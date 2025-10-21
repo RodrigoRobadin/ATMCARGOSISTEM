@@ -1,0 +1,46 @@
+﻿# env / secretos
+.env
+.env.*
+**/.env
+**/.env.*
+
+# node / build
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.next/
+**/.next/
+.cache/
+**/.cache/
+coverage/
+
+# logs
+*.log
+**/logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# SO / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# dumps / empaques
+*.sql
+*.sql.gz
+*.tgz
+*.zip
+
+# infra (no versionar acá)
+pm2*.json
+ecosystem*.config.js
+nginx*.conf
+**/deploy/
+**/scripts/deploy/
+
+# backups de código (los que vi en tu tree)
+*.bak
+*.bak.*
