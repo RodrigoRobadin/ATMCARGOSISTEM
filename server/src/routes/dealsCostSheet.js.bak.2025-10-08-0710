@@ -1,0 +1,149 @@
+// server/src/routes/dealsCostSheet.js
+import { Router } from 'express';
+import { pool } from '../db.js';
+import { requireAuth } from '../middlewares/auth.js';
+
+const router = Router();
+
+// Obtener planilla guardada
+router.get('/:id/cost-sheet', requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const [[row]] = await pool.query(
+    'SELECT data, updated_at, updated_by FROM deal_cost_sheets WHERE deal_id = ?',
+    [id]
+  );
+  if (!row) return res.json({ data: null });
+  res.json({ data: row.data, updated_at: row.updated_at, updated_by: row.updated_by });
+});
+
+// Guardar planilla (respeta bloqueo)
+router.put('/:id/cost-sheet', requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const data = req.body || {};
+
+  // Chequear organización y estado de presupuesto
+  const [[d]] = await pool.query('SELECT org_id FROM deals WHERE id = ? LIMIT 1', [id]);
+  if (!d) return res.status(404).json({ error: 'Deal no encontrado' });
+
+  const [[o]] = await pool.query(
+    'SELECT budget_status FROM organizations WHERE id = ? LIMIT 1',
+    [d.org_id]
+  );
+
+  if (o && (o.budget_status === 'bloqueado' || o.budget_status === 'confirmado') && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Presupuesto bloqueado' });
+  }
+
+  await pool.query(
+    `INSERT INTO deal_cost_sheets (deal_id, data, updated_by)
+     VALUES (?, ?, ?)
+     ON DUPLICATE KEY UPDATE data = VALUES(data), updated_by = VALUES(updated_by)`,
+    [id, JSON.stringify(data), req.user.id]
+  );
+
+  res.json({ ok: true });
+});
+
+export default router;
+// server/src/routes/dealsCostSheet.js
+import { Router } from 'express';
+import { pool } from '../db.js';
+import { requireAuth } from '../middlewares/auth.js';
+
+const router = Router();
+
+// Helper para parsear JSON sin reventar
+function safeParseJSON(v) {
+  if (v == null) return null;
+  if (typeof v === 'object') return v;
+  try {
+    return JSON.parse(v);
+  } catch {
+    return null;
+  }
+}
+
+// =================== GET ===================
+// Devuelve "data" COMO OBJETO (no string) para que el front lo use directo.
+router.get('/:id/cost-sheet', requireAuth, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [[row]] = await pool.query(
+      `SELECT dcs.data, dcs.updated_at, dcs.updated_by, u.name AS updated_by_name
+       FROM deal_cost_sheets dcs
+       LEFT JOIN users u ON u.id = dcs.updated_by
+       WHERE dcs.deal_id = ?
+       LIMIT 1`,
+      [id]
+    );
+
+    if (!row) {
+      return res.json({
+        data: null,
+        updated_at: null,
+        updated_by: null,
+        updated_by_name: null,
+      });
+    }
+
+    const data = safeParseJSON(row.data);
+
+    // Si no se pudo parsear, devolvemos null para que el front no se rompa
+    // (y puedas re-guardar desde el UI para normalizar).
+    return res.json({
+      data: data ?? null,
+      updated_at: row.updated_at,
+      updated_by: row.updated_by,
+      updated_by_name: row.updated_by_name ?? null,
+    });
+  } catch (err) {
+    console.error('[cost-sheet][GET] error', err);
+    return res.status(500).json({ error: 'Error al obtener planilla' });
+  }
+});
+
+// =================== PUT ===================
+// Guarda tal cual lo que envía el front (objeto) y actualiza updated_at/updated_by.
+router.put('/:id/cost-sheet', requireAuth, async (req, res) => {
+  const { id } = req.params;
+
+  // Lo que te manda el front: { header, compraRows, ventaRows, ... }
+  // Debe ser un objeto; si no, lo normalizamos a objeto vacío.
+  const data = (req.body && typeof req.body === 'object') ? req.body : {};
+
+  try {
+    // Chequear que la operación exista y obtener org_id
+    const [[deal]] = await pool.query('SELECT org_id FROM deals WHERE id = ? LIMIT 1', [id]);
+    if (!deal) return res.status(404).json({ error: 'Deal no encontrado' });
+
+    // Estado de presupuesto (para bloqueo)
+    const [[org]] = await pool.query(
+      'SELECT budget_status FROM organizations WHERE id = ? LIMIT 1',
+      [deal.org_id]
+    );
+
+    const locked = org && (org.budget_status === 'bloqueado' || org.budget_status === 'confirmado');
+    if (locked && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Presupuesto bloqueado' });
+    }
+
+    // Insert/Update
+    await pool.query(
+      `INSERT INTO deal_cost_sheets (deal_id, data, updated_by, updated_at)
+       VALUES (?, ?, ?, NOW())
+       ON DUPLICATE KEY UPDATE
+         data = VALUES(data),
+         updated_by = VALUES(updated_by),
+         updated_at = NOW()`,
+      [id, JSON.stringify(data), req.user.id]
+    );
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('[cost-sheet][PUT] error', err);
+    return res.status(500).json({ error: 'Error al guardar planilla' });
+  }
+});
+
+export default router;

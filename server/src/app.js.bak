@@ -1,0 +1,113 @@
+// server/src/app.js
+import express from 'express';
+import cors from 'cors';
+import morgan from 'morgan';
+import dotenv from 'dotenv';
+
+import pipelinesRouter from './routes/pipelines.js';
+import stagesRouter from './routes/stages.js';
+import dealsRouter from './routes/deals.js';
+import contactsRouter from './routes/contacts.js';
+import orgsRouter from './routes/organizations.js';
+import businessUnitsRouter from './routes/businessUnits.js';
+
+// nuevos
+import usersRouter from './routes/users.js';
+import labelsRouter from './routes/labels.js';
+import activitiesRouter from './routes/activities.js';
+import authRouter from './routes/auth.js';
+import dealsCostSheetRouter from './routes/dealsCostSheet.js';
+import paramsRouter from './routes/params.js';
+import adminActivity from './routes/admin-activity.js';
+import auditRouter from './routes/audit.js';
+
+// ⭐️ NUEVO: Seguimiento
+import followupsRouter from './routes/followups.js';
+
+
+// ⚠️ NO importes archivos .jsx del front en el server
+// import Admin from './pages/Admin.jsx';
+
+dotenv.config();
+
+const app = express();
+
+/* ================== CORS ==================
+ * Soporta varias origins separadas por coma en .env, ej:
+ * CORS_ORIGIN=http://localhost:5173,http://127.0.0.1:5173
+ */
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const corsOptions = {
+  origin(origin, cb) {
+    // permite requests sin Origin (curl/healthchecks) y los que estén en la whitelist
+    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error(`Not allowed by CORS: ${origin}`));
+  },
+  credentials: true, // permite cookies/autenticación con credenciales
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  // 👇 Agregamos 'X-Requested-With' (y algunos comunes) para aprobar el preflight
+  allowedHeaders: [
+    'Authorization',
+    'Content-Type',
+    'Accept',
+    'X-Requested-With',
+    'X-CSRF-Token',
+    'Origin',
+  ],
+  exposedHeaders: ['Content-Disposition'],
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+// Responder preflight explícito
+app.options('*', cors(corsOptions));
+
+/* ================ Middlewares ================ */
+app.use(express.json());
+app.use(morgan('dev'));
+
+/* ================ Archivos estáticos subidos ================ */
+// Ruta correcta (pública): http://localhost:4000/uploads/...
+app.use('/uploads', express.static('uploads'));
+
+// ⭐️ NUEVO: alias de compatibilidad para URLs antiguas tipo /api/uploads/...
+// (evita "Cannot GET /api/uploads/...")
+app.use('/api/uploads', express.static('uploads'));
+
+/* ================ Healthcheck ================ */
+app.get('/api/health', (_, res) => res.json({ ok: true }));
+
+/* ================ Rutas Públicas ================ */
+app.use('/api/auth', authRouter);
+
+/* ================ Rutas API ================ */
+app.use('/api/pipelines', pipelinesRouter);
+app.use('/api/stages', stagesRouter);
+
+// Ambas montan en /api/deals; no se pisan si los paths internos no duplican exactamente
+app.use('/api/deals', dealsRouter);
+app.use('/api/deals', dealsCostSheetRouter);
+
+app.use('/api/contacts', contactsRouter);
+app.use('/api/organizations', orgsRouter);
+app.use('/api/business-units', businessUnitsRouter);
+app.use('/api/users', usersRouter);
+app.use('/api/labels', labelsRouter);
+app.use('/api/activities', activitiesRouter);
+app.use('/api/params', paramsRouter);
+app.use('/api/admin/activity', adminActivity);
+app.use('/api/audit', auditRouter);
+
+// ⭐️ NUEVO: Seguimiento (por usuario; admin puede filtrar)
+app.use('/api/followups', followupsRouter);
+
+/* ================ Arranque ================ */
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, () => {
+  console.log(`API running on http://localhost:${PORT}`);
+  console.log(`CORS allowed origins: ${allowedOrigins.join(', ') || '(none)'}`);
+});

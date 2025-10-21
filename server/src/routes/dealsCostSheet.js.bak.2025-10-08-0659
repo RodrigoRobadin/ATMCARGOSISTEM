@@ -1,0 +1,47 @@
+// server/src/routes/dealsCostSheet.js
+import { Router } from 'express';
+import { pool } from '../db.js';
+import { requireAuth } from '../middlewares/auth.js';
+
+const router = Router();
+
+// Obtener planilla guardada
+router.get('/:id/cost-sheet', requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const [[row]] = await pool.query(
+    'SELECT data, updated_at, updated_by FROM deal_cost_sheets WHERE deal_id = ?',
+    [id]
+  );
+  if (!row) return res.json({ data: null });
+  res.json({ data: row.data, updated_at: row.updated_at, updated_by: row.updated_by });
+});
+
+// Guardar planilla (respeta bloqueo)
+router.put('/:id/cost-sheet', requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const data = req.body || {};
+
+  // Chequear organización y estado de presupuesto
+  const [[d]] = await pool.query('SELECT org_id FROM deals WHERE id = ? LIMIT 1', [id]);
+  if (!d) return res.status(404).json({ error: 'Deal no encontrado' });
+
+  const [[o]] = await pool.query(
+    'SELECT budget_status FROM organizations WHERE id = ? LIMIT 1',
+    [d.org_id]
+  );
+
+  if (o && (o.budget_status === 'bloqueado' || o.budget_status === 'confirmado') && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Presupuesto bloqueado' });
+  }
+
+  await pool.query(
+    `INSERT INTO deal_cost_sheets (deal_id, data, updated_by)
+     VALUES (?, ?, ?)
+     ON DUPLICATE KEY UPDATE data = VALUES(data), updated_by = VALUES(updated_by)`,
+    [id, JSON.stringify(data), req.user.id]
+  );
+
+  res.json({ ok: true });
+});
+
+export default router;

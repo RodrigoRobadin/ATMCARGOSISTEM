@@ -1,0 +1,152 @@
+// server/src/app.js
+import express from 'express';
+import cors from 'cors';
+import morgan from 'morgan';
+import dotenv from 'dotenv';
+import fs from 'node:fs';
+
+import pipelinesRouter from './routes/pipelines.js';
+import stagesRouter from './routes/stages.js';
+import dealsRouter from './routes/deals.js';
+import contactsRouter from './routes/contacts.js';
+import orgsRouter from './routes/organizations.js';
+import businessUnitsRouter from './routes/businessUnits.js';
+
+// nuevos
+import usersRouter from './routes/users.js';
+import labelsRouter from './routes/labels.js';
+import activitiesRouter from './routes/activities.js';
+import authRouter from './routes/auth.js';
+import dealsCostSheetRouter from './routes/dealsCostSheet.js';
+import paramsRouter from './routes/params.js';
+import adminActivity from './routes/admin-activity.js';
+import auditRouter from './routes/audit.js';
+
+// ⭐️ NUEVO: Seguimiento
+import followupsRouter from './routes/followups.js';
+
+// ⚠️ NO importes archivos .jsx del front en el server
+// import Admin from './pages/Admin.jsx';
+
+// ====== Cargar variables de entorno ======
+// Primero intentamos el archivo global del deploy, luego .env local si existe
+const ENV_PATH = '/home/deploy/.env.crm';
+if (fs.existsSync(ENV_PATH)) {
+  dotenv.config({ path: ENV_PATH });
+} else {
+  dotenv.config();
+}
+
+const app = express();
+
+/* ================== CORS ==================
+ * Puedes definir orígenes en CORS_ORIGIN separados por coma, ej:
+ *   CORS_ORIGIN=https://atmcargosoft.com,https://www.atmcargosoft.com
+ * Opcionales:
+ *   PUBLIC_DOMAIN=atmcargosoft.com
+ *   PUBLIC_IP=72.60.243.190
+ *   PUBLIC_ORIGIN=https://mi-dominio.com
+ */
+const parseList = (v = '') =>
+  v.split(',').map(s => s.trim()).filter(Boolean);
+
+const envOrigins = parseList(process.env.CORS_ORIGIN || '');
+const defaults = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+];
+
+// Añadimos dominios/ip públicos si están definidos (y algunos útiles por defecto)
+const pubDomain = process.env.PUBLIC_DOMAIN || 'atmcargosoft.com';
+const pubIp = process.env.PUBLIC_IP || '72.60.243.190';
+const pubOrigin = process.env.PUBLIC_ORIGIN || '';
+
+defaults.push(
+  `http://${pubIp}`, `https://${pubIp}`,
+  `http://${pubDomain}`, `https://${pubDomain}`,
+  `http://www.${pubDomain}`, `https://www.${pubDomain}`
+);
+if (pubOrigin) defaults.push(pubOrigin);
+
+// Lista final sin duplicados
+const allowedOrigins = Array.from(new Set([...envOrigins, ...defaults]));
+
+const corsOptions = {
+  origin(origin, cb) {
+    // permite requests sin Origin (curl/healthchecks) y los que estén en la whitelist
+    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    // Importante: devolver "false" evita 500 genéricos y deja 200 en preflight si aplica
+    return cb(new Error(`Not allowed by CORS: ${origin}`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Authorization',
+    'Content-Type',
+    'Accept',
+    'X-Requested-With',
+    'X-CSRF-Token',
+    'Origin',
+  ],
+  exposedHeaders: ['Content-Disposition'],
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+// Preflight explícito
+app.options('*', cors(corsOptions));
+
+/* ============== Middlewares ============== */
+app.use(express.json());
+app.use(morgan('dev'));
+
+/* ========== Archivos estáticos subidos ========== */
+// Ruta pública: http(s)://<host>/uploads/...
+app.use('/uploads', express.static('uploads'));
+// Compatibilidad con URLs antiguas /api/uploads/...
+app.use('/api/uploads', express.static('uploads'));
+
+/* ================ Healthcheck ================ */
+app.get('/api/health', (_, res) => res.json({ ok: true }));
+
+/* ================ Rutas Públicas ================ */
+app.use('/api/auth', authRouter);
+
+/* ================ Rutas API ================ */
+app.use('/api/pipelines', pipelinesRouter);
+app.use('/api/stages', stagesRouter);
+
+// Ambas montan en /api/deals; no se pisan si paths internos no duplican exactamente
+app.use('/api/deals', dealsRouter);
+app.use('/api/deals', dealsCostSheetRouter);
+
+app.use('/api/contacts', contactsRouter);
+app.use('/api/organizations', orgsRouter);
+app.use('/api/business-units', businessUnitsRouter);
+app.use('/api/users', usersRouter);
+app.use('/api/labels', labelsRouter);
+app.use('/api/activities', activitiesRouter);
+app.use('/api/params', paramsRouter);
+app.use('/api/admin/activity', adminActivity);
+app.use('/api/audit', auditRouter);
+
+// ⭐️ Seguimiento
+app.use('/api/followups', followupsRouter);
+
+/* ====== Manejador de errores CORS (evita 500 genéricos) ====== */
+app.use((err, req, res, next) => {
+  if (err && /Not allowed by CORS/.test(err.message)) {
+    return res.status(403).json({
+      error: err.message,
+      allowedOrigins,
+    });
+  }
+  return next(err);
+});
+
+/* ================ Arranque ================ */
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, () => {
+  console.log(`API running on http://localhost:${PORT}`);
+  console.log(`CORS allowed origins: ${allowedOrigins.join(', ') || '(none)'}`);
+});
