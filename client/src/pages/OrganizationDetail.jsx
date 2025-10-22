@@ -1,6 +1,8 @@
+// client/src/pages/OrganizationDetail.jsx
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api';
+import AccountExecutiveSelect from '../components/AccountExecutiveSelect.jsx';
 
 function FieldRow({ label, value, children }) {
   return (
@@ -34,6 +36,203 @@ function toCSV(arr) {
   return Array.isArray(arr) ? arr.join(',') : '';
 }
 
+/* ===== Helpers: Users / Ejecutivo de cuenta ===== */
+function coerceId(v) {
+  if (v == null) return null;
+  if (typeof v === 'number') return Number.isFinite(v) && v > 0 ? v : null;
+  if (typeof v === 'string') {
+    const trimmed = v.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const n = Number(trimmed);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    }
+    return null;
+  }
+  if (typeof v === 'object') {
+    const id = coerceId(v.id ?? v.user_id ?? v.userId ?? null);
+    return id ?? null;
+  }
+  return null;
+}
+
+function extractUserDisplay(user, fallbackId = null) {
+  if (!user) {
+    return {
+      name: fallbackId != null ? `Usuario #${fallbackId}` : null,
+      email: ''
+    };
+  }
+  const nameFromParts = [user.first_name, user.last_name].filter(Boolean).join(' ');
+  let name = user.name || nameFromParts || user.username || user.email || (fallbackId != null ? `Usuario #${fallbackId}` : null);
+  const email = user.email || '';
+  return { name, email };
+}
+
+/* ====== Caché y fallbacks para /users ====== */
+let USERS_CACHE = null;
+
+async function fetchUsersIndex() {
+  if (USERS_CACHE) return USERS_CACHE;
+  try {
+    const { data } = await api.get('/users/select', { params: { active: 0 } });
+    USERS_CACHE = Array.isArray(data) ? data : [];
+    if (USERS_CACHE.length) return USERS_CACHE;
+  } catch {}
+  try {
+    const { data } = await api.get('/users');
+    USERS_CACHE = Array.isArray(data) ? data : [];
+  } catch {
+    USERS_CACHE = [];
+  }
+  return USERS_CACHE;
+}
+
+async function fetchUserRecordById(uid) {
+  if (!uid) return null;
+  try {
+    const { data } = await api.get(`/users/${uid}`);
+    return data || null;
+  } catch {
+    const list = await fetchUsersIndex();
+    return list.find(u => Number(u.id) === Number(uid)) || null;
+  }
+}
+
+/* ===== Detección flexible del “ejecutivo” en la organización ===== */
+const DIRECT_ID_KEYS = [
+  'account_exec_id',
+  'account_executive_id',
+  'exec_user_id',
+  'account_manager_id',
+  'manager_user_id',
+  'sales_rep_id',
+  'assigned_user_id',
+  'user_id',
+  'userId',
+  'owner_user_id',
+  'ownerId',
+  'ejecutivo_cuenta_id',
+  'ejecutivo_de_cuenta_id',
+  'account_exec_user_id',
+];
+
+const DIRECT_NAME_KEYS = [
+  'account_exec_name',
+  'exec_user_name',
+  'account_manager_name',
+  'sales_rep_name',
+  'user_name',
+  'ejecutivo_cuenta',
+  'ejecutivo_de_cuenta',
+  'account_exec',
+];
+
+const USER_ID_KEY_REGEXES = [
+  /(account|acct).*exec.*(_)?user.*id$/i,
+  /(account|acct).*exec.*id$/i,
+  /exec.*(_)?user.*id$/i,
+  /exec.*id$/i,
+  /assigned.*(_)?user.*id$/i,
+  /manager.*(_)?user.*id$/i,
+  /owner.*(_)?user.*id$/i,
+  /(^|_)user(id)?s?$/i,
+  /(^|_)user_?id$/i,
+  /owner(id)?$/i,
+];
+
+function pickBestIdKey(candidates) {
+  if (!candidates.length) return null;
+  const withScore = candidates.map(k => {
+    let score = 0;
+    if (/exec/i.test(k)) score += 5;
+    if (/account/i.test(k)) score += 3;
+    if (/assigned/i.test(k)) score += 2;
+    if (/owner/i.test(k)) score += 1;
+    return { k, score };
+  });
+  withScore.sort((a, b) => b.score - a.score);
+  return withScore[0].k;
+}
+
+function getExecFromOrg(org) {
+  if (!org) return { id: null, name: null };
+
+  for (const k of DIRECT_ID_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(org, k)) continue;
+    const id = coerceId(org[k]);
+    if (id) return { id, name: null };
+    const raw = org[k];
+    if (typeof raw === 'object' && raw) {
+      const nestedId = coerceId(raw.id ?? raw.user_id ?? raw.userId);
+      if (nestedId) return { id: nestedId, name: null };
+      const maybeName = raw.name || [raw.first_name, raw.last_name].filter(Boolean).join(' ') || raw.username || raw.email || null;
+      if (maybeName) return { id: null, name: String(maybeName) };
+    }
+    if (typeof raw === 'string' && raw.trim() && !/^\d+$/.test(raw.trim())) {
+      return { id: null, name: raw.trim() };
+    }
+  }
+
+  for (const k of DIRECT_NAME_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(org, k) && org[k]) {
+      return { id: null, name: String(org[k]) };
+    }
+  }
+
+  const genericCandidates = [];
+  for (const [k, v] of Object.entries(org)) {
+    if (v == null) continue;
+    if (typeof v === 'object') {
+      const nestedId = coerceId(v.id ?? v.user_id ?? v.userId);
+      if (nestedId && USER_ID_KEY_REGEXES.some(rx => rx.test(k))) genericCandidates.push(k);
+      continue;
+    }
+    const id = coerceId(v);
+    if (id && USER_ID_KEY_REGEXES.some(rx => rx.test(k))) genericCandidates.push(k);
+  }
+  const bestKey = pickBestIdKey(genericCandidates);
+  if (bestKey) {
+    const id = coerceId(org[bestKey]);
+    if (id) return { id, name: null };
+  }
+
+  if (org.owner && typeof org.owner === 'object') {
+    const nestedId = coerceId(org.owner.id ?? org.owner.user_id ?? org.owner.userId);
+    if (nestedId) return { id: nestedId, name: null };
+    const maybeName = org.owner.name || [org.owner.first_name, org.owner.last_name].filter(Boolean).join(' ') || org.owner.username || org.owner.email || null;
+    if (maybeName) return { id: null, name: String(maybeName) };
+  }
+
+  return { id: null, name: null };
+}
+
+function getExecFromCF(customFields) {
+  if (!Array.isArray(customFields)) return { id: null, name: null };
+  const idKeys = [
+    'account_exec_id',
+    'account_executive_id',
+    'ejecutivo_cuenta',
+    'ejecutivo_de_cuenta',
+    'sales_rep_id',
+    'assigned_user_id',
+    'user_id',
+    'user',
+    'owner_user_id',
+    'ownerId',
+  ];
+  for (const k of idKeys) {
+    const cf = customFields.find(x => (x?.key || '').toLowerCase() === k.toLowerCase());
+    if (!cf) continue;
+    const raw = (cf.value ?? cf.default_value);
+    const id = coerceId(raw);
+    if (id) return { id, name: null };
+    if (typeof raw === 'string' && raw.trim() && !/^\d+$/.test(raw.trim())) {
+      return { id: null, name: raw.trim() };
+    }
+  }
+  return { id: null, name: null };
+}
+
 export default function OrganizationDetail() {
   const { id } = useParams();
   const [org, setOrg] = useState(null);
@@ -63,6 +262,17 @@ export default function OrganizationDetail() {
   const [customFields, setCustomFields] = useState([]); // [{id,key,label,type,value}]
   const [cfSupported, setCfSupported] = useState(true);
   const [openAddCF, setOpenAddCF] = useState(false);
+
+  // ===== Ejecutivo de cuenta =====
+  const [accountExec, setAccountExec] = useState(null); // { id, name, email } | null
+  const [execLoading, setExecLoading] = useState(false);
+  const [execIdRaw, setExecIdRaw] = useState(null);
+  const [execNameRaw, setExecNameRaw] = useState(null);
+
+  // edición inline del ejecutivo
+  const [editExec, setEditExec] = useState(false);
+  const [execSelection, setExecSelection] = useState(null);
+  const [savingExec, setSavingExec] = useState(false);
 
   // === helpers de carga ===
   async function loadOrg() {
@@ -135,6 +345,64 @@ export default function OrganizationDetail() {
     return () => { cancel = true; };
   }, [tab, id]);
 
+  // Resolver ejecutivo de cuenta en cuanto tengamos org y/o CF
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      setExecLoading(true);
+      setExecIdRaw(null);
+      setExecNameRaw(null);
+      setAccountExec(null);
+
+      if (!org) { if (live) setExecLoading(false); return; }
+
+      const fromOrg = getExecFromOrg(org);
+      const fromCF  = (!fromOrg.id && !fromOrg.name) ? getExecFromCF(customFields) : { id: null, name: null };
+
+      const execId       = fromOrg.id || fromCF.id || null;
+      const nameFallback = fromOrg.name || fromCF.name || null;
+
+      if (execId != null) setExecIdRaw(execId);
+      if (nameFallback != null) setExecNameRaw(nameFallback);
+
+      if (execId) {
+        const rec = await fetchUserRecordById(execId);
+        if (!live) return;
+        const { name, email } = extractUserDisplay(rec, execId);
+        if (name) {
+          setAccountExec({ id: Number(execId), name, email });
+          setExecLoading(false);
+          return;
+        }
+      }
+
+      if (nameFallback) {
+        if (live) setAccountExec({ id: null, name: String(nameFallback), email: '' });
+      }
+
+      if (live) setExecLoading(false);
+    })();
+    return () => { live = false; };
+  }, [org, customFields]);
+
+  // inicializar selección cuando cambia lo detectado
+  useEffect(() => {
+    setExecSelection(accountExec?.id ?? (execIdRaw ?? null));
+  }, [accountExec?.id, execIdRaw, id]);
+
+  async function saveExecAssignment() {
+    setSavingExec(true);
+    try {
+      await api.patch(`/organizations/${id}`, { owner_user_id: execSelection ?? null });
+      await loadOrg(); // recarga datos, vuelve a resolver el ejecutivo
+      setEditExec(false);
+    } catch {
+      alert('No se pudo guardar el ejecutivo.');
+    } finally {
+      setSavingExec(false);
+    }
+  }
+
   async function saveQuickActivity() {
     const subject = (composer || '').trim();
     if (!subject) return;
@@ -157,8 +425,6 @@ export default function OrganizationDetail() {
   if (err) return <p className="text-sm text-red-600">{err}</p>;
   if (!org) return <p className="text-sm text-slate-600">Organización no encontrada.</p>;
 
-  // const modalities = parseModalitiesCSV(org.modalities_supported); // (oculto en Detalles)
-
   return (
     <div className="space-y-4">
       {/* ====== Header estilo Pipedrive ====== */}
@@ -176,8 +442,6 @@ export default function OrganizationDetail() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {/* Oculto el badge de Agente para evitar confusión con la tabla */}
-            {/* {Number(org.is_agent) ? <span className="text-xs px-2 py-1 rounded bg-emerald-100 text-emerald-700">Agente</span> : null} */}
             <button className="px-3 py-2 text-sm rounded-lg border" onClick={()=>alert('Próximamente: seguir/seguidores')}>1 seguidor</button>
             <button className="px-3 py-2 text-sm rounded-lg bg-emerald-600 text-white" onClick={()=>setOpenDeal(true)}>+ Trato</button>
             <button className="px-3 py-2 text-sm rounded-lg border" onClick={()=>setOpenEdit(true)}>Editar</button>
@@ -198,7 +462,6 @@ export default function OrganizationDetail() {
             </header>
             <div className="p-4">
               <div className="space-y-2">
-                {/* === Campos alineados a la tabla === */}
                 <FieldRow label="Razón Social" value={org.razon_social || org.name} />
                 <FieldRow label="RUC" value={org.ruc} />
                 <FieldRow label="Dirección" value={org.address} />
@@ -210,11 +473,6 @@ export default function OrganizationDetail() {
                 <FieldRow label="Tipo org" value={org.tipo_org} />
                 <FieldRow label="Operación" value={org.operacion} />
                 <FieldRow label="Notas" value={org.notes} />
-
-                {/* === Ocultos para coincidir con la tabla === */}
-                {/* <FieldRow label="¿Es agente?">{Number(org.is_agent) ? 'Sí' : 'No'}</FieldRow> */}
-                {/* <FieldRow label="Modalidades">{modalities.length ? modalities.map(m => <Badge key={m}>{m}</Badge>) : '—'}</FieldRow> */}
-
                 <FieldRow label="Creado">
                   {org.created_at ? new Date(org.created_at).toLocaleDateString() : '—'}
                 </FieldRow>
@@ -312,6 +570,61 @@ export default function OrganizationDetail() {
               </ul>
             </div>
           </section>
+
+          {/* ===== Ejecutivo de cuenta ===== */}
+          <section className="bg-white rounded-2xl shadow">
+            <header className="px-4 py-3 border-b font-medium flex items-center justify-between">
+              <span>Ejecutivo de cuenta</span>
+              <button
+                className="text-sm text-blue-600 hover:underline"
+                onClick={()=> setEditExec(v => !v)}
+              >
+                {editExec ? 'Cancelar' : 'Editar'}
+              </button>
+            </header>
+            <div className="p-4 text-sm">
+              {execLoading ? (
+                <div className="text-slate-600">Cargando ejecutivo…</div>
+              ) : editExec ? (
+                <div className="space-y-2">
+                  <AccountExecutiveSelect
+                    value={execSelection ?? null}
+                    onChange={setExecSelection}
+                    onlyActive={false}
+                    label="Seleccionar"
+                    placeholder="— Sin asignar —"
+                  />
+                  <div className="pt-1 flex gap-2">
+                    <button
+                      className="px-3 py-2 text-sm rounded-lg bg-black text-white disabled:opacity-60"
+                      onClick={saveExecAssignment}
+                      disabled={savingExec}
+                    >
+                      {savingExec ? 'Guardando…' : 'Guardar'}
+                    </button>
+                    <button
+                      className="px-3 py-2 text-sm rounded-lg border"
+                      onClick={()=>{ setEditExec(false); setExecSelection(accountExec?.id ?? execIdRaw ?? null); }}
+                      disabled={savingExec}
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              ) : accountExec ? (
+                <div>
+                  <div className="font-medium">{accountExec.name}</div>
+                  <div className="text-slate-600">{accountExec.email || '—'}</div>
+                </div>
+              ) : execIdRaw != null ? (
+                <div className="text-slate-600">Usuario #{String(execIdRaw)} no accesible</div>
+              ) : execNameRaw ? (
+                <div><div className="font-medium">{execNameRaw}</div></div>
+              ) : (
+                <div className="text-slate-600">— Sin asignar —</div>
+              )}
+            </div>
+          </section>
         </aside>
 
         {/* ===== Panel principal ===== */}
@@ -400,7 +713,7 @@ export default function OrganizationDetail() {
         </section>
       </div>
 
-      {/* Modal nueva actividad */}
+      {/* Modales */}
       {openAct && (
         <NewActivityModal
           orgId={id}
@@ -409,7 +722,6 @@ export default function OrganizationDetail() {
         />
       )}
 
-      {/* Modal nuevo trato */}
       {openDeal && (
         <NewDealModal
           orgId={id}
@@ -418,7 +730,6 @@ export default function OrganizationDetail() {
         />
       )}
 
-      {/* Modal nueva persona */}
       {openPerson && (
         <NewPersonModal
           orgId={id}
@@ -427,7 +738,6 @@ export default function OrganizationDetail() {
         />
       )}
 
-      {/* Modal editar detalles estándar */}
       {openEdit && (
         <EditOrgModal
           org={org}
@@ -436,7 +746,6 @@ export default function OrganizationDetail() {
         />
       )}
 
-      {/* Modal añadir campo personalizado */}
       {openAddCF && (
         <AddCustomFieldModal
           orgId={id}
@@ -448,16 +757,11 @@ export default function OrganizationDetail() {
   );
 }
 
-/* ===== Inline editor para un campo personalizado ===== */
+/* ===== Inline editor / Modales ===== */
 function InlineCFEditor({ cf, onSave }) {
   const [v, setV] = useState(cf.value ?? '');
   const [saving, setSaving] = useState(false);
-
-  async function save(){
-    setSaving(true);
-    try { await onSave(v); } finally { setSaving(false); }
-  }
-
+  async function save(){ setSaving(true); try { await onSave(v); } finally { setSaving(false); } }
   return (
     <div className="flex items-center gap-2">
       {cf.type === 'number' ? (
@@ -474,7 +778,6 @@ function InlineCFEditor({ cf, onSave }) {
   );
 }
 
-/* ===== Modal: Editar detalles estándar ===== */
 function EditOrgModal({ org, onClose, onSaved }) {
   const [form, setForm] = useState({
     name: org.name || '',
@@ -486,20 +789,15 @@ function EditOrgModal({ org, onClose, onSaved }) {
     city: org.city || '',
     country: org.country || '',
     label: org.label || '',
-    owner_user_id: org.owner_user_id || '',
+    owner_user_id: org.owner_user_id || null,
     visibility: org.visibility || 'company',
     notes: org.notes || '',
-    // NUEVOS (se mantienen para compatibilidad, pero no se muestran en Detalles)
     is_agent: Number(org.is_agent) ? 1 : 0,
     modalities_supported: org.modalities_supported || null,
-    // también podrías agregar razon_social, rubro, tipo_org, operacion aquí si querés editarlos desde este modal
   });
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
-
   function upd(k, v){ setForm(prev=>({ ...prev, [k]: v })); }
-
-  // helpers UI para modalidades
   const parsedModalities = parseModalitiesCSV(form.modalities_supported);
   function toggleModality(m){
     const next = parsedModalities.includes(m)
@@ -507,30 +805,20 @@ function EditOrgModal({ org, onClose, onSaved }) {
       : [...parsedModalities, m];
     upd('modalities_supported', toCSV(next));
   }
-
   async function submit(e){
-    e.preventDefault();
-    setErr(''); setSaving(true);
+    e.preventDefault(); setErr(''); setSaving(true);
     try {
-      const payload = Object.fromEntries(
-        Object.entries(form).map(([k, v]) => [k, v === '' ? null : v])
-      );
+      const payload = Object.fromEntries(Object.entries(form).map(([k, v]) => [k, v === '' ? null : v]));
       if (payload?.owner_user_id != null) {
         const n = Number(payload.owner_user_id);
         payload.owner_user_id = Number.isFinite(n) && n > 0 ? n : null;
       }
       payload.is_agent = payload.is_agent ? 1 : 0;
-
       await api.patch(`/organizations/${org.id}`, payload);
-      onSaved?.();
-      onClose?.();
-    } catch {
-      setErr('No se pudo guardar los cambios.');
-    } finally {
-      setSaving(false);
-    }
+      onSaved?.(); onClose?.();
+    } catch { setErr('No se pudo guardar los cambios.'); }
+    finally { setSaving(false); }
   }
-
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50">
       <form onSubmit={submit} className="bg-white rounded-2xl p-4 w-full max-w-2xl space-y-3">
@@ -538,9 +826,7 @@ function EditOrgModal({ org, onClose, onSaved }) {
           <h3 className="text-lg font-semibold">Editar organización</h3>
           <button type="button" onClick={onClose} className="text-sm">✕</button>
         </div>
-
         {err && <div className="text-sm text-red-600">{err}</div>}
-
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <label className="block text-sm">Nombre
             <input className="w-full border rounded-lg px-3 py-2" value={form.name} onChange={e=>upd('name', e.target.value)} />
@@ -548,25 +834,21 @@ function EditOrgModal({ org, onClose, onSaved }) {
           <label className="block text-sm">Industria
             <input className="w-full border rounded-lg px-3 py-2" value={form.industry} onChange={e=>upd('industry', e.target.value)} />
           </label>
-
           <label className="block text-sm">Teléfono
             <input className="w-full border rounded-lg px-3 py-2" value={form.phone} onChange={e=>upd('phone', e.target.value)} />
           </label>
           <label className="block text-sm">Website
             <input className="w-full border rounded-lg px-3 py-2" value={form.website} onChange={e=>upd('website', e.target.value)} />
           </label>
-
           <label className="block text-sm">RUC
             <input className="w-full border rounded-lg px-3 py-2" value={form.ruc ?? ''} onChange={e=>upd('ruc', e.target.value)} />
           </label>
-
           <label className="block text-sm">Dirección
             <input className="w-full border rounded-lg px-3 py-2" value={form.address} onChange={e=>upd('address', e.target.value)} />
           </label>
           <label className="block text-sm">Ciudad
             <input className="w-full border rounded-lg px-3 py-2" value={form.city} onChange={e=>upd('city', e.target.value)} />
           </label>
-
           <label className="block text-sm">País
             <input className="w-full border rounded-lg px-3 py-2" value={form.country} onChange={e=>upd('country', e.target.value)} />
           </label>
@@ -574,9 +856,17 @@ function EditOrgModal({ org, onClose, onSaved }) {
             <input className="w-full border rounded-lg px-3 py-2" value={form.label} onChange={e=>upd('label', e.target.value)} />
           </label>
 
-          <label className="block text-sm">Owner (ID de usuario)
-            <input className="w-full border rounded-lg px-3 py-2" value={form.owner_user_id ?? ''} onChange={e=>upd('owner_user_id', e.target.value)} />
-          </label>
+          {/* Reemplazado por selector */}
+          <div className="md:col-span-2">
+            <AccountExecutiveSelect
+              value={form.owner_user_id ? Number(form.owner_user_id) : null}
+              onChange={(v)=>upd('owner_user_id', v)}
+              onlyActive={false}
+              label="Ejecutivo / Owner"
+              placeholder="— Sin asignar —"
+            />
+          </div>
+
           <label className="block text-sm">Visibilidad
             <select className="w-full border rounded-lg px-3 py-2" value={form.visibility} onChange={e=>upd('visibility', e.target.value)}>
               <option value="company">company</option>
@@ -585,22 +875,14 @@ function EditOrgModal({ org, onClose, onSaved }) {
             </select>
           </label>
         </div>
-
-        {/* Se mantiene este bloque de agente/modalidades en el modal de edición,
-            pero está oculto en la vista de Detalles para coincidir con la tabla */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <label className="block text-sm md:col-span-1">
             <span className="block mb-2">¿Es agente?</span>
             <label className="inline-flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={!!Number(form.is_agent)}
-                onChange={e=>upd('is_agent', e.target.checked ? 1 : 0)}
-              />
+              <input type="checkbox" checked={!!Number(form.is_agent)} onChange={e=>upd('is_agent', e.target.checked ? 1 : 0)} />
               <span>Marcar como agente</span>
             </label>
           </label>
-
           <div className="md:col-span-2">
             <div className="text-sm mb-2">Modalidades soportadas</div>
             <div className="flex flex-wrap gap-3 text-sm">
@@ -608,8 +890,12 @@ function EditOrgModal({ org, onClose, onSaved }) {
                 <label key={m} className="inline-flex items-center gap-2">
                   <input
                     type="checkbox"
-                    checked={parsedModalities.includes(m)}
-                    onChange={()=>toggleModality(m)}
+                    checked={parseModalitiesCSV(form.modalities_supported).includes(m)}
+                    onChange={()=>{
+                      const parsed = parseModalitiesCSV(form.modalities_supported);
+                      const next = parsed.includes(m) ? parsed.filter(x=>x!==m) : [...parsed, m];
+                      upd('modalities_supported', toCSV(next));
+                    }}
                   />
                   <span className="capitalize">{m}</span>
                 </label>
@@ -618,11 +904,9 @@ function EditOrgModal({ org, onClose, onSaved }) {
             <div className="text-xs text-slate-500 mt-1">Se guardan como CSV en <code>modalities_supported</code>.</div>
           </div>
         </div>
-
         <label className="block text-sm">Notas
           <textarea className="w-full border rounded-lg px-3 py-2" rows={4} value={form.notes ?? ''} onChange={e=>upd('notes', e.target.value)} />
         </label>
-
         <div className="pt-2 flex gap-2 justify-end">
           <button type="button" onClick={onClose} className="px-3 py-2 border rounded-lg">Cancelar</button>
           <button className="px-3 py-2 rounded-lg bg-black text-white disabled:opacity-60" disabled={saving}>
@@ -634,39 +918,24 @@ function EditOrgModal({ org, onClose, onSaved }) {
   );
 }
 
-/* ===== Modal: Añadir campo personalizado ===== */
 function AddCustomFieldModal({ orgId, onClose, onCreated }) {
   const [label, setLabel] = useState('');
   const [key, setKey] = useState('');
-  const [type, setType] = useState('text'); // text | number | date
+  const [type, setType] = useState('text');
   const [value, setValue] = useState('');
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
-
   async function submit(e){
     e.preventDefault();
     setErr('');
-    if (!key.trim() || !label.trim()) {
-      setErr('Completá clave y etiqueta.');
-      return;
-    }
+    if (!key.trim() || !label.trim()) { setErr('Completá clave y etiqueta.'); return; }
     setSaving(true);
     try {
-      await api.post(`/organizations/${orgId}/custom-fields`, {
-        key: key.trim(),
-        label: label.trim(),
-        type,
-        value: value ?? null
-      });
-      onCreated?.();
-      onClose?.();
-    } catch {
-      setErr('No se pudo crear el campo (verifica que el endpoint exista).');
-    } finally {
-      setSaving(false);
-    }
+      await api.post(`/organizations/${orgId}/custom-fields`, { key: key.trim(), label: label.trim(), type, value: value ?? null });
+      onCreated?.(); onClose?.();
+    } catch { setErr('No se pudo crear el campo (verifica que el endpoint exista).'); }
+    finally { setSaving(false); }
   }
-
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50">
       <form onSubmit={submit} className="bg-white rounded-2xl p-4 w-full max-w-lg space-y-3">
@@ -674,13 +943,10 @@ function AddCustomFieldModal({ orgId, onClose, onCreated }) {
           <h3 className="text-lg font-semibold">Nuevo campo personalizado</h3>
           <button type="button" onClick={onClose} className="text-sm">✕</button>
         </div>
-
         {err && <div className="text-sm text-red-600">{err}</div>}
-
         <label className="block text-sm">Etiqueta visible
           <input className="w-full border rounded-lg px-3 py-2" value={label} onChange={e=>setLabel(e.target.value)} />
         </label>
-
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <label className="block text-sm">Clave (sin espacios)
             <input className="w-full border rounded-lg px-3 py-2" value={key} onChange={e=>setKey(e.target.value)} placeholder="ej: tax_id" />
@@ -693,11 +959,9 @@ function AddCustomFieldModal({ orgId, onClose, onCreated }) {
             </select>
           </label>
         </div>
-
         <label className="block text-sm">Valor inicial
           <input className="w-full border rounded-lg px-3 py-2" value={value} onChange={e=>setValue(e.target.value)} />
         </label>
-
         <div className="pt-2 flex gap-2 justify-end">
           <button type="button" onClick={onClose} className="px-3 py-2 border rounded-lg">Cancelar</button>
           <button className="px-3 py-2 rounded-lg bg-black text-white disabled:opacity-60" disabled={saving}>
@@ -709,41 +973,23 @@ function AddCustomFieldModal({ orgId, onClose, onCreated }) {
   );
 }
 
-/* ===== Modal para crear actividades ===== */
 function NewActivityModal({ orgId, onClose, onCreated }) {
-  const [type, setType] = useState('task'); // task | call | meeting | email | note
+  const [type, setType] = useState('task');
   const [subject, setSubject] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
-
   async function submit(e){
-    e.preventDefault();
-    setErr('');
-    if (!subject.trim() && !notes.trim()) {
-      setErr('Escribí al menos asunto o notas.');
-      return;
-    }
+    e.preventDefault(); setErr('');
+    if (!subject.trim() && !notes.trim()) { setErr('Escribí al menos asunto o notas.'); return; }
     setSaving(true);
     try {
-      await api.post('/activities', {
-        type,
-        subject: subject.trim(),
-        due_date: dueDate || null,
-        done: 0,
-        org_id: Number(orgId),
-        notes: notes || null
-      });
-      onCreated?.();
-      onClose?.();
-    } catch (e) {
-      setErr('No se pudo crear la actividad.');
-    } finally {
-      setSaving(false);
-    }
+      await api.post('/activities', { type, subject: subject.trim(), due_date: dueDate || null, done: 0, org_id: Number(orgId), notes: notes || null });
+      onCreated?.(); onClose?.();
+    } catch { setErr('No se pudo crear la actividad.'); }
+    finally { setSaving(false); }
   }
-
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50">
       <form onSubmit={submit} className="bg-white rounded-2xl p-4 w-full max-w-lg space-y-3">
@@ -751,9 +997,7 @@ function NewActivityModal({ orgId, onClose, onCreated }) {
           <h3 className="text-lg font-semibold">Nueva actividad</h3>
           <button type="button" onClick={onClose} className="text-sm">✕</button>
         </div>
-
         {err && <div className="text-sm text-red-600">{err}</div>}
-
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <label className="block text-sm">Tipo
             <select className="w-full border rounded-lg px-3 py-2" value={type} onChange={e=>setType(e.target.value)}>
@@ -764,20 +1008,16 @@ function NewActivityModal({ orgId, onClose, onCreated }) {
               <option value="note">Nota</option>
             </select>
           </label>
-
           <label className="block text-sm">Vence (YYYY-MM-DD)
             <input className="w-full border rounded-lg px-3 py-2" type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} />
           </label>
         </div>
-
         <label className="block text-sm">Asunto
           <input className="w-full border rounded-lg px-3 py-2" value={subject} onChange={e=>setSubject(e.target.value)} placeholder="Ej: Llamar para propuesta" />
         </label>
-
         <label className="block text-sm">Notas
           <textarea className="w-full border rounded-lg px-3 py-2" rows={4} value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Detalles, acuerdos, etc." />
         </label>
-
         <div className="pt-2 flex gap-2 justify-end">
           <button type="button" onClick={onClose} className="px-3 py-2 border rounded-lg">Cancelar</button>
           <button className="px-3 py-2 rounded-lg bg-black text-white disabled:opacity-60" disabled={saving}>
@@ -789,7 +1029,6 @@ function NewActivityModal({ orgId, onClose, onCreated }) {
   );
 }
 
-/* ===== Modal para crear tratos ===== */
 function NewDealModal({ orgId, onClose, onCreated }) {
   const [title, setTitle] = useState('');
   const [value, setValue] = useState('');
@@ -905,7 +1144,6 @@ function NewDealModal({ orgId, onClose, onCreated }) {
   );
 }
 
-/* ===== Modal para crear persona (contacto) vinculada ===== */
 function NewPersonModal({ orgId, onClose, onCreated }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -913,32 +1151,17 @@ function NewPersonModal({ orgId, onClose, onCreated }) {
   const [title, setTitle] = useState('');
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
-
   async function submit(e){
     e.preventDefault();
     setErr('');
-    if (!name.trim() && !email.trim()) {
-      setErr('Completá al menos nombre o email.');
-      return;
-    }
+    if (!name.trim() && !email.trim()) { setErr('Completá al menos nombre o email.'); return; }
     setSaving(true);
     try {
-      await api.post('/contacts', {
-        name: name.trim() || null,
-        email: email || null,
-        phone: phone || null,
-        title: title || null,
-        org_id: Number(orgId),
-      });
-      onCreated?.();
-      onClose?.();
-    } catch (e) {
-      setErr('No se pudo crear la persona.');
-    } finally {
-      setSaving(false);
-    }
+      await api.post('/contacts', { name: name.trim() || null, email: email || null, phone: phone || null, title: title || null, org_id: Number(orgId) });
+      onCreated?.(); onClose?.();
+    } catch (e) { setErr('No se pudo crear la persona.'); }
+    finally { setSaving(false); }
   }
-
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50">
       <form onSubmit={submit} className="bg-white rounded-2xl p-4 w-full max-w-md space-y-3">
@@ -946,26 +1169,21 @@ function NewPersonModal({ orgId, onClose, onCreated }) {
           <h3 className="text-lg font-semibold">Nueva persona</h3>
           <button type="button" onClick={onClose} className="text-sm">✕</button>
         </div>
-
         {err && <div className="text-sm text-red-600">{err}</div>}
-
         <label className="block text-sm">Nombre
           <input className="w-full border rounded-lg px-3 py-2" value={name} onChange={e=>setName(e.target.value)} />
         </label>
-
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <label className="block text-sm">Email
             <input className="w-full border rounded-lg px-3 py-2" value={email} onChange={e=>setEmail(e.target.value)} />
           </label>
-          <label className="block text-sm">Teléfono
+          <label className="block textsm">Teléfono
             <input className="w-full border rounded-lg px-3 py-2" value={phone} onChange={e=>setPhone(e.target.value)} />
           </label>
         </div>
-
         <label className="block text-sm">Cargo (opcional)
           <input className="w-full border rounded-lg px-3 py-2" value={title} onChange={e=>setTitle(e.target.value)} />
         </label>
-
         <div className="pt-2 flex gap-2 justify-end">
           <button type="button" onClick={onClose} className="px-3 py-2 border rounded-lg">Cancelar</button>
           <button className="px-3 py-2 rounded-lg bg-black text-white disabled:opacity-60" disabled={saving}>

@@ -8,11 +8,70 @@ function normalizeUrl(u) {
   return /^https?:\/\//i.test(u) ? u : `http://${u}`;
 }
 
+/* =============== Selector interno de ejecutivos (usuarios) =============== */
+function ExecSelect({ value, onChange, disabled = false, label = "Ejecutivo de cuenta (opcional)" }) {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      setLoading(true);
+      setErr('');
+      try {
+        const { data } = await api.get('/users', { params: { active: 1 } });
+        const list = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
+        const mapped = list
+          .map((u) => {
+            const id = u.id ?? u.user_id ?? null;
+            const name =
+             u.name ??
+            (([u.first_name, u.last_name].filter(Boolean).join(" ")) ||
+             u.username ||
+            u.email ||
+            null);
+
+            if (!id || !name) return null;
+            return { id, name: String(name), email: u.email || '' };
+          })
+          .filter(Boolean);
+        if (live) setUsers(mapped);
+      } catch (e) {
+        if (live) setErr('No se pudo cargar usuarios.');
+      } finally {
+        if (live) setLoading(false);
+      }
+    })();
+    return () => { live = false; };
+  }, []);
+
+  return (
+    <label className="block text-sm">
+      {label}
+      <select
+        className="w-full border rounded-lg px-3 py-2 mt-1"
+        value={value ?? ''}
+        onChange={(e) => onChange?.(e.target.value ? Number(e.target.value) : null)}
+        disabled={disabled || loading}
+      >
+        <option value="">— Sin asignar —</option>
+        {users.map((u) => (
+          <option key={u.id} value={u.id}>
+            {u.name} {u.email ? `· ${u.email}` : ''}
+          </option>
+        ))}
+      </select>
+      {!!err && <div className="text-xs text-red-600 mt-1">{err}</div>}
+    </label>
+  );
+}
+
 export default function Organizations(){
   const [rows, setRows] = useState([]);
   const [open, setOpen] = useState(false);
 
-  // (Se mantienen aunque ya no se usen en la tabla; pueden servir a futuro)
+  // Se mantienen para futuro
   const [owners, setOwners] = useState([]);
   const [labelOptions, setLabelOptions] = useState([]);
 
@@ -126,7 +185,7 @@ export default function Organizations(){
   );
 }
 
-/* =====================  MODAL (coincide con los campos de la tabla)  ===================== */
+/* =====================  MODAL  ===================== */
 
 function NewOrganizationModal({ onClose, onCreated /* owners, labelOptions */ }) {
   const [razonSocial, setRazonSocial] = useState('');
@@ -141,17 +200,19 @@ function NewOrganizationModal({ onClose, onCreated /* owners, labelOptions */ })
   const [operacion, setOperacion] = useState('');
   const [notes, setNotes] = useState('');
 
+  // 👇 Nuevo: Ejecutivo de cuenta (opcional)
+  const [accountExecutiveId, setAccountExecutiveId] = useState(null);
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  // Parametría para "Tipo org", "Rubro" y "Operación" (nuevo)
+  // Parametría para "Tipo org", "Rubro" y "Operación"
   const { options: paramOpts } = useParamOptions(
-    ['org_tipo','org_rubro','org_operacion','tipo_operacion'], // incluye fallback a tipo_operacion
+    ['org_tipo','org_rubro','org_operacion','tipo_operacion'],
     { onlyActive: true, asValues: true }
   );
   const tipoOrgOptions = paramOpts?.org_tipo || [];
   const rubroOptions = paramOpts?.org_rubro || ['Seguro'];
-  // Preferimos org_operacion; si no existe aún en parámetros, usamos tipo_operacion como respaldo
   const operacionOptions = paramOpts?.org_operacion || paramOpts?.tipo_operacion || [];
 
   async function submit(e){
@@ -160,6 +221,7 @@ function NewOrganizationModal({ onClose, onCreated /* owners, labelOptions */ })
     if (!razonSocial.trim()) { setError('La Razón Social es obligatoria.'); return; }
     setSaving(true);
     try {
+      const execId = accountExecutiveId ? Number(accountExecutiveId) : null;
       await api.post('/organizations', {
         // compat: algunos listados viejos leen name
         razon_social: razonSocial.trim(),
@@ -174,11 +236,20 @@ function NewOrganizationModal({ onClose, onCreated /* owners, labelOptions */ })
         tipo_org: tipoOrg || null,
         operacion: operacion || null,
         notes: notes || null,
+
+        // 👇 Asignación comercial (tolerante: el backend toma el que soporte)
+        account_executive_id: execId,
+        owner_id: execId,
+        assigned_user_id: execId,
       });
       await onCreated?.();
       onClose?.();
-    } catch {
-      setError('No se pudo crear la organización.');
+    } catch (e) {
+      setError(
+        e?.response?.data
+          ? (typeof e.response.data === 'string' ? e.response.data : 'No se pudo crear la organización.')
+          : 'No se pudo crear la organización.'
+      );
     } finally {
       setSaving(false);
     }
@@ -192,7 +263,7 @@ function NewOrganizationModal({ onClose, onCreated /* owners, labelOptions */ })
           <button type="button" onClick={onClose} className="text-sm">✕</button>
         </div>
 
-        {error && <div className="text-sm text-red-600">{error}</div>}
+        {error && <div className="text-sm text-red-600 break-words">{error}</div>}
 
         {/* Fila 1: Razón Social - RUC */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -242,13 +313,20 @@ function NewOrganizationModal({ onClose, onCreated /* owners, labelOptions */ })
           </label>
         </div>
 
-        {/* Operación (ahora desplegable administrado por parámetros) */}
+        {/* Operación */}
         <label className="block text-sm">Tipo de Operación
           <select className="w-full border rounded-lg px-3 py-2" value={operacion} onChange={e=>setOperacion(e.target.value)}>
             <option value="">(Seleccione)</option>
             {operacionOptions.map(v => <option key={v} value={v}>{v}</option>)}
           </select>
         </label>
+
+        {/* 👇 Nuevo: Ejecutivo de cuenta */}
+        <ExecSelect
+          value={accountExecutiveId}
+          onChange={setAccountExecutiveId}
+          label="Ejecutivo de cuenta (opcional)"
+        />
 
         {/* Notas */}
         <label className="block text-sm">Notas

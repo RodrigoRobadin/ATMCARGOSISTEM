@@ -1,5 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
+// client/src/components/NewOperationModal.jsx
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import useParamOptions from "../hooks/useParamOptions";
 
 const Input = (props) => (
   <input
@@ -17,8 +19,7 @@ const Select = ({ children, ...props }) => (
   </select>
 );
 
-// Mapa local de tipos de carga por modalidad.
-// Si más adelante querés leerlos desde /params, se puede, pero con esto ya funciona.
+// Tipos de carga por modalidad
 const LOAD_TYPES = {
   AEREO: ["LCL"],
   MARITIMO: ["FCL", "LCL"],
@@ -26,6 +27,211 @@ const LOAD_TYPES = {
   MULTIMODAL: ["N/A"],
 };
 
+// Fallback para Tipo de operación
+const OP_TYPE_FALLBACK = [
+  { value: "IMPORT", label: "Importación" },
+  { value: "EXPORT", label: "Exportación" },
+  { value: "EXTERIOR", label: "Exterior" },
+];
+
+/* ====================  ExecSelect (usuarios del sistema)  ==================== */
+function ExecSelect({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        setLoading(true);
+        const { data } = await api.get("/users");
+        const list = (Array.isArray(data) ? data : []).map((u) => {
+          const id = u.id ?? u.user_id ?? null;
+          const name =
+            u.name ??
+            (([u.first_name, u.last_name].filter(Boolean).join(" ")) ||
+              u.username ||
+              u.email ||
+              null);
+          if (!id || !name) return null;
+          return { id, name: String(name) };
+        }).filter(Boolean);
+        setUsers(list);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const filtered = useMemo(() => {
+    const f = q.trim().toLowerCase();
+    if (!f) return users;
+    return users.filter((u) => u.name.toLowerCase().includes(f));
+  }, [q, users]);
+
+  const currentLabel =
+    users.find((u) => String(u.id) === String(value))?.name || "";
+
+  return (
+    <div className="relative">
+      <div className="flex gap-2">
+        <input
+          className="w-full border rounded-lg px-3 py-2 text-sm"
+          value={currentLabel}
+          onChange={(e) => setQ(e.target.value)}
+          onFocus={() => setOpen(true)}
+          placeholder="Buscar usuario…"
+          readOnly
+        />
+        <button
+          type="button"
+          className="px-2 border rounded-lg text-sm"
+          onClick={() => setOpen((o) => !o)}
+          title="Seleccionar ejecutivo"
+        >
+          {open ? "▲" : "▼"}
+        </button>
+      </div>
+
+      {open && (
+        <div className="absolute z-30 mt-1 w-full bg-white border rounded-lg shadow-lg max-h-64 overflow-auto">
+          <div className="p-2">
+            <input
+              className="w-full border rounded px-2 py-1 text-sm"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Filtrar…"
+              autoFocus
+            />
+          </div>
+          {loading && (
+            <div className="px-3 py-2 text-xs text-slate-500">Cargando…</div>
+          )}
+          {!loading && filtered.length === 0 && (
+            <div className="px-3 py-2 text-xs text-slate-500">Sin resultados</div>
+          )}
+          {!loading &&
+            filtered.map((u) => (
+              <div
+                key={u.id}
+                className="px-3 py-2 text-sm hover:bg-slate-100 cursor-pointer"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onChange?.(u.id);
+                  setOpen(false);
+                }}
+              >
+                {u.name}
+              </div>
+            ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ====================  Helpers de red (orgs/contacts)  ==================== */
+async function searchOrganizations(term) {
+  const q = String(term || "").trim();
+  if (q.length < 2) return [];
+  const attempts = [
+    async () => {
+      const { data } = await api.get("/search", { params: { q } });
+      const arr = data?.organizations || data?.orgs || [];
+      return normalizeOrgs(arr);
+    },
+    async () => {
+      const { data } = await api.get("/organizations", { params: { search: q } });
+      return normalizeOrgs(data);
+    },
+    async () => {
+      const { data } = await api.get("/organizations", { params: { q } });
+      return normalizeOrgs(data);
+    },
+    async () => {
+      const { data } = await api.get("/organizations", { params: { name_like: q } });
+      return normalizeOrgs(data);
+    },
+  ];
+  for (const run of attempts) {
+    try {
+      const out = await run();
+      if (Array.isArray(out) && out.length) return out;
+    } catch (_) {}
+  }
+  return [];
+}
+
+function normalizeOrgs(data) {
+  const arr = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
+  return arr
+    .map((o) => {
+      if (!o) return null;
+      const id = o.id ?? o.org_id ?? o.organization_id ?? null;
+      const name = o.name ?? o.org_name ?? o.title ?? null;
+      if (!id || !name) return null;
+      const extra =
+        o.tax_id || o.ruc || o.document || o.doc || o.code
+          ? ` (${o.tax_id || o.ruc || o.document || o.doc || o.code})`
+          : "";
+      return { id, name: String(name), display: `${name}${extra}` };
+    })
+    .filter(Boolean);
+}
+
+async function fetchContactsByOrg(orgId) {
+  if (!orgId) return [];
+  const attempts = [
+    async () => {
+      const { data } = await api.get(`/organizations/${orgId}/contacts`);
+      return normalizeContacts(data);
+    },
+    async () => {
+      const { data } = await api.get(`/contacts`, { params: { org_id: orgId } });
+      return normalizeContacts(data);
+    },
+    async () => {
+      const { data } = await api.get(`/contacts`, { params: { organization_id: orgId } });
+      return normalizeContacts(data);
+    },
+  ];
+  for (const run of attempts) {
+    try {
+      const out = await run();
+      if (Array.isArray(out)) return out;
+    } catch (_) {}
+  }
+  return [];
+}
+
+function normalizeContacts(data) {
+  const arr = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
+  return arr
+    .map((c) => {
+      if (!c) return null;
+      const id = c.id ?? c.contact_id ?? null;
+      const fullNameFromParts = ((c.first_name || "") + " " + (c.last_name || "")).trim();
+      const name = c.name ?? (fullNameFromParts || c.fullname || null);
+      if (!id || !name) return null;
+      const email = c.email ?? c.mail ?? null;
+      const phone = c.phone ?? c.tel ?? c.mobile ?? null;
+      return { id, name: String(name), email: email || "", phone: phone || "" };
+    })
+    .filter(Boolean);
+}
+
+// Hook debounce
+function useDebounced(value, ms = 250) {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
+
+/* ====================  Componente principal  ==================== */
 export default function NewOperationModal({
   onClose,
   pipelineId,
@@ -33,32 +239,32 @@ export default function NewOperationModal({
   onCreated,
   defaultBusinessUnitId,
 }) {
-  // Preview de referencia
   const [referencePreview, setReferencePreview] = useState("—");
 
   // Transporte / carga
-  const [modo, setModo] = useState("");   // AEREO | MARITIMO | TERRESTRE | MULTIMODAL
-  const [clase, setClase] = useState(""); // según modalidad (FCL/LCL, FTL/LTL, etc.)
+  const [modo, setModo] = useState("");
+  const [clase, setClase] = useState("");
   const [origen, setOrigen] = useState("");
   const [destino, setDestino] = useState("");
 
-  // auto-sugerencia de tipo op, editable
-  const [tipoOp, setTipoOp] = useState(""); // IMPORT | EXPORT | ""
+  // Tipo de operación
+  const [tipoOp, setTipoOp] = useState(""); // IMPORT | EXPORT | EXTERIOR
   const [tipoOpManual, setTipoOpManual] = useState(false);
 
   // Carga
   const [mercaderia, setMercaderia] = useState("");
   const [cantidad, setCantidad] = useState("");
-  const [unidad, setUnidad] = useState("Bultos"); // Cajas | Bultos | Pallets
-  const [peso, setPeso] = useState("");     // kg (texto libre)
-  const [volumen, setVolumen] = useState(""); // m3 (texto libre)
+  const [unidad, setUnidad] = useState("Bultos");
+  const [peso, setPeso] = useState("");
+  const [volumen, setVolumen] = useState("");
 
   // Negocio/CRM
   const [businessUnits, setBusinessUnits] = useState([]);
-  const [businessUnitId, setBusinessUnitId] = useState(
-    defaultBusinessUnitId || ""
-  );
+  const [businessUnitId, setBusinessUnitId] = useState(defaultBusinessUnitId || "");
   const [stageId, setStageId] = useState(stages?.[0]?.id || null);
+  const [execId, setExecId] = useState(""); // 👈 Ejecutivo de cuenta (opcional)
+
+  const [saving, setSaving] = useState(false);
 
   // Empresa / contacto
   const [orgName, setOrgName] = useState("");
@@ -66,7 +272,32 @@ export default function NewOperationModal({
   const [contactPhone, setContactPhone] = useState("");
   const [contactEmail, setContactEmail] = useState("");
 
-  const [saving, setSaving] = useState(false);
+  // Autocomplete: Organización
+  const [orgQuery, setOrgQuery] = useState("");
+  const debOrg = useDebounced(orgQuery, 250);
+  const [orgOpen, setOrgOpen] = useState(false);
+  const [orgLoading, setOrgLoading] = useState(false);
+  const [orgResults, setOrgResults] = useState([]);
+  const [selectedOrg, setSelectedOrg] = useState(null);
+
+  // Dropdown contactos
+  const [contacts, setContacts] = useState([]);
+  const [contactOpen, setContactOpen] = useState(false);
+  const [contactFilter, setContactFilter] = useState("");
+
+  // Refs (SOLO una vez)
+  const orgBoxRef = useRef(null);
+  const contactBoxRef = useRef(null);
+
+  // Parámetros: Tipo de operación
+  const { options: paramOptions, loading: loadingParams } = useParamOptions(
+    ["operation_type"],
+    { onlyActive: true, fallback: { operation_type: OP_TYPE_FALLBACK }, useDefaults: true }
+  );
+  const tipoOperacionOptions = useMemo(
+    () => paramOptions?.operation_type ?? OP_TYPE_FALLBACK,
+    [paramOptions]
+  );
 
   // Opciones de "tipo de carga" según modalidad
   const tipoCargaOptions = useMemo(() => {
@@ -74,21 +305,19 @@ export default function NewOperationModal({
     return LOAD_TYPES[modo] || [];
   }, [modo]);
 
-  // Ajustar "tipo de carga" cuando cambia modalidad
+  // Ajuste de tipo de carga al cambiar modalidad
   useEffect(() => {
     if (!modo) {
       setClase("");
       return;
     }
     const opts = LOAD_TYPES[modo] || [];
-    // Si el valor actual no es válido para la nueva modalidad, setear el primero.
-    if (!opts.includes(clase)) {
-      setClase(opts[0] || "");
-    }
-  }, [modo]); // eslint-disable-line
+    if (!opts.includes(clase)) setClase(opts[0] || "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modo]);
 
+  // Cargar unidades de negocio
   useEffect(() => {
-    // Cargar unidades de negocio si aplica
     (async () => {
       try {
         const { data } = await api.get("/business-units").catch(() => ({ data: [] }));
@@ -100,28 +329,36 @@ export default function NewOperationModal({
         setBusinessUnits([]);
       }
     })();
-  }, []); // eslint-disable-line
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Sugerir tipo de operación según origen/destino (heurística simple)
+  // Sugerir tipo de operación
   useEffect(() => {
     if (tipoOpManual) return;
     const o = (origen || "").toLowerCase();
     const d = (destino || "").toLowerCase();
+    const isPY = (s) =>
+      s.includes("paraguay") ||
+      s.includes("py") ||
+      s.includes("asu") ||
+      s.includes("asunción") ||
+      s.includes("asuncion");
     if (o && d) {
-      const isPY = (s) => s.includes("paraguay") || s.includes("asu") || s.includes("asunción") || s.includes("ag");
       if (isPY(o) && !isPY(d)) setTipoOp("EXPORT");
-      if (isPY(d) && !isPY(o)) setTipoOp("IMPORT");
+      else if (isPY(d) && !isPY(o)) setTipoOp("IMPORT");
+      else if (!isPY(o) && !isPY(d)) setTipoOp("EXTERIOR");
     }
   }, [origen, destino, tipoOpManual]);
 
-  // Armar referencia visual
+  // Validar valor seleccionado vs opciones
   useEffect(() => {
-    const parts = [
-      (modo || "").trim(),
-      (clase || "").trim(),
-      (origen || "").trim(),
-      (destino || "").trim(),
-    ].filter(Boolean);
+    const valid = new Set((tipoOperacionOptions || []).map((x) => x.value));
+    if (tipoOp && !valid.has(tipoOp)) setTipoOp("");
+  }, [tipoOperacionOptions, tipoOp]);
+
+  // Referencia visual
+  useEffect(() => {
+    const parts = [modo, clase, origen, destino].map((x) => (x || "").trim()).filter(Boolean);
     setReferencePreview(parts.length ? parts.join(" • ") : "—");
   }, [modo, clase, origen, destino]);
 
@@ -130,19 +367,111 @@ export default function NewOperationModal({
       pipelineId &&
       stageId &&
       (modo || "").length &&
-      (clase || "").length && // ahora obligatorio para evitar inconsistencias
+      (clase || "").length &&
       (origen || "").length &&
       (destino || "").length &&
       (orgName || "").length
     );
   }, [pipelineId, stageId, modo, clase, origen, destino, orgName]);
 
+  // Autocomplete ORG
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      if (debOrg.trim().length < 2) {
+        if (live) { setOrgResults([]); setOrgLoading(false); }
+        return;
+      }
+      setOrgLoading(true);
+      try {
+        const rows = await searchOrganizations(debOrg);
+        if (!live) return;
+        setOrgResults(rows);
+      } finally {
+        if (live) setOrgLoading(false);
+      }
+    })();
+    return () => { live = false; };
+  }, [debOrg]);
+
+  function handleOrgInput(e) {
+    const v = e.target.value;
+    setOrgName(v);
+    setOrgQuery(v);
+    setSelectedOrg(null);
+    setContacts([]);
+    setContactName("");
+    setContactEmail("");
+    setContactPhone("");
+    if (v.trim().length >= 2) setOrgOpen(true);
+  }
+
+  async function selectOrganization(org) {
+    setSelectedOrg(org);
+    setOrgName(org.name);
+    setOrgQuery(org.name);
+    setOrgOpen(false);
+
+    const list = await fetchContactsByOrg(org.id);
+    setContacts(list || []);
+
+    if (list?.length === 1) {
+      const c = list[0];
+      setContactName(c.name || "");
+      setContactEmail(c.email || "");
+      setContactPhone(c.phone || "");
+    } else {
+      setContactName("");
+      setContactEmail("");
+      setContactPhone("");
+    }
+  }
+
+  // Cerrar dropdowns al click afuera (usa los MISMO refs)
+  useEffect(() => {
+    function onClick(e) {
+      if (orgBoxRef.current && !orgBoxRef.current.contains(e.target)) {
+        setOrgOpen(false);
+      }
+      if (contactBoxRef.current && !contactBoxRef.current.contains(e.target)) {
+        setContactOpen(false);
+      }
+    }
+    window.addEventListener("click", onClick);
+    return () => window.removeEventListener("click", onClick);
+  }, []);
+
+  // Contactos: abrir + filtrar
+  const filteredContacts = useMemo(() => {
+    const f = (contactFilter || "").toLowerCase();
+    if (!f) return contacts;
+    return contacts.filter(
+      (c) =>
+        c.name?.toLowerCase().includes(f) ||
+        c.email?.toLowerCase().includes(f) ||
+        c.phone?.toLowerCase().includes(f)
+    );
+  }, [contacts, contactFilter]);
+
+  function handleContactInput(e) {
+    const v = e.target.value;
+    setContactName(v);
+    setContactFilter(v);
+    if (selectedOrg && contacts.length) setContactOpen(true);
+  }
+
+  function selectContact(c) {
+    setContactName(c.name || "");
+    setContactEmail(c.email || "");
+    setContactPhone(c.phone || "");
+    setContactOpen(false);
+  }
+
   async function handleCreate(e) {
     e?.preventDefault?.();
     if (!canSave || saving) return;
     setSaving(true);
     try {
-      // Título seguro (backend también blinda)
       const titleFromForm = `${orgName}`.trim();
       const fallbackPieces = [modo || "", clase || "", mercaderia || ""].filter(Boolean);
       const safeTitle =
@@ -150,15 +479,13 @@ export default function NewOperationModal({
         (fallbackPieces.length ? fallbackPieces.join(" • ") : "") ||
         "Operación";
 
-      // Crear deal (enviamos formato PLANO, backend actual ya lo permite)
       const payload = {
         pipeline_id: pipelineId,
         stage_id: stageId,
         title: safeTitle,
         value: 0,
         business_unit_id: businessUnitId || null,
-
-        // Organización / contacto (planos)
+        account_exec_id: execId || null, // 👈 nuevo campo opcional
         org_name: orgName || null,
         contact_name: contactName || null,
         contact_phone: contactPhone || null,
@@ -169,7 +496,6 @@ export default function NewOperationModal({
       const dealId = created?.id;
       if (!dealId) throw new Error("No se obtuvo el ID de la operación");
 
-      // ==== Guardar CFs mínimos para que el Detalle muestre todo discriminado ====
       const cfPayloads = [
         { key: "modalidad_carga", label: "Modalidad de carga", type: "select", value: modo },
         { key: "tipo_carga", label: "Tipo de carga", type: "select", value: clase },
@@ -182,49 +508,37 @@ export default function NewOperationModal({
         { key: "vol_m3", label: "Vol m³", type: "text", value: volumen || "" },
         { key: "unidad", label: "Unidad", type: "text", value: unidad || "" },
       ];
-      await Promise.all(
-        cfPayloads.map((p) => api.post(`/deals/${dealId}/custom-fields`, p))
-      );
+      await Promise.all(cfPayloads.map((p) => api.post(`/deals/${dealId}/custom-fields`, p)));
 
-      // ==== Espejo en /operations según modalidad (para que el subform se inicialice coherente) ====
       if (modo === "MARITIMO") {
-        await api
-          .put(`/operations/${dealId}/ocean`, {
-            load_type: clase,               // "FCL" | "LCL"
-            pol: origen || "",
-            pod: destino || "",
-            commodity: mercaderia || "",
-            packages: cantidad || "",
-            weight_kg: peso || "",
-            volume_m3: volumen || "",
-          })
-          .catch(() => {}); // si aún no existe /operations, el CF ya cubre el detalle
+        await api.put(`/operations/${dealId}/ocean`, {
+          load_type: clase,
+          pol: origen || "",
+          pod: destino || "",
+          commodity: mercaderia || "",
+          packages: cantidad || "",
+          weight_kg: peso || "",
+          volume_m3: volumen || "",
+        }).catch(() => {});
       } else if (modo === "TERRESTRE") {
-        await api
-          .put(`/operations/${dealId}/road`, {
-            cargo_class: clase,             // "FTL" | "LTL"
-            origin_city: origen || "",
-            destination_city: destino || "",
-            commodity: mercaderia || "",
-            packages: cantidad || "",
-            weight_kg: peso || "",
-            volume_m3: volumen || "",
-          })
-          .catch(() => {});
+        await api.put(`/operations/${dealId}/road`, {
+          cargo_class: clase,
+          origin_city: origen || "",
+          destination_city: destino || "",
+          commodity: mercaderia || "",
+          packages: cantidad || "",
+          weight_kg: peso || "",
+          volume_m3: volumen || "",
+        }).catch(() => {});
       } else if (modo === "AEREO") {
-        // opcional: espejar algunos campos
-        await api
-          .put(`/operations/${dealId}/air`, {
-            origin_airport: origen || "",
-            destination_airport: destino || "",
-            commodity: mercaderia || "",
-            packages: cantidad || "",
-            weight_gross_kg: peso || "",
-            volume_m3: volumen || "",
-          })
-          .catch(() => {});
-      } else if (modo === "MULTIMODAL") {
-        // opcional: dejar solo CFs; el subform multimodal es más libre
+        await api.put(`/operations/${dealId}/air`, {
+          origin_airport: origen || "",
+          destination_airport: destino || "",
+          commodity: mercaderia || "",
+          packages: cantidad || "",
+          weight_gross_kg: peso || "",
+          volume_m3: volumen || "",
+        }).catch(() => {});
       }
 
       onCreated?.(created);
@@ -263,39 +577,98 @@ export default function NewOperationModal({
           <div className="bg-slate-50 rounded-xl p-3">
             <div className="font-medium mb-2">Cliente</div>
             <div className="grid gap-2">
-              <label className="text-sm">
+              <label className="text-sm" ref={orgBoxRef}>
                 Organización
-                <Input
-                  value={orgName}
-                  onChange={(e) => setOrgName(e.target.value)}
-                  placeholder="Ej: ACME S.A."
-                  required
-                />
+                <div className="relative">
+                  <Input
+                    value={orgName}
+                    onChange={handleOrgInput}
+                    onFocus={() => orgQuery.trim().length >= 2 && setOrgOpen(true)}
+                    placeholder="Ej: ACME S.A."
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  {orgOpen && (
+                    <div className="absolute z-20 mt-1 w-full bg-white border rounded-lg shadow-lg max-h-64 overflow-auto">
+                      {orgLoading && (
+                        <div className="px-3 py-2 text-xs text-slate-500">Buscando…</div>
+                      )}
+                      {!orgLoading && orgResults.length === 0 && (
+                        <div className="px-3 py-2 text-xs text-slate-500">Sin resultados</div>
+                      )}
+                      {!orgLoading &&
+                        orgResults.map((o) => (
+                          <div
+                            key={o.id}
+                            className="px-3 py-2 text-sm hover:bg-slate-100 cursor-pointer"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              selectOrganization(o);
+                            }}
+                          >
+                            {o.display || o.name}
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
               </label>
-              <label className="text-sm">
+
+              <label className="text-sm" ref={contactBoxRef}>
                 Contacto
-                <Input
-                  value={contactName}
-                  onChange={(e) => setContactName(e.target.value)}
-                  placeholder="Nombre y apellido"
-                />
+                <div className="relative">
+                  <Input
+                    value={contactName}
+                    onChange={handleContactInput}
+                    onFocus={() => selectedOrg && contacts.length && setContactOpen(true)}
+                    placeholder={selectedOrg ? "Seleccioná o escribí…" : "Selecciona organización primero"}
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={!selectedOrg}
+                  />
+                  {contactOpen && selectedOrg && (
+                    <div className="absolute z-20 mt-1 w-full bg-white border rounded-lg shadow-lg max-h-64 overflow-auto">
+                      {filteredContacts.length === 0 && (
+                        <div className="px-3 py-2 text-xs text-slate-500">Sin contactos</div>
+                      )}
+                      {filteredContacts.map((c) => (
+                        <div
+                          key={c.id}
+                          className="px-3 py-2 text-sm hover:bg-slate-100 cursor-pointer"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            selectContact(c);
+                          }}
+                        >
+                          <div className="font-medium">{c.name}</div>
+                          <div className="text-xs text-slate-500">
+                            {c.email || "—"} {c.phone ? `· ${c.phone}` : ""}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </label>
-              <label className="text-sm">
-                Teléfono
-                <Input
-                  value={contactPhone}
-                  onChange={(e) => setContactPhone(e.target.value)}
-                  placeholder="+595 ..."
-                />
-              </label>
-              <label className="text-sm">
-                Email
-                <Input
-                  value={contactEmail}
-                  onChange={(e) => setContactEmail(e.target.value)}
-                  placeholder="correo@dominio.com"
-                />
-              </label>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-sm">
+                  Teléfono
+                  <Input
+                    value={contactPhone}
+                    onChange={(e) => setContactPhone(e.target.value)}
+                    placeholder="+595 ..."
+                  />
+                </label>
+                <label className="text-sm">
+                  Email
+                  <Input
+                    value={contactEmail}
+                    onChange={(e) => setContactEmail(e.target.value)}
+                    placeholder="correo@dominio.com"
+                  />
+                </label>
+              </div>
             </div>
           </div>
 
@@ -305,11 +678,7 @@ export default function NewOperationModal({
             <div className="grid gap-2">
               <label className="text-sm">
                 Modo
-                <Select
-                  value={modo}
-                  onChange={(e) => setModo(e.target.value)}
-                  required
-                >
+                <Select value={modo} onChange={(e) => setModo(e.target.value)} required>
                   <option value="">—</option>
                   <option value="AEREO">AÉREO</option>
                   <option value="MARITIMO">MARÍTIMO</option>
@@ -318,7 +687,6 @@ export default function NewOperationModal({
                 </Select>
               </label>
 
-              {/* 👇 Tipo de carga AHORA va ANTES de Origen y depende de "modo" */}
               <label className="text-sm">
                 Tipo de carga
                 <Select
@@ -364,10 +732,14 @@ export default function NewOperationModal({
                     setTipoOp(e.target.value);
                     setTipoOpManual(true);
                   }}
+                  disabled={loadingParams}
                 >
                   <option value="">—</option>
-                  <option value="IMPORT">IMPORT</option>
-                  <option value="EXPORT">EXPORT</option>
+                  {tipoOperacionOptions.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label || o.value}
+                    </option>
+                  ))}
                 </Select>
                 <span className="text-xs text-slate-500">(editable)</span>
               </label>
@@ -431,6 +803,7 @@ export default function NewOperationModal({
                   ))}
                 </Select>
               </label>
+
               <label className="text-sm">
                 Unidad de negocio
                 <Select
@@ -444,6 +817,12 @@ export default function NewOperationModal({
                     </option>
                   ))}
                 </Select>
+              </label>
+
+              {/* Ejecutivo de cuenta (opcional) */}
+              <label className="text-sm">
+                Ejecutivo de cuenta (opcional)
+                <ExecSelect value={execId} onChange={setExecId} />
               </label>
             </div>
           </div>

@@ -10,13 +10,56 @@ const TYPES = [
 const CURRENCIES = ["USD", "PYG", "EUR"];
 const UNITS = ["UN", "KG", "M3", "SERV"];
 
+/** Normaliza la fila para ENVIAR al backend con claves “típicas”. */
+function normalizeItemRow(row = {}) {
+  // alias comunes desde UI / API
+  const code = row.code ?? row.item_code ?? row.sku ?? row.codigo ?? null;
+  const name = row.name ?? row.item_name ?? row.title ?? row.descripcion ?? "";
+  const kind = row.kind ?? row.type ?? row.tipo ?? "PRODUCT"; // preferimos PRODUCT por defecto
+  const unit = row.unit ?? row.uom ?? row.unidad ?? "UN";
+  const currency = row.currency ?? row.moneda ?? "USD";
+  const active = row.active ?? row.enabled ?? row.activo ?? 1;
+
+  // numéricos
+  const price = Number(row.price ?? row.unit_price ?? row.precio ?? 0) || 0;
+  const vatPct = Number(row.vat_pct ?? row.tax_rate ?? row.iva ?? 0) || 0;
+
+  // payload canónico (conciso; la mayoría de APIs acepta estos nombres)
+  return {
+    code,              // opcional
+    name,              // requerido
+    kind,              // "SERVICE" | "PRODUCT"
+    unit,              // "UN", "KG", "M3", "SERV"
+    currency,          // "USD", "PYG", "EUR"
+    price,             // número
+    vat_pct: vatPct,   // número (IVA %)
+    active: active ? 1 : 0,
+  };
+}
+
+/** Normaliza filas que VIENEN del backend para mostrarlas en la tabla. */
+function toViewRow(item) {
+  const id = item.id ?? item.item_id ?? item.code_id ?? item.pk ?? Math.random();
+  return {
+    id,
+    type: item.type ?? item.kind ?? item.tipo ?? "PRODUCT",
+    sku: item.sku ?? item.code ?? item.item_code ?? "",
+    name: item.name ?? item.title ?? item.descripcion ?? "",
+    unit: item.unit ?? item.uom ?? item.unidad ?? "UN",
+    currency: item.currency ?? item.moneda ?? "USD",
+    price: Number(item.price ?? item.unit_price ?? item.precio ?? 0) || 0,
+    tax_rate: Number(item.tax_rate ?? item.vat_pct ?? item.iva ?? 0) || 0,
+    active: item.active ?? item.enabled ?? item.activo ?? 1,
+  };
+}
+
 export default function ProductsServices() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [onlyActive, setOnlyActive] = useState(true);
   const [err, setErr] = useState("");
-  const [savingId, setSavingId] = useState(null); // para mostrar spinner por fila
-  const [tempId, setTempId] = useState(-1); // ids temporales negativos para filas nuevas
+  const [savingId, setSavingId] = useState(null); // spinner por fila
+  const [tempId, setTempId] = useState(-1);       // ids temporales negativos
 
   // ------- Cargar ----------
   const load = async () => {
@@ -24,11 +67,18 @@ export default function ProductsServices() {
     setErr("");
     try {
       const ts = Date.now(); // anti-cache
-      const { data } = await api.get(`/catalog/items?active=${onlyActive ? 1 : 0}&t=${ts}`);
-      setRows(Array.isArray(data) ? data : []);
+      const { data } = await api.get(`/catalog/items`, {
+        params: { active: onlyActive ? 1 : 0, t: ts },
+      });
+      const list = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
+      setRows(list.map(toViewRow));
     } catch (e) {
       console.error("[catalog] load", e);
-      setErr("No se pudo cargar el catálogo.");
+      setErr(
+        typeof e?.response?.data === "string"
+          ? e.response.data
+          : "No se pudo cargar el catálogo."
+      );
     } finally {
       setLoading(false);
     }
@@ -64,36 +114,39 @@ export default function ProductsServices() {
     setRows((prev) => [newRow, ...prev]);
   };
 
-  const normalizePayload = (row) => ({
-    type: row.type || "PRODUCT",
-    sku: row.sku || null,
-    name: row.name || null,
-    unit: row.unit || null,
-    currency: row.currency || "USD",
-    price: row.price === "" || row.price == null ? 0 : Number(row.price),
-    tax_rate: row.tax_rate === "" || row.tax_rate == null ? 0 : Number(row.tax_rate),
-    active: row.active ? 1 : 0,
-  });
-
   const saveRow = async (row) => {
     setSavingId(row.id);
     setErr("");
-    try {
-      const payload = normalizePayload(row);
 
+    // Validación mínima antes de enviar
+    if (!row.name || !String(row.name).trim()) {
+      setSavingId(null);
+      setErr("El nombre es obligatorio.");
+      return;
+    }
+
+    const payload = normalizeItemRow(row);
+
+    try {
       if (row.__isNew || row.id < 0) {
         // CREATE
         await api.post("/catalog/items", payload);
-        // Para que se vea inmediatamente lo que guarda el server, recargamos:
-        await load();
+        await load(); // refrescamos para tomar id real y normalización del servidor
       } else {
         // UPDATE
         await api.put(`/catalog/items/${row.id}`, payload);
         await load();
       }
     } catch (e) {
-      console.error("[catalog] saveRow", e);
-      setErr("No se pudo guardar la fila.");
+      console.error("[catalog] saveRow payload =>", payload);
+      console.error("[catalog] saveRow ERROR =>", e?.response?.status, e?.response?.data || e?.message);
+      setErr(
+        e?.response?.data
+          ? (typeof e.response.data === "string"
+              ? e.response.data
+              : JSON.stringify(e.response.data))
+          : "No se pudo guardar la fila."
+      );
     } finally {
       setSavingId(null);
     }
@@ -111,15 +164,19 @@ export default function ProductsServices() {
       setRows((prev) => prev.filter((r) => r.id !== row.id));
     } catch (e) {
       console.error("[catalog] deleteRow", e);
-      setErr("No se pudo eliminar el ítem.");
+      setErr(
+        typeof e?.response?.data === "string"
+          ? e.response.data
+          : "No se pudo eliminar el ítem."
+      );
     }
   };
 
   const toggleActive = async (row) => {
-    // Cambiamos en memoria para feedback instantáneo…
+    // feedback instantáneo
     const next = { ...row, active: row.active ? 0 : 1 };
     onChangeCell(row.id, "active", next.active);
-    // …y persistimos de inmediato
+    // persistimos
     await saveRow(next);
   };
 
@@ -154,7 +211,7 @@ export default function ProductsServices() {
       </div>
 
       {err && (
-        <div className="mb-3 text-sm text-red-600 border border-red-200 bg-red-50 px-3 py-2 rounded">
+        <div className="mb-3 text-sm text-red-600 border border-red-200 bg-red-50 px-3 py-2 rounded break-words">
           {err}
         </div>
       )}

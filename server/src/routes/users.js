@@ -45,6 +45,20 @@ router.get('/me', requireAuth, async (req, res) => {
   res.json(u);
 });
 
+// ---- LISTA MINIMAL PARA SELECT (autenticado, no requiere admin) ----
+router.get('/select', requireAuth, async (req, res) => {
+  const raw = String(req.query.active ?? req.query.is_active ?? '1').toLowerCase();
+  const onlyActive = !(raw === '0' || raw === 'false' || raw === 'no');
+  const where = onlyActive ? 'WHERE is_active = 1' : '';
+  const [rows] = await pool.query(
+    `SELECT id, name, email
+       FROM users
+       ${where}
+      ORDER BY name ASC, id ASC`
+  );
+  res.json(rows);
+});
+
 // ---- LISTAR (solo admin) ----
 router.get('/', requireAuth, requireRole('admin'), async (_req, res) => {
   const [rows] = await pool.query(
@@ -53,6 +67,19 @@ router.get('/', requireAuth, requireRole('admin'), async (_req, res) => {
       ORDER BY id ASC`
   );
   res.json(rows);
+});
+
+// ---- OBTENER UNO (autenticado, no requiere admin) ----
+router.get('/:id', requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const [[u]] = await pool.query(
+    `SELECT id, name, email, role, is_active
+       FROM users
+      WHERE id = ? LIMIT 1`,
+    [id]
+  );
+  if (!u) return res.status(404).json({ error: 'Usuario no encontrado' });
+  res.json(u);
 });
 
 // ---- CREAR (solo admin) ----
