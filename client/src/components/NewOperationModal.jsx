@@ -34,6 +34,43 @@ const OP_TYPE_FALLBACK = [
   { value: "EXTERIOR", label: "Exterior" },
 ];
 
+// Helpers de labels
+const OP_LABELS = {
+  IMPORT: "Importación",
+  EXPORT: "Exportación",
+  EXTERIOR: "Exterior",
+};
+const opLabel = (v) => OP_LABELS[v] || v || "";
+
+// Normalizador robusto para options de tipo de operación
+function normalizeOpTypeOptions(raw) {
+  // raw puede venir como:
+  // - array de strings ["IMPORT","EXPORT",...]
+  // - array de objetos {value,label} o {key,label}
+  // - objeto { operation_type: [...] }
+  let src = raw;
+  if (raw && raw.operation_type) src = raw.operation_type;
+  if (Array.isArray(src)) {
+    const mapped = src
+      .map((o) => {
+        if (!o) return null;
+        if (typeof o === "string") {
+          return { value: o, label: opLabel(o) };
+        }
+        if (typeof o === "object") {
+          const v = o.value ?? o.key ?? o.code ?? null;
+          const l = o.label ?? opLabel(v);
+          if (!v) return null;
+          return { value: String(v), label: String(l || v) };
+        }
+        return null;
+      })
+      .filter(Boolean);
+    return mapped.length ? mapped : OP_TYPE_FALLBACK;
+  }
+  return OP_TYPE_FALLBACK;
+}
+
 /* ====================  ExecSelect (usuarios del sistema)  ==================== */
 function ExecSelect({ value, onChange }) {
   const [open, setOpen] = useState(false);
@@ -45,18 +82,21 @@ function ExecSelect({ value, onChange }) {
     (async () => {
       try {
         setLoading(true);
-        const { data } = await api.get("/users");
-        const list = (Array.isArray(data) ? data : []).map((u) => {
-          const id = u.id ?? u.user_id ?? null;
-          const name =
-            u.name ??
-            (([u.first_name, u.last_name].filter(Boolean).join(" ")) ||
-              u.username ||
-              u.email ||
-              null);
-          if (!id || !name) return null;
-          return { id, name: String(name) };
-        }).filter(Boolean);
+        // Endpoint minimal que no requiere admin
+        const { data } = await api.get("/users/select", { params: { active: 1 } });
+        const list = (Array.isArray(data) ? data : [])
+          .map((u) => {
+            const id = u.id ?? u.user_id ?? null;
+            const name =
+              u.name ??
+              (([u.first_name, u.last_name].filter(Boolean).join(" ")) ||
+                u.username ||
+                u.email ||
+                null);
+            if (!id || !name) return null;
+            return { id, name: String(name) };
+          })
+          .filter(Boolean);
         setUsers(list);
       } finally {
         setLoading(false);
@@ -216,7 +256,7 @@ function normalizeContacts(data) {
       if (!id || !name) return null;
       const email = c.email ?? c.mail ?? null;
       const phone = c.phone ?? c.tel ?? c.mobile ?? null;
-      return { id, name: String(name), email: email || "", phone: phone || "" };
+      return { id, name: String(name), email: email || "", phone: phone || "", org_id: c.org_id ?? null };
     })
     .filter(Boolean);
 }
@@ -280,24 +320,29 @@ export default function NewOperationModal({
   const [orgResults, setOrgResults] = useState([]);
   const [selectedOrg, setSelectedOrg] = useState(null);
 
-  // Dropdown contactos
+  // Contactos: locales por organización
   const [contacts, setContacts] = useState([]);
+  // Contactos: búsqueda global (cuando NO hay organización)
+  const [contactResults, setContactResults] = useState([]);
+  const [contactLoading, setContactLoading] = useState(false);
+
   const [contactOpen, setContactOpen] = useState(false);
   const [contactFilter, setContactFilter] = useState("");
+  const debContact = useDebounced(contactFilter, 250);
 
   // Refs (SOLO una vez)
   const orgBoxRef = useRef(null);
   const contactBoxRef = useRef(null);
 
-  // Parámetros: Tipo de operación
+  // Parámetros: Tipo de operación (normalizados)
   const { options: paramOptions, loading: loadingParams } = useParamOptions(
     ["operation_type"],
     { onlyActive: true, fallback: { operation_type: OP_TYPE_FALLBACK }, useDefaults: true }
   );
-  const tipoOperacionOptions = useMemo(
-    () => paramOptions?.operation_type ?? OP_TYPE_FALLBACK,
-    [paramOptions]
-  );
+
+  const tipoOperacionOptions = useMemo(() => {
+    return normalizeOpTypeOptions(paramOptions);
+  }, [paramOptions]);
 
   // Opciones de "tipo de carga" según modalidad
   const tipoCargaOptions = useMemo(() => {
@@ -398,8 +443,8 @@ export default function NewOperationModal({
     const v = e.target.value;
     setOrgName(v);
     setOrgQuery(v);
-    setSelectedOrg(null);
-    setContacts([]);
+    setSelectedOrg(null);        // al escribir, deja de haber una org seleccionada
+    setContacts([]);             // limpiamos contactos de esa org
     setContactName("");
     setContactEmail("");
     setContactPhone("");
@@ -427,7 +472,7 @@ export default function NewOperationModal({
     }
   }
 
-  // Cerrar dropdowns al click afuera (usa los MISMO refs)
+  // Cerrar dropdowns al click afuera
   useEffect(() => {
     function onClick(e) {
       if (orgBoxRef.current && !orgBoxRef.current.contains(e.target)) {
@@ -441,7 +486,7 @@ export default function NewOperationModal({
     return () => window.removeEventListener("click", onClick);
   }, []);
 
-  // Contactos: abrir + filtrar
+  // Contactos: abrir + filtrar (cuando hay organización)
   const filteredContacts = useMemo(() => {
     const f = (contactFilter || "").toLowerCase();
     if (!f) return contacts;
@@ -453,11 +498,36 @@ export default function NewOperationModal({
     );
   }, [contacts, contactFilter]);
 
+  // Contactos: búsqueda global si NO hay organización
+  useEffect(() => {
+    let live = true;
+    const q = debContact?.trim();
+    if (selectedOrg) { setContactResults([]); setContactLoading(false); return; }
+    if (!q || q.length < 2) { setContactResults([]); setContactLoading(false); return; }
+
+    (async () => {
+      try {
+        setContactLoading(true);
+        const { data } = await api.get("/contacts", { params: { q, limit: 8 } }).catch(() => ({ data: [] }));
+        if (!live) return;
+        setContactResults(normalizeContacts(data));
+      } catch {
+        if (live) setContactResults([]);
+      } finally {
+        if (live) setContactLoading(false);
+      }
+    })();
+
+    return () => { live = false; };
+  }, [debContact, selectedOrg]);
+
   function handleContactInput(e) {
     const v = e.target.value;
     setContactName(v);
     setContactFilter(v);
-    if (selectedOrg && contacts.length) setContactOpen(true);
+    if ((selectedOrg && contacts.length) || v.trim().length >= 2) {
+      setContactOpen(true);
+    }
   }
 
   function selectContact(c) {
@@ -485,7 +555,7 @@ export default function NewOperationModal({
         title: safeTitle,
         value: 0,
         business_unit_id: businessUnitId || null,
-        account_exec_id: execId || null, // 👈 nuevo campo opcional
+        account_exec_id: execId || null, // opcional
         org_name: orgName || null,
         contact_name: contactName || null,
         contact_phone: contactPhone || null,
@@ -620,32 +690,65 @@ export default function NewOperationModal({
                   <Input
                     value={contactName}
                     onChange={handleContactInput}
-                    onFocus={() => selectedOrg && contacts.length && setContactOpen(true)}
-                    placeholder={selectedOrg ? "Seleccioná o escribí…" : "Selecciona organización primero"}
+                    onFocus={() => {
+                      if ((selectedOrg && contacts.length) || contactResults.length) {
+                        setContactOpen(true);
+                      }
+                    }}
+                    placeholder="Escribí para buscar o crear…"
                     autoComplete="off"
                     spellCheck={false}
-                    disabled={!selectedOrg}
                   />
-                  {contactOpen && selectedOrg && (
+                  {contactOpen && (
                     <div className="absolute z-20 mt-1 w-full bg-white border rounded-lg shadow-lg max-h-64 overflow-auto">
-                      {filteredContacts.length === 0 && (
-                        <div className="px-3 py-2 text-xs text-slate-500">Sin contactos</div>
+                      {/* Si hay organización seleccionada, mostramos sus contactos filtrados */}
+                      {selectedOrg ? (
+                        <>
+                          {filteredContacts.length === 0 && (
+                            <div className="px-3 py-2 text-xs text-slate-500">Sin contactos</div>
+                          )}
+                          {filteredContacts.map((c) => (
+                            <div
+                              key={c.id}
+                              className="px-3 py-2 text-sm hover:bg-slate-100 cursor-pointer"
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                selectContact(c);
+                              }}
+                            >
+                              <div className="font-medium">{c.name}</div>
+                              <div className="text-xs text-slate-500">
+                                {c.email || "—"} {c.phone ? `· ${c.phone}` : ""}
+                              </div>
+                            </div>
+                          ))}
+                        </>
+                      ) : (
+                        // Si NO hay organización, usamos búsqueda global
+                        <>
+                          {contactLoading && (
+                            <div className="px-3 py-2 text-xs text-slate-500">Buscando…</div>
+                          )}
+                          {!contactLoading && contactResults.length === 0 && debContact.trim().length >= 2 && (
+                            <div className="px-3 py-2 text-xs text-slate-500">Sin resultados</div>
+                          )}
+                          {contactResults.map((c) => (
+                            <div
+                              key={c.id}
+                              className="px-3 py-2 text-sm hover:bg-slate-100 cursor-pointer"
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                selectContact(c);
+                              }}
+                            >
+                              <div className="font-medium">{c.name}</div>
+                              <div className="text-xs text-slate-500">
+                                {c.email || "—"} {c.phone ? `· ${c.phone}` : ""}
+                              </div>
+                            </div>
+                          ))}
+                        </>
                       )}
-                      {filteredContacts.map((c) => (
-                        <div
-                          key={c.id}
-                          className="px-3 py-2 text-sm hover:bg-slate-100 cursor-pointer"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            selectContact(c);
-                          }}
-                        >
-                          <div className="font-medium">{c.name}</div>
-                          <div className="text-xs text-slate-500">
-                            {c.email || "—"} {c.phone ? `· ${c.phone}` : ""}
-                          </div>
-                        </div>
-                      ))}
                     </div>
                   )}
                 </div>
@@ -697,7 +800,7 @@ export default function NewOperationModal({
                 >
                   {!modo && <option value="">Elegí modalidad…</option>}
                   {modo &&
-                    tipoCargaOptions.map((v) => (
+                    (LOAD_TYPES[modo] || []).map((v) => (
                       <option key={v} value={v}>
                         {v}
                       </option>
@@ -724,6 +827,7 @@ export default function NewOperationModal({
                 />
               </label>
 
+              {/* Campo visible y robusto */}
               <label className="text-sm flex items-center gap-2">
                 Tipo de operación
                 <Select
@@ -737,7 +841,7 @@ export default function NewOperationModal({
                   <option value="">—</option>
                   {tipoOperacionOptions.map((o) => (
                     <option key={o.value} value={o.value}>
-                      {o.label || o.value}
+                      {o.label || opLabel(o.value)}
                     </option>
                   ))}
                 </Select>

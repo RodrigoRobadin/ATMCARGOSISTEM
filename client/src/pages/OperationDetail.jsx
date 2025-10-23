@@ -1,3 +1,4 @@
+// client/src/components/OperationDetail.jsx
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
@@ -306,15 +307,27 @@ function AirForm({ f, set, readOnly }) {
   return (
     <div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <Field label="DOC MASTER"><Input readOnly={readOnly} value={f.doc_master} onChange={(e)=>set('doc_master',e.target.value)} /></Field>
-        <Field label="DOC HOUSE"><Input readOnly={readOnly} value={f.doc_house} onChange={(e)=>set('doc_house',e.target.value)} /></Field>
-        <Field label="Línea aérea"><Input readOnly={readOnly} value={f.airline} onChange={(e)=>set('airline',e.target.value)} /></Field>
+        <Field label="DOC MASTER">
+          <Input readOnly={readOnly} value={f.doc_master} onChange={(e)=>set('doc_master',e.target.value)} />
+        </Field>
+        <Field label="DOC HOUSE">
+          <Input readOnly={readOnly} value={f.doc_house} onChange={(e)=>set('doc_house',e.target.value)} />
+        </Field>
+        <Field label="Línea aérea">
+          <Input readOnly={readOnly} value={f.airline} onChange={(e)=>set('airline',e.target.value)} />
+        </Field>
 
-        <Field label="Agente"><Input readOnly={readOnly} value={f.agent} onChange={(e)=>set('agent',e.target.value)} /></Field>
-        <Field label="Ag. Aduanera"><Input readOnly={readOnly} value={f.customs_broker} onChange={(e)=>set('customs_broker',e.target.value)} /></Field>
-        <Field label="Proveedor"><Input readOnly={readOnly} value={f.provider} onChange={(e)=>set('provider',e.target.value)} /></Field>
+        <Field label="Agente">
+          <Input readOnly={readOnly} value={f.agent} onChange={(e)=>set('agent',e.target.value)} />
+        </Field>
+        <Field label="Ag. Aduanera">
+          <Input readOnly={readOnly} value={f.customs_broker} onChange={(e)=>set('customs_broker',e.target.value)} />
+        </Field>
+        <Field label="Proveedor">
+          <Input readOnly={readOnly} value={f.provider} onChange={(e)=>set('provider',e.target.value)} />
+        </Field>
 
-        {/* NUEVO: SHPR / CNEE */}
+        {/* SHPR / CNEE */}
         <div className="md:col-span-3">
           <Field label="SHPR / CNEE">
             <Input
@@ -326,13 +339,25 @@ function AirForm({ f, set, readOnly }) {
           </Field>
         </div>
 
-        <Field label="Origen (AP)"><Input readOnly={readOnly} value={f.origin_airport} onChange={(e)=>set('origin_airport',e.target.value)} /></Field>
-        <Field label="Transbordo (AP)"><Input readOnly={readOnly} value={f.transshipment_airport} onChange={(e)=>set('transshipment_airport',e.target.value)} /></Field>
-        <Field label="Destino (AP)"><Input readOnly={readOnly} value={f.destination_airport} onChange={(e)=>set('destination_airport',e.target.value)} /></Field>
+        <Field label="Origen (AP)">
+          <Input readOnly={readOnly} value={f.origin_airport} onChange={(e)=>set('origin_airport',e.target.value)} />
+        </Field>
+        <Field label="Transbordo (AP)">
+          <Input readOnly={readOnly} value={f.transshipment_airport} onChange={(e)=>set('transshipment_airport',e.target.value)} />
+        </Field>
+        <Field label="Destino (AP)">
+          <Input readOnly={readOnly} value={f.destination_airport} onChange={(e)=>set('destination_airport',e.target.value)} />
+        </Field>
 
-        <Field label="Mercadería"><Input readOnly={readOnly} value={f.commodity} onChange={(e)=>set('commodity',e.target.value)} /></Field>
-        <Field label="Bultos"><Input readOnly={readOnly} type="number" value={f.packages} onChange={(e)=>set('packages',e.target.value)} /></Field>
-        <Field label="P. Bruto (kg)"><Input readOnly={readOnly} type="number" value={f.weight_gross_kg} onChange={(e)=>set('weight_gross_kg',e.target.value)} /></Field>
+        <Field label="Mercadería">
+          <Input readOnly={readOnly} value={f.commodity} onChange={(e)=>set('commodity',e.target.value)} />
+        </Field>
+        <Field label="Bultos">
+          <Input readOnly={readOnly} type="number" value={f.packages} onChange={(e)=>set('packages',e.target.value)} />
+        </Field>
+        <Field label="P. Bruto (kg)">
+          <Input readOnly={readOnly} type="number" value={f.weight_gross_kg} onChange={(e)=>set('weight_gross_kg',e.target.value)} />
+        </Field>
 
         <Field label="Volumen (m³)">
           <Input
@@ -348,7 +373,7 @@ function AirForm({ f, set, readOnly }) {
             readOnly
             type="number"
             value={f.weight_chargeable_kg}
-            title="Se calcula como Volumen × 167"
+            title="Se calcula como Volumen × 167 (y/o el mayor con P. Bruto según tu lógica)"
           />
         </Field>
 
@@ -361,26 +386,40 @@ function AirForm({ f, set, readOnly }) {
           />
         </Field>
 
-        <Field label="Seguro (X/—)"><Input readOnly={readOnly} value={f.seguro_flag} onChange={(e)=>set('seguro_flag',e.target.value)} /></Field>
-        <Field label="Tipo seguro"><Input readOnly={readOnly} value={f.tipo_seguro} onChange={(e)=>set('tipo_seguro',e.target.value)} /></Field>
-        <Field label="Cert. seguro"><Input readOnly={readOnly} value={f.cert_seguro} onChange={(e)=>set('cert_seguro',e.target.value)} /></Field>
+        {/* ⚠️ Campos de Seguro / Condición / Factura fueron removidos de esta sección */}
 
-        <Field label="Condición"><Input readOnly={readOnly} value={f.condicion} onChange={(e)=>set('condicion',e.target.value)} /></Field>
-        <Field label="FACT Nº"><Input readOnly={readOnly} value={f.fact_no} onChange={(e)=>set('fact_no',e.target.value)} /></Field>
-        <Field label="Valor Factura"><Input readOnly={readOnly} value={f.valor_fact} onChange={(e)=>set('valor_fact',e.target.value)} /></Field>
+        <Field label="ETD">
+          <Input readOnly={readOnly} type="datetime-local" value={toLocal(f.etd)} onChange={(e)=>set('etd',e.target.value)} />
+        </Field>
+        <Field label="Arribo Transb.">
+          <Input readOnly={readOnly} type="datetime-local" value={toLocal(f.trans_arrival)} onChange={(e)=>set('trans_arrival',e.target.value)} />
+        </Field>
+        <Field label="Salida Transb.">
+          <Input readOnly={readOnly} type="datetime-local" value={toLocal(f.trans_depart)} onChange={(e)=>set('trans_depart',e.target.value)} />
+        </Field>
+        <Field label="ETA">
+          <Input readOnly={readOnly} type="datetime-local" value={toLocal(f.eta)} onChange={(e)=>set('eta',e.target.value)} />
+        </Field>
+        <Field label="Días tránsito">
+          <Input readOnly={readOnly} type="number" value={f.transit_days} onChange={(e)=>set('transit_days',e.target.value)} />
+        </Field>
 
-        <Field label="ETD"><Input readOnly={readOnly} type="datetime-local" value={toLocal(f.etd)} onChange={(e)=>set('etd',e.target.value)} /></Field>
-        <Field label="Arribo Transb."><Input readOnly={readOnly} type="datetime-local" value={toLocal(f.trans_arrival)} onChange={(e)=>set('trans_arrival',e.target.value)} /></Field>
-        <Field label="Salida Transb."><Input readOnly={readOnly} type="datetime-local" value={toLocal(f.trans_depart)} onChange={(e)=>set('trans_depart',e.target.value)} /></Field>
-        <Field label="ETA"><Input readOnly={readOnly} type="datetime-local" value={toLocal(f.eta)} onChange={(e)=>set('eta',e.target.value)} /></Field>
-        <Field label="Días tránsito"><Input readOnly={readOnly} type="number" value={f.transit_days} onChange={(e)=>set('transit_days',e.target.value)} /></Field>
+        <Field label="Observaciones">
+          <Input readOnly={readOnly} value={f.observations} onChange={(e)=>set('observations',e.target.value)} />
+        </Field>
 
-        <Field label="Observaciones"><Input readOnly={readOnly} value={f.observations} onChange={(e)=>set('observations',e.target.value)} /></Field>
-
-        <Field label="DOC MASTER (término)"><Input readOnly={readOnly} value={f.doc_master_term} onChange={(e)=>set('doc_master_term',e.target.value)} /></Field>
-        <Field label="DOC HOUSE (término)"><Input readOnly={readOnly} value={f.doc_house_term} onChange={(e)=>set('doc_house_term',e.target.value)} /></Field>
-        <Field label="Flete (pago)"><Input readOnly={readOnly} value={f.flete_pago} onChange={(e)=>set('flete_pago',e.target.value)} /></Field>
-        <Field label="Gastos locales (pago)"><Input readOnly={readOnly} value={f.gastos_locales_pago} onChange={(e)=>set('gastos_locales_pago',e.target.value)} /></Field>
+        <Field label="DOC MASTER (término)">
+          <Input readOnly={readOnly} value={f.doc_master_term} onChange={(e)=>set('doc_master_term',e.target.value)} />
+        </Field>
+        <Field label="DOC HOUSE (término)">
+          <Input readOnly={readOnly} value={f.doc_house_term} onChange={(e)=>set('doc_house_term',e.target.value)} />
+        </Field>
+        <Field label="Flete (pago)">
+          <Input readOnly={readOnly} value={f.flete_pago} onChange={(e)=>set('flete_pago',e.target.value)} />
+        </Field>
+        <Field label="Gastos locales (pago)">
+          <Input readOnly={readOnly} value={f.gastos_locales_pago} onChange={(e)=>set('gastos_locales_pago',e.target.value)} />
+        </Field>
       </div>
     </div>
   );
@@ -388,7 +427,6 @@ function AirForm({ f, set, readOnly }) {
 
 
 function OceanForm({ f, set, readOnly }) {
-  // helpers de contenedores usando estado del padre (no hooks aquí)
   const list = Array.isArray(f.containers_json) ? f.containers_json : [];
 
   const addCntr = () => {
@@ -415,8 +453,6 @@ function OceanForm({ f, set, readOnly }) {
         <Field label="MBL"><Input readOnly={readOnly} value={f.mbl} onChange={(e)=>set("mbl",e.target.value)} /></Field>
         <Field label="HBL"><Input readOnly={readOnly} value={f.hbl} onChange={(e)=>set("hbl",e.target.value)} /></Field>
         <Field label="Naviera"><Input readOnly={readOnly} value={f.shipping_line} onChange={(e)=>set("shipping_line",e.target.value)} /></Field>
-
-        {/* Tipo de carga se maneja en “Detalles de operación”, por eso no va aquí */}
 
         <Field label="Puerto Origen"><Input readOnly={readOnly} value={f.pol} onChange={(e)=>set("pol",e.target.value)} /></Field>
         <Field label="Transbordo"><Input readOnly={readOnly} value={f.transshipment_port} onChange={(e)=>set("transshipment_port",e.target.value)} /></Field>
@@ -445,7 +481,6 @@ function OceanForm({ f, set, readOnly }) {
         <Field label="Observaciones"><Input readOnly={readOnly} value={f.observations} onChange={(e)=>set("observations",e.target.value)} /></Field>
       </div>
 
-      {/* ===== Contenedores (acordeón nativo <details>) ===== */}
       <details className="mt-3 bg-white border rounded-xl">
         <summary className="cursor-pointer select-none px-3 py-2 text-sm flex items-center gap-2">
           <b>Contenedores</b>
@@ -491,9 +526,7 @@ function OceanForm({ f, set, readOnly }) {
   );
 }
 
-
 function RoadForm({ f, set, readOnly }) {
-  // helpers contenedores
   const list = Array.isArray(f.containers_json) ? f.containers_json : [];
   const addCntr = () => {
     if (readOnly) return;
@@ -545,7 +578,6 @@ function RoadForm({ f, set, readOnly }) {
         <Field label="Observaciones"><Input readOnly={readOnly} value={f.observations} onChange={(e)=>set("observations",e.target.value)} /></Field>
       </div>
 
-      {/* ===== Contenedores (acordeón) ===== */}
       <details className="mt-3 bg-white border rounded-xl" open>
         <summary className="cursor-pointer select-none px-3 py-2 text-sm flex items-center gap-2">
           <b>Contenedores</b>
@@ -583,9 +615,7 @@ function RoadForm({ f, set, readOnly }) {
   );
 }
 
-
 function MultimodalForm({ f, set, readOnly }) {
-  // helpers contenedores
   const list = Array.isArray(f.containers_json) ? f.containers_json : [];
   const addCntr = () => {
     if (readOnly) return;
@@ -604,7 +634,6 @@ function MultimodalForm({ f, set, readOnly }) {
     set("containers_json", next);
   };
 
-  // helpers tramos (como ya tenías)
   const addLeg = () => {
     const leg_no = (f.legs?.length || 0) + 1;
     set("legs", [...(f.legs || []), { leg_no, mode:"OCEAN", carrier:"", origin:"", destination:"", ref_doc:"", etd:"", eta:"", weight_kg:"", volume_m3:"", packages:"" }]);
@@ -632,7 +661,6 @@ function MultimodalForm({ f, set, readOnly }) {
         <Field label="Free days"><Input readOnly={readOnly} type="number" value={f.free_days} onChange={(e)=>set("free_days",e.target.value)} /></Field>
       </div>
 
-      {/* ===== Contenedores (acordeón) ===== */}
       <details className="mt-3 bg-white border rounded-xl" open>
         <summary className="cursor-pointer select-none px-3 py-2 text-sm flex items-center gap-2">
           <b>Contenedores</b>
@@ -667,7 +695,6 @@ function MultimodalForm({ f, set, readOnly }) {
         </div>
       </details>
 
-      {/* ===== Tramos ===== */}
       <div className="mt-4">
         <h4 className="font-medium mb-2">Tramos</h4>
         <div className="grid gap-2">
@@ -712,7 +739,6 @@ function MultimodalForm({ f, set, readOnly }) {
   );
 }
 
-
 /* ---- util ---- */
 function getExt(name = "") {
   const m = String(name).toLowerCase().match(/\.([a-z0-9]+)(?:\?|#|$)/);
@@ -734,34 +760,28 @@ export default function OperationDetail() {
   const { id } = useParams();
   const nav = useNavigate();
 
-  // hooks SIEMPRE arriba
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState(null);
   const [activities, setActivities] = useState([]);
 
   const [desc, setDesc] = useState("");
-  const [value, setValue] = useState(""); // mantiene compat, ya no se edita
+  const [value, setValue] = useState("");
   const [cf, setCf] = useState({});
   const [cfSupported, setCfSupported] = useState(true);
   const [editMode, setEditMode] = useState(false);
   const [dirtyCF, setDirtyCF] = useState(new Set());
   const [note, setNote] = useState("");
 
-  // >>> NUEVO: Profit del presupuesto
   const [profitUSD, setProfitUSD] = useState(null);
 
-  // Documentos
   const [filesByType, setFilesByType] = useState({});
   const fileInputsRef = useRef({});
 
-  // pestañas
   const [activeTab, setActiveTab] = useState("detalle");
   const [filesRefreshKey, setFilesRefreshKey] = useState(0);
 
-  // uploads en curso
   const [uploadingFiles, setUploadingFiles] = useState([]);
 
-  // params admin
   const [paramMap, setParamMap] = useState({
     tipo_operacion: [],
     modalidad_carga: [],
@@ -769,7 +789,6 @@ export default function OperationDetail() {
     incoterm: [],
   });
 
-  // estados de formularios por modalidad
   const [air, setAir] = useState({});
   const [ocean, setOcean] = useState({});
   const [road, setRoad] = useState({});
@@ -779,10 +798,8 @@ export default function OperationDetail() {
   const setRoadF  = (k, v) => setRoad((s)=>({ ...s, [k]: v }));
   const setMultiF = (k, v) => setMulti((s)=>({ ...s, [k]: v }));
 
-  // === NUEVO: estado de generación de informe ===
   const [generatingReport, setGeneratingReport] = useState(false);
 
-  /* ------- carga -------- */
   async function loadFiles() {
     try {
       const { data } = await api.get(`/deals/${id}/files`).catch(() => ({ data: [] }));
@@ -827,7 +844,7 @@ export default function OperationDetail() {
       const [{ data: detail }, cfRes, opRes] = await Promise.all([
         api.get(`/deals/${id}`),
         api.get(`/deals/${id}/custom-fields`).catch(() => ({ data: null })),
-        api.get(`/operations/${id}`).catch(() => ({ data: null })), // puede no existir aún
+        api.get(`/operations/${id}`).catch(() => ({ data: null })),
       ]);
 
       setDeal(detail.deal);
@@ -835,7 +852,6 @@ export default function OperationDetail() {
       setDesc(detail.deal?.title || "");
       setValue(String(detail.deal?.value ?? ""));
 
-      // ---- CFs
       let cfMapLocal = {};
       if (Array.isArray(cfRes?.data)) {
         cfRes.data.forEach((row) => {
@@ -847,9 +863,8 @@ export default function OperationDetail() {
         setCf({});
         setCfSupported(false);
       }
-      const cfVal = (k) => (hasKey(cfMapLocal, k) ? cfMapLocal[k].value : "");
+      const cfVal = (k) => (cfMapLocal.hasOwnProperty(k) ? cfMapLocal[k].value : "");
 
-      // ---- datos de operación/modalidades
       const op = opRes?.data || {};
       setAir({
         doc_master: op.air?.doc_master ?? cfVal("doc_master") ?? "",
@@ -960,7 +975,6 @@ export default function OperationDetail() {
         containers_json: Array.isArray(op.multimodal?.containers_json) ? op.multimodal.containers_json : [],
       });
 
-      // === Cost-sheet → Profit
       let profit = null;
       try {
         const csResp = await api.get(`/deals/${id}/cost-sheet`).then(r => r.data).catch(() => null);
@@ -984,9 +998,8 @@ export default function OperationDetail() {
     }
   }
 
-  useEffect(() => { reload(); }, [id]); // seguro: hook siempre registrado
+  useEffect(() => { reload(); }, [id]);
 
-  /* ---------- custom-field helpers ---------- */
   const getCF = (key) => cf[key]?.value ?? "";
   const setCFLocal = (key, updater) =>
     setCf((prev) => ({ ...prev, [key]: { ...(prev[key] || {}), ...updater } }));
@@ -1042,47 +1055,41 @@ export default function OperationDetail() {
         : mapCF2TT[cfTTraw] || "AIR";
 
       if (currentTT === "AIR") {
-        await saveModal("air", air, [
-          { key: "doc_master", label: "DOC MASTER", type: "text", pick: (p) => p.doc_master },
-          { key: "doc_house", label: "DOC HOUSE", type: "text", pick: (p) => p.doc_house },
-          { key: "linea_aerea", label: "Línea aérea", type: "text", pick: (p) => p.airline },
-          { key: "shpr_cnee", label: "SHPR - CNEE", type: "text", pick: (p) => p.shpr_cnee },
-          { key: "agente", label: "Agente", type: "text", pick: (p) => p.agent },
-          { key: "ag_aduanera", label: "Ag Aduanera", type: "text", pick: (p) => p.customs_broker },
-          { key: "proveedor", label: "Proveedor", type: "text", pick: (p) => p.provider },
-          { key: "origen_pto", label: "Origen", type: "text", pick: (p) => p.origin_airport },
-          { key: "transb_pto", label: "Transbordo", type: "text", pick: (p) => p.transshipment_airport },
-          { key: "destino_pto", label: "Destino", type: "text", pick: (p) => p.destination_airport },
-          { key: "mercaderia", label: "Mercadería", type: "text", pick: (p) => p.commodity },
-          { key: "cant_bultos", label: "Cant bultos", type: "number", pick: (p) => p.packages },
-          { key: "peso_bruto", label: "Peso", type: "text", pick: (p) => p.weight_gross_kg },
-          { key: "vol_m3", label: "Vol m³", type: "text", pick: (p) => p.volume_m3 },
-          { key: "p_vol", label: "P. Vol", type: "text", pick: (p) => p.weight_chargeable_kg },
-          { key: "dimensiones", label: "Dimensiones", type: "text", pick: (p) => p.dimensions_text },
-          { key: "seguro", label: "Seguro", type: "text", pick: (p) => p.seguro_flag },
-          { key: "tipo_seguro", label: "Tipo seguro", type: "text", pick: (p) => p.tipo_seguro },
-          { key: "cert_seguro", label: "Cert. seguro", type: "text", pick: (p) => p.cert_seguro },
-          { key: "condicion", label: "Condición", type: "text", pick: (p) => p.condicion },
-          { key: "fact_no", label: "FACT No", type: "text", pick: (p) => p.fact_no },
-          { key: "valor_fact", label: "Valor Fact", type: "text", pick: (p) => p.valor_fact },
-          { key: "f_est_salida", label: "F. Est. Salida", type: "date", pick: (p) => p.etd },
-          { key: "llegada_transb", label: "Arribo Transb.", type: "date", pick: (p) => p.trans_arrival },
-          { key: "salida_transb", label: "Salida Transb.", type: "date", pick: (p) => p.trans_depart },
-          { key: "llegada_destino", label: "ETA", type: "date", pick: (p) => p.eta },
-          { key: "dias_transito", label: "Días Tránsito", type: "number", pick: (p) => p.transit_days },
-          { key: "observaciones", label: "OBS", type: "text", pick: (p) => p.observations },
-          { key: "doc_master_term", label: "Doc Master (term)", type: "text", pick: (p) => p.doc_master_term },
-          { key: "doc_house_term", label: "Doc House (term)", type: "text", pick: (p) => p.doc_house_term },
-          { key: "flete_pago", label: "Flete pago", type: "text", pick: (p) => p.flete_pago },
-          { key: "gastos_locales_pago", label: "Gastos locales pago", type: "text", pick: (p) => p.gastos_locales_pago },
-        ]);
-      }
+  await saveModal("air", air, [
+    { key: "doc_master", label: "DOC MASTER", type: "text", pick: (p) => p.doc_master },
+    { key: "doc_house", label: "DOC HOUSE", type: "text", pick: (p) => p.doc_house },
+    { key: "linea_aerea", label: "Línea aérea", type: "text", pick: (p) => p.airline },
+    { key: "shpr_cnee", label: "SHPR - CNEE", type: "text", pick: (p) => p.shpr_cnee },
+    { key: "agente", label: "Agente", type: "text", pick: (p) => p.agent },
+    { key: "ag_aduanera", label: "Ag Aduanera", type: "text", pick: (p) => p.customs_broker },
+    { key: "proveedor", label: "Proveedor", type: "text", pick: (p) => p.provider },
+    { key: "origen_pto", label: "Origen", type: "text", pick: (p) => p.origin_airport },
+    { key: "transb_pto", label: "Transbordo", type: "text", pick: (p) => p.transshipment_airport },
+    { key: "destino_pto", label: "Destino", type: "text", pick: (p) => p.destination_airport },
+    { key: "mercaderia", label: "Mercadería", type: "text", pick: (p) => p.commodity },
+    { key: "cant_bultos", label: "Cant bultos", type: "number", pick: (p) => p.packages },
+    { key: "peso_bruto", label: "Peso", type: "text", pick: (p) => p.weight_gross_kg },
+    { key: "vol_m3", label: "Vol m³", type: "text", pick: (p) => p.volume_m3 },
+    { key: "p_vol", label: "P. Vol", type: "text", pick: (p) => p.weight_chargeable_kg },
+    { key: "dimensiones", label: "Dimensiones", type: "text", pick: (p) => p.dimensions_text },
+    { key: "f_est_salida", label: "F. Est. Salida", type: "date", pick: (p) => p.etd },
+    { key: "llegada_transb", label: "Arribo Transb.", type: "date", pick: (p) => p.trans_arrival },
+    { key: "salida_transb", label: "Salida Transb.", type: "date", pick: (p) => p.trans_depart },
+    { key: "llegada_destino", label: "ETA", type: "date", pick: (p) => p.eta },
+    { key: "dias_transito", label: "Días Tránsito", type: "number", pick: (p) => p.transit_days },
+    { key: "observaciones", label: "OBS", type: "text", pick: (p) => p.observations },
+    { key: "doc_master_term", label: "Doc Master (term)", type: "text", pick: (p) => p.doc_master_term },
+    { key: "doc_house_term", label: "Doc House (term)", type: "text", pick: (p) => p.doc_house_term },
+    { key: "flete_pago", label: "Flete pago", type: "text", pick: (p) => p.flete_pago },
+    { key: "gastos_locales_pago", label: "Gastos locales pago", type: "text", pick: (p) => p.gastos_locales_pago },
+  ]);
+}
+
       if (currentTT === "OCEAN") {
         await saveModal("ocean", ocean, [
           { key: "doc_master", label: "DOC MASTER", type: "text", pick: (p) => p.mbl },
           { key: "doc_house", label: "DOC HOUSE", type: "text", pick: (p) => p.hbl },
           { key: "linea_marit", label: "Línea marítima", type: "text", pick: (p) => p.shipping_line },
-          // ⚠️ Quitado el mapeo de "tipo_carga" para no sobreescribir desde subform
           { key: "origen_pto", label: "Puerto Origen", type: "text", pick: (p) => p.pol },
           { key: "transb_pto", label: "Transbordo", type: "text", pick: (p) => p.transshipment_port },
           { key: "destino_pto", label: "Puerto Destino", type: "text", pick: (p) => p.pod },
@@ -1105,7 +1112,6 @@ export default function OperationDetail() {
           { key: "chofer", label: "Chofer", type: "text", pick: (p) => p.driver_name },
           { key: "chofer_tel", label: "Tel. Chofer", type: "text", pick: (p) => p.driver_phone },
           { key: "cruce_frontera", label: "Cruce Fronterizo", type: "text", pick: (p) => p.border_crossing },
-          // ⚠️ Quitado el mapeo de "clase_carga" para no sobreescribir desde subform
           { key: "precinto", label: "Precinto", type: "text", pick: (p) => p.seal_no },
           { key: "observaciones", label: "OBS", type: "text", pick: (p) => p.observations },
         ]);
@@ -1159,7 +1165,6 @@ export default function OperationDetail() {
     fileInputsRef.current[type].click();
   }
 
-  // ===== NUEVO: descarga de informe (robusto a rutas distintas) =====
   function downloadBlob(blob, filename = "informe.pdf") {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1175,8 +1180,6 @@ export default function OperationDetail() {
     if (!id) return;
     try {
       setGeneratingReport(true);
-
-      // 1) intentar POST clásico a /reports/status/informes con body { deal_id }
       try {
         const { data } = await api.post(
           "/reports/status/informes",
@@ -1186,21 +1189,15 @@ export default function OperationDetail() {
         const blob = new Blob([data], { type: "application/pdf" });
         downloadBlob(blob, `informe-estado-${(deal?.reference || id)}.pdf`);
         return;
-      } catch (e1) {
-        // sigue al fallback
-      }
+      } catch (e1) {}
 
-      // 2) fallback GET a /reports/status/:id
       try {
         const { data } = await api.get(`/reports/status/${id}`, { responseType: "blob" });
         const blob = new Blob([data], { type: "application/pdf" });
         downloadBlob(blob, `informe-estado-${(deal?.reference || id)}.pdf`);
         return;
-      } catch (e2) {
-        // sigue al fallback
-      }
+      } catch (e2) {}
 
-      // 3) fallback GET a /reports/status?deal_id=:id
       try {
         const { data } = await api.get(`/reports/status`, {
           params: { deal_id: id },
@@ -1210,7 +1207,6 @@ export default function OperationDetail() {
         downloadBlob(blob, `informe-estado-${(deal?.reference || id)}.pdf`);
         return;
       } catch (e3) {
-        // si nada funcionó:
         throw e3;
       }
     } catch (err) {
@@ -1221,7 +1217,6 @@ export default function OperationDetail() {
     }
   }
 
-  // subida con progreso -> pestaña "Subiendo…"
   const docLabelFor = (type) => DOC_TYPES.find((t) => t.key === type)?.label || "Documento";
   const pushUploading = ({ name, type }) => {
     const tempId = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
@@ -1263,18 +1258,14 @@ export default function OperationDetail() {
       popUploading(tempId);
       await loadFiles();
 
-      if (info?.id) setActiveTab(`f-${info.id}`);
-      else {
-        const newest = flattenFiles(filesByType)[0];
-        if (newest) setActiveTab(`f-${newest.id}`);
-      }
+      const newest = info?.id ? { id: info.id } : flattenFiles(filesByType)[0];
+      if (newest) setActiveTab(`f-${newest.id}`);
     } catch {
       popUploading(tempId);
       alert("No se pudo subir el archivo.");
     }
   }
 
-  /* --------- tabs de archivos --------- */
   const flatUploadingTabs = uploadingFiles.map((u) => ({
     id: `up-${u.tempId}`,
     kind: "upload",
@@ -1319,7 +1310,6 @@ export default function OperationDetail() {
     return null;
   }
 
-  // ====== opciones / derivados / tipo de transporte ======
   const opts = {
     tipo_operacion: (paramMap.tipo_operacion.length
       ? paramMap.tipo_operacion
@@ -1333,7 +1323,6 @@ export default function OperationDetail() {
     incoterm: (paramMap.incoterm.length ? paramMap.incoterm : []).map((o) => o.value),
   };
 
-  // valores empresa
   const orgRuc = deal?.org_ruc || getCF("org_ruc") || getCF("ruc") || "";
   const orgAddress = deal?.org_address || getCF("org_address") || getCF("address") || "";
   const orgPhone = deal?.org_phone || getCF("org_phone") || getCF("phone") || "";
@@ -1355,7 +1344,6 @@ export default function OperationDetail() {
   const [modalTab, setModalTab] = useState("AIR");
   useEffect(() => { setModalTab(currentTT); }, [currentTT]);
 
-  // ---- returns tempranos después de registrar TODOS los hooks
   if (loading) return <p className="text-sm text-slate-600">Cargando…</p>;
   if (!deal) return <p className="text-sm text-slate-600">Operación no encontrada.</p>;
 
@@ -1476,7 +1464,6 @@ export default function OperationDetail() {
                   <Field label="Email (contacto)"><Input value={deal.contact_email || ""} readOnly /></Field>
                 </div>
 
-                {/* 👇 Valor (solo lectura) */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
                   <Field label="Valor (Profit presupuesto)">
                     <Input
@@ -1491,11 +1478,11 @@ export default function OperationDetail() {
                 </div>
               </div>
 
-              {/* ====== Detalles de operación (ÚNICA fuente de Tipo de carga) */}
+              {/* ====== Detalles de operación (UNIFICA incoterm/seguro aquí) */}
               <div className="bg-white rounded-2xl shadow p-4">
                 <h3 className="font-medium mb-3">Detalles de operación</h3>
 
-                {/* TIPO DE OPERACIÓN - MERCADERÍA */}
+                {/* Tipo de operación - Mercadería */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 mb-3">
                   <Field label="Tipo de operación">
                     <Select
@@ -1525,7 +1512,7 @@ export default function OperationDetail() {
                   </Field>
                 </div>
 
-                {/* TIPO DE EMBARQUE - TIPO DE CARGA */}
+                {/* Tipo de embarque - Tipo de carga */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 mb-3">
                   <Field label="Tipo de embarque">
                     <Select
@@ -1560,8 +1547,8 @@ export default function OperationDetail() {
                   </Field>
                 </div>
 
-                {/* ORIGEN - DESTINO */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+                {/* Origen - Destino */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 mb-3">
                   <Field label="Origen">
                     <Input
                       readOnly={!editMode}
@@ -1583,74 +1570,9 @@ export default function OperationDetail() {
                     />
                   </Field>
                 </div>
-              </div>
 
-              {/* ====== Pestañas por modalidad */}
-              <div className="bg-white rounded-2xl shadow p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-medium">Detalle por modalidad</h3>
-                  <div className="text-xs text-slate-500">
-                    Tipo actual: <b>{currentTT}</b>
-                  </div>
-                </div>
-
-                <div className="flex gap-1 flex-wrap mb-4">
-                  {[
-                    { key: "AIR", label: "Aéreo" },
-                    { key: "OCEAN", label: "Marítimo" },
-                    { key: "ROAD", label: "Terrestre" },
-                    { key: "MULTIMODAL", label: "Multimodal" },
-                  ].map((t) => {
-                    const disabled = t.key !== currentTT;
-                    const active = modalTab === t.key;
-                    return (
-                      <button
-                        key={t.key}
-                        className={`px-3 py-2 text-sm rounded-lg border ${
-                          active ? "bg-black text-white" : "bg-white"
-                        } ${disabled ? "opacity-60 cursor-not-allowed" : ""}`}
-                        onClick={() => !disabled && setModalTab(t.key)}
-                        disabled={disabled}
-                        title={
-                          disabled
-                            ? "Pestaña deshabilitada: la operación es de otro tipo"
-                            : `Ver ${t.label}`
-                        }
-                      >
-                        {t.label}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {modalTab === "AIR" && <AirForm f={air} set={setAirF} readOnly={!editMode} />}
-                {modalTab === "OCEAN" && <OceanForm f={ocean} set={setOceanF} readOnly={!editMode} />}
-                {modalTab === "ROAD" && <RoadForm f={road} set={setRoadF} readOnly={!editMode} />}
-                {modalTab === "MULTIMODAL" && <MultimodalForm f={multi} set={setMultiF} readOnly={!editMode} />}
-              </div>
-
-              {/* Fechas / Incoterm / Seguro */}
-              <div className="bg-white rounded-2xl shadow p-4">
-                <h3 className="font-medium mb-3">Fechas & condiciones</h3>
+                {/* 👇 NUEVO: Incoterm + Seguro dentro de Detalles de operación */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
-                  {[
-                    ["f_inicio", "F. Inicio", "date"],
-                    ["f_cotiz", "F. Cotiz", "date"],
-                    ["f_confirm", "F. Confirm", "date"],
-                  ].map(([key, label, type]) => (
-                    <Field key={key} label={label}>
-                      <Input
-                        readOnly={!editMode}
-                        type={type}
-                        value={getCF(key)}
-                        onChange={(e) => {
-                          setCFLocal(key, { label, type, value: e.target.value });
-                          markDirty(key);
-                        }}
-                      />
-                    </Field>
-                  ))}
-
                   <Field label="Incoterm">
                     <Select
                       readOnly={!editMode}
@@ -1704,6 +1626,74 @@ export default function OperationDetail() {
                       }}
                     />
                   </Field>
+                </div>
+              </div>
+
+              {/* ====== Pestañas por modalidad */}
+              <div className="bg-white rounded-2xl shadow p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-medium">Detalle por modalidad</h3>
+                  <div className="text-xs text-slate-500">
+                    Tipo actual: <b>{currentTT}</b>
+                  </div>
+                </div>
+
+                <div className="flex gap-1 flex-wrap mb-4">
+                  {[
+                    { key: "AIR", label: "Aéreo" },
+                    { key: "OCEAN", label: "Marítimo" },
+                    { key: "ROAD", label: "Terrestre" },
+                    { key: "MULTIMODAL", label: "Multimodal" },
+                  ].map((t) => {
+                    const disabled = t.key !== currentTT;
+                    const active = modalTab === t.key;
+                    return (
+                      <button
+                        key={t.key}
+                        className={`px-3 py-2 text-sm rounded-lg border ${
+                          active ? "bg-black text-white" : "bg-white"
+                        } ${disabled ? "opacity-60 cursor-not-allowed" : ""}`}
+                        onClick={() => !disabled && setModalTab(t.key)}
+                        disabled={disabled}
+                        title={
+                          disabled
+                            ? "Pestaña deshabilitada: la operación es de otro tipo"
+                            : `Ver ${t.label}`
+                        }
+                      >
+                        {t.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {modalTab === "AIR" && <AirForm f={air} set={setAirF} readOnly={!editMode} />}
+                {modalTab === "OCEAN" && <OceanForm f={ocean} set={setOceanF} readOnly={!editMode} />}
+                {modalTab === "ROAD" && <RoadForm f={road} set={setRoadF} readOnly={!editMode} />}
+                {modalTab === "MULTIMODAL" && <MultimodalForm f={multi} set={setMultiF} readOnly={!editMode} />}
+              </div>
+
+              {/* Fechas (solo logísticas ahora) */}
+              <div className="bg-white rounded-2xl shadow p-4">
+                <h3 className="font-medium mb-3">Fechas logísticas</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+                  {[
+                    ["f_inicio", "F. Inicio", "date"],
+                    ["f_cotiz", "F. Cotiz", "date"],
+                    ["f_confirm", "F. Confirm", "date"],
+                  ].map(([key, label, type]) => (
+                    <Field key={key} label={label}>
+                      <Input
+                        readOnly={!editMode}
+                        type={type}
+                        value={getCF(key)}
+                        onChange={(e) => {
+                          setCFLocal(key, { label, type, value: e.target.value });
+                          markDirty(key);
+                        }}
+                      />
+                    </Field>
+                  ))}
                 </div>
               </div>
 
@@ -1818,7 +1808,6 @@ export default function OperationDetail() {
                 )
               )}
 
-              {/* === NUEVO: botón generar informe === */}
               <button
                 className="px-3 py-2 text-sm rounded-lg bg-green-600 text-white text-center hover:opacity-90 disabled:opacity-60"
                 onClick={generateStatusReport}

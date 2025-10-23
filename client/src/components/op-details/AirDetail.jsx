@@ -1,6 +1,38 @@
 // client/src/sections/operation-detail/AirDetail.jsx
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { api } from "../../api";
+
+// Factor volumétrico aéreo (kg/m³)
+const AIR_CHARGE_FACTOR = 167;
+
+// Parse de dimensiones en metros, aceptando líneas tipo: LxWxH[xQTY]
+// Separador entre piezas por salto de línea, coma o punto y coma.
+function parseDimensionsToM3(raw) {
+  if (!raw) return null;
+  const txt = String(raw).toLowerCase().replace(/[×*]/g, "x");
+  const parts = txt
+    .split(/[\n;,+]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  let totalM3 = 0;
+  const toNum = (s) => Number(String(s).replace(",", "."));
+
+  for (const seg of parts) {
+    const m = seg.match(
+      /(\d+(?:[.,]\d+)?)\s*x\s*(\d+(?:[.,]\d+)?)\s*x\s*(\d+(?:[.,]\d+)?)(?:\s*x\s*(\d+(?:[.,]\d+)?))?/i
+    );
+    if (!m) continue;
+    let L = toNum(m[1]),
+      W = toNum(m[2]),
+      H = toNum(m[3]),
+      qty = m[4] ? toNum(m[4]) : 1;
+    if (!L || !W || !H || !qty) continue;
+    const vol = L * W * H * qty;
+    if (!isNaN(vol)) totalM3 += vol;
+  }
+  return totalM3 > 0 ? Number(totalM3.toFixed(3)) : null;
+}
 
 export default function AirDetail({ op, onChange }) {
   // Normalizamos el payload inicial
@@ -13,14 +45,38 @@ export default function AirDetail({ op, onChange }) {
   const disabled = op.locked;
 
   const set = (k, v) => setForm((s) => ({ ...s, [k]: v }));
-  const setNum = (k) => (e) => set(k, e.target.value === "" ? "" : Number(e.target.value));
+  const setNum = (k) => (e) =>
+    set(k, e.target.value === "" ? "" : Number(e.target.value));
 
-  // date (yyyy-mm-dd) -> 'yyyy-mm-dd' (DB DATETIME admite este formato; si querés, podés sumar "T00:00:00")
+  // Helpers de recálculo
+  const calcChargeable = (volM3, grossKg) => {
+    const v = Number(String(volM3 ?? "").toString().replace(",", "."));
+    const g = Number(String(grossKg ?? "").toString().replace(",", "."));
+    const volok = !isNaN(v) && isFinite(v);
+    const grook = !isNaN(g) && isFinite(g);
+
+    if (!volok && !grook) return "";
+    const volumetric = volok ? v * AIR_CHARGE_FACTOR : 0;
+    const charge = Math.max(grook ? g : 0, volumetric);
+    return Number(charge.toFixed(3));
+  };
+
+  // Recalcular al cambiar volumen o peso bruto (ediciones directas)
+  useEffect(() => {
+    const next = calcChargeable(form.volume_m3, form.weight_gross_kg);
+    setForm((s) =>
+      s.weight_chargeable_kg === next ? s : { ...s, weight_chargeable_kg: next }
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.volume_m3, form.weight_gross_kg]);
+
+  // date (yyyy-mm-dd) -> 'yyyy-mm-dd' (DB DATETIME admite este formato)
   const toDate = (v) => (v === "" || v == null ? null : v);
 
   const save = async () => {
     const { id } = op;
 
+    // ⚠️ Sin campos de seguro/factura (esos están en “Detalle de la operación”)
     const b = {
       doc_master: form.doc_master || null,
       doc_house: form.doc_house || null,
@@ -32,7 +88,8 @@ export default function AirDetail({ op, onChange }) {
 
       packages: form.packages === "" ? null : (form.packages ?? null),
       weight_gross_kg: form.weight_gross_kg === "" ? null : (form.weight_gross_kg ?? null),
-      weight_chargeable_kg: form.weight_chargeable_kg === "" ? null : (form.weight_chargeable_kg ?? null),
+      weight_chargeable_kg:
+        form.weight_chargeable_kg === "" ? null : (form.weight_chargeable_kg ?? null),
       volume_m3: form.volume_m3 === "" ? null : (form.volume_m3 ?? null),
 
       commodity: form.commodity || null,
@@ -52,20 +109,35 @@ export default function AirDetail({ op, onChange }) {
     };
 
     try {
-      // 1) Guardar
       await api.put(`/api/operations/${id}/air`, b);
-
-      // 2) Refrescar desde el backend para asegurar consistencia con la DB
       const { data: fresh } = await api.get(`/api/operations/${id}?t=${Date.now()}`);
-      // Actualizá el padre con lo que REALMENTE quedó
       onChange(fresh);
-
-      // 3) (Opcional) si tenés un botón para ver el informe en una pestaña:
-      // window.open(`/api/reports/status/view/${id}?t=${Date.now()}`, "_blank");
-
     } catch (err) {
       console.error("Error guardando detalle aéreo:", err);
       alert("No se pudo guardar el detalle. Revisá consola.");
+    }
+  };
+
+  // Setters que recalculan
+  const onChangeGross = (e) => {
+    const val = e.target.value === "" ? "" : Number(e.target.value);
+    set("weight_gross_kg", val);
+    // el useEffect hará el recálculo
+  };
+
+  const onChangeVolume = (e) => {
+    const val = e.target.value === "" ? "" : Number(e.target.value);
+    set("volume_m3", val);
+    // el useEffect hará el recálculo
+  };
+
+  const onChangeDimensions = (e) => {
+    const txt = e.target.value;
+    set("dimensions_text", txt);
+    const vol = parseDimensionsToM3(txt);
+    if (vol != null) {
+      set("volume_m3", vol);
+      // el useEffect recalcula weight_chargeable automáticamente
     }
   };
 
@@ -160,18 +232,7 @@ export default function AirDetail({ op, onChange }) {
           step="0.001"
           className="input"
           value={form.weight_gross_kg ?? ""}
-          onChange={setNum("weight_gross_kg")}
-        />
-      </Field>
-
-      <Field label="Peso cobrable (kg)">
-        <input
-          disabled={disabled}
-          type="number"
-          step="0.001"
-          className="input"
-          value={form.weight_chargeable_kg ?? ""}
-          onChange={setNum("weight_chargeable_kg")}
+          onChange={onChangeGross}
         />
       </Field>
 
@@ -182,7 +243,19 @@ export default function AirDetail({ op, onChange }) {
           step="0.001"
           className="input"
           value={form.volume_m3 ?? ""}
-          onChange={setNum("volume_m3")}
+          onChange={onChangeVolume}
+        />
+      </Field>
+
+      <Field label="Peso cobrable (kg)">
+        <input
+          disabled
+          readOnly
+          type="number"
+          step="0.001"
+          className="input"
+          title="Se calcula como max(Peso bruto, Volumen × 167)"
+          value={form.weight_chargeable_kg ?? ""}
         />
       </Field>
 
@@ -233,7 +306,7 @@ export default function AirDetail({ op, onChange }) {
             className="input"
             placeholder="Ej: 1.20x0.80x0.60x2; 0.90x0.70x0.50"
             value={form.dimensions_text || ""}
-            onChange={(e) => set("dimensions_text", e.target.value)}
+            onChange={onChangeDimensions}
           />
         </Field>
       </div>
