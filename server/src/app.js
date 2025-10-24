@@ -10,7 +10,7 @@ import pipelinesRouter from './routes/pipelines.js';
 import stagesRouter from './routes/stages.js';
 import dealsRouter from './routes/deals.js';
 import contactsRouter from './routes/contacts.js';
-import orgsRouter from './routes/organizations.js'; // 👈 default (corrige el error)
+import orgsRouter from './routes/organizations.js';
 import businessUnitsRouter from './routes/businessUnits.js';
 
 // nuevos
@@ -81,13 +81,23 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 /* ========== BYPASS DE AUTH (opcional, controlado por env) ========== */
-const AUTH_OPTIONAL = (process.env.AUTH_OPTIONAL === '1' || String(process.env.AUTH_OPTIONAL).toLowerCase() === 'true');
+const AUTH_OPTIONAL =
+  process.env.AUTH_OPTIONAL === '1' ||
+  String(process.env.AUTH_OPTIONAL || '').toLowerCase() === 'true';
+
+console.log(`[auth] AUTH_OPTIONAL: ${AUTH_OPTIONAL ? 'ON' : 'OFF'}`);
+
 if (AUTH_OPTIONAL) {
-  // Inyecta un usuario “falso” para que las rutas que requieren auth no den 401.
+  // Inyecta un usuario “falso” y un Authorization dummy para middlewares estrictos
   app.use((req, _res, next) => {
     if (!req.user) {
-      req.user = { id: 1, name: 'Admin', email: '' };
+      req.user = { id: 2, name: 'Admin', email: 'admin@tuempresa.com', role: 'admin' };
     }
+    // algunos middlewares solo chequean que exista el header
+    if (!req.headers.authorization) {
+      req.headers.authorization = 'Bearer dev-bypass';
+    }
+    // y otros exponen helpers tipo req.isAuthenticated
     req.isAuthenticated = () => true;
     next();
   });
@@ -97,7 +107,7 @@ if (AUTH_OPTIONAL) {
   app.post('/api/auth/login', (req, res) => res.json({ ok: true, user: req.user }));
   app.post('/api/auth/logout', (_req, res) => res.json({ ok: true }));
 
-  console.log('[auth] AUTH_OPTIONAL activo: autenticación bypass habilitada');
+  console.log('[auth] Bypass activo: las rutas aceptan requests sin login real');
 }
 
 /* ========== Archivos estáticos subidos ========== */
