@@ -33,7 +33,6 @@ import reportsRouter from "./routes/reports.js";
 import adminRouter from "./routes/admin.js";
 import catalogRouter from "./routes/catalog.js";
 
-
 // ====== Cargar variables de entorno ======
 const ENV_PATH = '/home/deploy/.env.crm';
 if (fs.existsSync(ENV_PATH)) {
@@ -81,6 +80,26 @@ app.options('*', cors(corsOptions));
 app.use(express.json());
 app.use(morgan('dev'));
 
+/* ========== BYPASS DE AUTH (opcional, controlado por env) ========== */
+const AUTH_OPTIONAL = (process.env.AUTH_OPTIONAL === '1' || String(process.env.AUTH_OPTIONAL).toLowerCase() === 'true');
+if (AUTH_OPTIONAL) {
+  // Inyecta un usuario “falso” para que las rutas que requieren auth no den 401.
+  app.use((req, _res, next) => {
+    if (!req.user) {
+      req.user = { id: 1, name: 'Admin', email: '' };
+    }
+    req.isAuthenticated = () => true;
+    next();
+  });
+
+  // Endpoints mínimos para el FE mientras dura el bypass
+  app.get('/api/auth/me', (req, res) => res.json(req.user));
+  app.post('/api/auth/login', (req, res) => res.json({ ok: true, user: req.user }));
+  app.post('/api/auth/logout', (_req, res) => res.json({ ok: true }));
+
+  console.log('[auth] AUTH_OPTIONAL activo: autenticación bypass habilitada');
+}
+
 /* ========== Archivos estáticos subidos ========== */
 app.use('/uploads', express.static('uploads'));
 app.use('/api/uploads', express.static('uploads'));
@@ -113,7 +132,6 @@ app.use('/api/search', searchRouter);
 app.use("/api/reports", reportsRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api", catalogRouter);
-
 
 // ⭐️ Operaciones (crear/leer y PUT por tipo: air/ocean/road/multimodal)
 app.use('/api/operations', operationsRouter);
