@@ -12,9 +12,14 @@ export function AuthProvider({ children }) {
 
   const refresh = async () => {
     try {
-      const { data } = await api.get("/auth/me"); // usa cookie o bearer
+      // Asegura que el Authorization esté precargado si hay token persistido
+      try {
+        const raw = localStorage.getItem("token");
+        if (raw) api.defaults.headers.Authorization = `Bearer ${raw}`;
+      } catch {}
+      const { data } = await api.get("/auth/me");
       setUser(data || null);
-    } catch (err) {
+    } catch {
       setUser(null);
     } finally {
       setLoading(false);
@@ -29,7 +34,7 @@ export function AuthProvider({ children }) {
 
   const login = async (payload) => {
     const { data } = await api.post("/auth/login", payload);
-    // si el backend devuelve { token, user }, guardamos ambos
+    // si el backend devuelve { token, user }, guardamos ambos; si no, igual seteamos user
     if (data?.token) {
       saveAuth({ token: data.token, user: data.user ?? null });
     }
@@ -40,7 +45,7 @@ export function AuthProvider({ children }) {
 
   const logout = async () => {
     try { await api.post("/auth/logout"); } catch {}
-    saveAuth({ token: null, user: null });  // limpia token y user
+    saveAuth({ token: null, user: null });
     setUser(null);
   };
 
@@ -51,7 +56,9 @@ export function AuthProvider({ children }) {
   );
 }
 
-export function useAuth() { return useContext(AuthCtx); }
+export function useAuth() {
+  return useContext(AuthCtx);
+}
 
 export function RequireAuth({ children }) {
   const { user, loading } = useAuth();
