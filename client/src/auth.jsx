@@ -1,7 +1,7 @@
-// src/auth.jsx
+// client/src/auth.jsx
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
-import { api, saveAuth } from "./api";
+import { api, saveAuth, loadSavedAuth, TOKEN_KEY, USER_KEY } from "./api";
 
 const AuthCtx = createContext(null);
 
@@ -11,16 +11,34 @@ export function AuthProvider({ children }) {
   const didInit = useRef(false);
 
   const refresh = async () => {
+    // 1) Levantá estado desde localStorage para evitar "logout instantáneo"
+    const { token: savedToken, user: savedUser } = loadSavedAuth();
+    if (savedToken || savedUser) {
+      // Mostramos al menos el user guardado mientras validamos con el backend
+      setUser(savedUser || user);
+      setLoading(false); // evitá redirecciones mientras validamos /auth/me
+    }
+
+    // 2) Intentá validar sesión con el backend (cookie o bearer)
     try {
-      // Asegura que el Authorization esté precargado si hay token persistido
-      try {
-        const raw = localStorage.getItem("token");
-        if (raw) api.defaults.headers.Authorization = `Bearer ${raw}`;
-      } catch {}
-      const { data } = await api.get("/auth/me");
-      setUser(data || null);
-    } catch {
-      setUser(null);
+      const { data } = await api.get("/auth/me"); // si existe en tu API
+      if (data && typeof data === "object") {
+        setUser(data);
+        // Actualizá el user persistido si llegó uno más completo
+        saveAuth({ token: savedToken || localStorage.getItem(TOKEN_KEY), user: data });
+      }
+    } catch (err) {
+      const status = err?.response?.status;
+      if (status === 401) {
+        // Sesión inválida → limpiar todo
+        saveAuth({ token: null, user: null });
+        setUser(null);
+      } else if (status === 404) {
+        // Tu backend no tiene /auth/me → NO deslogueamos. Se usará cookie+Bearer en las llamadas normales.
+        // No hacemos nada.
+      } else {
+        // Errores de red u otros: no forzamos logout inmediato
+      }
     } finally {
       setLoading(false);
     }
@@ -33,18 +51,23 @@ export function AuthProvider({ children }) {
   }, []);
 
   const login = async (payload) => {
+    // Soporta respuestas con { token, user } o solo { user } o 204 con cookie
     const { data } = await api.post("/auth/login", payload);
-    // si el backend devuelve { token, user }, guardamos ambos; si no, igual seteamos user
-    if (data?.token) {
-      saveAuth({ token: data.token, user: data.user ?? null });
-    }
+
+    const token = data?.token || null;
     const nextUser = data?.user ?? data ?? null;
+
+    // Guardar lo que haya
+    saveAuth({ token, user: nextUser });
     setUser(nextUser);
+
     return nextUser;
   };
 
   const logout = async () => {
-    try { await api.post("/auth/logout"); } catch {}
+    try {
+      await api.post("/auth/logout"); // si tu backend lo expone; si no, sólo limpia local
+    } catch {}
     saveAuth({ token: null, user: null });
     setUser(null);
   };
