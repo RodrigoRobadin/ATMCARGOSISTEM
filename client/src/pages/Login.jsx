@@ -2,6 +2,7 @@
 import React, { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth.jsx";
+import bgImage from "../assets/IMAGEN FONDO ATM.jpg"; // ⬅️ import del fondo
 
 export default function Login() {
   const { login } = useAuth();
@@ -30,7 +31,10 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen grid place-items-center bg-gray-50 p-4">
+    <div
+      className="min-h-screen grid place-items-center bg-gray-50 p-4 bg-no-repeat bg-cover bg-center"
+      style={{ backgroundImage: `url(${bgImage})` }}
+    >
       <form
         onSubmit={onSubmit}
         className="w-full max-w-sm bg-white border rounded-2xl p-6 space-y-3"

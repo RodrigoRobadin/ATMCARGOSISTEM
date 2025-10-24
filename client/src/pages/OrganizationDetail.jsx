@@ -233,6 +233,63 @@ function getExecFromCF(customFields) {
   return { id: null, name: null };
 }
 
+/* ===== Helpers Notas ===== */
+function fmtDate(dateStr) {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  if (isNaN(d)) return String(dateStr);
+  return d.toLocaleDateString();
+}
+function fmtTime(dateStr) {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  if (isNaN(d)) return '';
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+// Normaliza un row de activity (type=note) a nuestro esquema de nota
+function normalizeNoteFromActivity(r) {
+  if (!r) return null;
+  const id = r.id ?? r.activity_id ?? null;
+  const content = r.notes ?? r.subject ?? r.content ?? '';
+  const created =
+    r.created_at ??
+    r.updated_at ??
+    r.due_date ?? // por si tu backend guarda la “hora elegida” aquí
+    null;
+
+  const user_id =
+    coerceId(r.user_id) ??
+    coerceId(r.owner_user_id) ??
+    coerceId(r.created_by) ??
+    coerceId(r.created_by_user_id) ??
+    null;
+
+  const user_name =
+    r.user_name ??
+    r.created_by_name ??
+    (r.user && (r.user.name || r.user.username || r.user.email)) ??
+    null;
+
+  return { id, content: String(content || ''), created_at: created, user_id, user_name };
+}
+
+// Enriquecer con nombres de usuario desde cache
+async function enrichNotesAuthors(list) {
+  if (!Array.isArray(list) || !list.length) return [];
+  const cache = await fetchUsersIndex();
+  const map = new Map(cache.map(u => [Number(u.id), u]));
+  return list.map(n => {
+    if (n.user_name) return n;
+    const uid = Number(n.user_id || 0);
+    if (uid && map.has(uid)) {
+      const { name } = extractUserDisplay(map.get(uid), uid);
+      return { ...n, user_name: name };
+    }
+    return n;
+  });
+}
+
 export default function OrganizationDetail() {
   const { id } = useParams();
   const [org, setOrg] = useState(null);
@@ -246,6 +303,14 @@ export default function OrganizationDetail() {
   // actividades
   const [acts, setActs] = useState([]);
   const [actsLoading, setActsLoading] = useState(false);
+
+  // NOTAS (vía /activities type=note)
+  const [notes, setNotes] = useState([]);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [noteText, setNoteText] = useState('');
+  const [noteDate, setNoteDate] = useState(''); // opcional
+  const [noteTime, setNoteTime] = useState(''); // opcional
+  const [savingNote, setSavingNote] = useState(false);
 
   // modales
   const [openAct, setOpenAct] = useState(false);
@@ -313,6 +378,53 @@ export default function OrganizationDetail() {
     }
   }
 
+  // ===== NOTAS: lectura (solo /activities?type=note) =====
+  async function loadNotes() {
+    setNotesLoading(true);
+    try {
+      const { data } = await api.get('/activities', { params: { org_id: Number(id), type: 'note' } });
+      const list = Array.isArray(data) ? data : [];
+      const norm = list.map(normalizeNoteFromActivity).filter(Boolean);
+      setNotes(await enrichNotesAuthors(norm));
+    } finally {
+      setNotesLoading(false);
+    }
+  }
+
+  // Alta de nota (solo /activities con type=note)
+  async function addOrgNote() {
+    const text = (noteText || '').trim();
+    if (!text) return;
+    setSavingNote(true);
+    try {
+      // Si el backend permite sobreescribir created_at, lo mandamos.
+      const hasDT = !!noteDate || !!noteTime;
+      const created_at = (() => {
+        if (!hasDT) return null;
+        const d = noteDate || new Date().toISOString().slice(0, 10);
+        const t = (noteTime || '00:00') + ':00';
+        return `${d}T${t}`;
+      })();
+
+      const payload = {
+        type: 'note',
+        subject: null,
+        notes: text,
+        org_id: Number(id),
+        done: 1,
+      };
+      if (created_at) payload.created_at = created_at;
+
+      await api.post('/activities', payload);
+      await loadNotes();
+      setNoteText(''); setNoteDate(''); setNoteTime('');
+    } catch {
+      alert('No se pudo crear la nota.');
+    } finally {
+      setSavingNote(false);
+    }
+  }
+
   // cargar organización + tratos + CF
   useEffect(() => {
     let cancel = false;
@@ -340,6 +452,20 @@ export default function OrganizationDetail() {
         await loadActivities();
       } catch {
         if (!cancel) setActs([]);
+      }
+    })();
+    return () => { cancel = true; };
+  }, [tab, id]);
+
+  // cargar notas cuando el tab es "notes"
+  useEffect(() => {
+    if (tab !== 'notes') return;
+    let cancel = false;
+    (async () => {
+      try {
+        await loadNotes();
+      } catch {
+        if (!cancel) setNotes([]);
       }
     })();
     return () => { cancel = true; };
@@ -667,6 +793,59 @@ export default function OrganizationDetail() {
               </div>
             )}
 
+            {/* Composer Notas (solo en Notas) */}
+            {tab === 'notes' && (
+              <div className="p-4 border-b">
+                <label className="block text-sm mb-2">Nueva nota</label>
+                <textarea
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                  rows={3}
+                  placeholder="Escribí la nota…"
+                  value={noteText}
+                  onChange={(e)=>setNoteText(e.target.value)}
+                />
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-2 items-end">
+                  <div className="text-xs text-slate-600">
+                    Si dejás la fecha y hora vacías, se usará la fecha/hora actual del servidor.
+                  </div>
+                  <label className="text-sm">
+                    <div className="text-slate-600 mb-1">Fecha</div>
+                    <input
+                      type="date"
+                      className="border rounded-lg px-2 py-1 text-sm"
+                      value={noteDate}
+                      onChange={e=>setNoteDate(e.target.value)}
+                    />
+                  </label>
+                  <label className="text-sm">
+                    <div className="text-slate-600 mb-1">Hora</div>
+                    <input
+                      type="time"
+                      className="border rounded-lg px-2 py-1 text-sm"
+                      value={noteTime}
+                      onChange={e=>setNoteTime(e.target.value)}
+                    />
+                  </label>
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <button
+                    className="px-3 py-2 text-sm rounded-lg bg-black text-white disabled:opacity-60"
+                    onClick={addOrgNote}
+                    disabled={savingNote || !noteText.trim()}
+                  >
+                    {savingNote ? 'Guardando…' : 'Guardar nota'}
+                  </button>
+                  <button
+                    className="px-3 py-2 text-sm rounded-lg border"
+                    onClick={() => { setNoteText(''); setNoteDate(''); setNoteTime(''); }}
+                    disabled={savingNote}
+                  >
+                    Limpiar
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Contenido del tab */}
             <div className="p-4">
               {tab === 'activity' && (
@@ -700,7 +879,31 @@ export default function OrganizationDetail() {
                 </div>
               )}
 
-              {tab === 'notes' && <div className="text-sm text-slate-600">Notas (placeholder).</div>}
+              {tab === 'notes' && (
+                <div className="space-y-3">
+                  <h4 className="font-medium">Notas</h4>
+                  {notesLoading ? (
+                    <div className="text-sm text-slate-600">Cargando notas…</div>
+                  ) : notes.length ? (
+                    <ul className="space-y-2">
+                      {notes
+                        .slice()
+                        .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+                        .map(n => (
+                        <li key={n.id || `${n.created_at}-${Math.random()}`} className="border rounded-xl p-3">
+                          <div className="text-sm whitespace-pre-wrap">{n.content || '—'}</div>
+                          <div className="text-xs text-slate-600 mt-1">
+                            {n.user_name || (n.user_id ? `Usuario #${n.user_id}` : '—')} • {fmtDate(n.created_at)} {fmtTime(n.created_at)}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="text-sm text-slate-500">Sin notas todavía.</div>
+                  )}
+                </div>
+              )}
+
               {tab === 'files' && <div className="text-sm text-slate-600">Archivos (placeholder).</div>}
               {tab === 'docs'  && <div className="text-sm text-slate-600">Documentos (placeholder).</div>}
             </div>

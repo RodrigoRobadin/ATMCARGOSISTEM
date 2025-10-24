@@ -117,6 +117,39 @@ function resolveUploadUrl(urlPath = "") {
   }
 }
 
+/* user helpers (cliente) */
+function getCurrentUserFromStorage() {
+  try {
+    const keys = ["auth", "user", "authUser", "session", "crm_user"];
+    for (const k of keys) {
+      const raw = localStorage.getItem(k);
+      if (!raw) continue;
+      const obj = JSON.parse(raw);
+      const id =
+        obj?.user?.id ??
+        obj?.id ??
+        obj?.userId ??
+        obj?.user_id ??
+        null;
+      const name =
+        obj?.user?.name ??
+        obj?.user?.fullName ??
+        obj?.name ??
+        obj?.fullName ??
+        null;
+      const email = obj?.user?.email ?? obj?.email ?? null;
+      if (id || name || email) {
+        return {
+          id: id ? Number(id) : null,
+          name: name || null,
+          email: email || null,
+        };
+      }
+    }
+  } catch {}
+  return { id: null, name: null, email: null };
+}
+
 /* ---------- UI helpers ---------- */
 function Field({ label, children }) {
   return (
@@ -386,8 +419,6 @@ function AirForm({ f, set, readOnly }) {
           />
         </Field>
 
-        {/* ⚠️ Campos de Seguro / Condición / Factura fueron removidos de esta sección */}
-
         <Field label="ETD">
           <Input readOnly={readOnly} type="datetime-local" value={toLocal(f.etd)} onChange={(e)=>set('etd',e.target.value)} />
         </Field>
@@ -424,7 +455,6 @@ function AirForm({ f, set, readOnly }) {
     </div>
   );
 }
-
 
 function OceanForm({ f, set, readOnly }) {
   const list = Array.isArray(f.containers_json) ? f.containers_json : [];
@@ -753,7 +783,6 @@ function flattenFiles(filesByType) {
   arr.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
   return arr;
 }
-const hasKey = (obj, k) => obj && Object.prototype.hasOwnProperty.call(obj, k);
 
 /* =================== PÁGINA =================== */
 export default function OperationDetail() {
@@ -762,7 +791,10 @@ export default function OperationDetail() {
 
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState(null);
-  const [activities, setActivities] = useState([]);
+
+  // 🔹 notas (activities type=note)
+  const [notesList, setNotesList] = useState([]);
+  const [notesLoading, setNotesLoading] = useState(false);
 
   const [desc, setDesc] = useState("");
   const [value, setValue] = useState("");
@@ -838,6 +870,27 @@ export default function OperationDetail() {
     }
   }
 
+  // 🔹 cargar notas (solo type=note) incluyendo autor
+  async function loadNotes() {
+    setNotesLoading(true);
+    try {
+      const { data } = await api.get("/activities", {
+        params: {
+          deal_id: Number(id),
+          type: "note",
+          sort: "created_at",
+          order: "desc",
+        },
+      });
+      setNotesList(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error("GET /activities (notes) error", e);
+      setNotesList([]);
+    } finally {
+      setNotesLoading(false);
+    }
+  }
+
   async function reload() {
     setLoading(true);
     try {
@@ -848,7 +901,6 @@ export default function OperationDetail() {
       ]);
 
       setDeal(detail.deal);
-      setActivities(detail.activities || []);
       setDesc(detail.deal?.title || "");
       setValue(String(detail.deal?.value ?? ""));
 
@@ -993,6 +1045,7 @@ export default function OperationDetail() {
       } catch {}
 
       await Promise.all([loadFiles(), loadParams()]);
+      await loadNotes();
     } finally {
       setLoading(false);
     }
@@ -1055,35 +1108,35 @@ export default function OperationDetail() {
         : mapCF2TT[cfTTraw] || "AIR";
 
       if (currentTT === "AIR") {
-  await saveModal("air", air, [
-    { key: "doc_master", label: "DOC MASTER", type: "text", pick: (p) => p.doc_master },
-    { key: "doc_house", label: "DOC HOUSE", type: "text", pick: (p) => p.doc_house },
-    { key: "linea_aerea", label: "Línea aérea", type: "text", pick: (p) => p.airline },
-    { key: "shpr_cnee", label: "SHPR - CNEE", type: "text", pick: (p) => p.shpr_cnee },
-    { key: "agente", label: "Agente", type: "text", pick: (p) => p.agent },
-    { key: "ag_aduanera", label: "Ag Aduanera", type: "text", pick: (p) => p.customs_broker },
-    { key: "proveedor", label: "Proveedor", type: "text", pick: (p) => p.provider },
-    { key: "origen_pto", label: "Origen", type: "text", pick: (p) => p.origin_airport },
-    { key: "transb_pto", label: "Transbordo", type: "text", pick: (p) => p.transshipment_airport },
-    { key: "destino_pto", label: "Destino", type: "text", pick: (p) => p.destination_airport },
-    { key: "mercaderia", label: "Mercadería", type: "text", pick: (p) => p.commodity },
-    { key: "cant_bultos", label: "Cant bultos", type: "number", pick: (p) => p.packages },
-    { key: "peso_bruto", label: "Peso", type: "text", pick: (p) => p.weight_gross_kg },
-    { key: "vol_m3", label: "Vol m³", type: "text", pick: (p) => p.volume_m3 },
-    { key: "p_vol", label: "P. Vol", type: "text", pick: (p) => p.weight_chargeable_kg },
-    { key: "dimensiones", label: "Dimensiones", type: "text", pick: (p) => p.dimensions_text },
-    { key: "f_est_salida", label: "F. Est. Salida", type: "date", pick: (p) => p.etd },
-    { key: "llegada_transb", label: "Arribo Transb.", type: "date", pick: (p) => p.trans_arrival },
-    { key: "salida_transb", label: "Salida Transb.", type: "date", pick: (p) => p.trans_depart },
-    { key: "llegada_destino", label: "ETA", type: "date", pick: (p) => p.eta },
-    { key: "dias_transito", label: "Días Tránsito", type: "number", pick: (p) => p.transit_days },
-    { key: "observaciones", label: "OBS", type: "text", pick: (p) => p.observations },
-    { key: "doc_master_term", label: "Doc Master (term)", type: "text", pick: (p) => p.doc_master_term },
-    { key: "doc_house_term", label: "Doc House (term)", type: "text", pick: (p) => p.doc_house_term },
-    { key: "flete_pago", label: "Flete pago", type: "text", pick: (p) => p.flete_pago },
-    { key: "gastos_locales_pago", label: "Gastos locales pago", type: "text", pick: (p) => p.gastos_locales_pago },
-  ]);
-}
+        await saveModal("air", air, [
+          { key: "doc_master", label: "DOC MASTER", type: "text", pick: (p) => p.doc_master },
+          { key: "doc_house", label: "DOC HOUSE", type: "text", pick: (p) => p.doc_house },
+          { key: "linea_aerea", label: "Línea aérea", type: "text", pick: (p) => p.airline },
+          { key: "shpr_cnee", label: "SHPR - CNEE", type: "text", pick: (p) => p.shpr_cnee },
+          { key: "agente", label: "Agente", type: "text", pick: (p) => p.agent },
+          { key: "ag_aduanera", label: "Ag Aduanera", type: "text", pick: (p) => p.customs_broker },
+          { key: "proveedor", label: "Proveedor", type: "text", pick: (p) => p.provider },
+          { key: "origen_pto", label: "Origen", type: "text", pick: (p) => p.origin_airport },
+          { key: "transb_pto", label: "Transbordo", type: "text", pick: (p) => p.transshipment_airport },
+          { key: "destino_pto", label: "Destino", type: "text", pick: (p) => p.destination_airport },
+          { key: "mercaderia", label: "Mercadería", type: "text", pick: (p) => p.commodity },
+          { key: "cant_bultos", label: "Cant bultos", type: "number", pick: (p) => p.packages },
+          { key: "peso_bruto", label: "Peso", type: "text", pick: (p) => p.weight_gross_kg },
+          { key: "vol_m3", label: "Vol m³", type: "text", pick: (p) => p.volume_m3 },
+          { key: "p_vol", label: "P. Vol", type: "text", pick: (p) => p.weight_chargeable_kg },
+          { key: "dimensiones", label: "Dimensiones", type: "text", pick: (p) => p.dimensions_text },
+          { key: "f_est_salida", label: "F. Est. Salida", type: "date", pick: (p) => p.etd },
+          { key: "llegada_transb", label: "Arribo Transb.", type: "date", pick: (p) => p.trans_arrival },
+          { key: "salida_transb", label: "Salida Transb.", type: "date", pick: (p) => p.trans_depart },
+          { key: "llegada_destino", label: "ETA", type: "date", pick: (p) => p.eta },
+          { key: "dias_transito", label: "Días Tránsito", type: "number", pick: (p) => p.transit_days },
+          { key: "observaciones", label: "OBS", type: "text", pick: (p) => p.observations },
+          { key: "doc_master_term", label: "Doc Master (term)", type: "text", pick: (p) => p.doc_master_term },
+          { key: "doc_house_term", label: "Doc House (term)", type: "text", pick: (p) => p.doc_house_term },
+          { key: "flete_pago", label: "Flete pago", type: "text", pick: (p) => p.flete_pago },
+          { key: "gastos_locales_pago", label: "Gastos locales pago", type: "text", pick: (p) => p.gastos_locales_pago },
+        ]);
+      }
 
       if (currentTT === "OCEAN") {
         await saveModal("ocean", ocean, [
@@ -1141,9 +1194,43 @@ export default function OperationDetail() {
     reload();
   }
 
+  // 🔹 eliminar archivo (la dejo antes del return por claridad)
+  async function removeFile(fileId) {
+    if (!editMode) return;
+    if (!window.confirm("¿Eliminar archivo?")) return;
+    try {
+      await api.delete(`/deals/${id}/files/${fileId}`);
+      await loadFiles();
+    } catch {
+      alert("No se pudo eliminar el archivo.");
+    }
+  }
+
+  // 🔹 crear nota (UI optimista) y recargar
   async function addNote() {
     const txt = (note || "").trim();
     if (!txt) return;
+    const me = getCurrentUserFromStorage();
+    const tempId = `tmp-${Date.now()}`;
+    const nowIso = new Date().toISOString();
+
+    // UI optimista: inserta arriba
+    setNotesList((prev) => [
+      {
+        id: tempId,
+        type: "note",
+        subject: `Nota en ${deal?.reference || "operación"}`,
+        notes: txt,
+        deal_id: Number(id),
+        created_at: nowIso,
+        created_by: me.id,
+        created_by_name: me.name,
+        created_by_email: me.email,
+      },
+      ...prev,
+    ]);
+
+    setNote("");
     try {
       await api.post("/activities", {
         type: "note",
@@ -1151,11 +1238,11 @@ export default function OperationDetail() {
         notes: txt,
         deal_id: Number(id),
         done: 1,
+        ...(me.id ? { created_by: me.id } : {}),
       });
-      setNote("");
-      const { data } = await api.get(`/deals/${id}`);
-      setActivities(data.activities || []);
+      await loadNotes(); // reemplaza temp por la real
     } catch {
+      setNotesList((prev) => prev.filter((x) => x.id !== tempId));
       alert("No se pudo crear la nota.");
     }
   }
@@ -1189,14 +1276,14 @@ export default function OperationDetail() {
         const blob = new Blob([data], { type: "application/pdf" });
         downloadBlob(blob, `informe-estado-${(deal?.reference || id)}.pdf`);
         return;
-      } catch (e1) {}
+      } catch {}
 
       try {
         const { data } = await api.get(`/reports/status/${id}`, { responseType: "blob" });
         const blob = new Blob([data], { type: "application/pdf" });
         downloadBlob(blob, `informe-estado-${(deal?.reference || id)}.pdf`);
         return;
-      } catch (e2) {}
+      } catch {}
 
       try {
         const { data } = await api.get(`/reports/status`, {
@@ -1346,6 +1433,25 @@ export default function OperationDetail() {
 
   if (loading) return <p className="text-sm text-slate-600">Cargando…</p>;
   if (!deal) return <p className="text-sm text-slate-600">Operación no encontrada.</p>;
+
+  const me = getCurrentUserFromStorage();
+  const authorOf = (a) => {
+    const candidates = [
+      a?.created_by_name,
+      a?.created_by_username,
+      a?.creator_name,
+      a?.user_name,
+      a?.owner_name,
+      a?.created_by_email,
+      a?.creator_email,
+      a?.user_email,
+      a?.owner_email,
+    ].filter(Boolean);
+    if (me.id && a?.created_by && Number(a.created_by) === Number(me.id)) return "vos";
+    if (candidates.length) return candidates[0];
+    if (a?.created_by) return `Usuario #${a.created_by}`;
+    return "—";
+  };
 
   return (
     <div className="space-y-4">
@@ -1571,7 +1677,7 @@ export default function OperationDetail() {
                   </Field>
                 </div>
 
-                {/* 👇 NUEVO: Incoterm + Seguro dentro de Detalles de operación */}
+                {/* Incoterm + Seguro */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
                   <Field label="Incoterm">
                     <Select
@@ -1584,9 +1690,7 @@ export default function OperationDetail() {
                     >
                       <option value="">—</option>
                       {opts.incoterm.map((v) => (
-                        <option key={v} value={v}>
-                          {v}
-                        </option>
+                        <option key={v} value={v}>{v}</option>
                       ))}
                     </Select>
                   </Field>
@@ -1722,20 +1826,32 @@ export default function OperationDetail() {
                     Guardar
                   </button>
                 </div>
+
                 <div className="mt-4 space-y-2">
-                  {activities.length ? (
-                    activities.map((a) => (
-                      <div key={a.id} className="border rounded-xl p-3">
-                        <div className="text-sm font-medium">
-                          {a.type || "actividad"} — {a.subject || "sin asunto"}
+                  {notesLoading ? (
+                    <div className="text-sm text-slate-600">Cargando notas…</div>
+                  ) : notesList.length ? (
+                    notesList.map((a) => {
+                      const author = authorOf(a);
+                      const when = a.created_at
+                        ? new Date(a.created_at).toLocaleString()
+                        : "—";
+                      return (
+                        <div key={a.id} className="border rounded-xl p-3">
+                          <div className="text-sm font-medium">
+                            {a.subject || "Nota"}
+                          </div>
+                          <div className="text-xs text-slate-600">
+                            {when} • por {author}
+                          </div>
+                          {a.notes && (
+                            <div className="text-sm mt-1 whitespace-pre-wrap">
+                              {a.notes}
+                            </div>
+                          )}
                         </div>
-                        <div className="text-xs text-slate-600">
-                          {a.created_at ? new Date(a.created_at).toLocaleString() : "—"}
-                          {a.due_date ? ` • Vence: ${a.due_date}` : ""}
-                        </div>
-                        {a.notes && <div className="text-sm mt-1 whitespace-pre-wrap">{a.notes}</div>}
-                      </div>
-                    ))
+                      );
+                    })
                   ) : (
                     <div className="text-sm text-slate-500">Sin notas todavía.</div>
                   )}
@@ -1837,15 +1953,4 @@ export default function OperationDetail() {
       </div>
     </div>
   );
-
-  async function removeFile(fileId) {
-    if (!editMode) return;
-    if (!window.confirm("¿Eliminar archivo?")) return;
-    try {
-      await api.delete(`/deals/${id}/files/${fileId}`);
-      await loadFiles();
-    } catch {
-      alert("No se pudo eliminar el archivo.");
-    }
-  }
 }
