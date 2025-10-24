@@ -1,0 +1,8 @@
+/* client/src/index.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* opcional: helpers */
+html, body, #root { height: 100%; }
+:root { color-scheme: light; }
