@@ -1,39 +1,37 @@
 // server/src/middlewares/auth.js
-import jwt from 'jsonwebtoken';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
-
-export function signToken(payload) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
-}
+/**
+ * Autenticación basada en sesión (express-session).
+ * - requireAuth: exige sesión activa y expone req.user
+ * - requireRole: exige un rol específico (admin pasa siempre)
+ * - requireAnyRole: exige pertenecer a uno de varios roles (admin pasa siempre)
+ */
 
 export function requireAuth(req, res, next) {
-  const auth = req.headers.authorization || '';
-  const [, token] = auth.split(' ');
-  if (!token) return res.status(401).json({ error: 'No token' });
-
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded; // { id, email, role }
-    return next();
+    if (req.session && req.session.user) {
+      req.user = req.session.user; // { id, name?, email, role }
+      return next();
+    }
+    return res.status(401).json({ error: 'No login' });
   } catch {
-    return res.status(401).json({ error: 'Token inválido' });
+    return res.status(401).json({ error: 'No login' });
   }
 }
 
 export function requireRole(role) {
   return (req, res, next) => {
-    if (!req.user) return res.status(401).json({ error: 'No auth' });
-    if (req.user.role !== role) return res.status(403).json({ error: 'Permiso denegado' });
-    next();
+    const u = req.session?.user;
+    if (!u) return res.status(401).json({ error: 'No login' });
+    if (u.role === 'admin' || u.role === role) return next();
+    return res.status(403).json({ error: 'Sin permisos' });
   };
 }
 
 export function requireAnyRole(...roles) {
   return (req, res, next) => {
-    if (!req.user) return res.status(401).json({ error: 'No auth' });
-    if (!roles.includes(req.user.role)) return res.status(403).json({ error: 'Permiso denegado' });
-    next();
+    const u = req.session?.user;
+    if (!u) return res.status(401).json({ error: 'No login' });
+    if (u.role === 'admin' || roles.includes(u.role)) return next();
+    return res.status(403).json({ error: 'Sin permisos' });
   };
 }

@@ -1,71 +1,80 @@
 // server/src/routes/auth.js
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import db from '../services/db.js'; // 👈 IMPORTANTE: pool mysql2/promise (default)
+import db from '../services/db.js'; // default export: pool mysql2/promise
 
 const router = Router();
 
 /**
+ * GET /api/auth/me
+ * Devuelve el usuario de la sesión (si existe).
+ */
+router.get('/me', (req, res) => {
+  if (req.session && req.session.user) {
+    return res.json(req.session.user);
+  }
+  return res.status(401).json({ error: 'No login' });
+});
+
+/**
  * POST /api/auth/login
  * Body: { email, password }
- * Responde: { token, user }
+ * Guarda el usuario en la sesión (cookie 'sid') y responde { ok, user }.
  */
 router.post('/login', async (req, res) => {
   try {
-    const email = (req.body?.email || '').trim().toLowerCase();
-    const password = req.body?.password || '';
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email y password son requeridos' });
     }
 
-    // Busca usuario
-    const [[user]] = await db.query(
-      `SELECT id, email, role, is_active, password_hash
+    // Buscamos usuario (tolerante: puede tener password_hash (bcrypt) o password plano)
+    const [[u]] = await db.query(
+      `SELECT id, name, email, role, password_hash, password
          FROM users
         WHERE email = ? LIMIT 1`,
       [email]
     );
 
-    if (!user || !user.is_active) {
-      return res.status(401).json({ error: 'Credenciales inválidas' });
+    if (!u) return res.status(401).json({ error: 'Credenciales inválidas' });
+
+    let ok = false;
+    if (u.password_hash) {
+      ok = await bcrypt.compare(password, u.password_hash);
+    } else if (u.password) {
+      ok = String(u.password) === password;
     }
 
-    // Compara hash
-    const ok = await bcrypt.compare(password, user.password_hash);
-    if (!ok) {
-      return res.status(401).json({ error: 'Credenciales inválidas' });
-    }
+    if (!ok) return res.status(401).json({ error: 'Credenciales inválidas' });
 
-    const secret = process.env.JWT_SECRET;
-    if (!secret) {
-      console.error('[auth/login] JWT_SECRET faltante en .env');
-      return res.status(500).json({ error: 'Config del servidor incompleta' });
-    }
+    // Usuario “seguro” en sesión
+    const user = {
+      id: u.id,
+      name: u.name || null,
+      email: u.email,
+      role: u.role || 'user',
+    };
+    req.session.user = user;
 
-    const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
-      secret,
-      { expiresIn: process.env.JWT_EXPIRES || '7d' }
-    );
-
-    return res.json({
-      token,
-      user: { id: user.id, email: user.email, role: user.role }
-    });
+    return res.json({ ok: true, user });
   } catch (err) {
-    console.error('[auth/login] ', err?.message || err);
-    return res.status(500).json({ error: 'Login failed' });
+    console.error('[auth/login]', err?.message || err);
+    return res.status(500).json({ error: 'Error interno en login' });
   }
 });
 
 /**
- * (Opcional) GET /api/auth/health
- * Útil para probar que el router responde.
+ * POST /api/auth/logout
+ * Destruye la sesión actual.
  */
-router.get('/health', (_req, res) => {
-  res.json({ ok: true });
+router.post('/logout', (req, res) => {
+  if (!req.session) return res.json({ ok: true });
+  req.session.destroy(() => res.json({ ok: true }));
 });
+
+/** Health simple */
+router.get('/health', (_req, res) => res.json({ ok: true }));
 
 export default router;
