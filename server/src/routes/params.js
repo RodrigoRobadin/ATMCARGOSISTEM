@@ -14,21 +14,25 @@ try {
   console.warn('[params] audit.js no encontrado. Continúo sin auditoría.');
 }
 
-/* ========= Asegurar tabla ========== */
+/* ========= Asegurar tabla (con try/catch para no romper arranque) ========== */
 (async () => {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS param_values (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      \`key\`   VARCHAR(100) NOT NULL,
-      \`value\` VARCHAR(255) NOT NULL,
-      \`ord\`   INT NOT NULL DEFAULT 0,
-      \`active\` TINYINT(1) NOT NULL DEFAULT 1,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      INDEX idx_key(\`key\`, \`ord\`),
-      INDEX idx_active(\`active\`)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-  `);
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS param_values (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        \`key\`   VARCHAR(100) NOT NULL,
+        \`value\` VARCHAR(255) NOT NULL,
+        \`ord\`   INT NOT NULL DEFAULT 0,
+        \`active\` TINYINT(1) NOT NULL DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_key(\`key\`, \`ord\`),
+        INDEX idx_active(\`active\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+  } catch (e) {
+    console.error('[params] no se pudo asegurar tabla param_values:', e?.message || e);
+  }
 })();
 
 /* ====== Fallbacks útiles para selects (cuando la tabla aún no tiene data) ====== */
@@ -54,7 +58,6 @@ function mapRowsToOptions(rows = []) {
 /**
  * GET /api/params?keys=a,b,c&only_active=1
  * Respuesta: { key1: [{id,value,ord,active}], key2: [...] }
- * (Compatibilidad con lo que ya usás en otras partes del sistema)
  */
 router.get('/', requireAuth, async (req, res, next) => {
   try {
@@ -102,7 +105,6 @@ router.get('/', requireAuth, async (req, res, next) => {
  * GET /api/params/:key
  * Devuelve filas crudas SOLO para esa clave.
  * Query opcional: ?only_active=1
- * Respuesta: [{id,key,value,ord,active}]
  */
 router.get('/:key', requireAuth, async (req, res, next) => {
   try {
@@ -134,7 +136,6 @@ router.get('/:key', requireAuth, async (req, res, next) => {
 /**
  * GET /api/params/:key/options
  * Devuelve opciones normalizadas para selects: [{value,label}]
- * Query opcional: ?only_active=1
  * Fallback automático para "operation_type" si no hay datos en la tabla.
  */
 router.get('/:key/options', requireAuth, async (req, res, next) => {

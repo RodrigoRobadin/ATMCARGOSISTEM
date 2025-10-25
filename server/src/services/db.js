@@ -11,20 +11,22 @@ if (fs.existsSync(ENV_PATH)) {
   dotenv.config();
 }
 
+// Soportar ambos nombres: DB_PASS y DB_PASSWORD
 const {
   DB_HOST = '127.0.0.1',
   DB_PORT = '3306',
   DB_NAME = 'crmdb',
   DB_USER = 'crmuser',
-  DB_PASSWORD = 'root',
 } = process.env;
 
-// Crear pool
+const DB_PASS = process.env.DB_PASS ?? process.env.DB_PASSWORD ?? '';
+
+// Crear pool único para toda la app
 const pool = mysql.createPool({
   host: DB_HOST,
   port: Number(DB_PORT),
   user: DB_USER,
-  password: DB_PASSWORD,
+  password: DB_PASS,
   database: DB_NAME,
   waitForConnections: true,
   connectionLimit: 10,
@@ -42,12 +44,12 @@ const getConnection = () => pool.getConnection();
 (async () => {
   try {
     await pool.query('SELECT 1');
-    console.log(`[db] conectado a ${DB_HOST}:${DB_PORT}/${DB_NAME} como ${DB_USER}`);
+    console.log(`[db] pool OK => ${DB_HOST}:${DB_PORT}/${DB_NAME} como ${DB_USER}`);
   } catch (err) {
     console.error('[db] error conectando:', err?.message || err);
   }
 })();
 
-// ✅ Export default y nombrados para compatibilidad
+// ✅ Export default y nombrados
 export { pool, query, getConnection };
 export default pool;

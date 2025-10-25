@@ -488,9 +488,6 @@ router.delete('/:id/files/:fileId', requireAuth, async (req, res) => {
 
 /**
  * POST /api/deals
- * Acepta dos shapes:
- *  - Legacy: { description, value, pipeline_id, stage_id, business_unit_id, contact, organization }
- *  - Plano:  { title, value, pipeline_id, stage_id, business_unit_id, org_name, contact_name, contact_email, contact_phone, ...hints }
  */
 router.post('/', requireAuth, async (req, res) => {
   const body = req.body || {};

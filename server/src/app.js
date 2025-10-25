@@ -108,11 +108,11 @@ app.use(session({
   proxy: TRUST_PROXY,
   cookie: {
     httpOnly: true,
-    secure: FORCE_SECURE_COOKIE ? true : 'auto', // 👈 forzado por defecto
-    sameSite: sameSite,                          // 'none' permite envío cross-site (con withCredentials)
-    domain: sessionDomain,                       // ej: .atmcargosoft.com (opcional)
+    secure: FORCE_SECURE_COOKIE ? true : 'auto',
+    sameSite: sameSite,             // 'none' permite envío cross-site (con withCredentials)
+    domain: sessionDomain,          // ej: .atmcargosoft.com (opcional)
     path: '/',
-    maxAge: 1000 * 60 * 60 * 8, // 8h
+    maxAge: 1000 * 60 * 60 * 8,     // 8h
   },
 }));
 

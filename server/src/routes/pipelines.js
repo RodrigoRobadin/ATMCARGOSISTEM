@@ -1,3 +1,4 @@
+// server/src/routes/pipelines.js
 import { Router } from 'express';
 import { pool } from '../services/db.js';
 
