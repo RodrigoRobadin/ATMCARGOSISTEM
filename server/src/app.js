@@ -82,7 +82,7 @@ app.options('*', cors(corsOptions));
 app.use(express.json());
 app.use(morgan('dev'));
 
-/* ========== SESIÓN / COOKIES (detrás de Nginx con HTTPS) ========== */
+/* ========== SESIÓN / COOKIES ========== */
 // Usa X-Forwarded-Proto para que req.secure funcione tras el proxy
 const truthy = v => ['1','true','yes','on'].includes(String(v ?? '').toLowerCase());
 const TRUST_PROXY = truthy(process.env.TRUST_PROXY ?? 'true');
@@ -92,23 +92,25 @@ if (TRUST_PROXY) app.set('trust proxy', 1);
 const SESSION_NAME = process.env.SESSION_NAME || 'sid';
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 
+// Forzamos Secure para producción (evita rechazo de SameSite=None sin Secure)
+const FORCE_SECURE_COOKIE = truthy(process.env.FORCE_SECURE_COOKIE ?? 'true');
+
 let sameSite = (process.env.SESSION_SAMESITE || 'None').toLowerCase(); // 'none' | 'lax' | 'strict'
 if (!['none','lax','strict'].includes(sameSite)) sameSite = 'none';
 
 const sessionDomain = (process.env.SESSION_DOMAIN || '').trim() || undefined;
 
-// Nota: 'secure: "auto"' requiere trust proxy para funcionar bien en HTTPS
 app.use(session({
   name: SESSION_NAME,
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  proxy: TRUST_PROXY, // asegura set-cookie correcto detrás del proxy
+  proxy: TRUST_PROXY,
   cookie: {
     httpOnly: true,
-    secure: 'auto',           // en prod HTTPS => secure; en local http => no
-    sameSite: sameSite,       // 'none' permite envío cross-site (con withCredentials)
-    domain: sessionDomain,    // ej: .atmcargosoft.com (opcional)
+    secure: FORCE_SECURE_COOKIE ? true : 'auto', // 👈 forzado por defecto
+    sameSite: sameSite,                          // 'none' permite envío cross-site (con withCredentials)
+    domain: sessionDomain,                       // ej: .atmcargosoft.com (opcional)
     path: '/',
     maxAge: 1000 * 60 * 60 * 8, // 8h
   },
@@ -117,22 +119,9 @@ app.use(session({
 console.log('[auth] TRUST_PROXY:', TRUST_PROXY ? 'ON' : 'OFF');
 console.log('[auth] SESSION cookie:', {
   name: SESSION_NAME,
-  secure: 'auto',
+  secure: FORCE_SECURE_COOKIE ? true : 'auto',
   sameSite,
   domain: sessionDomain || '(default)',
-});
-
-/* ===== Preferir sesión sobre Bearer viejo ===== */
-app.use((req, _res, next) => {
-  // Si el server ya autenticó por sesión, exponemos el user
-  if (req.session?.user && !req.user) {
-    req.user = req.session.user;
-  }
-  // Si hay sesión válida, evitamos que un Authorization viejo cause 401
-  if (req.session?.user && req.headers?.authorization) {
-    delete req.headers.authorization;
-  }
-  next();
 });
 
 /* ========== BYPASS DE AUTH (opcional, controlado por env) ========== */
@@ -143,7 +132,7 @@ const AUTH_OPTIONAL =
 console.log(`[auth] AUTH_OPTIONAL: ${AUTH_OPTIONAL ? 'ON' : 'OFF'}`);
 
 if (AUTH_OPTIONAL) {
-  // Inyecta un usuario “falso” PERO SIN tocar Authorization
+  // Inyecta un usuario “falso”; NO añadimos Authorization Bearer dummy
   app.use((req, _res, next) => {
     if (!req.user) {
       req.user = { id: 2, name: 'Admin', email: 'admin@tuempresa.com', role: 'admin' };
@@ -164,8 +153,9 @@ if (AUTH_OPTIONAL) {
 app.use('/uploads', express.static('uploads'));
 app.use('/api/uploads', express.static('uploads'));
 
-/* ================ Healthcheck ================ */
+/* ================ Healthcheck y favicon ================ */
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
+app.get('/favicon.ico', (_req, res) => res.sendStatus(204)); // silencia 404 en consola
 
 /* ================ Rutas Públicas ================ */
 app.use('/api/auth', authRouter);
