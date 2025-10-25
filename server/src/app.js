@@ -4,6 +4,8 @@ import cors from 'cors';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import fs from 'node:fs';
+import session from 'express-session';
+import crypto from 'node:crypto';
 
 // Routers (ESM/CJS con default export)
 import pipelinesRouter from './routes/pipelines.js';
@@ -80,6 +82,46 @@ app.options('*', cors(corsOptions));
 app.use(express.json());
 app.use(morgan('dev'));
 
+/* ========== SESIÓN / COOKIES (detrás de Nginx con HTTPS) ========== */
+// Usa X-Forwarded-Proto para que req.secure funcione tras el proxy
+const truthy = v => ['1','true','yes','on'].includes(String(v ?? '').toLowerCase());
+const TRUST_PROXY = truthy(process.env.TRUST_PROXY ?? 'true');
+if (TRUST_PROXY) app.set('trust proxy', 1);
+
+// Config de cookie por .env (con defaults seguros para HTTPS)
+const SESSION_NAME = process.env.SESSION_NAME || 'sid';
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+
+let sameSite = (process.env.SESSION_SAMESITE || 'None').toLowerCase(); // 'none' | 'lax' | 'strict'
+if (!['none','lax','strict'].includes(sameSite)) sameSite = 'none';
+
+const sessionDomain = (process.env.SESSION_DOMAIN || '').trim() || undefined;
+
+// Nota: 'secure: "auto"' requiere trust proxy para funcionar bien en HTTPS
+app.use(session({
+  name: SESSION_NAME,
+  secret: SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  proxy: TRUST_PROXY, // asegura set-cookie correcto detrás del proxy
+  cookie: {
+    httpOnly: true,
+    secure: 'auto',           // en prod HTTPS => secure; en local http => no
+    sameSite: sameSite,       // 'none' permite envío cross-site (con withCredentials)
+    domain: sessionDomain,    // ej: .atmcargosoft.com (opcional)
+    path: '/',
+    maxAge: 1000 * 60 * 60 * 8, // 8h
+  },
+}));
+
+console.log('[auth] TRUST_PROXY:', TRUST_PROXY ? 'ON' : 'OFF');
+console.log('[auth] SESSION cookie:', {
+  name: SESSION_NAME,
+  secure: 'auto',
+  sameSite,
+  domain: sessionDomain || '(default)',
+});
+
 /* ========== BYPASS DE AUTH (opcional, controlado por env) ========== */
 const AUTH_OPTIONAL =
   process.env.AUTH_OPTIONAL === '1' ||
@@ -93,11 +135,9 @@ if (AUTH_OPTIONAL) {
     if (!req.user) {
       req.user = { id: 2, name: 'Admin', email: 'admin@tuempresa.com', role: 'admin' };
     }
-    // algunos middlewares solo chequean que exista el header
     if (!req.headers.authorization) {
       req.headers.authorization = 'Bearer dev-bypass';
     }
-    // y otros exponen helpers tipo req.isAuthenticated
     req.isAuthenticated = () => true;
     next();
   });
