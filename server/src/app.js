@@ -122,6 +122,19 @@ console.log('[auth] SESSION cookie:', {
   domain: sessionDomain || '(default)',
 });
 
+/* ===== Preferir sesión sobre Bearer viejo ===== */
+app.use((req, _res, next) => {
+  // Si el server ya autenticó por sesión, exponemos el user
+  if (req.session?.user && !req.user) {
+    req.user = req.session.user;
+  }
+  // Si hay sesión válida, evitamos que un Authorization viejo cause 401
+  if (req.session?.user && req.headers?.authorization) {
+    delete req.headers.authorization;
+  }
+  next();
+});
+
 /* ========== BYPASS DE AUTH (opcional, controlado por env) ========== */
 const AUTH_OPTIONAL =
   process.env.AUTH_OPTIONAL === '1' ||
@@ -130,13 +143,10 @@ const AUTH_OPTIONAL =
 console.log(`[auth] AUTH_OPTIONAL: ${AUTH_OPTIONAL ? 'ON' : 'OFF'}`);
 
 if (AUTH_OPTIONAL) {
-  // Inyecta un usuario “falso” y un Authorization dummy para middlewares estrictos
+  // Inyecta un usuario “falso” PERO SIN tocar Authorization
   app.use((req, _res, next) => {
     if (!req.user) {
       req.user = { id: 2, name: 'Admin', email: 'admin@tuempresa.com', role: 'admin' };
-    }
-    if (!req.headers.authorization) {
-      req.headers.authorization = 'Bearer dev-bypass';
     }
     req.isAuthenticated = () => true;
     next();
