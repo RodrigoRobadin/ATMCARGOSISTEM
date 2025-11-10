@@ -2787,7 +2787,7 @@ function providerHasFreightTag(p = {}) {
                 {modalTab === "OCEAN" && (
                   <OceanForm
                   f={ocean}
-                  set={setOpField}
+                  set={setOceanF}
                   readOnly={!editMode}
                   editMode={editMode}
                   getCF={getCF}
