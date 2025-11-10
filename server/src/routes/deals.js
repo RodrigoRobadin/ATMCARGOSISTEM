@@ -257,13 +257,18 @@ router.get('/:id', async (req, res) => {
 
        o.name  AS org_name,
        c.name  AS contact_name, c.email AS contact_email, c.phone AS contact_phone,
-       bu.name AS business_unit_name, bu.key_slug AS business_unit_key
+       bu.name AS business_unit_name, bu.key_slug AS business_unit_key,
+
+       s.name  AS stage_name,
+       p.name  AS pipeline_name
      FROM deals d
      LEFT JOIN organizations  o  ON o.id  = d.org_id
      LEFT JOIN contacts       c  ON c.id  = d.contact_id
      LEFT JOIN users          du ON du.id = d.advisor_user_id
      LEFT JOIN users          cu ON cu.id = d.created_by_user_id
      LEFT JOIN business_units bu ON bu.id = d.business_unit_id
+     LEFT JOIN stages         s  ON s.id  = d.stage_id
+     LEFT JOIN pipelines      p  ON p.id  = d.pipeline_id
      WHERE d.id = ?`,
     [id]
   );

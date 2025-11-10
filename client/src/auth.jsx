@@ -1,46 +1,39 @@
 // client/src/auth.jsx
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
-import { api, saveAuth, loadSavedAuth, TOKEN_KEY, USER_KEY } from "./api";
+import { api, saveAuth, loadSavedAuth, TOKEN_KEY } from "./api";
 
 const AuthCtx = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [authReady, setAuthReady] = useState(false);
   const didInit = useRef(false);
 
   const refresh = async () => {
-    // 1) Levantá estado desde localStorage para evitar "logout instantáneo"
     const { token: savedToken, user: savedUser } = loadSavedAuth();
-    if (savedToken || savedUser) {
-      // Mostramos al menos el user guardado mientras validamos con el backend
-      setUser(savedUser || user);
-      setLoading(false); // evitá redirecciones mientras validamos /auth/me
-    }
+    if (savedUser) setUser(savedUser);
 
-    // 2) Intentá validar sesión con el backend (cookie o bearer)
     try {
-      const { data } = await api.get("/auth/me"); // si existe en tu API
+      // OJO: sin "/" inicial (queda baseURL + "auth/me")
+      const { data } = await api.get("auth/me");
       if (data && typeof data === "object") {
         setUser(data);
-        // Actualizá el user persistido si llegó uno más completo
-        saveAuth({ token: savedToken || localStorage.getItem(TOKEN_KEY), user: data });
+        saveAuth({
+          token: data?.token || savedToken || localStorage.getItem(TOKEN_KEY) || null,
+          user: data,
+        });
       }
     } catch (err) {
       const status = err?.response?.status;
       if (status === 401) {
-        // Sesión inválida → limpiar todo
         saveAuth({ token: null, user: null });
         setUser(null);
-      } else if (status === 404) {
-        // Tu backend no tiene /auth/me → NO deslogueamos. Se usará cookie+Bearer en las llamadas normales.
-        // No hacemos nada.
-      } else {
-        // Errores de red u otros: no forzamos logout inmediato
+      } else if (status !== 404) {
+        console.warn("Auth refresh error:", err?.message || err);
       }
     } finally {
-      setLoading(false);
+      setAuthReady(true);
     }
   };
 
@@ -51,29 +44,42 @@ export function AuthProvider({ children }) {
   }, []);
 
   const login = async (payload) => {
-    // Soporta respuestas con { token, user } o solo { user } o 204 con cookie
-    const { data } = await api.post("/auth/login", payload);
+    // SIN "/" inicial y SIN "/api"
+    const res = await api.post("auth/login", payload);
+    const data = res?.data;
 
     const token = data?.token || null;
-    const nextUser = data?.user ?? data ?? null;
+    const nextUser = data?.user ?? (data && typeof data === "object" ? data : null);
 
-    // Guardar lo que haya
-    saveAuth({ token, user: nextUser });
-    setUser(nextUser);
+    saveAuth({ token, user: nextUser || user });
 
-    return nextUser;
+    if (!nextUser) {
+      try {
+        const me = await api.get("auth/me").then((r) => r.data);
+        if (me && typeof me === "object") {
+          saveAuth({ token: token || null, user: me });
+          setUser(me);
+          return me;
+        }
+      } catch (e) {
+        console.warn("fetch auth/me after login failed:", e?.message || e);
+      }
+    }
+
+    setUser(nextUser || null);
+    return nextUser || null;
   };
 
   const logout = async () => {
     try {
-      await api.post("/auth/logout"); // si tu backend lo expone; si no, sólo limpia local
+      await api.post("auth/logout"); // si existe
     } catch {}
     saveAuth({ token: null, user: null });
     setUser(null);
   };
 
   return (
-    <AuthCtx.Provider value={{ user, loading, login, logout, refresh }}>
+    <AuthCtx.Provider value={{ user, authReady, login, logout, refresh }}>
       {children}
     </AuthCtx.Provider>
   );
@@ -84,17 +90,17 @@ export function useAuth() {
 }
 
 export function RequireAuth({ children }) {
-  const { user, loading } = useAuth();
+  const { user, authReady } = useAuth();
   const loc = useLocation();
-  if (loading) return null;
+  if (!authReady) return null;
   if (!user) return <Navigate to="/login" replace state={{ from: loc }} />;
   return children;
 }
 
 export function RequireRole({ role, children }) {
-  const { user, loading } = useAuth();
-  if (loading) return null;
+  const { user, authReady } = useAuth();
+  if (!authReady) return null;
   if (!user) return <Navigate to="/login" replace />;
-  if (role && !user?.roles?.includes(role)) return <Navigate to="/" replace />;
+  if (role && !Array.isArray(user?.roles)?.includes(role)) return <Navigate to="/" replace />;
   return children;
 }

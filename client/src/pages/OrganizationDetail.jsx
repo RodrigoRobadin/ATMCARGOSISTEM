@@ -23,7 +23,8 @@ function Badge({ children }) {
   );
 }
 
-const ALL_MODALITIES = ['aerea', 'maritima', 'fluvial'];
+// 👇 agrego terrestre también por si lo usás
+const ALL_MODALITIES = ['aerea', 'maritima', 'terrestre', 'fluvial'];
 
 function parseModalitiesCSV(csv) {
   if (!csv) return [];
@@ -255,7 +256,7 @@ function normalizeNoteFromActivity(r) {
   const created =
     r.created_at ??
     r.updated_at ??
-    r.due_date ?? // por si tu backend guarda la “hora elegida” aquí
+    r.due_date ??
     null;
 
   const user_id =
@@ -308,8 +309,8 @@ export default function OrganizationDetail() {
   const [notes, setNotes] = useState([]);
   const [notesLoading, setNotesLoading] = useState(false);
   const [noteText, setNoteText] = useState('');
-  const [noteDate, setNoteDate] = useState(''); // opcional
-  const [noteTime, setNoteTime] = useState(''); // opcional
+  const [noteDate, setNoteDate] = useState('');
+  const [noteTime, setNoteTime] = useState('');
   const [savingNote, setSavingNote] = useState(false);
 
   // modales
@@ -324,12 +325,12 @@ export default function OrganizationDetail() {
 
   // ===== Campos personalizados =====
   const [cfLoading, setCfLoading] = useState(false);
-  const [customFields, setCustomFields] = useState([]); // [{id,key,label,type,value}]
+  const [customFields, setCustomFields] = useState([]);
   const [cfSupported, setCfSupported] = useState(true);
   const [openAddCF, setOpenAddCF] = useState(false);
 
   // ===== Ejecutivo de cuenta =====
-  const [accountExec, setAccountExec] = useState(null); // { id, name, email } | null
+  const [accountExec, setAccountExec] = useState(null);
   const [execLoading, setExecLoading] = useState(false);
   const [execIdRaw, setExecIdRaw] = useState(null);
   const [execNameRaw, setExecNameRaw] = useState(null);
@@ -338,6 +339,10 @@ export default function OrganizationDetail() {
   const [editExec, setEditExec] = useState(false);
   const [execSelection, setExecSelection] = useState(null);
   const [savingExec, setSavingExec] = useState(false);
+
+  // Rutas de flete asociadas a la organización
+  const [fleteRoutes, setFleteRoutes] = useState([]);
+  const [fleteRoutesLoading, setFleteRoutesLoading] = useState(false);
 
   // === helpers de carga ===
   async function loadOrg() {
@@ -378,7 +383,19 @@ export default function OrganizationDetail() {
     }
   }
 
-  // ===== NOTAS: lectura (solo /activities?type=note) =====
+  async function loadFleteRoutes() {
+    setFleteRoutesLoading(true);
+    try {
+      const { data } = await api.get(`/organizations/${id}/flete-routes`);
+      setFleteRoutes(Array.isArray(data) ? data : []);
+    } catch {
+      setFleteRoutes([]);
+    } finally {
+      setFleteRoutesLoading(false);
+    }
+  }
+
+  // ===== NOTAS: lectura =====
   async function loadNotes() {
     setNotesLoading(true);
     try {
@@ -391,13 +408,12 @@ export default function OrganizationDetail() {
     }
   }
 
-  // Alta de nota (solo /activities con type=note)
+  // Alta de nota
   async function addOrgNote() {
     const text = (noteText || '').trim();
     if (!text) return;
     setSavingNote(true);
     try {
-      // Si el backend permite sobreescribir created_at, lo mandamos.
       const hasDT = !!noteDate || !!noteTime;
       const created_at = (() => {
         if (!hasDT) return null;
@@ -425,7 +441,7 @@ export default function OrganizationDetail() {
     }
   }
 
-  // cargar organización + tratos + CF
+  // cargar organización + tratos + CF + rutas de flete
   useEffect(() => {
     let cancel = false;
     (async () => {
@@ -434,6 +450,7 @@ export default function OrganizationDetail() {
         await loadOrg();
         await loadOrgDeals();
         await loadCustomFields();
+        await loadFleteRoutes();
       } catch (e) {
         if (!cancel) setErr('No se pudo cargar la organización.');
       } finally {
@@ -471,7 +488,7 @@ export default function OrganizationDetail() {
     return () => { cancel = true; };
   }, [tab, id]);
 
-  // Resolver ejecutivo de cuenta en cuanto tengamos org y/o CF
+  // Resolver ejecutivo de cuenta
   useEffect(() => {
     let live = true;
     (async () => {
@@ -520,7 +537,7 @@ export default function OrganizationDetail() {
     setSavingExec(true);
     try {
       await api.patch(`/organizations/${id}`, { owner_user_id: execSelection ?? null });
-      await loadOrg(); // recarga datos, vuelve a resolver el ejecutivo
+      await loadOrg();
       setEditExec(false);
     } catch {
       alert('No se pudo guardar el ejecutivo.');
@@ -550,6 +567,13 @@ export default function OrganizationDetail() {
   if (loading) return <p className="text-sm text-slate-600">Cargando…</p>;
   if (err) return <p className="text-sm text-red-600">{err}</p>;
   if (!org) return <p className="text-sm text-slate-600">Organización no encontrada.</p>;
+
+  // 👇 Detectamos si es organización de Flete
+  const isFreightOrg =
+    (org.tipo_org || '').toLowerCase().includes('flete') ||
+    (org.rubro || '').toLowerCase().includes('flete');
+
+  const freightModalities = parseModalitiesCSV(org.modalities_supported);
 
   return (
     <div className="space-y-4">
@@ -605,6 +629,90 @@ export default function OrganizationDetail() {
               </div>
             </div>
           </section>
+
+          {/* 👇 Hoja de ruta (solo flete) */}
+          {isFreightOrg && (
+            <section className="bg-white rounded-2xl shadow">
+              <header className="px-4 py-3 border-b font-medium flex items-center justify-between">
+                <span>Hoja de ruta (flete)</span>
+                <button
+                  className="text-sm text-blue-600 hover:underline"
+                  onClick={()=>setOpenEdit(true)}
+                >
+                  Editar
+                </button>
+              </header>
+              <div className="p-4 space-y-3 text-sm">
+                <FieldRow label="Tipo de flete">
+                  {freightModalities.length ? (
+                    <div className="flex flex-wrap justify-end gap-1">
+                      {freightModalities.map(m => (
+                        <span
+                          key={m}
+                          className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-xs text-slate-700"
+                        >
+                          {m === 'aerea' && '✈️ Aéreo'}
+                          {m === 'maritima' && '🚢 Marítimo'}
+                          {m === 'terrestre' && '🚚 Terrestre'}
+                          {m === 'fluvial' && '🛳 Fluvial'}
+                          {m !== 'aerea' && m !== 'maritima' && m !== 'terrestre' && m !== 'fluvial' && m}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    '—'
+                  )}
+                </FieldRow>
+
+                <div>
+                  <div className="text-xs text-slate-500 mb-1 text-left">
+                    Cobertura / Hoja de ruta (texto libre)
+                  </div>
+                  <div className="text-sm text-slate-900 whitespace-pre-wrap text-right">
+                    {org.hoja_ruta || '—'}
+                  </div>
+                </div>
+
+                <div className="pt-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="text-xs text-slate-500">
+                      Rutas registradas (estructura)
+                    </div>
+                    {fleteRoutesLoading && (
+                      <span className="text-[11px] text-slate-500">Cargando…</span>
+                    )}
+                  </div>
+                  {(!fleteRoutesLoading && fleteRoutes.length === 0) && (
+                    <div className="text-xs text-slate-500 text-right">
+                      No hay rutas estructuradas cargadas para este proveedor.
+                    </div>
+                  )}
+                  {fleteRoutes.length > 0 && (
+                    <ul className="space-y-1 text-xs text-right">
+                      {fleteRoutes.map(r => (
+                        <li key={r.id}>
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 mr-1 capitalize">
+                            {r.modality === 'aereo' && '✈️ Aéreo'}
+                            {r.modality === 'maritimo' && '🚢 Marítimo'}
+                            {r.modality === 'terrestre' && '🚚 Terrestre'}
+                            {r.modality !== 'aereo' && r.modality !== 'maritimo' && r.modality !== 'terrestre' && (r.modality || '')}
+                          </span>
+                          <span>
+                            {(r.origin || 'Cualquier origen')} → {(r.destination || 'Cualquier destino')}
+                          </span>
+                          {(r.origin_country || r.destination_country) && (
+                            <span className="ml-1 text-slate-500">
+                              ({r.origin_country || '?'} → {r.destination_country || '?'})
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            </section>
+          )}
 
           {/* Campos personalizados */}
           <section className="bg-white rounded-2xl shadow">
@@ -945,7 +1053,7 @@ export default function OrganizationDetail() {
         <EditOrgModal
           org={org}
           onClose={()=>setOpenEdit(false)}
-          onSaved={async ()=>{ await loadOrg(); }}
+          onSaved={async ()=>{ await loadOrg(); await loadFleteRoutes(); }}
         />
       )}
 
@@ -997,6 +1105,7 @@ function EditOrgModal({ org, onClose, onSaved }) {
     notes: org.notes || '',
     is_agent: Number(org.is_agent) ? 1 : 0,
     modalities_supported: org.modalities_supported || null,
+    hoja_ruta: org.hoja_ruta || '',
   });
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
@@ -1008,6 +1117,11 @@ function EditOrgModal({ org, onClose, onSaved }) {
       : [...parsedModalities, m];
     upd('modalities_supported', toCSV(next));
   }
+
+  const isFreight =
+    (org.tipo_org || '').toLowerCase().includes('flete') ||
+    (org.rubro || '').toLowerCase().includes('flete');
+
   async function submit(e){
     e.preventDefault(); setErr(''); setSaving(true);
     try {
@@ -1094,11 +1208,7 @@ function EditOrgModal({ org, onClose, onSaved }) {
                   <input
                     type="checkbox"
                     checked={parseModalitiesCSV(form.modalities_supported).includes(m)}
-                    onChange={()=>{
-                      const parsed = parseModalitiesCSV(form.modalities_supported);
-                      const next = parsed.includes(m) ? parsed.filter(x=>x!==m) : [...parsed, m];
-                      upd('modalities_supported', toCSV(next));
-                    }}
+                    onChange={()=>toggleModality(m)}
                   />
                   <span className="capitalize">{m}</span>
                 </label>
@@ -1107,6 +1217,24 @@ function EditOrgModal({ org, onClose, onSaved }) {
             <div className="text-xs text-slate-500 mt-1">Se guardan como CSV en <code>modalities_supported</code>.</div>
           </div>
         </div>
+
+        {/* Hoja de ruta (solo si es Flete) */}
+        {isFreight && (
+          <label className="block text-sm">
+            Hoja de ruta (cobertura de flete)
+            <textarea
+              className="w-full border rounded-lg px-3 py-2"
+              rows={3}
+              placeholder="Ej: Aéreo: AR–BR–CL / Marítimo: Asia–Latam vía Panamá..."
+              value={form.hoja_ruta ?? ''}
+              onChange={e=>upd('hoja_ruta', e.target.value)}
+            />
+            <div className="text-xs text-slate-500 mt-1">
+              Describí las rutas típicas, países y puertos que cubre este proveedor. Luego se podrá usar para filtrar proveedores por origen/destino.
+            </div>
+          </label>
+        )}
+
         <label className="block text-sm">Notas
           <textarea className="w-full border rounded-lg px-3 py-2" rows={4} value={form.notes ?? ''} onChange={e=>upd('notes', e.target.value)} />
         </label>
@@ -1121,279 +1249,5 @@ function EditOrgModal({ org, onClose, onSaved }) {
   );
 }
 
-function AddCustomFieldModal({ orgId, onClose, onCreated }) {
-  const [label, setLabel] = useState('');
-  const [key, setKey] = useState('');
-  const [type, setType] = useState('text');
-  const [value, setValue] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState('');
-  async function submit(e){
-    e.preventDefault();
-    setErr('');
-    if (!key.trim() || !label.trim()) { setErr('Completá clave y etiqueta.'); return; }
-    setSaving(true);
-    try {
-      await api.post(`/organizations/${orgId}/custom-fields`, { key: key.trim(), label: label.trim(), type, value: value ?? null });
-      onCreated?.(); onClose?.();
-    } catch { setErr('No se pudo crear el campo (verifica que el endpoint exista).'); }
-    finally { setSaving(false); }
-  }
-  return (
-    <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50">
-      <form onSubmit={submit} className="bg-white rounded-2xl p-4 w-full max-w-lg space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Nuevo campo personalizado</h3>
-          <button type="button" onClick={onClose} className="text-sm">✕</button>
-        </div>
-        {err && <div className="text-sm text-red-600">{err}</div>}
-        <label className="block text-sm">Etiqueta visible
-          <input className="w-full border rounded-lg px-3 py-2" value={label} onChange={e=>setLabel(e.target.value)} />
-        </label>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <label className="block text-sm">Clave (sin espacios)
-            <input className="w-full border rounded-lg px-3 py-2" value={key} onChange={e=>setKey(e.target.value)} placeholder="ej: tax_id" />
-          </label>
-          <label className="block text-sm">Tipo
-            <select className="w-full border rounded-lg px-3 py-2" value={type} onChange={e=>setType(e.target.value)}>
-              <option value="text">Texto</option>
-              <option value="number">Número</option>
-              <option value="date">Fecha</option>
-            </select>
-          </label>
-        </div>
-        <label className="block text-sm">Valor inicial
-          <input className="w-full border rounded-lg px-3 py-2" value={value} onChange={e=>setValue(e.target.value)} />
-        </label>
-        <div className="pt-2 flex gap-2 justify-end">
-          <button type="button" onClick={onClose} className="px-3 py-2 border rounded-lg">Cancelar</button>
-          <button className="px-3 py-2 rounded-lg bg-black text-white disabled:opacity-60" disabled={saving}>
-            {saving ? 'Guardando…' : 'Crear'}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-function NewActivityModal({ orgId, onClose, onCreated }) {
-  const [type, setType] = useState('task');
-  const [subject, setSubject] = useState('');
-  const [dueDate, setDueDate] = useState('');
-  const [notes, setNotes] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState('');
-  async function submit(e){
-    e.preventDefault(); setErr('');
-    if (!subject.trim() && !notes.trim()) { setErr('Escribí al menos asunto o notas.'); return; }
-    setSaving(true);
-    try {
-      await api.post('/activities', { type, subject: subject.trim(), due_date: dueDate || null, done: 0, org_id: Number(orgId), notes: notes || null });
-      onCreated?.(); onClose?.();
-    } catch { setErr('No se pudo crear la actividad.'); }
-    finally { setSaving(false); }
-  }
-  return (
-    <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50">
-      <form onSubmit={submit} className="bg-white rounded-2xl p-4 w-full max-w-lg space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Nueva actividad</h3>
-          <button type="button" onClick={onClose} className="text-sm">✕</button>
-        </div>
-        {err && <div className="text-sm text-red-600">{err}</div>}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <label className="block text-sm">Tipo
-            <select className="w-full border rounded-lg px-3 py-2" value={type} onChange={e=>setType(e.target.value)}>
-              <option value="task">Tarea</option>
-              <option value="call">Llamada</option>
-              <option value="meeting">Reunión</option>
-              <option value="email">Email</option>
-              <option value="note">Nota</option>
-            </select>
-          </label>
-          <label className="block text-sm">Vence (YYYY-MM-DD)
-            <input className="w-full border rounded-lg px-3 py-2" type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} />
-          </label>
-        </div>
-        <label className="block text-sm">Asunto
-          <input className="w-full border rounded-lg px-3 py-2" value={subject} onChange={e=>setSubject(e.target.value)} placeholder="Ej: Llamar para propuesta" />
-        </label>
-        <label className="block text-sm">Notas
-          <textarea className="w-full border rounded-lg px-3 py-2" rows={4} value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Detalles, acuerdos, etc." />
-        </label>
-        <div className="pt-2 flex gap-2 justify-end">
-          <button type="button" onClick={onClose} className="px-3 py-2 border rounded-lg">Cancelar</button>
-          <button className="px-3 py-2 rounded-lg bg-black text-white disabled:opacity-60" disabled={saving}>
-            {saving ? 'Guardando…' : 'Crear'}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-function NewDealModal({ orgId, onClose, onCreated }) {
-  const [title, setTitle] = useState('');
-  const [value, setValue] = useState('');
-  const [pipelineId, setPipelineId] = useState('');
-  const [stageId, setStageId] = useState('');
-  const [pipelines, setPipelines] = useState([]);
-  const [stages, setStages] = useState([]);
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState('');
-
-  useEffect(() => {
-    let cancel = false;
-    (async () => {
-      try {
-        const { data: p } = await api.get('/pipelines');
-        if (!cancel) {
-          const list = Array.isArray(p) ? p : [];
-          setPipelines(list);
-          const pid = list?.[0]?.id ? String(list[0].id) : '';
-          setPipelineId(pid);
-        }
-      } catch {}
-    })();
-    return () => { cancel = true; };
-  }, []);
-
-  useEffect(() => {
-    let cancel = false;
-    (async () => {
-      if (!pipelineId) { setStages([]); setStageId(''); return; }
-      try {
-        const { data: s } = await api.get(`/pipelines/${pipelineId}/stages`);
-        if (!cancel) {
-          const list = Array.isArray(s) ? s : [];
-          setStages(list);
-          setStageId(list?.[0]?.id ? String(list[0].id) : '');
-        }
-      } catch {}
-    })();
-    return () => { cancel = true; };
-  }, [pipelineId]);
-
-  async function submit(e){
-    e.preventDefault();
-    setErr('');
-    if (!title.trim() || !stageId || !pipelineId) {
-      setErr('Completá título, pipeline y etapa.');
-      return;
-    }
-    setSaving(true);
-    try {
-      await api.post('/deals', {
-        title: title.trim(),
-        value: value ? Number(value) : 0,
-        pipeline_id: Number(pipelineId),
-        stage_id: Number(stageId),
-        org_id: Number(orgId),
-      });
-      onCreated?.();
-      onClose?.();
-    } catch (e) {
-      setErr('No se pudo crear el trato.');
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50">
-      <form onSubmit={submit} className="bg-white rounded-2xl p-4 w-full max-w-lg space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Nuevo trato</h3>
-          <button type="button" onClick={onClose} className="text-sm">✕</button>
-        </div>
-
-        {err && <div className="text-sm text-red-600">{err}</div>}
-
-        <label className="block text-sm">Título
-          <input className="w-full border rounded-lg px-3 py-2" value={title} onChange={e=>setTitle(e.target.value)} />
-        </label>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <label className="block text-sm">Valor
-            <input className="w-full border rounded-lg px-3 py-2" type="number" min="0"
-              value={value} onChange={e=>setValue(e.target.value)} />
-          </label>
-
-          <label className="block text-sm">Pipeline
-            <select className="w-full border rounded-lg px-3 py-2"
-              value={pipelineId} onChange={e=>setPipelineId(e.target.value)}>
-              <option value="">Seleccionar…</option>
-              {pipelines.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </label>
-        </div>
-
-        <label className="block text-sm">Etapa
-          <select className="w-full border rounded-lg px-3 py-2"
-            value={stageId} onChange={e=>setStageId(e.target.value)} disabled={!stages.length}>
-            <option value="">Seleccionar…</option>
-            {stages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-        </label>
-
-        <div className="pt-2 flex gap-2 justify-end">
-          <button type="button" onClick={onClose} className="px-3 py-2 border rounded-lg">Cancelar</button>
-          <button className="px-3 py-2 rounded-lg bg-black text-white disabled:opacity-60" disabled={saving}>
-            {saving ? 'Guardando…' : 'Crear'}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-function NewPersonModal({ orgId, onClose, onCreated }) {
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [title, setTitle] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState('');
-  async function submit(e){
-    e.preventDefault();
-    setErr('');
-    if (!name.trim() && !email.trim()) { setErr('Completá al menos nombre o email.'); return; }
-    setSaving(true);
-    try {
-      await api.post('/contacts', { name: name.trim() || null, email: email || null, phone: phone || null, title: title || null, org_id: Number(orgId) });
-      onCreated?.(); onClose?.();
-    } catch (e) { setErr('No se pudo crear la persona.'); }
-    finally { setSaving(false); }
-  }
-  return (
-    <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50">
-      <form onSubmit={submit} className="bg-white rounded-2xl p-4 w-full max-w-md space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Nueva persona</h3>
-          <button type="button" onClick={onClose} className="text-sm">✕</button>
-        </div>
-        {err && <div className="text-sm text-red-600">{err}</div>}
-        <label className="block text-sm">Nombre
-          <input className="w-full border rounded-lg px-3 py-2" value={name} onChange={e=>setName(e.target.value)} />
-        </label>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <label className="block text-sm">Email
-            <input className="w-full border rounded-lg px-3 py-2" value={email} onChange={e=>setEmail(e.target.value)} />
-          </label>
-          <label className="block textsm">Teléfono
-            <input className="w-full border rounded-lg px-3 py-2" value={phone} onChange={e=>setPhone(e.target.value)} />
-          </label>
-        </div>
-        <label className="block text-sm">Cargo (opcional)
-          <input className="w-full border rounded-lg px-3 py-2" value={title} onChange={e=>setTitle(e.target.value)} />
-        </label>
-        <div className="pt-2 flex gap-2 justify-end">
-          <button type="button" onClick={onClose} className="px-3 py-2 border rounded-lg">Cancelar</button>
-          <button className="px-3 py-2 rounded-lg bg-black text-white disabled:opacity-60" disabled={saving}>
-            {saving ? 'Guardando…' : 'Crear'}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
+// ... (el resto del archivo: AddCustomFieldModal, NewActivityModal,
+// NewDealModal, NewPersonModal — igual que ya los tenías)

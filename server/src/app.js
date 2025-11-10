@@ -31,9 +31,15 @@ import followupsRouter from './routes/followups.js';
 
 // ⭐️ Operaciones (nuestro router nuevo)
 import operationsRouter from './routes/operations.js';
-import reportsRouter from "./routes/reports.js";
-import adminRouter from "./routes/admin.js";
-import catalogRouter from "./routes/catalog.js";
+import reportsRouter from './routes/reports.js';
+import adminRouter from './routes/admin.js';
+import catalogRouter from './routes/catalog.js';
+
+// ⭐️ NUEVO: solicitudes de flete
+import freightRequestsRouter from './routes/freightRequests.js';
+
+// ⭐️ NUEVO: envío de informes por correo
+import emailRoutes from './routes/emailRoutes.js';
 
 // ====== Cargar variables de entorno ======
 const ENV_PATH = '/home/deploy/.env.crm';
@@ -84,7 +90,7 @@ app.use(morgan('dev'));
 
 /* ========== SESIÓN / COOKIES ========== */
 // Usa X-Forwarded-Proto para que req.secure funcione tras el proxy
-const truthy = v => ['1','true','yes','on'].includes(String(v ?? '').toLowerCase());
+const truthy = v => ['1', 'true', 'yes', 'on'].includes(String(v ?? '').toLowerCase());
 const TRUST_PROXY = truthy(process.env.TRUST_PROXY ?? 'true');
 if (TRUST_PROXY) app.set('trust proxy', 1);
 
@@ -96,7 +102,7 @@ const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toSt
 const FORCE_SECURE_COOKIE = truthy(process.env.FORCE_SECURE_COOKIE ?? 'true');
 
 let sameSite = (process.env.SESSION_SAMESITE || 'None').toLowerCase(); // 'none' | 'lax' | 'strict'
-if (!['none','lax','strict'].includes(sameSite)) sameSite = 'none';
+if (!['none', 'lax', 'strict'].includes(sameSite)) sameSite = 'none';
 
 const sessionDomain = (process.env.SESSION_DOMAIN || '').trim() || undefined;
 
@@ -179,12 +185,18 @@ app.use('/api/admin/activity', adminActivity);
 app.use('/api/audit', auditRouter);
 app.use('/api/followups', followupsRouter);
 app.use('/api/search', searchRouter);
-app.use("/api/reports", reportsRouter);
-app.use("/api/admin", adminRouter);
-app.use("/api", catalogRouter);
+app.use('/api/reports', reportsRouter);
+app.use('/api/admin', adminRouter);
+app.use('/api', catalogRouter);
 
 // ⭐️ Operaciones (crear/leer y PUT por tipo: air/ocean/road/multimodal)
 app.use('/api/operations', operationsRouter);
+
+// ⭐️ NUEVO: solicitudes de flete (envío de emails “pedido de tarifa”)
+app.use('/api/freight-requests', freightRequestsRouter);
+
+// ⭐️ NUEVO: envío de informes por correo (status report)
+app.use('/api', emailRoutes); // /api/emails/status-report
 
 /* ====== Manejador de errores CORS ====== */
 app.use((err, _req, res, next) => {

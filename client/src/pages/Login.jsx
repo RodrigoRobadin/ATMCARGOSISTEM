@@ -1,8 +1,8 @@
-// src/pages/Login.jsx
+// client/src/pages/Login.jsx
 import React, { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth.jsx";
-import bgImage from "../assets/IMAGEN FONDO ATM.jpg"; // ⬅️ import del fondo
+import bgImage from "../assets/IMAGEN FONDO ATM.jpg";
 
 export default function Login() {
   const { login } = useAuth();
@@ -20,10 +20,16 @@ export default function Login() {
     setErr("");
     setSubmitting(true);
     try {
+      // Llama a "auth/login" (el provider ya lo hace; lo dejo claro)
       await login({ email, password: pass });
       nav(from, { replace: true });
     } catch (e) {
-      setErr("Usuario o contraseña inválidos");
+      const msg =
+        e?.response?.data?.message ||
+        e?.response?.data?.error ||
+        e?.message ||
+        "Usuario o contraseña inválidos";
+      setErr(msg);
       console.error(e);
     } finally {
       setSubmitting(false);
@@ -41,6 +47,7 @@ export default function Login() {
       >
         <h1 className="text-lg font-semibold">Ingresar</h1>
         {err && <div className="text-sm text-red-600">{err}</div>}
+
         <label className="block">
           <span className="text-xs text-slate-600">Email</span>
           <input
@@ -52,6 +59,7 @@ export default function Login() {
             required
           />
         </label>
+
         <label className="block">
           <span className="text-xs text-slate-600">Contraseña</span>
           <input
@@ -62,6 +70,7 @@ export default function Login() {
             required
           />
         </label>
+
         <button
           disabled={submitting}
           className="w-full px-3 py-2 rounded-lg bg-black text-white"

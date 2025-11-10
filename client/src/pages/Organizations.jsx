@@ -1,3 +1,4 @@
+// client/src/pages/Organizations.jsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
@@ -149,7 +150,7 @@ export default function Organizations(){
                   <td className="p-2">{r.id}</td>
                   <td className="p-2">
                     <Link to={`/organizations/${r.id}`} className="text-blue-600 hover:underline">
-                      {r.razon_social || r.name /* compat */}
+                      {r.razon_social || r.name}
                     </Link>
                   </td>
                   <td className="p-2">{r.ruc || '—'}</td>
@@ -200,7 +201,10 @@ function NewOrganizationModal({ onClose, onCreated /* owners, labelOptions */ })
   const [operacion, setOperacion] = useState('');
   const [notes, setNotes] = useState('');
 
-  // 👇 Nuevo: Ejecutivo de cuenta (opcional)
+  // 👇 Nuevo: hoja de ruta para flete
+  const [hojaRuta, setHojaRuta] = useState('');
+
+  // Ejecutivo de cuenta (opcional)
   const [accountExecutiveId, setAccountExecutiveId] = useState(null);
 
   const [saving, setSaving] = useState(false);
@@ -215,6 +219,10 @@ function NewOrganizationModal({ onClose, onCreated /* owners, labelOptions */ })
   const rubroOptions = paramOpts?.org_rubro || ['Seguro'];
   const operacionOptions = paramOpts?.org_operacion || paramOpts?.tipo_operacion || [];
 
+  const isFreightOrg =
+    (tipoOrg || '').toLowerCase().includes('flete') ||
+    (rubro || '').toLowerCase().includes('flete');
+
   async function submit(e){
     e.preventDefault();
     setError('');
@@ -223,7 +231,6 @@ function NewOrganizationModal({ onClose, onCreated /* owners, labelOptions */ })
     try {
       const execId = accountExecutiveId ? Number(accountExecutiveId) : null;
       await api.post('/organizations', {
-        // compat: algunos listados viejos leen name
         razon_social: razonSocial.trim(),
         name: razonSocial.trim(),
         ruc: ruc || null,
@@ -236,8 +243,9 @@ function NewOrganizationModal({ onClose, onCreated /* owners, labelOptions */ })
         tipo_org: tipoOrg || null,
         operacion: operacion || null,
         notes: notes || null,
+        hoja_ruta: hojaRuta || null,
 
-        // 👇 Asignación comercial (tolerante: el backend toma el que soporte)
+        // Asignación comercial tolerante
         account_executive_id: execId,
         owner_id: execId,
         assigned_user_id: execId,
@@ -321,12 +329,26 @@ function NewOrganizationModal({ onClose, onCreated /* owners, labelOptions */ })
           </select>
         </label>
 
-        {/* 👇 Nuevo: Ejecutivo de cuenta */}
+        {/* Ejecutivo de cuenta */}
         <ExecSelect
           value={accountExecutiveId}
           onChange={setAccountExecutiveId}
           label="Ejecutivo de cuenta (opcional)"
         />
+
+        {/* 👇 NUEVO: Hoja de ruta solo si es Flete */}
+        {isFreightOrg && (
+          <label className="block text-sm">
+            Hoja de ruta (cobertura de flete)
+            <textarea
+              className="w-full border rounded-lg px-3 py-2"
+              rows={3}
+              placeholder="Ej: Aéreo: AR–BR–CL / Marítimo: China–Latam vía Panamá..."
+              value={hojaRuta}
+              onChange={e=>setHojaRuta(e.target.value)}
+            />
+          </label>
+        )}
 
         {/* Notas */}
         <label className="block text-sm">Notas

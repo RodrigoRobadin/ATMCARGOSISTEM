@@ -36,6 +36,9 @@ import PipelineEditorPage from './pages/PipelineEditorPage.jsx';
 // + NUEVO import
 import ProductsServices from "./pages/catalog/ProductsServices.jsx";
 
+// ⭐️ NUEVO: Solicitud de flete desde operación
+import RequestFreight from './pages/RequestFreight.jsx';
+
 
 // ---------------- UI helpers ----------------
 const linkCls = ({ isActive }) =>
@@ -200,6 +203,7 @@ export default function App() {
                 {/* Operaciones */}
                 <Route path="/operations/:id" element={<OperationDetail />} />
                 <Route path="/operations/:id/quote" element={<QuoteGenerator />} />
+                <Route path="/operations/:id/request-freight" element={<RequestFreight />} />
 
                 {/* Seguimiento */}
                 <Route path="/followup" element={<FollowUp />} />
