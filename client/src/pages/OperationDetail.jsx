@@ -3295,10 +3295,10 @@ function OceanForm({
             </select>
           </div>
           <div className="flex-1 ml-2 min-w-[280px]">
-            {/* Rótulo + link para MBL */}
+            {/* Rótulo + link para MBL (usa misma CF que DOC MASTER) */}
             <DocTextLink
               label=""
-              cfKey="mbl"
+              cfKey="doc_master"   // <- antes era "mbl"
               editMode={editMode}
               getCF={getCF}
               setCFLocal={setCFLocal}
@@ -3329,10 +3329,10 @@ function OceanForm({
             </select>
           </div>
           <div className="flex-1 ml-2 min-w-[280px]">
-            {/* Rótulo + link para HBL */}
+            {/* Rótulo + link para HBL (usa misma CF que DOC HOUSE) */}
             <DocTextLink
               label=""
-              cfKey="hbl"
+              cfKey="doc_house"    // <- antes era "hbl"
               editMode={editMode}
               getCF={getCF}
               setCFLocal={setCFLocal}
