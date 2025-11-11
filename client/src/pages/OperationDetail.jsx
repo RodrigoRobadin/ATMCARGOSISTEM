@@ -3273,6 +3273,21 @@ function OceanForm({
     readOnly,
   });
 
+  // === Fallback de CF: primero doc_master/doc_house, si están vacíos usa mbl/hbl ===
+  const chooseCFKey = (keys) => {
+    if (!getCF) return keys[0];
+    for (const k of keys) {
+      const v = getCF(k);
+      if (v != null && String(v).trim() !== "") {
+        return k;
+      }
+    }
+    return keys[0];
+  };
+
+  const docMasterKey = chooseCFKey(["doc_master", "mbl"]);
+  const docHouseKey = chooseCFKey(["doc_house", "hbl"]);
+
   return (
     <div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -3295,10 +3310,10 @@ function OceanForm({
             </select>
           </div>
           <div className="flex-1 ml-2 min-w-[280px]">
-            {/* Rótulo + link para MBL (usa misma CF que DOC MASTER) */}
+            {/* Rótulo + link para MBL */}
             <DocTextLink
               label=""
-              cfKey="doc_master"   // <- antes era "mbl"
+              cfKey={docMasterKey}
               editMode={editMode}
               getCF={getCF}
               setCFLocal={setCFLocal}
@@ -3329,10 +3344,10 @@ function OceanForm({
             </select>
           </div>
           <div className="flex-1 ml-2 min-w-[280px]">
-            {/* Rótulo + link para HBL (usa misma CF que DOC HOUSE) */}
+            {/* Rótulo + link para HBL */}
             <DocTextLink
               label=""
-              cfKey="doc_house"    // <- antes era "hbl"
+              cfKey={docHouseKey}
               editMode={editMode}
               getCF={getCF}
               setCFLocal={setCFLocal}
