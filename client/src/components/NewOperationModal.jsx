@@ -72,11 +72,16 @@ function normalizeOpTypeOptions(raw) {
 }
 
 /* ====================  ExecSelect (usuarios del sistema)  ==================== */
+/* ====================  ExecSelect (usuarios del sistema)  ==================== */
 function ExecSelect({ value, onChange }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
+
+  // 👇 nuevo: para decidir si abre hacia arriba o hacia abajo
+  const containerRef = useRef(null);
+  const [placement, setPlacement] = useState("down"); // "down" | "up"
 
   useEffect(() => {
     (async () => {
@@ -113,21 +118,51 @@ function ExecSelect({ value, onChange }) {
   const currentLabel =
     users.find((u) => String(u.id) === String(value))?.name || "";
 
+  // 👇 calcula si hay más espacio arriba o abajo
+  const recalcPlacement = () => {
+    try {
+      const el = containerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const viewportH =
+        window.innerHeight || document.documentElement.clientHeight || 0;
+
+      const spaceBelow = viewportH - rect.bottom;
+      const spaceAbove = rect.top;
+
+      // max-h-64 ≈ 256px
+      const estimatedHeight = 260;
+
+      if (spaceBelow < estimatedHeight && spaceAbove > spaceBelow) {
+        setPlacement("up");
+      } else {
+        setPlacement("down");
+      }
+    } catch {
+      // si algo falla, dejamos "down"
+    }
+  };
+
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       <div className="flex gap-2">
         <input
           className="w-full border rounded-lg px-3 py-2 text-sm"
           value={currentLabel}
-          onChange={(e) => setQ(e.target.value)}
-          onFocus={() => setOpen(true)}
+          onFocus={() => {
+            recalcPlacement();
+            setOpen(true);
+          }}
           placeholder="Buscar usuario…"
           readOnly
         />
         <button
           type="button"
           className="px-2 border rounded-lg text-sm"
-          onClick={() => setOpen((o) => !o)}
+          onClick={() => {
+            if (!open) recalcPlacement();
+            setOpen((o) => !o);
+          }}
           title="Seleccionar ejecutivo"
         >
           {open ? "▲" : "▼"}
@@ -135,7 +170,12 @@ function ExecSelect({ value, onChange }) {
       </div>
 
       {open && (
-        <div className="absolute z-30 mt-1 w-full bg-white border rounded-lg shadow-lg max-h-64 overflow-auto">
+        <div
+          className={
+            "absolute z-30 w-full bg-white border rounded-lg shadow-lg max-h-64 overflow-auto " +
+            (placement === "up" ? "bottom-full mb-1" : "mt-1")
+          }
+        >
           <div className="p-2">
             <input
               className="w-full border rounded px-2 py-1 text-sm"

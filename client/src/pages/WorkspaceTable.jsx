@@ -276,11 +276,14 @@ export default function WorkspaceTable() {
     return (deals || []).map((d) => {
       const etapa =
         stages.find((s) => s.id === d.stage_id)?.name || "—"; // Estado = etapa de pipeline
+
       const ejecutivo =
-        d.deal_advisor_name ||
-        d.created_by_name ||
-        d.org_advisor_name ||
+        d.deal_advisor_name ||    // si el backend lo manda así
+        d.advisor_user_name ||    // otro nombre típico
+        d.advisor_name ||         // fallback
+        d.org_advisor_name ||     // último recurso
         "—";
+
       const det = detailCache[d.id] || {};
 
       const tipoRaw = det.tipo || "—";

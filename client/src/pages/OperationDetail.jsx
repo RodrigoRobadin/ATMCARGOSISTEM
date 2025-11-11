@@ -1911,7 +1911,17 @@ useEffect(() => {
     getCF("estado") || // campo personalizado
     "Sin etapa";
 
-  const pipelineState = String(rawStage);
+const pipelineState = String(rawStage);
+
+// Ejecutivo de cuenta (quien lleva la operación)
+// Usamos optional chaining porque deal puede ser null al principio
+
+// Después (sin fallback al creador):
+const executiveName =
+  deal?.deal_advisor_name ||
+  deal?.advisor_user_name ||
+  deal?.advisor_name ||
+  "—";
 
   // Rótulo/resumen de la operación (para mostrar en el header)
  // Rótulo / resumen de la operación (para mostrar en el header y en correos)
@@ -2496,6 +2506,10 @@ function providerHasFreightTag(p = {}) {
                           : "—"
                       }
                     />
+                  </Field>
+
+                  <Field label="Ejecutivo de cuenta">
+                    <Input readOnly value={executiveName} />
                   </Field>
                 </div>
               </div>

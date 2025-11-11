@@ -493,6 +493,7 @@ router.delete('/:id/files/:fileId', requireAuth, async (req, res) => {
 
 /**
  * POST /api/deals
+ * Crea una operación nueva
  */
 router.post('/', requireAuth, async (req, res) => {
   const body = req.body || {};
@@ -514,9 +515,9 @@ router.post('/', requireAuth, async (req, res) => {
   const org_name     = body.org_name || organization?.name || null;
   const org_id_body  = organization?.id || null;
 
-  const contact_name  = body.contact_name  || contact?.name  || null;
-  const contact_email = body.contact_email || contact?.email || null;
-  const contact_phone = body.contact_phone || contact?.phone || null;
+  const contact_name    = body.contact_name  || contact?.name  || null;
+  const contact_email   = body.contact_email || contact?.email || null;
+  const contact_phone   = body.contact_phone || contact?.phone || null;
   const contact_id_body = contact?.id || null;
 
   // Hints -> CF
@@ -541,28 +542,39 @@ router.post('/', requireAuth, async (req, res) => {
     'Operación';
 
   const conn = await pool.getConnection();
+
   try {
     await conn.beginTransaction();
 
-    // Organización
+    // ===== ORGANIZACIÓN =====
     let orgId = null;
     if (org_id_body) {
       orgId = org_id_body;
     } else if (org_name) {
-      const [orgRows] = await conn.query('SELECT id FROM organizations WHERE name = ? LIMIT 1', [org_name]);
-      if (orgRows.length) orgId = orgRows[0].id;
-      else {
-        const [ins] = await conn.query('INSERT INTO organizations(name) VALUES(?)', [org_name]);
+      const [orgRows] = await conn.query(
+        'SELECT id FROM organizations WHERE name = ? LIMIT 1',
+        [org_name]
+      );
+      if (orgRows.length) {
+        orgId = orgRows[0].id;
+      } else {
+        const [ins] = await conn.query(
+          'INSERT INTO organizations(name) VALUES(?)',
+          [org_name]
+        );
         orgId = ins.insertId;
       }
     }
 
-    // Contacto
+    // ===== CONTACTO =====
     let contactId = null;
     if (contact_id_body) {
       contactId = contact_id_body;
     } else if (contact_name) {
-      const [cRows] = await conn.query('SELECT id FROM contacts WHERE name = ? LIMIT 1', [contact_name]);
+      const [cRows] = await conn.query(
+        'SELECT id FROM contacts WHERE name = ? LIMIT 1',
+        [contact_name]
+      );
       if (cRows.length) {
         contactId = cRows[0].id;
       } else {
@@ -574,21 +586,49 @@ router.post('/', requireAuth, async (req, res) => {
       }
     }
 
-    // Asesores (operación y creador)
-    const createdById = req.user?.id || null;
-    let dealAdvisorId = createdById;
-    if (orgId) {
-      const [[oAdv]] = await conn.query('SELECT advisor_user_id FROM organizations WHERE id = ? LIMIT 1', [orgId]);
-      if (oAdv?.advisor_user_id) dealAdvisorId = oAdv.advisor_user_id;
+    // ===== ASESOR / EJECUTIVO DE CUENTA =====
+    const createdById = req.user?.id ?? null;
+
+    // 1) Intentamos usar lo que venga explícito del front:
+    //    soportamos varios nombres de campo por compatibilidad
+    let dealAdvisorId = null;
+
+    if (body.account_exec_id != null && body.account_exec_id !== '') {
+      dealAdvisorId = Number(body.account_exec_id) || null;
+    } else if (body.deal_advisor_user_id != null && body.deal_advisor_user_id !== '') {
+      dealAdvisorId = Number(body.deal_advisor_user_id) || null;
+    } else if (body.advisor_user_id != null && body.advisor_user_id !== '') {
+      dealAdvisorId = Number(body.advisor_user_id) || null;
+    }
+
+    // 2) Si todavía no tenemos, miramos el asesor de la organización
+    if (!dealAdvisorId && orgId) {
+      const [[oAdv] = []] = await conn.query(
+        'SELECT advisor_user_id FROM organizations WHERE id = ? LIMIT 1',
+        [orgId]
+      );
+      if (oAdv && oAdv.advisor_user_id) {
+        dealAdvisorId = Number(oAdv.advisor_user_id) || null;
+      }
+    }
+
+    // 3) Último fallback: el usuario que crea la operación
+    if (!dealAdvisorId) {
+      dealAdvisorId = createdById;
     }
 
     // Placeholder temporal para reference
-    const tmpRef = `TMP-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`.slice(0, 32);
+    const tmpRef = `TMP-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`.slice(0, 32);
 
-    // Insert principal (title blindeado)
+    // ===== INSERT PRINCIPAL =====
     const [dealIns] = await conn.query(
-      `INSERT INTO deals(reference, title, value, status, pipeline_id, business_unit_id, stage_id, contact_id, org_id, advisor_user_id, created_by_user_id)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO deals(
+         reference, title, value, status,
+         pipeline_id, business_unit_id, stage_id,
+         contact_id, org_id,
+         advisor_user_id, created_by_user_id
+       )
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
       [
         tmpRef,
         title,
@@ -599,8 +639,8 @@ router.post('/', requireAuth, async (req, res) => {
         stage_id,
         contactId,
         orgId,
-        dealAdvisorId,
-        createdById
+        dealAdvisorId ?? null,
+        createdById ?? null
       ]
     );
 
@@ -608,16 +648,22 @@ router.post('/', requireAuth, async (req, res) => {
     const reference = formatReference(newId);
 
     // Referencia definitiva
-    await conn.query(`UPDATE deals SET reference = ? WHERE id = ?`, [reference, newId]);
+    await conn.query(
+      'UPDATE deals SET reference = ? WHERE id = ?',
+      [reference, newId]
+    );
 
-    // Siembra de custom fields a partir de hints
+    // ===== CUSTOM FIELDS DESDE HINTS =====
     const upsertCF = async (key, label, type, val) => {
       const v = val != null ? String(val).trim() : '';
       if (!v) return;
       await conn.query(
         `INSERT INTO deal_custom_fields (deal_id, \`key\`, label, \`type\`, \`value\`)
          VALUES (?,?,?,?,?)
-         ON DUPLICATE KEY UPDATE \`value\` = VALUES(\`value\`), label = VALUES(label), \`type\` = VALUES(\`type\`)`,
+         ON DUPLICATE KEY UPDATE
+           \`value\` = VALUES(\`value\`),
+           label    = VALUES(label),
+           \`type\`  = VALUES(\`type\`)`,
         [newId, key, label, type, v]
       );
     };
@@ -635,15 +681,23 @@ router.post('/', requireAuth, async (req, res) => {
 
     await conn.commit();
 
-    // Auditoría
     await logAudit({
-      req, action: 'create', entity: 'deal', entityId: newId,
+      req,
+      action: 'create',
+      entity: 'deal',
+      entityId: newId,
       description: `Creó la operación ${reference}`,
       meta: {
-        pipeline_id, stage_id,
+        pipeline_id,
+        stage_id,
         business_unit_id,
-        org_id: orgId, contact_id: contactId,
-        seeded_cf: Object.keys(hints).filter(k => (hints[k] ?? '').toString().trim() !== '')
+        org_id: orgId,
+        contact_id: contactId,
+        advisor_user_id: dealAdvisorId,
+        created_by_user_id: createdById,
+        seeded_cf: Object.keys(hints).filter(
+          k => (hints[k] ?? '').toString().trim() !== ''
+        )
       }
     });
 
@@ -656,7 +710,7 @@ router.post('/', requireAuth, async (req, res) => {
     });
   } catch (e) {
     await conn.rollback();
-    console.error(e);
+    console.error('POST /deals error:', e);
     res.status(500).json({ error: 'No se pudo crear el deal' });
   } finally {
     conn.release();
