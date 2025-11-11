@@ -3273,20 +3273,44 @@ function OceanForm({
     readOnly,
   });
 
-  // === Fallback de CF: primero doc_master/doc_house, si están vacíos usa mbl/hbl ===
-  const chooseCFKey = (keys) => {
-    if (!getCF) return keys[0];
-    for (const k of keys) {
-      const v = getCF(k);
-      if (v != null && String(v).trim() !== "") {
-        return k;
-      }
-    }
-    return keys[0];
-  };
+  // === TOMAMOS LOS ARCHIVOS Y RÓTULOS IGUAL QUE EN PESTAÑA "DOCUMENTOS" ===
+  const masterFiles = (filesByType && filesByType.doc_master) || [];
+  const houseFiles  = (filesByType && filesByType.doc_house) || [];
 
-  const docMasterKey = chooseCFKey(["doc_master", "mbl"]);
-  const docHouseKey = chooseCFKey(["doc_house", "hbl"]);
+  const masterFile = masterFiles[0] || null;
+  const houseFile  = houseFiles[0] || null;
+
+  const masterLabel =
+    masterFile ? labelOfFile(masterFile, fileLabels) : "";
+  const houseLabel =
+    houseFile ? labelOfFile(houseFile, fileLabels) : "";
+
+  // helpers para abrir la pestaña Documentos en el tipo correcto
+  const openMasterTab = () =>
+    openFileTabByType && openFileTabByType("doc_master");
+  const openHouseTab = () =>
+    openFileTabByType && openFileTabByType("doc_house");
+
+  const renderDocBadge = (label, file, onClick) => {
+    const text =
+      label || (file && file.filename) || "Sin documento";
+    const title =
+      label && file
+        ? `${label} — ${file.filename}`
+        : text;
+
+    return (
+      <button
+        type="button"
+        className="w-full text-left text-xs px-2 py-1 border rounded-lg bg-white hover:bg-slate-50 truncate disabled:text-slate-400"
+        onClick={onClick}
+        disabled={!file}
+        title={title}
+      >
+        {text}
+      </button>
+    );
+  };
 
   return (
     <div>
@@ -3310,18 +3334,8 @@ function OceanForm({
             </select>
           </div>
           <div className="flex-1 ml-2 min-w-[280px]">
-            {/* Rótulo + link para MBL */}
-            <DocTextLink
-              label=""
-              cfKey={docMasterKey}
-              editMode={editMode}
-              getCF={getCF}
-              setCFLocal={setCFLocal}
-              markDirty={markDirty}
-              filesByType={filesByType}
-              openFileTabByType={openFileTabByType}
-              fileLabels={fileLabels}
-            />
+            {/* Rótulo + link MBL: toma label/archivo desde deal_files */}
+            {renderDocBadge(masterLabel, masterFile, openMasterTab)}
           </div>
         </div>
 
@@ -3344,18 +3358,8 @@ function OceanForm({
             </select>
           </div>
           <div className="flex-1 ml-2 min-w-[280px]">
-            {/* Rótulo + link para HBL */}
-            <DocTextLink
-              label=""
-              cfKey={docHouseKey}
-              editMode={editMode}
-              getCF={getCF}
-              setCFLocal={setCFLocal}
-              markDirty={markDirty}
-              filesByType={filesByType}
-              openFileTabByType={openFileTabByType}
-              fileLabels={fileLabels}
-            />
+            {/* Rótulo + link HBL: igual que en pestaña Documentos */}
+            {renderDocBadge(houseLabel, houseFile, openHouseTab)}
           </div>
         </div>
 
