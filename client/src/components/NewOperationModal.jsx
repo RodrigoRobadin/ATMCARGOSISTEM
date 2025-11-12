@@ -44,19 +44,13 @@ const opLabel = (v) => OP_LABELS[v] || v || "";
 
 // Normalizador robusto para options de tipo de operación
 function normalizeOpTypeOptions(raw) {
-  // raw puede venir como:
-  // - array de strings ["IMPORT","EXPORT",...]
-  // - array de objetos {value,label} o {key,label}
-  // - objeto { operation_type: [...] }
   let src = raw;
   if (raw && raw.operation_type) src = raw.operation_type;
   if (Array.isArray(src)) {
     const mapped = src
       .map((o) => {
         if (!o) return null;
-        if (typeof o === "string") {
-          return { value: o, label: opLabel(o) };
-        }
+        if (typeof o === "string") return { value: o, label: opLabel(o) };
         if (typeof o === "object") {
           const v = o.value ?? o.key ?? o.code ?? null;
           const l = o.label ?? opLabel(v);
@@ -72,21 +66,20 @@ function normalizeOpTypeOptions(raw) {
 }
 
 /* ====================  ExecSelect (usuarios del sistema)  ==================== */
-/* ====================  ExecSelect (usuarios del sistema)  ==================== */
 function ExecSelect({ value, onChange }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // 👇 nuevo: para decidir si abre hacia arriba o hacia abajo
+  // para decidir si abre hacia arriba o hacia abajo
   const containerRef = useRef(null);
   const [placement, setPlacement] = useState("down"); // "down" | "up"
 
   useEffect(() => {
     (async () => {
+      setLoading(true);
       try {
-        setLoading(true);
         // Endpoint minimal que no requiere admin
         const { data } = await api.get("/users/select", { params: { active: 1 } });
         const list = (Array.isArray(data) ? data : [])
@@ -103,6 +96,8 @@ function ExecSelect({ value, onChange }) {
           })
           .filter(Boolean);
         setUsers(list);
+      } catch {
+        setUsers([]);
       } finally {
         setLoading(false);
       }
@@ -118,7 +113,7 @@ function ExecSelect({ value, onChange }) {
   const currentLabel =
     users.find((u) => String(u.id) === String(value))?.name || "";
 
-  // 👇 calcula si hay más espacio arriba o abajo
+  // calcula si hay más espacio arriba o abajo
   const recalcPlacement = () => {
     try {
       const el = containerRef.current;
@@ -129,9 +124,7 @@ function ExecSelect({ value, onChange }) {
 
       const spaceBelow = viewportH - rect.bottom;
       const spaceAbove = rect.top;
-
-      // max-h-64 ≈ 256px
-      const estimatedHeight = 260;
+      const estimatedHeight = 260; // ~ max-h-64 + paddings
 
       if (spaceBelow < estimatedHeight && spaceAbove > spaceBelow) {
         setPlacement("up");
@@ -139,9 +132,35 @@ function ExecSelect({ value, onChange }) {
         setPlacement("down");
       }
     } catch {
-      // si algo falla, dejamos "down"
+      // noop
     }
   };
+
+  // cerrar al click afuera / ESC y recalcular en resize/scroll
+  useEffect(() => {
+    const onClick = (e) => {
+      if (!containerRef.current) return;
+      if (!containerRef.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    const onResizeScroll = () => {
+      if (open) recalcPlacement();
+    };
+
+    window.addEventListener("click", onClick);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onResizeScroll);
+    window.addEventListener("scroll", onResizeScroll, true);
+
+    return () => {
+      window.removeEventListener("click", onClick);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onResizeScroll);
+      window.removeEventListener("scroll", onResizeScroll, true);
+    };
+  }, [open]);
 
   return (
     <div className="relative" ref={containerRef}>
@@ -342,7 +361,7 @@ export default function NewOperationModal({
   const [businessUnits, setBusinessUnits] = useState([]);
   const [businessUnitId, setBusinessUnitId] = useState(defaultBusinessUnitId || "");
   const [stageId, setStageId] = useState(stages?.[0]?.id || null);
-  const [execId, setExecId] = useState(""); // 👈 Ejecutivo de cuenta (opcional)
+  const [execId, setExecId] = useState(""); // Ejecutivo de cuenta (opcional)
 
   const [saving, setSaving] = useState(false);
 
@@ -370,11 +389,11 @@ export default function NewOperationModal({
   const [contactFilter, setContactFilter] = useState("");
   const debContact = useDebounced(contactFilter, 250);
 
-  // Refs (SOLO una vez)
+  // Refs
   const orgBoxRef = useRef(null);
   const contactBoxRef = useRef(null);
 
-  // Parámetros: Tipo de operación (normalizados)
+  // Parámetros: Tipo de operación
   const { options: paramOptions, loading: loadingParams } = useParamOptions(
     ["operation_type"],
     { onlyActive: true, fallback: { operation_type: OP_TYPE_FALLBACK }, useDefaults: true }
@@ -483,8 +502,8 @@ export default function NewOperationModal({
     const v = e.target.value;
     setOrgName(v);
     setOrgQuery(v);
-    setSelectedOrg(null);        // al escribir, deja de haber una org seleccionada
-    setContacts([]);             // limpiamos contactos de esa org
+    setSelectedOrg(null);
+    setContacts([]);
     setContactName("");
     setContactEmail("");
     setContactPhone("");
@@ -677,7 +696,7 @@ export default function NewOperationModal({
             <div className="text-xs text-slate-500">Nueva operación</div>
             <div className="text-lg font-semibold">{referencePreview}</div>
           </div>
-          <button className="text-sm px-3 py-1.5 rounded-lg border" onClick={onClose}>
+        <button className="text-sm px-3 py-1.5 rounded-lg border" onClick={onClose}>
             Cerrar
           </button>
         </div>

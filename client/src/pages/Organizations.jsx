@@ -21,18 +21,18 @@ function ExecSelect({ value, onChange, disabled = false, label = "Ejecutivo de c
       setLoading(true);
       setErr('');
       try {
-        const { data } = await api.get('/users', { params: { active: 1 } });
+        // ✅ Ruta abierta para cualquier autenticado
+        const { data } = await api.get('/users/select', { params: { active: 1 } });
         const list = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
         const mapped = list
           .map((u) => {
             const id = u.id ?? u.user_id ?? null;
             const name =
-             u.name ??
-            (([u.first_name, u.last_name].filter(Boolean).join(" ")) ||
-             u.username ||
-            u.email ||
-            null);
-
+              u.name ??
+              (([u.first_name, u.last_name].filter(Boolean).join(' ')) ||
+                u.username ||
+                u.email ||
+                null);
             if (!id || !name) return null;
             return { id, name: String(name), email: u.email || '' };
           })
@@ -94,13 +94,24 @@ export default function Organizations(){
     fetch();
     (async () => {
       try {
-        const [{ data: users }, { data: labels }] = await Promise.all([
-          api.get('/users'),
+        // ✅ Cambiamos /users -> /users/select (no admin)
+        const [{ data: usersLite }, { data: labels }] = await Promise.all([
+          api.get('/users/select', { params: { active: 1 } }),
           api.get('/labels', { params: { scope: 'organization' } })
         ]);
-        setOwners(Array.isArray(users) ? users : []);
+
+        const mappedOwners = (Array.isArray(usersLite) ? usersLite : []).map(u => ({
+          id: u.id,
+          name: u.name || u.email || `Usuario ${u.id}`,
+          email: u.email || ''
+        }));
+
+        setOwners(mappedOwners);
         setLabelOptions(Array.isArray(labels) ? labels : []);
-      } catch {}
+      } catch {
+        setOwners([]);
+        setLabelOptions([]);
+      }
     })();
   },[]);
 

@@ -16,7 +16,7 @@ const toNull = (v) => (v === '' || typeof v === 'undefined' ? null : v);
       FROM INFORMATION_SCHEMA.COLUMNS
       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'organizations'
     `);
-    const have = new Set(cols.map(c => c.COLUMN_NAME));
+    const have = new Set(cols.map((c) => c.COLUMN_NAME));
 
     if (!have.has('hoja_ruta')) {
       await db.query(`
@@ -68,15 +68,27 @@ router.get('/', requireAuth, async (req, res) => {
 router.post('/', requireAuth, async (req, res) => {
   try {
     const {
-      razon_social,         // requerido (o se toma name)
+      razon_social, // requerido (o se toma name)
       name,
-      industry = null, phone = null, website = null, ruc = null, address = null,
-      city = null, country = null, notes = null,
+      industry = null,
+      phone = null,
+      website = null,
+      ruc = null,
+      address = null,
+      city = null,
+      country = null,
+      notes = null,
       // legacy (compat)
-      label = null, owner_user_id = null, visibility = 'company',
-      is_agent = 0, modalities_supported = null,
+      label = null,
+      owner_user_id = null,
+      visibility = 'company',
+      is_agent = 0,
+      modalities_supported = null,
       // nuevos
-      email = null, rubro = null, tipo_org = null, operacion = null,
+      email = null,
+      rubro = null,
+      tipo_org = null,
+      operacion = null,
       hoja_ruta = null,
     } = req.body || {};
 
@@ -97,9 +109,26 @@ router.post('/', requireAuth, async (req, res) => {
          'borrador', NULL, NOW(), NOW())
       `,
       [
-        rs, rs, industry, phone, website, ruc, address, city, country, notes,
-        owner_user_id, owner_user_id, visibility, is_agent ? 1 : 0, modalities_supported,
-        email, rubro, tipo_org, operacion, hoja_ruta
+        rs,
+        rs,
+        industry,
+        phone,
+        website,
+        ruc,
+        address,
+        city,
+        country,
+        notes,
+        owner_user_id,
+        owner_user_id,
+        visibility,
+        is_agent ? 1 : 0,
+        modalities_supported,
+        email,
+        rubro,
+        tipo_org,
+        operacion,
+        hoja_ruta,
       ]
     );
 
@@ -122,8 +151,12 @@ router.post('/', requireAuth, async (req, res) => {
     );
 
     await logAudit({
-      req, action: 'create', entity: 'organization', entityId: row.id,
-      description: `Creó organización ${row.name}`, meta: { payload: req.body }
+      req,
+      action: 'create',
+      entity: 'organization',
+      entityId: row.id,
+      description: `Creó organización ${row.name}`,
+      meta: { payload: req.body },
     });
 
     res.status(201).json(row);
@@ -145,7 +178,9 @@ router.get('/search-flete-providers', requireAuth, async (req, res) => {
     destination_country = (destination_country || '').trim();
 
     if (!modalidad) {
-      return res.status(400).json({ error: 'modalidad es requerida (aereo/maritimo/terrestre)' });
+      return res
+        .status(400)
+        .json({ error: 'modalidad es requerida (aereo/maritimo/terrestre)' });
     }
 
     const params = [];
@@ -255,11 +290,17 @@ router.post('/:id/flete-routes', requireAuth, async (req, res) => {
 
     modality = (modality || '').toLowerCase().trim();
     if (!['aereo', 'maritimo', 'terrestre'].includes(modality)) {
-      return res.status(400).json({ error: 'modality debe ser aereo, maritimo o terrestre' });
+      return res
+        .status(400)
+        .json({ error: 'modality debe ser aereo, maritimo o terrestre' });
     }
 
-    const [orgRows] = await db.query(`SELECT id, name FROM organizations WHERE id = ? LIMIT 1`, [id]);
-    if (!orgRows.length) return res.status(404).json({ error: 'Organización no encontrada' });
+    const [orgRows] = await db.query(
+      `SELECT id, name FROM organizations WHERE id = ? LIMIT 1`,
+      [id]
+    );
+    if (!orgRows.length)
+      return res.status(404).json({ error: 'Organización no encontrada' });
 
     const [ins] = await db.query(
       `
@@ -268,7 +309,15 @@ router.post('/:id/flete-routes', requireAuth, async (req, res) => {
       VALUES
         (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
       `,
-      [id, modality, origin || null, destination || null, origin_country || null, destination_country || null, notes || null]
+      [
+        id,
+        modality,
+        origin || null,
+        destination || null,
+        origin_country || null,
+        destination_country || null,
+        notes || null,
+      ]
     );
 
     const [[row]] = await db.query(
@@ -301,7 +350,8 @@ router.delete('/:id/flete-routes/:routeId', requireAuth, async (req, res) => {
       `DELETE FROM org_flete_routes WHERE id = ? AND org_id = ?`,
       [routeId, id]
     );
-    if (r.affectedRows === 0) return res.status(404).json({ error: 'Ruta no encontrada' });
+    if (r.affectedRows === 0)
+      return res.status(404).json({ error: 'Ruta no encontrada' });
 
     await logAudit({
       req,
@@ -315,6 +365,30 @@ router.delete('/:id/flete-routes/:routeId', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('[organizations:flete-routes:delete]', e);
     res.status(400).json({ error: 'Delete flete route failed' });
+  }
+});
+
+/* ===================== CONTACTOS POR ORGANIZACIÓN (para NewOperationModal) ===================== */
+// GET /organizations/:id/contacts
+router.get('/:id/contacts', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [rows] = await db.query(
+      `SELECT id, name, email, phone, title
+       FROM contacts
+       WHERE org_id = ?
+       ORDER BY name ASC`,
+      [id]
+    );
+
+    // Devolvemos siempre 200 con lista (vacía o con datos)
+    res.json(rows || []);
+  } catch (e) {
+    console.error('[organizations:contacts:list]', e?.message || e);
+    res
+      .status(500)
+      .json({ error: 'No se pudieron obtener los contactos de la organización' });
   }
 });
 
@@ -341,7 +415,8 @@ router.get('/:id', requireAuth, async (req, res) => {
       `,
       [id]
     );
-    if (!org) return res.status(404).json({ error: 'Organización no encontrada' });
+    if (!org)
+      return res.status(404).json({ error: 'Organización no encontrada' });
 
     const [contacts] = await db.query(
       `SELECT id, name, email, phone, title FROM contacts WHERE org_id = ? ORDER BY name`,
@@ -360,10 +435,26 @@ router.patch('/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const allowed = [
-      'razon_social','name','industry','phone','website','ruc','address','city','country',
-      'label','owner_user_id','visibility','notes',
-      'is_agent','modalities_supported',
-      'email','rubro','tipo_org','operacion','hoja_ruta'
+      'razon_social',
+      'name',
+      'industry',
+      'phone',
+      'website',
+      'ruc',
+      'address',
+      'city',
+      'country',
+      'label',
+      'owner_user_id',
+      'visibility',
+      'notes',
+      'is_agent',
+      'modalities_supported',
+      'email',
+      'rubro',
+      'tipo_org',
+      'operacion',
+      'hoja_ruta',
     ];
 
     const sets = [];
@@ -383,7 +474,8 @@ router.patch('/:id', requireAuth, async (req, res) => {
       `UPDATE organizations SET ${sets.join(', ')} WHERE id = ?`,
       params
     );
-    if (r.affectedRows === 0) return res.status(404).json({ error: 'No encontrado' });
+    if (r.affectedRows === 0)
+      return res.status(404).json({ error: 'No encontrado' });
 
     const [[row]] = await db.query(
       `
@@ -404,8 +496,12 @@ router.patch('/:id', requireAuth, async (req, res) => {
     );
 
     await logAudit({
-      req, action: 'update', entity: 'organization', entityId: Number(id),
-      description: 'Actualizó organización', meta: { patch: req.body }
+      req,
+      action: 'update',
+      entity: 'organization',
+      entityId: Number(id),
+      description: 'Actualizó organización',
+      meta: { patch: req.body },
     });
 
     res.json(row);
@@ -420,11 +516,15 @@ router.delete('/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const [r] = await db.query(`DELETE FROM organizations WHERE id = ?`, [id]);
-    if (r.affectedRows === 0) return res.status(404).json({ error: 'No encontrado' });
+    if (r.affectedRows === 0)
+      return res.status(404).json({ error: 'No encontrado' });
 
     await logAudit({
-      req, action: 'delete', entity: 'organization', entityId: Number(id),
-      description: 'Eliminó organización'
+      req,
+      action: 'delete',
+      entity: 'organization',
+      entityId: Number(id),
+      description: 'Eliminó organización',
     });
 
     res.json({ ok: true });
@@ -442,8 +542,13 @@ router.get('/:id/budget', requireAuth, async (req, res) => {
       `SELECT id, budget_status, budget_profit FROM organizations WHERE id = ? LIMIT 1`,
       [id]
     );
-    if (!org) return res.status(404).json({ error: 'Organización no encontrada' });
-    res.json({ id: org.id, budget_status: org.budget_status, budget_profit: org.budget_profit });
+    if (!org)
+      return res.status(404).json({ error: 'Organización no encontrada' });
+    res.json({
+      id: org.id,
+      budget_status: org.budget_status,
+      budget_profit: org.budget_profit,
+    });
   } catch (e) {
     console.error('[organizations:budget:get]', e);
     res.status(500).json({ error: 'Get budget failed' });
@@ -458,7 +563,8 @@ router.post('/:id/budget/lock', requireAuth, async (req, res) => {
       `SELECT id, budget_status FROM organizations WHERE id = ? LIMIT 1`,
       [id]
     );
-    if (!org) return res.status(404).json({ error: 'Organización no encontrada' });
+    if (!org)
+      return res.status(404).json({ error: 'Organización no encontrada' });
     if (org.budget_status === 'confirmado') {
       return res.status(409).json({ error: 'Ya confirmado' });
     }
@@ -474,8 +580,11 @@ router.post('/:id/budget/lock', requireAuth, async (req, res) => {
     );
 
     await logAudit({
-      req, action: 'update', entity: 'organization', entityId: Number(id),
-      description: 'Bloqueó presupuesto'
+      req,
+      action: 'update',
+      entity: 'organization',
+      entityId: Number(id),
+      description: 'Bloqueó presupuesto',
     });
 
     res.json({ ok: true, budget_status: 'bloqueado' });
@@ -494,7 +603,8 @@ router.post('/:id/budget/confirm', requireAuth, async (req, res) => {
       `SELECT id, budget_status FROM organizations WHERE id = ? LIMIT 1`,
       [id]
     );
-    if (!org) return res.status(404).json({ error: 'Organización no encontrada' });
+    if (!org)
+      return res.status(404).json({ error: 'Organización no encontrada' });
 
     if (org.budget_status === 'confirmado') {
       return res.json({ ok: true, budget_status: 'confirmado' });
@@ -508,16 +618,23 @@ router.post('/:id/budget/confirm', requireAuth, async (req, res) => {
               budget_updated_at = NOW(),
               updated_at = NOW()
         WHERE id = ?`,
-
       [profit_value ?? null, req.user.id, id]
     );
 
     await logAudit({
-      req, action: 'update', entity: 'organization', entityId: Number(id),
-      description: 'Confirmó presupuesto', meta: { profit_value }
+      req,
+      action: 'update',
+      entity: 'organization',
+      entityId: Number(id),
+      description: 'Confirmó presupuesto',
+      meta: { profit_value },
     });
 
-    res.json({ ok: true, budget_status: 'confirmado', budget_profit: profit_value ?? null });
+    res.json({
+      ok: true,
+      budget_status: 'confirmado',
+      budget_profit: profit_value ?? null,
+    });
   } catch (e) {
     console.error('[organizations:budget:confirm]', e);
     res.status(400).json({ error: 'Confirm budget failed' });
@@ -532,7 +649,8 @@ router.post('/:id/budget/reopen', requireAuth, requireRole('admin'), async (req,
       `SELECT id FROM organizations WHERE id = ? LIMIT 1`,
       [id]
     );
-    if (!org) return res.status(404).json({ error: 'Organización no encontrada' });
+    if (!org)
+      return res.status(404).json({ error: 'Organización no encontrada' });
 
     await db.query(
       `UPDATE organizations
@@ -545,8 +663,11 @@ router.post('/:id/budget/reopen', requireAuth, requireRole('admin'), async (req,
     );
 
     await logAudit({
-      req, action: 'update', entity: 'organization', entityId: Number(id),
-      description: 'Reabrió presupuesto'
+      req,
+      action: 'update',
+      entity: 'organization',
+      entityId: Number(id),
+      description: 'Reabrió presupuesto',
     });
 
     res.json({ ok: true, budget_status: 'borrador' });

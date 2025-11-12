@@ -7,7 +7,7 @@ import { signToken, requireAuth, requireRole } from '../middlewares/auth.js';
 const router = Router();
 
 // Helper: normalizar
-function toNull(v){ return v === '' ? null : v; }
+function toNull(v) { return v === '' || typeof v === 'undefined' ? null : v; }
 
 // ---- LOGIN ----
 router.post('/login', async (req, res) => {
@@ -45,18 +45,56 @@ router.get('/me', requireAuth, async (req, res) => {
   res.json(u);
 });
 
-// ---- LISTA MINIMAL PARA SELECT (autenticado, no requiere admin) ----
+/**
+ * ---- LISTA MINIMAL PARA SELECT (autenticado, NO requiere admin) ----
+ * GET /api/users/select
+ * Query:
+ *   - q: filtro por nombre/email (min 2 chars) (opcional)
+ *   - active=1|0 (por defecto 1)
+ *   - limit=200 (máx 500)
+ */
 router.get('/select', requireAuth, async (req, res) => {
-  const raw = String(req.query.active ?? req.query.is_active ?? '1').toLowerCase();
-  const onlyActive = !(raw === '0' || raw === 'false' || raw === 'no');
-  const where = onlyActive ? 'WHERE is_active = 1' : '';
-  const [rows] = await pool.query(
-    `SELECT id, name, email
-       FROM users
-       ${where}
-      ORDER BY name ASC, id ASC`
-  );
-  res.json(rows);
+  try {
+    const q = String(req.query.q ?? '').trim();
+    const rawActive = String(req.query.active ?? req.query.is_active ?? '1').toLowerCase();
+    const onlyActive = !(rawActive === '0' || rawActive === 'false' || rawActive === 'no');
+    const limit = Math.min(Math.max(parseInt(req.query.limit || '200', 10) || 200, 1), 500);
+
+    const where = [];
+    const params = [];
+
+    if (onlyActive) {
+      where.push('is_active = 1');
+    }
+    if (q.length >= 2) {
+      where.push('(name LIKE ? OR email LIKE ?)');
+      const like = `%${q}%`;
+      params.push(like, like);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const [rows] = await pool.query(
+      `
+      SELECT id, name, email
+        FROM users
+        ${whereSql}
+       ORDER BY name ASC, id ASC
+       LIMIT ?
+      `,
+      [...params, limit]
+    );
+
+    // Normalizamos salida mínima {id, name}
+    const out = rows.map(r => ({
+      id: r.id,
+      name: (r.name && String(r.name).trim()) || (r.email && String(r.email).trim()) || `Usuario ${r.id}`
+    }));
+
+    res.json(out);
+  } catch (e) {
+    console.error('[users:select]', e?.message || e);
+    res.status(500).json({ error: 'No se pudo listar usuarios (select)' });
+  }
 });
 
 // ---- LISTAR (solo admin) ----
@@ -87,7 +125,6 @@ router.post('/', requireAuth, requireRole('admin'), async (req, res) => {
   const { name, email, role = 'viewer', is_active = 1 } = req.body || {};
   if (!name || !email) return res.status(400).json({ error: 'name y email requeridos' });
 
-  // dedupe por email
   const [[ex]] = await pool.query('SELECT id FROM users WHERE email = ? LIMIT 1', [email]);
   if (ex) return res.status(409).json({ error: 'Email ya existe', id: ex.id });
 
@@ -130,8 +167,6 @@ router.post('/:id/set-password', requireAuth, async (req, res) => {
   if (!new_password || String(new_password).length < 6) {
     return res.status(400).json({ error: 'Password mínimo 6 caracteres' });
   }
-
-  // Si no es admin, solo puede cambiar su propio password
   if (req.user.role !== 'admin' && Number(id) !== Number(req.user.id)) {
     return res.status(403).json({ error: 'Permiso denegado' });
   }
