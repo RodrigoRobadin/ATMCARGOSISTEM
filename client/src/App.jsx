@@ -33,12 +33,12 @@ import FollowUp from './pages/FollowUp.jsx';
 
 // ⭐️ NUEVO: Editor de Pipeline (pantalla completa)
 import PipelineEditorPage from './pages/PipelineEditorPage.jsx';
-// + NUEVO import
-import ProductsServices from "./pages/catalog/ProductsServices.jsx";
+
+// Catálogo
+import ProductsServices from './pages/catalog/ProductsServices.jsx';
 
 // ⭐️ NUEVO: Solicitud de flete desde operación
 import RequestFreight from './pages/RequestFreight.jsx';
-
 
 // ---------------- UI helpers ----------------
 const linkCls = ({ isActive }) =>
@@ -57,7 +57,8 @@ function SideLink({ to, icon, label }) {
 }
 
 function Layout({ children }) {
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
+  const role = user?.role || '';
 
   return (
     <div className="min-h-screen flex">
@@ -94,17 +95,18 @@ function Layout({ children }) {
           <SideLink to="/workspace/industrial-rayflex" icon="⚙️" label="Rayflex" />
           <SideLink to="/workspace/industrial-boplan" icon="🛡️" label="Boplan" />
 
-          <hr className="my-2" />
-          {/* Admin existentes */}
-          <SideLink to="/admin" icon="🧾" label="Administración" />
-          <SideLink to="/admin/users" icon="👤" label="Usuarios" />
-          <SideLink to="/admin/params" icon="⚙️" label="Parámetros" />
-          {/* ⭐️ NUEVO: Administración (Ops) */}
-          <SideLink to="/admin-ops" icon="📂" label="Administración (Ops)" />
-
-           <hr className="my-2" />
-          {/* Productos y servicios (nuevo) */}
-          <SideLink to="/catalog" icon="🧾" label="Productos y servicios" />
+          {/* Bloque administrativo visible SOLO si NO es "venta" */}
+          {role !== 'venta' && (
+            <>
+              <hr className="my-2" />
+              <SideLink to="/admin" icon="🧾" label="Administración" />
+              <SideLink to="/admin/users" icon="👤" label="Usuarios" />
+              <SideLink to="/admin/params" icon="⚙️" label="Parámetros" />
+              <SideLink to="/admin-ops" icon="📂" label="Administración (Ops)" />
+              <hr className="my-2" />
+              <SideLink to="/catalog" icon="🧾" label="Productos y servicios" />
+            </>
+          )}
 
           <hr className="my-2" />
           <SideLink to="/contacts" icon="👤" label="Contactos" />
@@ -122,7 +124,6 @@ function Layout({ children }) {
             >
               Salir
             </button>
-            {/* Icono solo en colapsado (opcional) */}
             <div className="group-hover:hidden flex justify-center">
               <span title="Salir">🚪</span>
             </div>
@@ -140,7 +141,6 @@ function Layout({ children }) {
     </div>
   );
 }
-
 
 // ---------------- App (única exportación por defecto) ----------------
 export default function App() {
@@ -177,9 +177,6 @@ export default function App() {
                 <Route path="/" element={<Pipeline />} />
                 <Route path="/general" element={<General />} />
 
-                {/* Catálogo */}
-                <Route path="/catalog" element={<ProductsServices />} />
-
                 {/* Contactos */}
                 <Route path="/contacts" element={<Contacts />} />
                 <Route path="/contacts/:id" element={<ContactDetail />} />
@@ -192,13 +189,48 @@ export default function App() {
                 <Route path="/workspace/:key" element={<Workspace />} />
                 <Route path="/workspace/:key/table" element={<WorkspaceTable />} />
 
-                {/* Admin existentes */}
-                <Route path="/admin" element={<AdminActivity />} />
-                <Route path="/admin/users" element={<UsersAdmin />} />
-                <Route path="/admin/params" element={<AdminParams />} />
-
-                {/* ⭐️ NUEVO: Administración (Ops) */}
-                <Route path="/admin-ops" element={<AdminWorkspace />} />
+                {/* ---- Secciones restringidas a admin/manager ---- */}
+                <Route
+                  path="/admin"
+                  element={
+                    <RequireRole allow={['admin', 'manager']}>
+                      <AdminActivity />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/admin/users"
+                  element={
+                    <RequireRole allow={['admin', 'manager']}>
+                      <UsersAdmin />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/admin/params"
+                  element={
+                    <RequireRole allow={['admin', 'manager']}>
+                      <AdminParams />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/admin-ops"
+                  element={
+                    <RequireRole allow={['admin', 'manager']}>
+                      <AdminWorkspace />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/catalog"
+                  element={
+                    <RequireRole allow={['admin', 'manager']}>
+                      <ProductsServices />
+                    </RequireRole>
+                  }
+                />
+                {/* ----------------------------------------------- */}
 
                 {/* Operaciones */}
                 <Route path="/operations/:id" element={<OperationDetail />} />
