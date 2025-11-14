@@ -191,7 +191,7 @@ export default function Organizations() {
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-lg font-semibold">Organizaciones</h2>
+        <h2 className="text-lg font-semibold">OrganizacionesS</h2>
         <div className="text-sm">
           <span className="text-slate-500 mr-1">
             Acumulado Valor Profit:
