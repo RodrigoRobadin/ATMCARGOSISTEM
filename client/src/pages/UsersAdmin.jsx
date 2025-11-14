@@ -1,10 +1,13 @@
 // client/src/pages/UsersAdmin.jsx
 import React, { useEffect, useState } from 'react';
 import { api } from '../api';
+import { useAuth } from '../auth';
 
-const ROLES = ['admin','venta','ops','viewer'];
+const ROLES = ['admin', 'venta', 'ops', 'viewer'];
 
-export default function UsersAdmin(){
+export default function UsersAdmin() {
+  const { user, authReady } = useAuth();
+
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -16,70 +19,107 @@ export default function UsersAdmin(){
   const [nRole, setNRole] = useState('viewer');
   const [nPass, setNPass] = useState('');
 
-  async function fetchAll(){
-    setLoading(true); setErr('');
-    try{
+  async function fetchAll() {
+    setLoading(true);
+    setErr('');
+    try {
       const { data } = await api.get('/users');
       setRows(Array.isArray(data) ? data : []);
-    }catch(e){
+    } catch (e) {
       setErr('No se pudo cargar la lista de usuarios');
-    }finally{
+    } finally {
       setLoading(false);
     }
   }
 
-  useEffect(()=>{ fetchAll(); },[]);
+  useEffect(() => {
+    // 🔒 Solo admin carga la lista de usuarios
+    if (!authReady) return;
+    if (!user || user.role !== 'admin') return;
+    fetchAll();
+  }, [authReady, user?.id, user?.role]);
 
-  async function createUser(e){
+  async function createUser(e) {
     e.preventDefault();
     setErr('');
-    try{
+    try {
       // 1) crear usuario (name, email, role)
       const { data } = await api.post('/users', {
-        name: nName.trim(), email: nEmail.trim(), role: nRole, is_active: 1
+        name: nName.trim(),
+        email: nEmail.trim(),
+        role: nRole,
+        is_active: 1,
       });
       const id = data?.id;
 
       // 2) setear password si se envió
       if (id && nPass.trim()) {
-        await api.post(`/users/${id}/set-password`, { new_password: nPass.trim() });
+        await api.post(`/users/${id}/set-password`, {
+          new_password: nPass.trim(),
+        });
       }
 
       setOpenNew(false);
-      setNName(''); setNEmail(''); setNRole('viewer'); setNPass('');
+      setNName('');
+      setNEmail('');
+      setNRole('viewer');
+      setNPass('');
       await fetchAll();
-    }catch(e){
-      setErr(e?.response?.data?.error || 'No se pudo crear el usuario');
+    } catch (e) {
+      setErr(
+        e?.response?.data?.error || 'No se pudo crear el usuario'
+      );
     }
   }
 
-  async function toggleActive(u){
-    try{
-      await api.patch(`/users/${u.id}`, { is_active: u.is_active ? 0 : 1 });
+  async function toggleActive(u) {
+    try {
+      await api.patch(`/users/${u.id}`, {
+        is_active: u.is_active ? 0 : 1,
+      });
       await fetchAll();
-    }catch(e){
+    } catch (e) {
       alert('No se pudo cambiar el estado');
     }
   }
 
-  async function changeRole(u, role){
-    try{
+  async function changeRole(u, role) {
+    try {
       await api.patch(`/users/${u.id}`, { role });
       await fetchAll();
-    }catch(e){
+    } catch (e) {
       alert('No se pudo cambiar el rol');
     }
   }
 
-  async function resetPassword(u){
+  async function resetPassword(u) {
     const np = prompt(`Nuevo password para ${u.name}:`);
     if (!np) return;
-    try{
-      await api.post(`/users/${u.id}/set-password`, { new_password: np });
+    try {
+      await api.post(`/users/${u.id}/set-password`, {
+        new_password: np,
+      });
       alert('Password actualizado');
-    }catch(e){
+    } catch (e) {
       alert('No se pudo actualizar el password');
     }
+  }
+
+  // 🔒 Estados de auth / permisos
+  if (!authReady) {
+    return (
+      <div className="p-4 text-sm text-slate-600">
+        Cargando autenticación…
+      </div>
+    );
+  }
+
+  if (!user || user.role !== 'admin') {
+    return (
+      <div className="p-4 text-sm text-slate-600">
+        No tienes permisos para ver esta sección.
+      </div>
+    );
   }
 
   return (
@@ -88,7 +128,7 @@ export default function UsersAdmin(){
         <h2 className="text-lg font-semibold">Administración de usuarios</h2>
         <button
           className="px-3 py-2 rounded-lg bg-black text-white text-sm"
-          onClick={()=>setOpenNew(true)}
+          onClick={() => setOpenNew(true)}
         >
           ➕ Nuevo usuario
         </button>
@@ -109,7 +149,7 @@ export default function UsersAdmin(){
             </tr>
           </thead>
           <tbody>
-            {rows.map(u=>(
+            {rows.map((u) => (
               <tr key={u.id} className="border-b last:border-0">
                 <td className="p-2">{u.id}</td>
                 <td className="p-2">{u.name}</td>
@@ -118,15 +158,23 @@ export default function UsersAdmin(){
                   <select
                     className="border rounded px-2 py-1"
                     value={u.role}
-                    onChange={(e)=>changeRole(u, e.target.value)}
+                    onChange={(e) => changeRole(u, e.target.value)}
                   >
-                    {ROLES.map(r=> <option key={r} value={r}>{r}</option>)}
+                    {ROLES.map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
                   </select>
                 </td>
                 <td className="p-2">
                   <button
-                    className={`px-2 py-1 rounded text-xs ${u.is_active ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-600'}`}
-                    onClick={()=>toggleActive(u)}
+                    className={`px-2 py-1 rounded text-xs ${
+                      u.is_active
+                        ? 'bg-green-100 text-green-700'
+                        : 'bg-slate-200 text-slate-600'
+                    }`}
+                    onClick={() => toggleActive(u)}
                   >
                     {u.is_active ? 'Activo' : 'Inactivo'}
                   </button>
@@ -134,7 +182,7 @@ export default function UsersAdmin(){
                 <td className="p-2">
                   <button
                     className="px-2 py-1 border rounded mr-2 hover:bg-gray-50"
-                    onClick={()=>resetPassword(u)}
+                    onClick={() => resetPassword(u)}
                   >
                     Reset password
                   </button>
@@ -146,7 +194,12 @@ export default function UsersAdmin(){
             ))}
             {!rows.length && !loading && (
               <tr>
-                <td colSpan={6} className="p-6 text-center text-slate-500">Sin usuarios</td>
+                <td
+                  colSpan={6}
+                  className="p-6 text-center text-slate-500"
+                >
+                  Sin usuarios
+                </td>
               </tr>
             )}
           </tbody>
@@ -155,33 +208,78 @@ export default function UsersAdmin(){
 
       {openNew && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
-          <form onSubmit={createUser} className="bg-white rounded-2xl p-4 w-full max-w-md space-y-3">
+          <form
+            onSubmit={createUser}
+            className="bg-white rounded-2xl p-4 w-full max-w-md space-y-3"
+          >
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold">Nuevo usuario</h3>
-              <button type="button" onClick={()=>setOpenNew(false)} className="text-sm">✕</button>
+              <button
+                type="button"
+                onClick={() => setOpenNew(false)}
+                className="text-sm"
+              >
+                ✕
+              </button>
             </div>
 
-            <label className="block text-sm">Nombre
-              <input className="w-full border rounded-lg px-3 py-2" value={nName} onChange={e=>setNName(e.target.value)} required />
+            <label className="block text-sm">
+              Nombre
+              <input
+                className="w-full border rounded-lg px-3 py-2"
+                value={nName}
+                onChange={(e) => setNName(e.target.value)}
+                required
+              />
             </label>
 
-            <label className="block text-sm">Email
-              <input className="w-full border rounded-lg px-3 py-2" type="email" value={nEmail} onChange={e=>setNEmail(e.target.value)} required />
+            <label className="block text-sm">
+              Email
+              <input
+                className="w-full border rounded-lg px-3 py-2"
+                type="email"
+                value={nEmail}
+                onChange={(e) => setNEmail(e.target.value)}
+                required
+              />
             </label>
 
-            <label className="block text-sm">Rol
-              <select className="w-full border rounded-lg px-3 py-2" value={nRole} onChange={e=>setNRole(e.target.value)}>
-                {ROLES.map(r=> <option key={r} value={r}>{r}</option>)}
+            <label className="block text-sm">
+              Rol
+              <select
+                className="w-full border rounded-lg px-3 py-2"
+                value={nRole}
+                onChange={(e) => setNRole(e.target.value)}
+              >
+                {ROLES.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
               </select>
             </label>
 
-            <label className="block text-sm">Password inicial (opcional)
-              <input className="w-full border rounded-lg px-3 py-2" type="password" value={nPass} onChange={e=>setNPass(e.target.value)} />
+            <label className="block text-sm">
+              Password inicial (opcional)
+              <input
+                className="w-full border rounded-lg px-3 py-2"
+                type="password"
+                value={nPass}
+                onChange={(e) => setNPass(e.target.value)}
+              />
             </label>
 
             <div className="pt-2 flex gap-2 justify-end">
-              <button type="button" onClick={()=>setOpenNew(false)} className="px-3 py-2 border rounded-lg">Cancelar</button>
-              <button className="px-3 py-2 rounded-lg bg-black text-white">Crear</button>
+              <button
+                type="button"
+                onClick={() => setOpenNew(false)}
+                className="px-3 py-2 border rounded-lg"
+              >
+                Cancelar
+              </button>
+              <button className="px-3 py-2 rounded-lg bg-black text-white">
+                Crear
+              </button>
             </div>
           </form>
         </div>

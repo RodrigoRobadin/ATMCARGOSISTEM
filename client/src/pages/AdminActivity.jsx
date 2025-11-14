@@ -1,9 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
+import { useAuth } from '../auth';
 
 // =============== Utilidades ===============
-const fmt = (n) => Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
-const fmt2 = (n) => Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmt = (n) =>
+  Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
+const fmt2 = (n) =>
+  Number(n || 0).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 const toISO = (d) => new Date(d).toISOString();
 const daysAgo = (n) => {
   const d = new Date();
@@ -32,43 +38,81 @@ function PieChart({ value = 0, total = 1, size = 180, stroke = 22, labels = [] }
   return (
     <div className="flex items-center gap-4">
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-        <circle cx={size/2} cy={size/2} r={r} stroke="#E5E7EB" strokeWidth={stroke} fill="none" />
         <circle
-          cx={size/2} cy={size/2} r={r}
-          stroke="#3B2CCB" strokeWidth={stroke} fill="none"
-          strokeDasharray={dash} strokeLinecap="round"
-          transform={`rotate(-90 ${size/2} ${size/2})`}
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          stroke="#E5E7EB"
+          strokeWidth={stroke}
+          fill="none"
+        />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          stroke="#3B2CCB"
+          strokeWidth={stroke}
+          fill="none"
+          strokeDasharray={dash}
+          strokeLinecap="round"
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
       </svg>
       <div className="space-y-2 text-sm">
-        {labels?.length ? labels.map((l,i)=>(
-          <div key={i} className="flex items-center gap-2">
-            <span className="inline-block w-3 h-3 rounded-full" style={{background:i===0?'#3B2CCB':'#C026D3'}} />
-            <span className="text-slate-700">{l}</span>
-          </div>
-        )): null}
+        {labels?.length
+          ? labels.map((l, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span
+                  className="inline-block w-3 h-3 rounded-full"
+                  style={{ background: i === 0 ? '#3B2CCB' : '#C026D3' }}
+                />
+                <span className="text-slate-700">{l}</span>
+              </div>
+            ))
+          : null}
       </div>
     </div>
   );
 }
 
 function Bars({ items = [], max = 1, w = 520, h = 220 }) {
-  const padX = 24, padY = 24;
+  const padX = 24,
+    padY = 24;
   const bw = (w - padX * 2) / (items.length || 1);
-  const scaleY = (v) => h - padY - (max ? (v / max) * (h - padY * 2) : 0);
+  const scaleY = (v) =>
+    h - padY - (max ? (v / max) * (h - padY * 2) : 0);
   return (
     <svg width={w} height={h}>
       {/* eje */}
-      <line x1={padX} y1={h-padY} x2={w-padX/2} y2={h-padY} stroke="#CBD5E1" />
+      <line
+        x1={padX}
+        y1={h - padY}
+        x2={w - padX / 2}
+        y2={h - padY}
+        stroke="#CBD5E1"
+      />
       {items.map((it, i) => {
         const x = padX + i * bw + 6;
         const y = scaleY(it.value);
-        const barH = (h - padY) - y;
+        const barH = h - padY - y;
         return (
           <g key={i}>
-            <rect x={x} y={y} width={bw-12} height={barH} rx="6" fill="#3B82F6" />
-            <text x={x + (bw-12)/2} y={h - 6} textAnchor="middle" fontSize="11" fill="#475569">
-              {it.label.length > 10 ? it.label.slice(0,10)+'…' : it.label}
+            <rect
+              x={x}
+              y={y}
+              width={bw - 12}
+              height={barH}
+              rx="6"
+              fill="#3B82F6"
+            />
+            <text
+              x={x + (bw - 12) / 2}
+              y={h - 6}
+              textAnchor="middle"
+              fontSize="11"
+              fill="#475569"
+            >
+              {it.label.length > 10 ? it.label.slice(0, 10) + '…' : it.label}
             </text>
           </g>
         );
@@ -81,7 +125,9 @@ function Bars({ items = [], max = 1, w = 520, h = 220 }) {
 function Card({ title, children, className = '' }) {
   return (
     <div className={`bg-white rounded-2xl shadow p-4 ${className}`}>
-      {title && <div className="text-slate-700 font-semibold mb-2">{title}</div>}
+      {title && (
+        <div className="text-slate-700 font-semibold mb-2">{title}</div>
+      )}
       {children}
     </div>
   );
@@ -89,34 +135,55 @@ function Card({ title, children, className = '' }) {
 function Delta({ value = 0 }) {
   const up = value >= 0;
   return (
-    <div className={`text-sm font-semibold ${up ? 'text-emerald-600' : 'text-rose-600'} flex items-center gap-1`}>
+    <div
+      className={`text-sm font-semibold ${
+        up ? 'text-emerald-600' : 'text-rose-600'
+      } flex items-center gap-1`}
+    >
       <span className="inline-block">{up ? '↑' : '↓'}</span>
       {fmt2(Math.abs(value))}%
     </div>
   );
 }
-const initials = (name='?') => name.split(' ').map(s=>s[0]).slice(0,2).join('').toUpperCase();
+const initials = (name = '?') =>
+  name
+    .split(' ')
+    .map((s) => s[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
 
 // =============== Página ===============
 export default function AdminActivity() {
+  const { user, authReady } = useAuth();
+
   const [loading, setLoading] = useState(true);
-  const [users, setUsers]   = useState([]);
+  const [users, setUsers] = useState([]);
   const [activities, setActivities] = useState([]);
-  const [deals, setDeals]   = useState([]);
-  const [error, setError]   = useState('');
+  const [deals, setDeals] = useState([]);
+  const [error, setError] = useState('');
 
   const [days, setDays] = useState(30); // ventana de análisis
 
   useEffect(() => {
+    // 🔒 Solo admin puede cargar estos datos
+    if (!authReady) return;
+    if (!user || user.role !== 'admin') return;
+
     (async () => {
-      setLoading(true); setError('');
+      setLoading(true);
+      setError('');
       try {
         // 1) Intentamos un endpoint agregado de overview (si existe)
         let overview = null;
         try {
-          const { data } = await api.get('/admin/activity/overview', { params: { days } });
+          const { data } = await api.get('/admin/activity/overview', {
+            params: { days },
+          });
           overview = data;
-        } catch { /* caemos a construir en el cliente */ }
+        } catch {
+          /* caemos a construir en el cliente */
+        }
 
         if (overview?.users && overview?.activities && overview?.deals) {
           setUsers(overview.users);
@@ -124,7 +191,7 @@ export default function AdminActivity() {
           setDeals(overview.deals);
         } else {
           // 2) Fallback: traemos colecciones crudas y calculamos
-          const [{data: u}, {data: a}, {data: d}] = await Promise.all([
+          const [{ data: u }, { data: a }, { data: d }] = await Promise.all([
             api.get('/users'),
             api.get('/activities'),
             api.get('/deals'),
@@ -140,27 +207,34 @@ export default function AdminActivity() {
         setLoading(false);
       }
     })();
-  }, [days]);
+  }, [days, authReady, user?.id, user?.role]);
 
   const now = new Date();
   const from = daysAgo(days);
   const prevFrom = daysAgo(days * 2);
 
-  const actsNow  = useMemo(
-    () => activities.filter(a => new Date(a.created_at || a.date || 0) >= from),
+  const actsNow = useMemo(
+    () =>
+      activities.filter(
+        (a) => new Date(a.created_at || a.date || 0) >= from
+      ),
     [activities, days]
   );
   const actsPrev = useMemo(
-    () => activities.filter(a => {
-      const d = new Date(a.created_at || a.date || 0);
-      return d >= prevFrom && d < from;
-    }),
+    () =>
+      activities.filter((a) => {
+        const d = new Date(a.created_at || a.date || 0);
+        return d >= prevFrom && d < from;
+      }),
     [activities, days]
   );
 
   // Usuarios activos: con al menos 1 actividad en el período
   const activeUserIds = useMemo(
-    () => Array.from(new Set(actsNow.map(a => a.user_id).filter(Boolean))),
+    () =>
+      Array.from(
+        new Set(actsNow.map((a) => a.user_id).filter(Boolean))
+      ),
     [actsNow]
   );
   const totalActive = activeUserIds.length;
@@ -176,20 +250,24 @@ export default function AdminActivity() {
     const g = groupBy(actsNow, (a) => a.user_id || 'desconocido');
     const rows = [];
     for (const [uid, list] of g.entries()) {
-      const done = list.filter(a => a.is_done || a.done || a.status === 'done').length;
+      const done = list.filter(
+        (a) => a.is_done || a.done || a.status === 'done'
+      ).length;
       // Operaciones: preferimos deals por advisor_user_id; si no, únicos por deal_id en actividades
-      const ownDeals = deals.filter(d => d.advisor_user_id === uid);
-      const ops = ownDeals.length || new Set(list.map(a => a.deal_id).filter(Boolean)).size;
+      const ownDeals = deals.filter((d) => d.advisor_user_id === uid);
+      const ops =
+        ownDeals.length ||
+        new Set(list.map((a) => a.deal_id).filter(Boolean)).size;
       const u = usersById.get(uid) || { name: 'Desconocido', id: uid };
       rows.push({
         id: uid,
-        name: u.name || u.email || ('#' + uid),
+        name: u.name || u.email || '#' + uid,
         actions: list.length,
         done,
         ops,
       });
     }
-    rows.sort((a,b)=> b.actions - a.actions);
+    rows.sort((a, b) => b.actions - a.actions);
     return rows;
   }, [actsNow, deals, usersById]);
 
@@ -209,13 +287,17 @@ export default function AdminActivity() {
 
   // Nuevas operaciones por organización (últimos N días)
   const newDeals = useMemo(
-    () => deals.filter(d => new Date(d.created_at || 0) >= from),
+    () =>
+      deals.filter((d) => new Date(d.created_at || 0) >= from),
     [deals, days]
   );
   const byOrg = useMemo(() => {
-    const g = groupBy(newDeals, (d)=> d.org_name || '—');
-    const arr = Array.from(g.entries()).map(([label, list]) => ({ label, value: list.length }));
-    arr.sort((a,b)=> b.value - a.value);
+    const g = groupBy(newDeals, (d) => d.org_name || '—');
+    const arr = Array.from(g.entries()).map(([label, list]) => ({
+      label,
+      value: list.length,
+    }));
+    arr.sort((a, b) => b.value - a.value);
     return arr.slice(0, 6);
   }, [newDeals]);
 
@@ -223,7 +305,7 @@ export default function AdminActivity() {
   const [sort, setSort] = useState({ key: 'actions', dir: 'desc' });
   const tableRows = useMemo(() => {
     const r = [...actionsByUser];
-    r.sort((a,b) => {
+    r.sort((a, b) => {
       const s = sort.dir === 'asc' ? 1 : -1;
       if (sort.key === 'name') return s * a.name.localeCompare(b.name);
       return s * (a[sort.key] - b[sort.key]);
@@ -231,11 +313,35 @@ export default function AdminActivity() {
     return r;
   }, [actionsByUser, sort]);
   const toggleSort = (key) => {
-    setSort((s) => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' });
+    setSort((s) =>
+      s.key === key
+        ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: 'desc' }
+    );
   };
 
-  if (loading) return <div className="p-4 text-sm text-slate-600">Cargando datos…</div>;
-  if (error)   return <div className="p-4 text-sm text-rose-600">{error}</div>;
+  // 🔒 Estados de auth / permisos
+  if (!authReady) {
+    return (
+      <div className="p-4 text-sm text-slate-600">
+        Cargando autenticación…
+      </div>
+    );
+  }
+  if (!user || user.role !== 'admin') {
+    return (
+      <div className="p-4 text-sm text-slate-600">
+        No tienes permisos para ver esta sección.
+      </div>
+    );
+  }
+
+  if (loading)
+    return (
+      <div className="p-4 text-sm text-slate-600">Cargando datos…</div>
+    );
+  if (error)
+    return <div className="p-4 text-sm text-rose-600">{error}</div>;
 
   return (
     <div className="space-y-4">
@@ -246,7 +352,7 @@ export default function AdminActivity() {
           <select
             className="border rounded-lg px-2 py-1"
             value={days}
-            onChange={(e)=>setDays(Number(e.target.value))}
+            onChange={(e) => setDays(Number(e.target.value))}
           >
             <option value={7}>Últimos 7 días</option>
             <option value={14}>Últimos 14 días</option>
@@ -262,11 +368,18 @@ export default function AdminActivity() {
         <Card title="Usuarios activos totales">
           <div className="flex items-end justify-between">
             <div>
-              <div className="text-6xl font-semibold leading-none">{fmt(totalActive)}</div>
-              <div className="mt-2"><Delta value={trendPct} /></div>
+              <div className="text-6xl font-semibold leading-none">
+                {fmt(totalActive)}
+              </div>
+              <div className="mt-2">
+                <Delta value={trendPct} />
+              </div>
             </div>
             <div className="text-xs text-slate-500">
-              <div>Del {toISO(from).slice(0,10)} al {toISO(now).slice(0,10)}</div>
+              <div>
+                Del {toISO(from).slice(0, 10)} al{' '}
+                {toISO(now).slice(0, 10)}
+              </div>
             </div>
           </div>
         </Card>
@@ -278,12 +391,16 @@ export default function AdminActivity() {
               total={totalUsers || 1}
               labels={[
                 `Usuarios activos: ${fmt(totalActive)}`,
-                `Usuarios inactivos: ${fmt(inactive)}`
+                `Usuarios inactivos: ${fmt(inactive)}`,
               ]}
             />
             <div className="text-right">
-              <div className="text-slate-500 text-sm">Total usuarios</div>
-              <div className="text-3xl font-semibold">{fmt(totalUsers)}</div>
+              <div className="text-slate-500 text-sm">
+                Total usuarios
+              </div>
+              <div className="text-3xl font-semibold">
+                {fmt(totalUsers)}
+              </div>
             </div>
           </div>
         </Card>
@@ -299,19 +416,29 @@ export default function AdminActivity() {
                   {initials(mostActive.name)}
                 </div>
                 <div>
-                  <div className="text-2xl font-semibold">{mostActive.name}</div>
-                  <div className="text-slate-500 text-sm">Acciones: {fmt(mostActive.actions)} · Finalizadas: {fmt(mostActive.done)}</div>
+                  <div className="text-2xl font-semibold">
+                    {mostActive.name}
+                  </div>
+                  <div className="text-slate-500 text-sm">
+                    Acciones: {fmt(mostActive.actions)} · Finalizadas:{' '}
+                    {fmt(mostActive.done)}
+                  </div>
                 </div>
               </div>
               <Delta value={trendPct} />
             </div>
           ) : (
-            <div className="text-slate-500 text-sm">Sin actividades en el período.</div>
+            <div className="text-slate-500 text-sm">
+              Sin actividades en el período.
+            </div>
           )}
         </Card>
 
         <Card title="Nuevas operaciones por organización">
-          <Bars items={byOrg} max={Math.max(1, ...byOrg.map(x=>x.value))} />
+          <Bars
+            items={byOrg}
+            max={Math.max(1, ...byOrg.map((x) => x.value))}
+          />
         </Card>
       </div>
 
@@ -321,29 +448,72 @@ export default function AdminActivity() {
           <table className="min-w-[680px] w-full text-sm">
             <thead>
               <tr className="border-b">
-                <Th onClick={()=>toggleSort('name')}   active={sort.key==='name'}   dir={sort.dir}>Usuario</Th>
-                <Th onClick={()=>toggleSort('actions')} active={sort.key==='actions'} dir={sort.dir} right>Acciones</Th>
-                <Th onClick={()=>toggleSort('done')}    active={sort.key==='done'}    dir={sort.dir} right>Acciones finalizadas</Th>
-                <Th onClick={()=>toggleSort('ops')}     active={sort.key==='ops'}     dir={sort.dir} right>Operaciones</Th>
+                <Th
+                  onClick={() => toggleSort('name')}
+                  active={sort.key === 'name'}
+                  dir={sort.dir}
+                >
+                  Usuario
+                </Th>
+                <Th
+                  onClick={() => toggleSort('actions')}
+                  active={sort.key === 'actions'}
+                  dir={sort.dir}
+                  right
+                >
+                  Acciones
+                </Th>
+                <Th
+                  onClick={() => toggleSort('done')}
+                  active={sort.key === 'done'}
+                  dir={sort.dir}
+                  right
+                >
+                  Acciones finalizadas
+                </Th>
+                <Th
+                  onClick={() => toggleSort('ops')}
+                  active={sort.key === 'ops'}
+                  dir={sort.dir}
+                  right
+                >
+                  Operaciones
+                </Th>
               </tr>
             </thead>
             <tbody>
-              {tableRows.map(r => (
-                <tr key={r.id} className="border-b hover:bg-slate-50">
+              {tableRows.map((r) => (
+                <tr
+                  key={r.id}
+                  className="border-b hover:bg-slate-50"
+                >
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-2">
-                      <span className="w-7 h-7 rounded-full bg-indigo-600 text-white grid place-items-center text-xs">{initials(r.name)}</span>
+                      <span className="w-7 h-7 rounded-full bg-indigo-600 text-white grid place-items-center text-xs">
+                        {initials(r.name)}
+                      </span>
                       <span>{r.name}</span>
                     </div>
                   </td>
-                  <td className="px-3 py-2 text-right font-medium">{fmt(r.actions)}</td>
-                  <td className="px-3 py-2 text-right">{fmt(r.done)}</td>
-                  <td className="px-3 py-2 text-right">{fmt(r.ops)}</td>
+                  <td className="px-3 py-2 text-right font-medium">
+                    {fmt(r.actions)}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {fmt(r.done)}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {fmt(r.ops)}
+                  </td>
                 </tr>
               ))}
               {!tableRows.length && (
                 <tr>
-                  <td colSpan={4} className="px-3 py-6 text-center text-slate-500">Sin datos</td>
+                  <td
+                    colSpan={4}
+                    className="px-3 py-6 text-center text-slate-500"
+                  >
+                    Sin datos
+                  </td>
                 </tr>
               )}
             </tbody>
@@ -354,16 +524,26 @@ export default function AdminActivity() {
   );
 }
 
-function Th({ children, onClick, active=false, dir='desc', right=false }) {
+function Th({ children, onClick, active = false, dir = 'desc', right = false }) {
   return (
     <th
-      className={`px-3 py-2 text-left ${right ? 'text-right' : ''} uppercase text-[12px] text-slate-600 cursor-pointer`}
+      className={`px-3 py-2 text-left ${
+        right ? 'text-right' : ''
+      } uppercase text-[12px] text-slate-600 cursor-pointer`}
       onClick={onClick}
       title="Ordenar"
     >
-      <span className={`inline-flex items-center gap-1 ${active ? 'text-slate-900' : ''}`}>
+      <span
+        className={`inline-flex items-center gap-1 ${
+          active ? 'text-slate-900' : ''
+        }`}
+      >
         {children}
-        {active && <span className="text-slate-400">{dir === 'asc' ? '▲' : '▼'}</span>}
+        {active && (
+          <span className="text-slate-400">
+            {dir === 'asc' ? '▲' : '▼'}
+          </span>
+        )}
       </span>
     </th>
   );
