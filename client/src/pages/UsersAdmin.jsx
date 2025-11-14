@@ -6,7 +6,7 @@ import { useAuth } from '../auth';
 const ROLES = ['admin', 'venta', 'ops', 'viewer'];
 
 export default function UsersAdmin() {
-  const { user, authReady } = useAuth();
+  const { authReady, user } = useAuth();
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -33,9 +33,11 @@ export default function UsersAdmin() {
   }
 
   useEffect(() => {
-    // 🔒 Solo admin carga la lista de usuarios
+    // ⛔ No cargar lista si aún no sabemos el usuario
     if (!authReady) return;
+    // ⛔ Sólo admin puede ver esta pantalla
     if (!user || user.role !== 'admin') return;
+
     fetchAll();
   }, [authReady, user?.id, user?.role]);
 
@@ -105,12 +107,10 @@ export default function UsersAdmin() {
     }
   }
 
-  // 🔒 Estados de auth / permisos
+  // ============ GUARDIAS DE ACCESO ============
   if (!authReady) {
     return (
-      <div className="p-4 text-sm text-slate-600">
-        Cargando autenticación…
-      </div>
+      <div className="p-4 text-sm text-slate-600">Cargando sesión…</div>
     );
   }
 
@@ -134,7 +134,11 @@ export default function UsersAdmin() {
         </button>
       </div>
 
-      {err && <div className="mb-3 text-sm text-red-600">{err}</div>}
+      {err && (
+        <div className="mb-3 text-sm text-red-600">
+          {err}
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl shadow overflow-auto">
         <table className="w-full text-sm">

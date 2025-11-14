@@ -1,3 +1,4 @@
+// client/src/pages/AdminActivity.jsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../auth';
@@ -112,7 +113,9 @@ function Bars({ items = [], max = 1, w = 520, h = 220 }) {
               fontSize="11"
               fill="#475569"
             >
-              {it.label.length > 10 ? it.label.slice(0, 10) + '…' : it.label}
+              {it.label.length > 10
+                ? it.label.slice(0, 10) + '…'
+                : it.label}
             </text>
           </g>
         );
@@ -155,7 +158,7 @@ const initials = (name = '?') =>
 
 // =============== Página ===============
 export default function AdminActivity() {
-  const { user, authReady } = useAuth();
+  const { authReady, user } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [users, setUsers] = useState([]);
@@ -166,8 +169,9 @@ export default function AdminActivity() {
   const [days, setDays] = useState(30); // ventana de análisis
 
   useEffect(() => {
-    // 🔒 Solo admin puede cargar estos datos
+    // ⛔ No hacer llamadas si aún no se resolvió el auth
     if (!authReady) return;
+    // ⛔ No hacer llamadas si NO es admin
     if (!user || user.role !== 'admin') return;
 
     (async () => {
@@ -207,7 +211,7 @@ export default function AdminActivity() {
         setLoading(false);
       }
     })();
-  }, [days, authReady, user?.id, user?.role]);
+  }, [authReady, user?.id, user?.role, days]);
 
   const now = new Date();
   const from = daysAgo(days);
@@ -231,10 +235,7 @@ export default function AdminActivity() {
 
   // Usuarios activos: con al menos 1 actividad en el período
   const activeUserIds = useMemo(
-    () =>
-      Array.from(
-        new Set(actsNow.map((a) => a.user_id).filter(Boolean))
-      ),
+    () => Array.from(new Set(actsNow.map((a) => a.user_id).filter(Boolean))),
     [actsNow]
   );
   const totalActive = activeUserIds.length;
@@ -287,8 +288,7 @@ export default function AdminActivity() {
 
   // Nuevas operaciones por organización (últimos N días)
   const newDeals = useMemo(
-    () =>
-      deals.filter((d) => new Date(d.created_at || 0) >= from),
+    () => deals.filter((d) => new Date(d.created_at || 0) >= from),
     [deals, days]
   );
   const byOrg = useMemo(() => {
@@ -320,14 +320,13 @@ export default function AdminActivity() {
     );
   };
 
-  // 🔒 Estados de auth / permisos
+  // ============ GUARDIAS DE ACCESO ============
   if (!authReady) {
     return (
-      <div className="p-4 text-sm text-slate-600">
-        Cargando autenticación…
-      </div>
+      <div className="p-4 text-sm text-slate-600">Cargando sesión…</div>
     );
   }
+
   if (!user || user.role !== 'admin') {
     return (
       <div className="p-4 text-sm text-slate-600">
@@ -336,12 +335,14 @@ export default function AdminActivity() {
     );
   }
 
-  if (loading)
+  if (loading) {
     return (
       <div className="p-4 text-sm text-slate-600">Cargando datos…</div>
     );
-  if (error)
+  }
+  if (error) {
     return <div className="p-4 text-sm text-rose-600">{error}</div>;
+  }
 
   return (
     <div className="space-y-4">
@@ -395,9 +396,7 @@ export default function AdminActivity() {
               ]}
             />
             <div className="text-right">
-              <div className="text-slate-500 text-sm">
-                Total usuarios
-              </div>
+              <div className="text-slate-500 text-sm">Total usuarios</div>
               <div className="text-3xl font-semibold">
                 {fmt(totalUsers)}
               </div>
