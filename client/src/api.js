@@ -49,10 +49,21 @@ if (RAW && String(RAW).trim() !== "") {
   }
 }
 
+// ---- helper para leer token REAL de storage ----
+function getRawToken() {
+  try {
+    const t = localStorage.getItem(TOKEN_KEY);
+    if (!t || t === "SESSION") return null; // por si quedó basura vieja
+    return t;
+  } catch {
+    return null;
+  }
+}
+
 // axios instance
 export const api = axios.create({
-  baseURL: BASE,         // p.ej. http://localhost:4000/api o /api
-  withCredentials: true, // importantísimo para cookie de sesión "sid"
+  baseURL: BASE,        // p.ej. http://localhost:4000/api o /api
+  withCredentials: false, // con JWT no necesitamos cookies de sesión
 });
 
 // ==== Interceptor de request ====
@@ -60,18 +71,24 @@ export const api = axios.create({
 // - Evita que se duplique /api si accidentalmente pasás urls que empiecen con "/api/"
 api.interceptors.request.use((cfg) => {
   try {
-    // 1) Bearer
-    const t = localStorage.getItem(TOKEN_KEY);
+    const t = getRawToken();
     if (t) {
       cfg.headers = cfg.headers || {};
       cfg.headers.Authorization = `Bearer ${t}`;
     }
 
-    // 2) Evitar /api/api
-    if (typeof cfg.url === "string") {
-      if (cfg.url.startsWith("/api/")) {
-        cfg.url = cfg.url.slice(4); // quita "/api"
-      }
+    if (typeof cfg.url === "string" && cfg.url.startsWith("/api/")) {
+      cfg.url = cfg.url.slice(4); // quita "/api"
+    }
+
+    if (import.meta.env?.DEV) {
+      console.debug(
+        "[api] request",
+        cfg.method?.toUpperCase(),
+        cfg.url,
+        "token?",
+        !!t
+      );
     }
   } catch {
     // noop
@@ -79,19 +96,24 @@ api.interceptors.request.use((cfg) => {
   return cfg;
 });
 
-// ==== Interceptor de response: limpia credenciales en 401 (no redirige aquí) ====
+// ==== Interceptor de response: limpia credenciales en 401 ====
+// (NO redirige; eso lo maneja el AuthProvider)
 api.interceptors.response.use(
   (res) => res,
   (err) => {
     const status = err?.response?.status;
+    const url = err?.config?.url || "";
+
     if (status === 401) {
+      if (import.meta.env?.DEV) {
+        console.warn("[api] 401 en", url);
+      }
       try {
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(USER_KEY);
       } catch {
         // noop
       }
-      // NO redirigimos desde aquí; el AuthProvider decide.
     }
     return Promise.reject(err);
   }
@@ -101,24 +123,37 @@ export default api;
 
 export function saveAuth({ token, user }) {
   try {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
+    if (token) {
+      localStorage.setItem(TOKEN_KEY, token);
+    } else {
+      localStorage.removeItem(TOKEN_KEY);
+    }
 
-    if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
-    else localStorage.removeItem(USER_KEY);
+    if (user) {
+      localStorage.setItem(USER_KEY, JSON.stringify(user));
+    } else {
+      localStorage.removeItem(USER_KEY);
+    }
   } catch {
     // noop
   }
 }
 
 export function loadSavedAuth() {
-  const t = localStorage.getItem(TOKEN_KEY) || null;
+  let t = null;
   let u = null;
+  try {
+    t = localStorage.getItem(TOKEN_KEY) || null;
+  } catch {
+    t = null;
+  }
+
   try {
     const raw = localStorage.getItem(USER_KEY);
     u = raw ? JSON.parse(raw) : null;
   } catch {
     u = null;
   }
+
   return { token: t, user: u };
 }

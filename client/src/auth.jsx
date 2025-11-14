@@ -1,106 +1,152 @@
 // client/src/auth.jsx
-import React, { createContext, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useContext, useState, useEffect } from "react";
 import { Navigate, useLocation } from "react-router-dom";
-import { api, saveAuth, loadSavedAuth, TOKEN_KEY } from "./api";
+import api, { saveAuth, loadSavedAuth } from "./api";
 
-const AuthCtx = createContext(null);
+const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [authReady, setAuthReady] = useState(false);
-  const didInit = useRef(false);
+  const [token, setToken] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-  const refresh = async () => {
+  // Al montar: intentamos recuperar token/user y validar con /users/me
+  useEffect(() => {
     const { token: savedToken, user: savedUser } = loadSavedAuth();
+
+    if (!savedToken) {
+      // No hay token → no logueado
+      setUser(null);
+      setToken(null);
+      setLoading(false);
+      return;
+    }
+
+    setToken(savedToken);
     if (savedUser) setUser(savedUser);
 
-    try {
-      // OJO: sin "/" inicial (queda baseURL + "auth/me")
-      const { data } = await api.get("auth/me");
-      if (data && typeof data === "object") {
-        setUser(data);
-        saveAuth({
-          token: data?.token || savedToken || localStorage.getItem(TOKEN_KEY) || null,
-          user: data,
-        });
-      }
-    } catch (err) {
-      const status = err?.response?.status;
-      if (status === 401) {
+    api
+      .get("/users/me")
+      .then((res) => {
+        const me = res.data;
+        setUser(me);
+        saveAuth({ token: savedToken, user: me });
+        if (import.meta.env?.DEV) {
+          console.debug("[auth] /users/me ok", me);
+        }
+      })
+      .catch((err) => {
+        console.warn(
+          "[auth] /users/me error",
+          err?.response?.status,
+          err?.message
+        );
         saveAuth({ token: null, user: null });
         setUser(null);
-      } else if (status !== 404) {
-        console.warn("Auth refresh error:", err?.message || err);
-      }
-    } finally {
-      setAuthReady(true);
-    }
-  };
-
-  useEffect(() => {
-    if (didInit.current) return;
-    didInit.current = true;
-    refresh();
+        setToken(null);
+      })
+      .finally(() => setLoading(false));
   }, []);
 
-  const login = async (payload) => {
-    // SIN "/" inicial y SIN "/api"
-    const res = await api.post("auth/login", payload);
-    const data = res?.data;
+  // ---- LOGIN ----
+  const login = async ({ email, password }) => {
+    // Backend JWT: POST /users/login => { token, user }
+    const res = await api.post("/users/login", { email, password });
+    const { token: t, user: u } = res.data || {};
 
-    const token = data?.token || null;
-    const nextUser = data?.user ?? (data && typeof data === "object" ? data : null);
-
-    saveAuth({ token, user: nextUser || user });
-
-    if (!nextUser) {
-      try {
-        const me = await api.get("auth/me").then((r) => r.data);
-        if (me && typeof me === "object") {
-          saveAuth({ token: token || null, user: me });
-          setUser(me);
-          return me;
-        }
-      } catch (e) {
-        console.warn("fetch auth/me after login failed:", e?.message || e);
-      }
+    if (!t) {
+      throw new Error("Respuesta de login sin token");
     }
 
-    setUser(nextUser || null);
-    return nextUser || null;
+    setUser(u || null);
+    setToken(t);
+    saveAuth({ token: t, user: u });
+
+    if (import.meta.env?.DEV) {
+      console.debug("[auth] login ok, user:", u, "token:", t);
+    }
+
+    return u;
   };
 
-  const logout = async () => {
-    try {
-      await api.post("auth/logout"); // si existe
-    } catch {}
+  // ---- LOGOUT ----
+  const logout = () => {
     saveAuth({ token: null, user: null });
     setUser(null);
+    setToken(null);
   };
 
-  return (
-    <AuthCtx.Provider value={{ user, authReady, login, logout, refresh }}>
-      {children}
-    </AuthCtx.Provider>
-  );
+  const value = {
+    user,
+    token,
+    loading,
+    login,
+    logout,
+  };
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
+// Hook para usar auth fácilmente
 export function useAuth() {
-  return useContext(AuthCtx);
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used within AuthProvider");
+  return ctx;
 }
 
+// ---- Ruta protegida: requiere estar logueado ----
 export function RequireAuth({ children }) {
-  const { user, authReady } = useAuth();
-  const loc = useLocation();
-  if (!authReady) return null;
-  if (!user) return <Navigate to="/login" replace state={{ from: loc }} />;
+  const { user, loading } = useAuth();
+  const location = useLocation();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-sm text-slate-500">
+        Cargando sesión...
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+
   return children;
 }
 
-export function RequireRole({ role, children }) {
-  const { user, authReady } = useAuth();
-  if (!authReady) return null;
-  if (!user) return <Navigate to="/login" replace />;
-  if (role && !Array.isArray(user?.roles)?.includes(role)) return <Navigate to="/" replace />;
+// ---- Ruta protegida por rol (string o array) ----
+export function RequireRole({ allow, children }) {
+  const { user, loading } = useAuth();
+  const location = useLocation();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-sm text-slate-500">
+        Cargando sesión...
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+
+  const role = (user.role || "").toLowerCase();
+  const allowed = Array.isArray(allow)
+    ? allow.map((r) => String(r).toLowerCase())
+    : [String(allow).toLowerCase()];
+
+  if (!allowed.includes(role)) {
+    return (
+      <div className="p-8 text-center">
+        <h1 className="text-xl font-semibold mb-2">Acceso denegado</h1>
+        <p className="text-sm text-slate-600">
+          Tu rol (<b>{role || "sin rol"}</b>) no tiene permiso para ver esta
+          sección.
+        </p>
+      </div>
+    );
+  }
+
   return children;
 }
