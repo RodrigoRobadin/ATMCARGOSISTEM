@@ -1,7 +1,7 @@
 // client/src/pages/AdminActivity.jsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import { useAuth } from '../auth';
+import { useAuth } from '../auth/AuthContext';
 
 // =============== Utilidades ===============
 const fmt = (n) =>
@@ -158,7 +158,19 @@ const initials = (name = '?') =>
 
 // =============== Página ===============
 export default function AdminActivity() {
-  const { authReady, user } = useAuth();
+  const { user } = useAuth();
+  const role = (user?.role || '').toLowerCase();
+
+  // ✅ Bloqueo duro: solo admin/manager pueden ver y ejecutar requests
+  const canSee = role === 'admin' || role === 'manager';
+  if (!canSee) {
+    return (
+      <div className="p-4 text-sm text-red-600">
+        Permiso denegado. Esta sección solo está disponible para
+        administradores.
+      </div>
+    );
+  }
 
   const [loading, setLoading] = useState(true);
   const [users, setUsers] = useState([]);
@@ -169,16 +181,11 @@ export default function AdminActivity() {
   const [days, setDays] = useState(30); // ventana de análisis
 
   useEffect(() => {
-    // ⛔ No hacer llamadas si aún no se resolvió el auth
-    if (!authReady) return;
-    // ⛔ No hacer llamadas si NO es admin
-    if (!user || user.role !== 'admin') return;
-
     (async () => {
       setLoading(true);
       setError('');
       try {
-        // 1) Intentamos un endpoint agregado de overview (si existe)
+        // 1) Intentamos el endpoint de overview (admin-only)
         let overview = null;
         try {
           const { data } = await api.get('/admin/activity/overview', {
@@ -211,7 +218,7 @@ export default function AdminActivity() {
         setLoading(false);
       }
     })();
-  }, [authReady, user?.id, user?.role, days]);
+  }, [days]);
 
   const now = new Date();
   const from = daysAgo(days);
@@ -320,29 +327,12 @@ export default function AdminActivity() {
     );
   };
 
-  // ============ GUARDIAS DE ACCESO ============
-  if (!authReady) {
-    return (
-      <div className="p-4 text-sm text-slate-600">Cargando sesión…</div>
-    );
-  }
-
-  if (!user || user.role !== 'admin') {
-    return (
-      <div className="p-4 text-sm text-slate-600">
-        No tienes permisos para ver esta sección.
-      </div>
-    );
-  }
-
-  if (loading) {
+  if (loading)
     return (
       <div className="p-4 text-sm text-slate-600">Cargando datos…</div>
     );
-  }
-  if (error) {
+  if (error)
     return <div className="p-4 text-sm text-rose-600">{error}</div>;
-  }
 
   return (
     <div className="space-y-4">
@@ -434,10 +424,7 @@ export default function AdminActivity() {
         </Card>
 
         <Card title="Nuevas operaciones por organización">
-          <Bars
-            items={byOrg}
-            max={Math.max(1, ...byOrg.map((x) => x.value))}
-          />
+          <Bars items={byOrg} max={Math.max(1, ...byOrg.map((x) => x.value))} />
         </Card>
       </div>
 
