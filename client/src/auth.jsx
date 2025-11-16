@@ -10,12 +10,10 @@ export function AuthProvider({ children }) {
   const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Al montar: intentamos recuperar token/user y validar con /users/me
   useEffect(() => {
     const { token: savedToken, user: savedUser } = loadSavedAuth();
 
     if (!savedToken) {
-      // No hay token → no logueado
       setUser(null);
       setToken(null);
       setLoading(false);
@@ -31,16 +29,8 @@ export function AuthProvider({ children }) {
         const me = res.data;
         setUser(me);
         saveAuth({ token: savedToken, user: me });
-        if (import.meta.env?.DEV) {
-          console.debug("[auth] /users/me ok", me);
-        }
       })
-      .catch((err) => {
-        console.warn(
-          "[auth] /users/me error",
-          err?.response?.status,
-          err?.message
-        );
+      .catch(() => {
         saveAuth({ token: null, user: null });
         setUser(null);
         setToken(null);
@@ -48,53 +38,45 @@ export function AuthProvider({ children }) {
       .finally(() => setLoading(false));
   }, []);
 
-  // ---- LOGIN ----
   const login = async ({ email, password }) => {
-    // Backend JWT: POST /users/login => { token, user }
     const res = await api.post("/users/login", { email, password });
     const { token: t, user: u } = res.data || {};
 
-    if (!t) {
-      throw new Error("Respuesta de login sin token");
-    }
+    if (!t) throw new Error("Respuesta de login sin token");
 
     setUser(u || null);
     setToken(t);
     saveAuth({ token: t, user: u });
-
-    if (import.meta.env?.DEV) {
-      console.debug("[auth] login ok, user:", u, "token:", t);
-    }
-
     return u;
   };
 
-  // ---- LOGOUT ----
   const logout = () => {
     saveAuth({ token: null, user: null });
     setUser(null);
     setToken(null);
   };
 
-  const value = {
-    user,
-    token,
-    loading,
-    login,
-    logout,
-  };
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        token,
+        loading,
+        login,
+        logout,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
-// Hook para usar auth fácilmente
 export function useAuth() {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth must be used within AuthProvider");
   return ctx;
 }
 
-// ---- Ruta protegida: requiere estar logueado ----
 export function RequireAuth({ children }) {
   const { user, loading } = useAuth();
   const location = useLocation();
@@ -114,7 +96,6 @@ export function RequireAuth({ children }) {
   return children;
 }
 
-// ---- Ruta protegida por rol (string o array) ----
 export function RequireRole({ allow, children }) {
   const { user, loading } = useAuth();
   const location = useLocation();

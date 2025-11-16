@@ -8,9 +8,7 @@ import { AuthProvider } from './auth.jsx';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    {/* Router ÚNICO aquí */}
     <BrowserRouter>
-      {/* Contexto de Auth ÚNICO */}
       <AuthProvider>
         <App />
       </AuthProvider>

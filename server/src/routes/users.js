@@ -144,14 +144,32 @@ router.get('/select', requireAuth, async (req, res) => {
   }
 });
 
-// ============ LISTAR COMPLETO (solo admin) ============
-router.get('/', requireAuth, requireRole('admin'), async (_req, res) => {
+// ============ LISTAR (visibilidad según rol) ============
+router.get('/', requireAuth, async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      `SELECT id, name, email, role, is_active, created_at, updated_at
-         FROM users
-        ORDER BY id ASC`
-    );
+    const requesterRole = toLowerTrim(req.user?.role);
+
+    let rows;
+
+    if (['admin', 'manager'].includes(requesterRole)) {
+      // Admin / manager ven todo
+      const [full] = await pool.query(
+        `SELECT id, name, email, role, is_active, created_at, updated_at
+           FROM users
+          ORDER BY id ASC`
+      );
+      rows = full;
+    } else {
+      // venta / ops / viewer → sólo usuarios activos, datos básicos
+      const [basic] = await pool.query(
+        `SELECT id, name, email
+           FROM users
+          WHERE is_active = 1
+          ORDER BY name ASC, id ASC`
+      );
+      rows = basic;
+    }
+
     return res.json(rows);
   } catch (err) {
     console.error('Error en GET /users:', err);
