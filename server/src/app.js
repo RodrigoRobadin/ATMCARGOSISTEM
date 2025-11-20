@@ -40,6 +40,8 @@ import freightRequestsRouter from './routes/freightRequests.js';
 
 // ⭐️ NUEVO: envío de informes por correo
 import emailRoutes from './routes/emailRoutes.js';
+import industrialDoorsRouter from "./routes/industrialDoors.js";
+
 
 // ====== Cargar variables de entorno ======
 const ENV_PATH = '/home/deploy/.env.crm';
@@ -205,6 +207,14 @@ app.use((err, _req, res, next) => {
   }
   return next(err);
 });
+
+// ...
+
+
+// ...
+app.use("/api", catalogRouter);
+app.use("/api", industrialDoorsRouter);
+// ...
 
 /* ================ Arranque ================ */
 const PORT = process.env.PORT || 4000;

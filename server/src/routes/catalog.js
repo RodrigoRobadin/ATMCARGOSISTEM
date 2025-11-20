@@ -37,8 +37,18 @@ router.get("/catalog/items", async (req, res) => {
     const limit = Math.min(toInt(req.query.limit, 500), 1000);
 
     let sql = `
-      SELECT id, type, sku, name, unit, currency, price, tax_rate, active,
-             created_at, updated_at
+      SELECT id,
+             type,
+             sku,
+             name,
+             brand,         -- 👈 NUEVO: se expone la marca
+             unit,
+             currency,
+             price,
+             tax_rate,
+             active,
+             created_at,
+             updated_at
         FROM catalog_items
        WHERE 1=1
     `;
@@ -75,8 +85,19 @@ router.get("/catalog/items/:id", async (req, res) => {
   try {
     const id = toInt(req.params.id, 0);
     const [[row]] = await db.query(
-      `SELECT id, type, sku, name, description, unit, currency, price, tax_rate, active,
-              created_at, updated_at
+      `SELECT id,
+              type,
+              sku,
+              name,
+              brand,         -- 👈 NUEVO también en get-by-id
+              description,
+              unit,
+              currency,
+              price,
+              tax_rate,
+              active,
+              created_at,
+              updated_at
          FROM catalog_items
         WHERE id = ?`,
       [id]
@@ -95,12 +116,13 @@ router.post("/catalog/items", async (req, res) => {
     const b = req.body || {};
     const [r] = await db.query(
       `INSERT INTO catalog_items
-       (type, sku, name, description, unit, currency, price, tax_rate, active)
-       VALUES (?,?,?,?,?,?,?,?,?)`,
+       (type, sku, name, brand, description, unit, currency, price, tax_rate, active)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
       [
         (b.type || "PRODUCTO").toUpperCase(),
         b.sku || null,
         b.name || "",
+        b.brand || null, // 👈 NUEVO: se inserta la marca
         b.description || null,
         b.unit || null,
         (b.currency || "USD").toUpperCase(),
@@ -123,20 +145,22 @@ router.put("/catalog/items/:id", async (req, res) => {
     const b = req.body || {};
     await db.query(
       `UPDATE catalog_items
-          SET type = ?,
-              sku = ?,
-              name = ?,
+          SET type        = ?,
+              sku         = ?,
+              name        = ?,
+              brand       = ?,   -- 👈 NUEVO: se actualiza la marca
               description = ?,
-              unit = ?,
-              currency = ?,
-              price = ?,
-              tax_rate = ?,
-              active = ?
+              unit        = ?,
+              currency    = ?,
+              price       = ?,
+              tax_rate    = ?,
+              active      = ?
         WHERE id = ?`,
       [
         (b.type || "PRODUCTO").toUpperCase(),
         b.sku || null,
         b.name || "",
+        b.brand || null,
         b.description || null,
         b.unit || null,
         (b.currency || "USD").toUpperCase(),

@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api } from "../api";
 import NewOperationModal from "../components/NewOperationModal";
+import NewIndustrialOperationModal from "../components/NewIndustrialOperationModal";
 
 /* ---------- UI ---------- */
 function FunnelIcon({ className = "w-4 h-4" }) {
@@ -81,12 +82,7 @@ function normalizeFromOpAndCF({ op, cfMap, dealTT }) {
 
   let destination =
     (tt === "AIR" &&
-      firstOf(
-        op?.air,
-        "destination_airport",
-        "destino",
-        "destination"
-      )) ||
+      firstOf(op?.air, "destination_airport", "destino", "destination")) ||
     (tt === "OCEAN" &&
       firstOf(op?.ocean, "pod", "port_discharge", "destino")) ||
     (tt === "ROAD" &&
@@ -197,6 +193,9 @@ export default function WorkspaceTable() {
   });
   const [openFilterKey, setOpenFilterKey] = useState(null);
 
+  const isIndustrial =
+    key === "industrial-rayflex" || key === "industrial-boplan";
+
   /* ---------- Carga base ---------- */
   useEffect(() => {
     (async () => {
@@ -208,8 +207,24 @@ export default function WorkspaceTable() {
         );
         setBu(found || null);
 
+        // 1) Intentar pipeline específico por workspace con /params
+        let chosenPid = null;
+        try {
+          const keys = ["kanban_pipeline_id", `kanban_pipeline_id__${key}`].join(
+            ","
+          );
+          const { data: params } = await api.get("/params", {
+            params: { keys },
+          });
+          const basePid = (params?.kanban_pipeline_id || [])[0]?.value;
+          const buPid = (params?.[`kanban_pipeline_id__${key}`] || [])[0]
+            ?.value;
+          chosenPid = Number(buPid || basePid) || null;
+        } catch {}
+
+        // 2) Fallback al primer pipeline si no hay param
         const { data: p } = await api.get("/pipelines");
-        const pid = Array.isArray(p) && p.length ? p[0].id : null;
+        const pid = chosenPid || (Array.isArray(p) && p.length ? p[0].id : null);
         setPipelineId(pid);
 
         if (pid) {
@@ -278,10 +293,10 @@ export default function WorkspaceTable() {
         stages.find((s) => s.id === d.stage_id)?.name || "—"; // Estado = etapa de pipeline
 
       const ejecutivo =
-        d.deal_advisor_name ||    // si el backend lo manda así
-        d.advisor_user_name ||    // otro nombre típico
-        d.advisor_name ||         // fallback
-        d.org_advisor_name ||     // último recurso
+        d.deal_advisor_name || // si el backend lo manda así
+        d.advisor_user_name || // otro nombre típico
+        d.advisor_name || // fallback
+        d.org_advisor_name || // último recurso
         "—";
 
       const det = detailCache[d.id] || {};
@@ -355,6 +370,7 @@ export default function WorkspaceTable() {
         <div>
           <h2 className="text-lg font-semibold">
             Workspace: {bu.name} (tabla)
+            {isIndustrial ? " - Industrial" : ""}
           </h2>
           <p className="text-xs text-slate-500">
             Pipeline: {pipelineId ?? "—"}
@@ -387,9 +403,7 @@ export default function WorkspaceTable() {
                     <span>{c.label}</span>
                     <button
                       className={`ml-1 p-1 rounded hover:bg-slate-200 ${
-                        colFilter[c.key]
-                          ? "text-blue-600"
-                          : "text-slate-500"
+                        colFilter[c.key] ? "text-blue-600" : "text-slate-500"
                       }`}
                       onClick={() =>
                         setOpenFilterKey(
@@ -488,26 +502,47 @@ export default function WorkspaceTable() {
       </div>
 
       {/* Modal */}
-      {openModal && (
-        <NewOperationModal
-          onClose={() => setOpenModal(false)}
-          pipelineId={pipelineId}
-          stages={stages}
-          defaultBusinessUnitId={bu.id}
-          onCreated={async () => {
-            try {
-              const { data: d } = await api.get("/deals", {
-                params: {
-                  pipeline_id: pipelineId,
-                  business_unit_id: bu.id,
-                },
-              });
-              setDeals(Array.isArray(d) ? d : []);
-            } catch {}
-            setOpenModal(false);
-          }}
-        />
-      )}
+      {openModal &&
+        (isIndustrial ? (
+          <NewIndustrialOperationModal
+            onClose={() => setOpenModal(false)}
+            pipelineId={pipelineId}
+            stages={stages}
+            defaultBusinessUnitId={bu.id}
+            industrialKey={key}
+            onCreated={async () => {
+              try {
+                const { data: d } = await api.get("/deals", {
+                  params: {
+                    pipeline_id: pipelineId,
+                    business_unit_id: bu.id,
+                  },
+                });
+                setDeals(Array.isArray(d) ? d : []);
+              } catch {}
+              setOpenModal(false);
+            }}
+          />
+        ) : (
+          <NewOperationModal
+            onClose={() => setOpenModal(false)}
+            pipelineId={pipelineId}
+            stages={stages}
+            defaultBusinessUnitId={bu.id}
+            onCreated={async () => {
+              try {
+                const { data: d } = await api.get("/deals", {
+                  params: {
+                    pipeline_id: pipelineId,
+                    business_unit_id: bu.id,
+                  },
+                });
+                setDeals(Array.isArray(d) ? d : []);
+              } catch {}
+              setOpenModal(false);
+            }}
+          />
+        ))}
     </div>
   );
 }

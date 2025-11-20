@@ -10,7 +10,11 @@ import Workspace from './pages/Workspace';
 import WorkspaceTable from './pages/WorkspaceTable';
 import OrganizationDetail from './pages/OrganizationDetail.jsx';
 import ContactDetail from './pages/ContactDetail.jsx';
-import OperationDetail from './pages/OperationDetail.jsx';
+// 👇 antes importabas OperationDetail directamente
+// import OperationDetail from './pages/OperationDetail.jsx';
+import OperationDetailSwitcher from './pages/OperationDetailSwitcher.jsx';
+import OperationDetailIndustrial from './pages/OperationDetailIndustrial.jsx';
+
 import Login from './pages/Login.jsx';
 import GlobalSearchBar from './components/GlobalSearchBar.jsx';
 
@@ -92,8 +96,8 @@ function Layout({ children }) {
             Workspaces
           </div>
           <SideLink to="/workspace/atm-cargo" icon="🚚" label="ATM CARGO" />
-          <SideLink to="/workspace/industrial-rayflex" icon="⚙️" label="Rayflex" />
-          <SideLink to="/workspace/industrial-boplan" icon="🛡️" label="Boplan" />
+          {/* 👉 Workspace industrial único */}
+          <SideLink to="/workspace/atm-industrial" icon="🏭" label="ATM INDUSTRIAL" />
 
           {/* Bloque administrativo visible SOLO si NO es "venta" */}
           {role !== 'venta' && (
@@ -233,9 +237,23 @@ export default function App() {
                 {/* ----------------------------------------------- */}
 
                 {/* Operaciones */}
-                <Route path="/operations/:id" element={<OperationDetail />} />
-                <Route path="/operations/:id/quote" element={<QuoteGenerator />} />
-                <Route path="/operations/:id/request-freight" element={<RequestFreight />} />
+                {/* 🔀 Ahora usamos el switcher para decidir normal vs industrial */}
+                <Route path="/operations/:id" element={<OperationDetailSwitcher />} />
+
+                {/* Ruta directa opcional al detalle industrial */}
+                <Route
+                  path="/operations/:id/industrial"
+                  element={<OperationDetailIndustrial />}
+                />
+
+                <Route
+                  path="/operations/:id/quote"
+                  element={<QuoteGenerator />}
+                />
+                <Route
+                  path="/operations/:id/request-freight"
+                  element={<RequestFreight />}
+                />
 
                 {/* Seguimiento */}
                 <Route path="/followup" element={<FollowUp />} />

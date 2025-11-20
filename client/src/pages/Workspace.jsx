@@ -4,7 +4,7 @@ import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { api } from "../api";
 import NewOperationModal from "../components/NewOperationModal";
-
+import NewIndustrialOperationModal from "../components/NewIndustrialOperationModal";
 
 /* helpers */
 const msPerDay = 24 * 60 * 60 * 1e3;
@@ -41,7 +41,7 @@ function buildHiddenStageSet(rows = []) {
 }
 
 export default function Workspace() {
-  const { key } = useParams();     // ej: "atm-cargo"
+  const { key } = useParams(); // ej: "atm-cargo", "atm-industrial"
   const nav = useNavigate();
   const location = useLocation();
 
@@ -56,14 +56,19 @@ export default function Workspace() {
   const [hiddenStageIds, setHiddenStageIds] = useState(new Set());
   const [dealCFMap, setDealCFMap] = useState({});
 
+  const isIndustrial =
+    key === "atm-industrial" || (bu && bu.key_slug === "atm-industrial");
+
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
+        // 1) Traer unidades de negocio y detectar la actual
         const { data: units } = await api.get("/business-units");
-        const found = units.find((u) => u.key_slug === key) || null;
+        const found = (units || []).find((u) => u.key_slug === key) || null;
         setBu(found);
 
+        // 2) Intentar leer parámetros (si tu backend /params existe; si no, el try/catch lo ignora)
         let chosenPid = null;
         try {
           const keys = [
@@ -80,9 +85,14 @@ export default function Workspace() {
           let hidden = buildHiddenStageSet(params?.kanban_hide_stages || []);
           let pidParam = (params?.kanban_pipeline_id || [])[0]?.value;
 
-          const buAlias = buildStageAliasMap(params?.[`kanban_stage_labels__${key}`] || []);
-          const buHidden = buildHiddenStageSet(params?.[`kanban_hide_stages__${key}`] || []);
-          const buPidParam = (params?.[`kanban_pipeline_id__${key}`] || [])[0]?.value;
+          const buAlias = buildStageAliasMap(
+            params?.[`kanban_stage_labels__${key}`] || []
+          );
+          const buHidden = buildHiddenStageSet(
+            params?.[`kanban_hide_stages__${key}`] || []
+          );
+          const buPidParam =
+            (params?.[`kanban_pipeline_id__${key}`] || [])[0]?.value;
 
           alias = { ...alias, ...buAlias };
           if (buHidden.size) hidden = buHidden;
@@ -91,25 +101,53 @@ export default function Workspace() {
           setStageAliasMap(alias);
           setHiddenStageIds(hidden);
           if (pidParam) chosenPid = Number(pidParam);
-        } catch {}
+        } catch {
+          // si /params no existe o falla, simplemente seguimos sin chosenPid
+        }
 
+        // 3) Traer todos los pipelines
         const { data: p } = await api.get("/pipelines");
-        const pid = chosenPid || p?.[0]?.id;
+
+        let pid = chosenPid || null;
+
+        // Si NO hay pid por parámetros, decidimos según el workspace
+        if (!pid) {
+          if (key === "atm-industrial") {
+            // Buscamos el pipeline específico de ATM INDUSTRIAL
+            const industrial = (p || []).find(
+              (pl) =>
+                String(pl.name).toLowerCase().trim() ===
+                "atm industrial".toLowerCase()
+            );
+            pid = industrial?.id || p?.[0]?.id;
+          } else {
+            // Resto de workspaces (ej: atm-cargo) usan el primer pipeline
+            pid = p?.[0]?.id;
+          }
+        }
+
         setPipelineId(pid);
 
+        // 4) Stages + deals de ese pipeline
         const [{ data: s }, { data: d }] = await Promise.all([
           api.get(`/pipelines/${pid}/stages`),
-          api.get("/deals", { params: { pipeline_id: pid, business_unit_id: found?.id } }),
+          api.get("/deals", {
+            params: { pipeline_id: pid, business_unit_id: found?.id },
+          }),
         ]);
 
-        const visibleStages = (s || []).filter((st) => !hiddenStageIds.has(String(st.id)));
+        // IMPORTANT: usamos el set 'hidden' calculado arriba (hiddenStageIds puede no estar actualizado aún)
+        const visibleStages = (s || []).filter(
+          (st) => !hiddenStageIds.has(String(st.id))
+        );
         setStages(visibleStages);
         setDeals(d || []);
       } finally {
         setLoading(false);
       }
     })();
-  }, [key]); // eslint-disable-line
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
 
   useEffect(() => {
     if (!deals.length) return;
@@ -117,9 +155,11 @@ export default function Workspace() {
       const entries = await Promise.allSettled(
         deals.map(async (deal) => {
           try {
-            const { data } = await api.get(`/deals/${deal.id}/custom-fields`).catch(() => ({ data: [] }));
+            const { data } = await api
+              .get(`/deals/${deal.id}/custom-fields`)
+              .catch(() => ({ data: [] }));
             const map = {};
-            for (const row of data || []) {
+            for (const row of (data || [])) {
               if (row?.key === "f_cotiz") map.f_cotiz = row.value || "";
             }
             return [deal.id, map];
@@ -158,8 +198,16 @@ export default function Workspace() {
     if (source.droppableId === destination.droppableId) return;
 
     const id = Number(draggableId);
-    await api.patch(`/deals/${id}`, { stage_id: Number(destination.droppableId) });
-    setDeals((prev) => prev.map((d) => (d.id === id ? { ...d, stage_id: Number(destination.droppableId) } : d)));
+    await api.patch(`/deals/${id}`, {
+      stage_id: Number(destination.droppableId),
+    });
+    setDeals((prev) =>
+      prev.map((d) =>
+        d.id === id
+          ? { ...d, stage_id: Number(destination.droppableId) }
+          : d
+      )
+    );
   }
 
   async function refresh() {
@@ -170,21 +218,30 @@ export default function Workspace() {
     setDeals(data || []);
   }
 
-  if (loading) return <div className="text-sm text-slate-600">Cargando…</div>;
-  if (!bu) return <div className="text-sm text-slate-600">Workspace no encontrado.</div>;
+  if (loading)
+    return <div className="text-sm text-slate-600">Cargando…</div>;
+  if (!bu)
+    return (
+      <div className="text-sm text-slate-600">Workspace no encontrado.</div>
+    );
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-lg font-semibold">Workspace: {bu.name}</h2>
-          <p className="text-xs text-slate-500">Pipeline: {pipelineId ?? "—"}</p>
+          <p className="text-xs text-slate-500">
+            Pipeline: {pipelineId ?? "—"}
+          </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* ✏️ Editor fullscreen con retorno a este módulo */}
           <button
             onClick={() =>
-              nav(`/pipelines/${pipelineId || ""}/edit?back=${encodeURIComponent(location.pathname)}`)
+              nav(
+                `/pipelines/${pipelineId || ""}/edit?back=${encodeURIComponent(
+                  location.pathname
+                )}`
+              )
             }
             className="px-3 py-2 text-sm rounded-lg border hover:bg-slate-50"
             title="Editar columnas del pipeline"
@@ -192,11 +249,17 @@ export default function Workspace() {
             ✏️ Editar pipeline
           </button>
 
-          <Link to={`/workspace/${key}/table`} className="px-3 py-2 text-sm rounded-lg border hover:bg-slate-50">
+          <Link
+            to={`/workspace/${key}/table`}
+            className="px-3 py-2 text-sm rounded-lg border hover:bg-slate-50"
+          >
             Ver como tabla
           </Link>
-          <button onClick={() => setOpenModal(true)} className="px-3 py-2 text-sm rounded-lg bg-black text-white">
-            ➕Nueva operación
+          <button
+            onClick={() => setOpenModal(true)}
+            className="px-3 py-2 text-sm rounded-lg bg-black text-white"
+          >
+            ➕ Nueva operación
           </button>
         </div>
       </div>
@@ -230,7 +293,8 @@ export default function Workspace() {
                       const cotizDays = fCotiz ? diffDays(fCotiz) : null;
 
                       let warnText = null;
-                      let warnClass = "text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800";
+                      let warnClass =
+                        "text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800";
                       if (cotizDays != null) {
                         if (cotizDays > 10 && cotizDays <= 15) {
                           const left = 15 - cotizDays;
@@ -238,18 +302,25 @@ export default function Workspace() {
                         } else if (cotizDays > 15) {
                           const late = cotizDays - 15;
                           warnText = `Atrasado ${late} d`;
-                          warnClass = "text-xs px-2 py-0.5 rounded bg-red-100 text-red-700";
+                          warnClass =
+                            "text-xs px-2 py-0.5 rounded bg-red-100 text-red-700";
                         }
                       }
 
                       return (
-                        <Draggable draggableId={String(deal.id)} index={idx} key={deal.id}>
+                        <Draggable
+                          draggableId={String(deal.id)}
+                          index={idx}
+                          key={deal.id}
+                        >
                           {(provided) => (
                             <div
                               ref={provided.innerRef}
                               {...provided.draggableProps}
                               {...provided.dragHandleProps}
-                              onDoubleClick={() => nav(`/operations/${deal.id}`)}
+                              onDoubleClick={() =>
+                                nav(`/operations/${deal.id}`)
+                              }
                               className="border rounded-xl p-3 hover:shadow transition bg-white cursor-pointer"
                               title="Doble clic para abrir"
                             >
@@ -257,7 +328,8 @@ export default function Workspace() {
                                 {deal.reference || deal.title}
                               </div>
                               <div className="text-xs text-slate-600 truncate">
-                                {deal.org_name || "—"} • {deal.contact_name || "—"}
+                                {deal.org_name || "—"} •{" "}
+                                {deal.contact_name || "—"}
                               </div>
 
                               <div className="flex items-center gap-2 flex-wrap mt-2">
@@ -269,13 +341,17 @@ export default function Workspace() {
                                     hace {createdDays} d
                                   </span>
                                 )}
-                                {warnText && <span className={warnClass}>{warnText}</span>}
+                                {warnText && (
+                                  <span className={warnClass}>{warnText}</span>
+                                )}
                               </div>
 
                               {fCotiz && (
                                 <div className="text-[11px] text-slate-500 mt-1">
                                   Cotizado: {fCotiz}
-                                  {cotizDays != null ? ` • ${cotizDays} d` : ""}
+                                  {cotizDays != null
+                                    ? ` • ${cotizDays} d`
+                                    : ""}
                                 </div>
                               )}
                             </div>
@@ -292,18 +368,30 @@ export default function Workspace() {
         </div>
       </DragDropContext>
 
-      {openModal && (
-        <NewOperationModal
-          onClose={() => setOpenModal(false)}
-          pipelineId={pipelineId}
-          stages={stages}
-          defaultBusinessUnitId={bu.id}
-          onCreated={async () => {
-            await refresh();
-            setOpenModal(false);
-          }}
-        />
-      )}
+      {openModal &&
+        (isIndustrial ? (
+          <NewIndustrialOperationModal
+            onClose={() => setOpenModal(false)}
+            pipelineId={pipelineId}
+            stages={stages}
+            defaultBusinessUnitId={bu.id}
+            onCreated={async () => {
+              await refresh();
+              setOpenModal(false);
+            }}
+          />
+        ) : (
+          <NewOperationModal
+            onClose={() => setOpenModal(false)}
+            pipelineId={pipelineId}
+            stages={stages}
+            defaultBusinessUnitId={bu.id}
+            onCreated={async () => {
+              await refresh();
+              setOpenModal(false);
+            }}
+          />
+        ))}
     </div>
   );
 }
