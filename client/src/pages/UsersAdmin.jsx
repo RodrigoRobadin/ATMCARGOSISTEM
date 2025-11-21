@@ -6,10 +6,9 @@ import { useAuth } from '../auth';
 const ROLES = ['admin', 'venta', 'ops', 'viewer'];
 
 export default function UsersAdmin() {
-  const { authReady, user } = useAuth();
+  const { user, loading } = useAuth(); // 👈 usamos loading, no authReady
 
   const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [openNew, setOpenNew] = useState(false);
 
@@ -20,32 +19,29 @@ export default function UsersAdmin() {
   const [nPass, setNPass] = useState('');
 
   async function fetchAll() {
-    setLoading(true);
     setErr('');
     try {
       const { data } = await api.get('/users');
       setRows(Array.isArray(data) ? data : []);
     } catch (e) {
+      console.error('Error cargando /users', e);
       setErr('No se pudo cargar la lista de usuarios');
-    } finally {
-      setLoading(false);
     }
   }
 
   useEffect(() => {
-    // ⛔ No cargar lista si aún no sabemos el usuario
-    if (!authReady) return;
-    // ⛔ Sólo admin puede ver esta pantalla
-    if (!user || user.role !== 'admin') return;
+    // ⛔ Esperar a que termine el chequeo de sesión
+    if (loading) return;
+    // ⛔ Solo admin
+    if (!user || (user.role || '').toLowerCase() !== 'admin') return;
 
     fetchAll();
-  }, [authReady, user?.id, user?.role]);
+  }, [loading, user?.id, user?.role]);
 
   async function createUser(e) {
     e.preventDefault();
     setErr('');
     try {
-      // 1) crear usuario (name, email, role)
       const { data } = await api.post('/users', {
         name: nName.trim(),
         email: nEmail.trim(),
@@ -54,7 +50,6 @@ export default function UsersAdmin() {
       });
       const id = data?.id;
 
-      // 2) setear password si se envió
       if (id && nPass.trim()) {
         await api.post(`/users/${id}/set-password`, {
           new_password: nPass.trim(),
@@ -68,9 +63,8 @@ export default function UsersAdmin() {
       setNPass('');
       await fetchAll();
     } catch (e) {
-      setErr(
-        e?.response?.data?.error || 'No se pudo crear el usuario'
-      );
+      console.error('Error creando usuario', e);
+      setErr(e?.response?.data?.error || 'No se pudo crear el usuario');
     }
   }
 
@@ -108,13 +102,13 @@ export default function UsersAdmin() {
   }
 
   // ============ GUARDIAS DE ACCESO ============
-  if (!authReady) {
+  if (loading) {
     return (
       <div className="p-4 text-sm text-slate-600">Cargando sesión…</div>
     );
   }
 
-  if (!user || user.role !== 'admin') {
+  if (!user || (user.role || '').toLowerCase() !== 'admin') {
     return (
       <div className="p-4 text-sm text-slate-600">
         No tienes permisos para ver esta sección.
@@ -173,11 +167,10 @@ export default function UsersAdmin() {
                 </td>
                 <td className="p-2">
                   <button
-                    className={`px-2 py-1 rounded text-xs ${
-                      u.is_active
+                    className={`px-2 py-1 rounded text-xs ${u.is_active
                         ? 'bg-green-100 text-green-700'
                         : 'bg-slate-200 text-slate-600'
-                    }`}
+                      }`}
                     onClick={() => toggleActive(u)}
                   >
                     {u.is_active ? 'Activo' : 'Inactivo'}
@@ -190,13 +183,10 @@ export default function UsersAdmin() {
                   >
                     Reset password
                   </button>
-                  {/* Si querés agregar eliminar:
-                  <button className="px-2 py-1 border rounded text-red-600 hover:bg-red-50">Eliminar</button>
-                  */}
                 </td>
               </tr>
             ))}
-            {!rows.length && !loading && (
+            {!rows.length && (
               <tr>
                 <td
                   colSpan={6}
