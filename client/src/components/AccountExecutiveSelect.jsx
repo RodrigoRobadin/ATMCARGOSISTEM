@@ -15,35 +15,35 @@ export default function AccountExecutiveSelect({
   const [err, setErr] = useState("");
 
   // ...
-useEffect(() => {
-  let live = true;
-  (async () => {
-    setLoading(true);
-    setErr("");
-    try {
-      const { data } = await api.get("/users/select", {
-        params: onlyActive ? { active: 1 } : { active: 0 },
-      });
-      if (!live) return;
-      const list = Array.isArray(data) ? data : [];
-      const map = list
-        .map((u) => {
-          const id = u.id ?? u.user_id ?? null;
-          const name = u.name || u.email || null;
-          if (!id || !name) return null;
-          return { id, name: String(name), email: u.email || "" };
-        })
-        .filter(Boolean);
-      setUsers(map);
-    } catch (e) {
-      setErr("No se pudo cargar la lista de usuarios.");
-    } finally {
-      if (live) setLoading(false);
-    }
-  })();
-  return () => { live = false; };
-}, [onlyActive]);
-// ...
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      setLoading(true);
+      setErr("");
+      try {
+        const { data } = await api.get("/users/select", {
+          params: onlyActive ? { active: 1 } : { active: 0 },
+        });
+        if (!live) return;
+        const list = Array.isArray(data) ? data : [];
+        const map = list
+          .map((u) => {
+            const id = u.id ?? u.user_id ?? null;
+            const name = u.name || u.email || null;
+            if (!id || !name) return null;
+            return { id, name: String(name), email: u.email || "" };
+          })
+          .filter(Boolean);
+        setUsers(map);
+      } catch (e) {
+        setErr("No se pudo cargar la lista de usuarios.");
+      } finally {
+        if (live) setLoading(false);
+      }
+    })();
+    return () => { live = false; };
+  }, [onlyActive]);
+  // ...
 
 
   const options = useMemo(() => users, [users]);
