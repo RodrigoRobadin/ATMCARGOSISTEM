@@ -28,6 +28,12 @@ import searchRouter from './routes/search.js';
 
 // ⭐️ Seguimiento
 import followupsRouter from './routes/followups.js';
+import visitsRouter from './routes/visits.js';
+
+// ⭐️ NUEVO: Recorridos (Routes Module)
+import zonesRouter from './routes/zones.js';
+import routesModuleRouter from './routes/routesModule.js';
+import routeStopsRouter from './routes/routeStops.js';
 
 // ⭐️ Operaciones (nuestro router nuevo)
 import operationsRouter from './routes/operations.js';
@@ -186,6 +192,13 @@ app.use('/api/params', paramsRouter);
 app.use('/api/admin/activity', adminActivity);
 app.use('/api/audit', auditRouter);
 app.use('/api/followups', followupsRouter);
+app.use('/api/visits', visitsRouter);
+
+// ⭐️ NUEVO: Recorridos (Routes Module)
+app.use('/api/zones', zonesRouter);
+app.use('/api/routes', routesModuleRouter);
+app.use('/api/route-stops', routeStopsRouter);
+
 app.use('/api/search', searchRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/admin', adminRouter);

@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { pool } from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
 
+
 const router = Router();
 
 /* =================== helpers comunes =================== */
@@ -228,8 +229,8 @@ router.post('/calls', requireAuth, async (req, res) => {
         normalizedOutcome === 'volver_a_llamar'
           ? 'Volver a llamar'
           : normalizedOutcome === 'interesado'
-          ? 'Dar seguimiento a interesado'
-          : 'Seguir negociación';
+            ? 'Dar seguimiento a interesado'
+            : 'Seguir negociación';
 
       const orgName = row?.org_name || 'cliente';
       const autoTitle = `${autoTitleBase} - ${orgName}`;

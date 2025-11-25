@@ -13,9 +13,9 @@ const money = (n) =>
   isNaN(n)
     ? "0,00"
     : Number(n).toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      });
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
 
 const num = (v) => {
   if (v === "" || v === null || v === undefined) return 0;
@@ -42,9 +42,8 @@ const Input = (props) => (
   <input
     {...props}
     title={props.disabled ? titleLock : (props.title || "")}
-    className={`w-full px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-sm ${
-      props.disabled ? "bg-gray-100 " + notAllowedCls : ""
-    } ${props.className || ""}`}
+    className={`w-full px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 text-sm ${props.disabled ? "bg-gray-100 " + notAllowedCls : ""
+      } ${props.className || ""}`}
   />
 );
 const NumInput = (props) => <Input inputMode="decimal" placeholder="0,00" {...props} />;
@@ -199,7 +198,8 @@ function CargoTable({
                       <select
                         disabled={disabled}
                         title={disabled ? titleLock : ""}
-                        className={`border border-gray-300 rounded px-2 py-1 text-sm max-w-[180px] focus:outline-none focus:ring-1 focus:ring-blue-500 ${disabled ? notAllowedCls : ""}`}
+                        className={`border border-gray-300 rounded px-2 py-1 text-sm max-w-[180px] focus:outline-none focus:ring-1 focus:ring-blue-500 ${disabled ? notAllowedCls : ""
+                          }`}
                         value={presets.includes(r.concepto) ? r.concepto : ""}
                         onChange={(e) => {
                           if (disabled) return;
@@ -252,12 +252,18 @@ function CargoTable({
                         onChange={(e) => setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, total: e.target.value } : x)))}
                         className={`text-right ${r.lockPerKg ? "bg-gray-100" : "bg-yellow-50"}`}
                       />
-                      <label className={`text-[11px] text-gray-600 flex items-center gap-1 whitespace-nowrap ${disabled ? notAllowedCls : ""}`} title={disabled ? titleLock : ""}>
+                      <label
+                        className={`text-[11px] text-gray-600 flex items-center gap-1 whitespace-nowrap ${disabled ? notAllowedCls : ""
+                          }`}
+                        title={disabled ? titleLock : ""}
+                      >
                         <input
                           type="checkbox"
                           disabled={disabled}
                           checked={r.lockPerKg}
-                          onChange={(e) => setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, lockPerKg: e.target.checked } : x)))}
+                          onChange={(e) =>
+                            setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, lockPerKg: e.target.checked } : x)))
+                          }
                         />
                         Auto
                       </label>
@@ -274,7 +280,8 @@ function CargoTable({
                       ) : null}
                       <button
                         disabled={disabled}
-                        className={`text-[11px] px-2 py-1 border border-gray-300 rounded hover:bg-gray-50 ${disabled ? notAllowedCls : ""}`}
+                        className={`text-[11px] px-2 py-1 border border-gray-300 rounded hover:bg-gray-50 ${disabled ? notAllowedCls : ""
+                          }`}
                         title={disabled ? titleLock : ""}
                         onClick={() => removeRow(r)}
                       >
@@ -290,7 +297,8 @@ function CargoTable({
               <div className="flex items-center gap-3">
                 <button
                   disabled={disabled}
-                  className={`px-3 py-1.5 text-sm text-white rounded transition-colors ${disabled ? "bg-gray-400 " + notAllowedCls : "bg-blue-500 hover:bg-blue-600"}`}
+                  className={`px-3 py-1.5 text-sm text-white rounded transition-colors ${disabled ? "bg-gray-400 " + notAllowedCls : "bg-blue-500 hover:bg-blue-600"
+                    }`}
                   title={disabled ? titleLock : ""}
                   onClick={() => addRow("")}
                 >
@@ -301,7 +309,8 @@ function CargoTable({
                   <select
                     disabled={disabled}
                     title={disabled ? titleLock : ""}
-                    className={`border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 ${disabled ? notAllowedCls : ""}`}
+                    className={`border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 ${disabled ? notAllowedCls : ""
+                      }`}
                     onChange={(e) => {
                       if (e.target.value) addRow(e.target.value);
                       e.target.value = "";
@@ -420,7 +429,8 @@ function LocalesTable({ title, rows, setRows, gsToUsd, showProfit = false, costo
             <div className="col-span-full bg-gray-100 py-1 px-3 flex justify-between items-center border-t-2 border-gray-300">
               <button
                 disabled={disabled}
-                className={`px-3 py-1.5 text-sm text-white rounded transition-colors ${disabled ? "bg-gray-400 " + notAllowedCls : "bg-blue-500 hover:bg-blue-600"}`}
+                className={`px-3 py-1.5 text-sm text-white rounded transition-colors ${disabled ? "bg-gray-400 " + notAllowedCls : "bg-blue-500 hover:bg-blue-600"
+                  }`}
                 title={disabled ? titleLock : ""}
                 onClick={addRow}
               >
@@ -536,7 +546,8 @@ function SeguroTable({ title, rows, setRows, showProfit = false, costosRows = nu
             <div className="col-span-full bg-gray-100 py-1 px-3 flex justify-between items-center border-t-2 border-gray-300">
               <button
                 disabled={disabled}
-                className={`px-3 py-1 text-sm text-white rounded transition-colors ${disabled ? "bg-gray-400 " + notAllowedCls : "bg-blue-500 hover:bg-blue-600"}`}
+                className={`px-3 py-1 text-sm text-white rounded transition-colors ${disabled ? "bg-gray-400 " + notAllowedCls : "bg-blue-500 hover:bg-blue-600"
+                  }`}
                 title={disabled ? titleLock : ""}
                 onClick={addRow}
               >
@@ -563,6 +574,11 @@ export default function DetCosSheet() {
   const [cf, setCf] = useState({});
 
   const [full, setFull] = useState(false);
+
+  // === NUEVO: Estados para versionado ===
+  const [versions, setVersions] = useState([]);
+  const [currentVersion, setCurrentVersion] = useState(null);
+  const [selectedVersionNum, setSelectedVersionNum] = useState(null);
 
   // cabecera / parametros
   const [modo, setModo] = useState("");
@@ -598,12 +614,12 @@ export default function DetCosSheet() {
   // permisos
   const role = String(user?.role || "").toLowerCase();
   const isAdmin = role === "admin";
-  const isVentas = ["ventas","vendedor","venta","seller","sales","commercial","comercial"].includes(role);
+  const isVentas = ["ventas", "vendedor", "venta", "seller", "sales", "commercial", "comercial"].includes(role);
 
   const isLocked = budgetStatus === "bloqueado" || budgetStatus === "confirmado";
   const canEdit = !(isLocked && !isAdmin); // admin puede editar siempre
 
-  // cargar deal + CF + planilla guardada + estado presupuesto + catálogo
+  // cargar deal + CF + planilla guardada + estado presupuesto + catálogo + versiones
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -626,7 +642,7 @@ export default function DetCosSheet() {
         setAwb(map["m_awb"] || "");
         setHbl(map["h_bl"] || "");
 
-        // cargar planilla guardada
+        // cargar planilla guardada (modo legacy)
         const cs = await api.get(`/deals/${id}/cost-sheet`).then(r => r.data).catch(() => null);
         if (cs?.data) {
           const d = cs.data;
@@ -656,6 +672,20 @@ export default function DetCosSheet() {
           setBudgetStatus(b.budget_status || "borrador");
         }
 
+        // === NUEVO: Cargar versiones ===
+        try {
+          const { data: vers } = await api.get(`/deals/${id}/cost-sheet/versions`);
+          setVersions(vers || []);
+        } catch {
+          setVersions([]);
+        }
+        try {
+          const { data: curr } = await api.get(`/deals/${id}/cost-sheet/current-version`);
+          setCurrentVersion(curr || null);
+        } catch {
+          setCurrentVersion(null);
+        }
+
         // === Catálogo robusto (SERVICIOS/PRODUCTOS activos) – prueba varios endpoints
         async function loadCatalogServices() {
           const tryEndpoints = [
@@ -675,9 +705,9 @@ export default function DetCosSheet() {
               // normalizar posibles formas de respuesta
               const arr =
                 Array.isArray(data) ? data :
-                Array.isArray(data?.items) ? data.items :
-                Array.isArray(data?.data) ? data.data :
-                null;
+                  Array.isArray(data?.items) ? data.items :
+                    Array.isArray(data?.data) ? data.data :
+                      null;
               if (arr) {
                 items = arr;
                 break;
@@ -719,7 +749,7 @@ export default function DetCosSheet() {
       try {
         const { data } = await api.get(`/organizations/${orgId}/budget`);
         setBudgetStatus((prev) => (data?.budget_status && data.budget_status !== prev ? data.budget_status : prev));
-      } catch {}
+      } catch { }
     }, 10000);
     return () => clearInterval(timer);
   }, [orgId]);
@@ -792,12 +822,12 @@ export default function DetCosSheet() {
 
   const totalVenta = useMemo(
     () =>
-      (allInEnabled ? ventaRowsBaseTotal : ventaRowsView.reduce((acc, r) => {
-        const perKg = num(r.usdXKg);
-        const manual = r.total !== "" && !r.lockPerKg ? num(r.total) : null;
-        const line = manual !== null ? manual : perKg * num(pesoKg || 0);
-        return acc + (isNaN(line) ? 0 : line);
-      }, 0)),
+    (allInEnabled ? ventaRowsBaseTotal : ventaRowsView.reduce((acc, r) => {
+      const perKg = num(r.usdXKg);
+      const manual = r.total !== "" && !r.lockPerKg ? num(r.total) : null;
+      const line = manual !== null ? manual : perKg * num(pesoKg || 0);
+      return acc + (isNaN(line) ? 0 : line);
+    }, 0)),
     [ventaRowsView, pesoKg, allInEnabled, ventaRowsBaseTotal]
   );
 
@@ -823,20 +853,146 @@ export default function DetCosSheet() {
     }
   }
 
+  // === NUEVO: Cargar versiones ===
+  async function loadVersions() {
+    try {
+      const { data } = await api.get(`/deals/${id}/cost-sheet/versions`);
+      setVersions(data || []);
+    } catch (err) {
+      console.error("Error al cargar versiones:", err);
+      setVersions([]);
+    }
+  }
+
+  // === NUEVO: Cargar versión actual ===
+  async function loadCurrentVersion() {
+    try {
+      const { data } = await api.get(`/deals/${id}/cost-sheet/current-version`);
+      setCurrentVersion(data || null);
+    } catch (err) {
+      console.error("Error al cargar versión actual:", err);
+      setCurrentVersion(null);
+    }
+  }
+
+  // === NUEVO: Cargar versión específica ===
+  async function loadVersion(versionNum) {
+    try {
+      const { data: v } = await api.get(`/deals/${id}/cost-sheet/versions/${versionNum}`);
+      if (!v?.data) return;
+      const d = v.data;
+      const h = d.header || {};
+      setModo(h.modo ?? "");
+      setClase(h.clase ?? "");
+      setPesoKg(h.pesoKg ?? "");
+      setAwb(h.awb ?? "");
+      setHbl(h.hbl ?? "");
+      setMercaderia(h.mercaderia ?? "");
+      setGsRate(h.gsRate ?? "5860");
+      setAllInEnabled(!!h.allInEnabled);
+      setAllInServiceName(h.allInServiceName || "");
+      setCompraRows(Array.isArray(d.compraRows) ? d.compraRows : []);
+      setVentaRows(Array.isArray(d.ventaRows) ? d.ventaRows : []);
+      setLocRows(Array.isArray(d.locRows) ? d.locRows : []);
+      setLocCliRows(Array.isArray(d.locCliRows) ? d.locCliRows : []);
+      setSegCostoRows(Array.isArray(d.segCostoRows) ? d.segCostoRows : []);
+      setSegVentaRows(Array.isArray(d.segVentaRows) ? d.segVentaRows : []);
+      setSelectedVersionNum(versionNum);
+    } catch (err) {
+      console.error("Error al cargar versión:", err);
+      alert("No se pudo cargar la versión");
+    }
+  }
+
+  // === NUEVO: Crear nueva revisión ===
+  async function createNewRevision() {
+    const reason = prompt("Razón de la nueva revisión:");
+    if (!reason) return;
+
+    const payload = {
+      header: {
+        modo,
+        clase,
+        pesoKg,
+        awb,
+        hbl,
+        mercaderia,
+        gsRate,
+        allInEnabled,
+        allInServiceName,
+      },
+      compraRows,
+      ventaRows,
+      locRows,
+      locCliRows,
+      segCostoRows,
+      segVentaRows,
+      totals: { totalCostos, totalVentas, profitGeneral },
+    };
+
+    try {
+      await api.post(`/deals/${id}/cost-sheet/versions`, {
+        data: payload,
+        change_reason: reason,
+      });
+      await updateDealValue(profitGeneral);
+      await loadVersions();
+      await loadCurrentVersion();
+      setSelectedVersionNum(null);
+      alert("Nueva revisión creada ✓");
+    } catch (err) {
+      console.error("Error al crear revisión:", err);
+      alert("Error al crear nueva revisión");
+    }
+  }
+
+  // === REEMPLAZADO: guardar usando sistema de versiones ===
   async function saveCostSheet() {
     const payload = {
       header: {
-        modo, clase, pesoKg, awb, hbl, mercaderia, gsRate,
-        allInEnabled, allInServiceName,
+        modo,
+        clase,
+        pesoKg,
+        awb,
+        hbl,
+        mercaderia,
+        gsRate,
+        allInEnabled,
+        allInServiceName,
       },
       compraRows,
       ventaRows, // guardamos “crudo” (incluye ventaInt)
-      locRows, locCliRows, segCostoRows, segVentaRows,
+      locRows,
+      locCliRows,
+      segCostoRows,
+      segVentaRows,
       totals: { totalCostos, totalVentas, profitGeneral },
     };
-    await api.put(`/deals/${id}/cost-sheet`, payload);
-    await updateDealValue(profitGeneral);
-    alert("Guardado ✓");
+
+    try {
+      if (currentVersion?.status === "borrador") {
+        // Actualizar versión actual si es borrador
+        await api.put(
+          `/deals/${id}/cost-sheet/versions/${currentVersion.id}`,
+          { data: payload }
+        );
+        alert("Versión actualizada ✓");
+      } else {
+        // Crear nueva versión
+        const reason = prompt("Razón del cambio (opcional):");
+        await api.post(`/deals/${id}/cost-sheet/versions`, {
+          data: payload,
+          change_reason: reason || "Actualización de presupuesto",
+        });
+        alert("Nueva versión creada ✓");
+      }
+      await updateDealValue(profitGeneral);
+      await loadVersions();
+      await loadCurrentVersion();
+    } catch (err) {
+      console.error("Error al guardar:", err);
+      alert("Error al guardar presupuesto");
+    }
   }
 
   async function confirmBudget() {
@@ -879,11 +1035,80 @@ export default function DetCosSheet() {
           >
             {full ? "Salir de pantalla completa" : "Pantalla completa"}
           </button>
+
+          {/* === NUEVO: Selector de versiones === */}
+          {versions.length > 0 && (
+            <select
+              className="border rounded px-3 py-2 text-sm"
+              value={selectedVersionNum || ""}
+              onChange={(e) => {
+                const numV = Number(e.target.value);
+                if (numV) {
+                  loadVersion(numV);
+                } else {
+                  setSelectedVersionNum(null);
+                  if (currentVersion?.version_number) {
+                    loadVersion(currentVersion.version_number);
+                  } else {
+                    window.location.reload();
+                  }
+                }
+              }}
+            >
+              <option value="">Versión actual</option>
+              {versions.map((v) => (
+                <option key={v.id} value={v.version_number}>
+                  v{v.version_number} - {v.status} ({new Date(v.created_at).toLocaleDateString()})
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* === NUEVO: Botón Nueva Revisión - SIEMPRE VISIBLE === */}
+          {canEdit && (
+            <button
+              onClick={createNewRevision}
+              className="px-3 py-2 text-sm bg-green-600 text-white rounded hover:bg-green-700"
+              title="Crear nueva revisión del presupuesto"
+            >
+              ➕ Nueva Revisión
+            </button>
+          )}
+
           <Link to={-1} className="px-4 py-2 text-sm bg-gray-200 rounded hover:bg-gray-300 transition-colors">
             ← Volver
           </Link>
         </div>
       </div>
+
+      {/* === NUEVO: Indicador de versión === */}
+      {selectedVersionNum && (
+        <div className="mx-4 mt-4 bg-blue-50 border border-blue-200 rounded p-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <strong>Viendo versión {selectedVersionNum}</strong>
+              {versions.find((v) => v.version_number === selectedVersionNum)?.change_reason && (
+                <span className="ml-3 text-sm text-slate-600">
+                  Razón: {versions.find((v) => v.version_number === selectedVersionNum).change_reason}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => {
+                setSelectedVersionNum(null);
+                if (currentVersion?.version_number) {
+                  loadVersion(currentVersion.version_number);
+                } else {
+                  window.location.reload();
+                }
+              }}
+              className="text-sm text-blue-600 hover:underline"
+            >
+              Volver a versión actual
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="p-4 md:p-6 space-y-6 overflow-y-auto">
         {/* encabezado superior */}
@@ -978,7 +1203,7 @@ export default function DetCosSheet() {
                         ))}
                       </select>
                       <div className="text-[11px] text-gray-600 mt-2">
-                        
+
                       </div>
                     </div>
                   </div>
@@ -1061,7 +1286,8 @@ export default function DetCosSheet() {
               <button
                 disabled={!canEdit}
                 title={!canEdit ? titleLock : ""}
-                className={`px-4 py-2 rounded text-white ${!canEdit ? "bg-gray-400 " + notAllowedCls : "bg-blue-600 hover:bg-blue-700"}`}
+                className={`px-4 py-2 rounded text-white ${!canEdit ? "bg-gray-400 " + notAllowedCls : "bg-blue-600 hover:bg-blue-700"
+                  }`}
                 onClick={saveCostSheet}
               >
                 Guardar

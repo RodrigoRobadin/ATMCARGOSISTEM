@@ -4,71 +4,38 @@ import axios from "axios";
 export const TOKEN_KEY = "token";
 export const USER_KEY = "user";
 
-// Normaliza baseURL: si viene con /api o sin, dejamos UNA sola vez.
-function normalizeBaseURL(raw) {
-  if (!raw) return "/api";
-  let u = String(raw).trim();
-  // quita barras finales
-  u = u.replace(/\/+$/g, "");
-  // si NO termina en /api, lo agregamos
-  if (!/\/api$/i.test(u)) u = u + "/api";
-  return u;
+// ----------- Detectar si estamos en localhost o en dominio -----------
+function isLocalHost() {
+  if (typeof window === "undefined") return false;
+  const origin = window.location.origin;
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
 }
 
-// ----- Resolución de BASE URL -----
-// Prioridad:
-// 1) VITE_API_URL (si está definida)
-// 2) Si estoy en localhost/127.0.0.1 -> http://localhost:4000/api
-// 3) Producción (dominio) -> /api
-let BASE;
-
-const RAW = import.meta.env?.VITE_API_URL;
-
-if (RAW && String(RAW).trim() !== "") {
-  // Caso explícito por .env
-  BASE = normalizeBaseURL(RAW);
-} else {
-  // Caso sin .env: decidimos según el host del navegador
-  let isLocal = false;
-  try {
-    if (typeof window !== "undefined") {
-      const origin = window.location.origin;
-      isLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
-    }
-  } catch {
-    // SSR o algo raro -> asumimos producción
-    isLocal = false;
-  }
-
-  if (isLocal) {
-    // Entorno local: front en 5173, API en 4000
-    BASE = "http://localhost:4000/api";
-  } else {
-    // Producción: mismo dominio, Nginx proxy_pass /api -> 4000
-    BASE = "/api";
-  }
-}
+// BASE:
+// - Si estoy en localhost → http://localhost:4000/api
+// - Si estoy en dominio (VPS) → /api  (pasa por Nginx)
+const BASE = isLocalHost()
+  ? "http://localhost:4000/api"
+  : "/api";
 
 // ---- helper para leer token REAL de storage ----
 function getRawToken() {
   try {
     const t = localStorage.getItem(TOKEN_KEY);
-    if (!t || t === "SESSION") return null; // por si quedó basura vieja
+    if (!t || t === "SESSION") return null;
     return t;
   } catch {
     return null;
   }
 }
 
-// axios instance
+// instancia de axios
 export const api = axios.create({
-  baseURL: BASE,        // p.ej. http://localhost:4000/api o /api
-  withCredentials: false, // con JWT no necesitamos cookies de sesión
+  baseURL: BASE,
+  withCredentials: false,
 });
 
-// ==== Interceptor de request ====
-// - Agrega Bearer si hay token
-// - Evita que se duplique /api si accidentalmente pasás urls que empiecen con "/api/"
+// Interceptor de request
 api.interceptors.request.use((cfg) => {
   try {
     const t = getRawToken();
@@ -77,18 +44,9 @@ api.interceptors.request.use((cfg) => {
       cfg.headers.Authorization = `Bearer ${t}`;
     }
 
+    // si alguien pasa "/api/..." por error, lo limpiamos
     if (typeof cfg.url === "string" && cfg.url.startsWith("/api/")) {
-      cfg.url = cfg.url.slice(4); // quita "/api"
-    }
-
-    if (import.meta.env?.DEV) {
-      console.debug(
-        "[api] request",
-        cfg.method?.toUpperCase(),
-        cfg.url,
-        "token?",
-        !!t
-      );
+      cfg.url = cfg.url.slice(4);
     }
   } catch {
     // noop
@@ -96,8 +54,7 @@ api.interceptors.request.use((cfg) => {
   return cfg;
 });
 
-// ==== Interceptor de response: limpia credenciales en 401 ====
-// (NO redirige; eso lo maneja el AuthProvider)
+// Interceptor de response
 api.interceptors.response.use(
   (res) => res,
   (err) => {
@@ -105,9 +62,6 @@ api.interceptors.response.use(
     const url = err?.config?.url || "";
 
     if (status === 401) {
-      if (import.meta.env?.DEV) {
-        console.warn("[api] 401 en", url);
-      }
       try {
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(USER_KEY);
@@ -119,8 +73,7 @@ api.interceptors.response.use(
   }
 );
 
-export default api;
-
+// Helpers de auth
 export function saveAuth({ token, user }) {
   try {
     if (token) {
@@ -157,3 +110,5 @@ export function loadSavedAuth() {
 
   return { token: t, user: u };
 }
+
+export default api;

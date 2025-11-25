@@ -2,6 +2,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useAuth } from "../auth.jsx";
+import VisitsList from "../components/visits/VisitsList";
+import VisitForm from "../components/visits/VisitForm";
+import VisitsCalendar from "../components/visits/VisitsCalendar"; // ← NUEVO
 
 /* ---------- helpers ---------- */
 const fmtDate = (s) => (s ? new Date(s) : null);
@@ -28,6 +31,8 @@ export default function FollowUp() {
   const [orgs, setOrgs] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [users, setUsers] = useState([]);
+  const [visits, setVisits] = useState([]);                  // ← NUEVO
+  const [activeTab, setActiveTab] = useState("dashboard");   // ← NUEVO
 
   // filtros
   const [adminUserId, setAdminUserId] = useState(""); // solo admin
@@ -66,42 +71,48 @@ export default function FollowUp() {
   async function loadData() {
     const params = isAdmin && adminUserId ? { user_id: adminUserId } : {};
 
-    const [cCalls, cNotes, cTasks, cOrgs, cContacts, cUsers] = await Promise.all([
-      api
-        .get("/followups/calls", { params })
-        .then((r) => r.data)
-        .catch(() => []),
-      api
-        .get("/followups/notes", { params })
-        .then((r) => r.data)
-        .catch(() => []),
-      api
-        .get("/followups/tasks", {
-          params,
-          paramsSerializer: (p) =>
-            new URLSearchParams({ ...p, status: "pending" }).toString(),
-        })
-        .then((r) => r.data)
-        .catch(() => []),
-      api
-        .get("/organizations")
-        .then((r) => r.data)
-        .catch(() => []),
-      api
-        .get("/contacts")
-        .then((r) => r.data)
-        .catch(() => []),
-      isAdmin
-        ? api
+    const [cCalls, cNotes, cTasks, cVisits, cOrgs, cContacts, cUsers] =
+      await Promise.all([
+        api
+          .get("/followups/calls", { params })
+          .then((r) => r.data)
+          .catch(() => []),
+        api
+          .get("/followups/notes", { params })
+          .then((r) => r.data)
+          .catch(() => []),
+        api
+          .get("/followups/tasks", {
+            params,
+            paramsSerializer: (p) =>
+              new URLSearchParams({ ...p, status: "pending" }).toString(),
+          })
+          .then((r) => r.data)
+          .catch(() => []),
+        api
+          .get("/visits", { params })       // ← NUEVO
+          .then((r) => r.data)
+          .catch(() => []),
+        api
+          .get("/organizations")
+          .then((r) => r.data)
+          .catch(() => []),
+        api
+          .get("/contacts")
+          .then((r) => r.data)
+          .catch(() => []),
+        isAdmin
+          ? api
             .get("/users")
             .then((r) => r.data)
             .catch(() => [])
-        : Promise.resolve([]),
-    ]);
+          : Promise.resolve([]),
+      ]);
 
     setCalls(Array.isArray(cCalls) ? cCalls : []);
     setNotes(Array.isArray(cNotes) ? cNotes : []);
     setTasks(Array.isArray(cTasks) ? cTasks : []);
+    setVisits(Array.isArray(cVisits) ? cVisits : []); // ← NUEVO
     setOrgs(Array.isArray(cOrgs) ? cOrgs : []);
     setContacts(Array.isArray(cContacts) ? cContacts : []);
     if (isAdmin) setUsers(Array.isArray(cUsers) ? cUsers : []);
@@ -202,14 +213,13 @@ export default function FollowUp() {
     const term = q.trim().toLowerCase();
     if (!term) return calls;
     return calls.filter((c) => {
-      const s = `${c.subject || ""} ${c.notes || ""} ${c.org_name || ""} ${
-        c.contact_name || ""
-      } ${c.outcome || ""}`.toLowerCase();
+      const s = `${c.subject || ""} ${c.notes || ""} ${c.org_name || ""} ${c.contact_name || ""
+        } ${c.outcome || ""}`.toLowerCase();
       return s.includes(term);
     });
   }, [q, calls]);
 
-  // === NUEVO: última nota por organización (para "Qué se habló") ===
+  // === última nota por organización (para "Qué se habló") ===
   const notesByOrgLast = useMemo(() => {
     const map = new Map(); // org_id -> { content, created_at: Date }
     notes.forEach((n) => {
@@ -294,11 +304,9 @@ export default function FollowUp() {
     const term = q.trim().toLowerCase();
     if (!term) return callsReport;
     return callsReport.filter((r) => {
-      const s = `${r.org_name || ""} ${r.contact_name || ""} ${
-        r.last_subject || ""
-      } ${r.last_notes || ""} ${r.last_outcome || ""} ${
-        r.last_note_content || ""
-      }`.toLowerCase();
+      const s = `${r.org_name || ""} ${r.contact_name || ""} ${r.last_subject || ""
+        } ${r.last_notes || ""} ${r.last_outcome || ""} ${r.last_note_content || ""
+        }`.toLowerCase();
       return s.includes(term);
     });
   }, [q, callsReport]);
@@ -365,547 +373,641 @@ export default function FollowUp() {
       : user?.name;
 
   return (
-    <div className="space-y-4">
-      {/* Header */}
-      <div className="bg-white rounded-2xl shadow p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-xs text-slate-500">Seguimiento</div>
-            <div className="text-2xl font-bold">Dashboard de seguimiento</div>
-            <div className="text-xs text-slate-500">
-              Usuario: {currentUserName || "—"}
-            </div>
-          </div>
+    <div className="p-4 space-y-4">
+      {/* Header superior con título + selector de usuario (admin) */}
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Seguimiento</h1>
+        {isAdmin && (
           <div className="flex items-center gap-2">
-            {isAdmin && (
-              <select
-                className="border rounded-lg px-2 py-1 text-sm"
-                value={adminUserId}
-                onChange={(e) => setAdminUserId(e.target.value)}
-                title="Filtrar por usuario (solo admin)"
-              >
-                <option value="">— Todos —</option>
-                {users.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name}
-                  </option>
-                ))}
-              </select>
-            )}
-            <input
-              placeholder="Buscar en llamadas…"
+            <label className="text-sm">Ver datos de:</label>
+            <select
               className="border rounded-lg px-3 py-1.5 text-sm"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* KPI cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KPI title="Organizaciones asignadas" value={orgsMine.length} />
-        <KPI title="Llamadas hoy" value={callsToday.length} />
-        <KPI
-          title="Tareas hoy"
-          value={tasksToday.length}
-          sub={`${tasksOverdue.length} atrasadas`}
-        />
-        <KPI
-          title="Org. sin contacto"
-          value={notContactedOrgs.length}
-          sub="Nunca se registró llamada"
-        />
-      </div>
-
-      {/* Activity + Contactados vs No + Qué tengo que hacer */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Gráfico de llamadas últimos 30 días */}
-        <div className="bg-white rounded-2xl shadow p-4 lg:col-span-2">
-          <div className="font-medium mb-2">
-            Actividad (llamadas últimos 30 días)
-          </div>
-          <LineMiniChart data={last30} />
-        </div>
-
-        {/* Contactados vs no contactados */}
-        <div className="bg-white rounded-2xl shadow p-4 space-y-4">
-          <div>
-            <div className="font-medium mb-2">Contactados vs No contactados</div>
-            <Bars
-              items={[
-                {
-                  label: "Contactados",
-                  value: orgsMine.length - notContactedOrgs.length,
-                },
-                {
-                  label: "No contactados",
-                  value: notContactedOrgs.length,
-                },
-              ]}
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Qué tengo que hacer: tareas */}
-      <div className="bg-white rounded-2xl shadow p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <div className="font-medium">Qué tengo que hacer</div>
-            <div className="text-xs text-slate-500">
-              Tareas pendientes: {tasksPending.length} · Hoy:{" "}
-              {tasksToday.length} · Atrasadas: {tasksOverdue.length}
-            </div>
-          </div>
-        </div>
-
-        {/* Form tarea */}
-        <form
-          onSubmit={submitTask}
-          className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end mb-4"
-        >
-          <label className="text-sm">
-            <div className="text-xs text-slate-600 mb-1">Organización</div>
-            <select
-              className="border rounded-lg px-2 py-1.5 w-full"
-              value={taskForm.org_id}
-              onChange={(e) =>
-                setTaskForm((f) => ({
-                  ...f,
-                  org_id: e.target.value,
-                  // si cambio de org, reseteo contacto
-                  contact_id: "",
-                }))
-              }
+              value={adminUserId}
+              onChange={(e) => setAdminUserId(e.target.value)}
             >
-              <option value="">—</option>
-              {orgsMine.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.name}
+              <option value="">Mi usuario</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name || u.email}
                 </option>
               ))}
             </select>
-          </label>
-
-          <label className="text-sm">
-            <div className="text-xs text-slate-600 mb-1">Contacto</div>
-            <select
-              className="border rounded-lg px-2 py-1.5 w-full"
-              value={taskForm.contact_id}
-              onChange={(e) =>
-                setTaskForm((f) => ({ ...f, contact_id: e.target.value }))
-              }
-            >
-              <option value="">—</option>
-              {contacts
-                .filter((c) =>
-                  taskForm.org_id
-                    ? String(c.org_id) === String(taskForm.org_id)
-                    : true
-                )
-                .map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} {c.email ? `(${c.email})` : ""}
-                  </option>
-                ))}
-            </select>
-          </label>
-
-          <label className="text-sm">
-            <div className="text-xs text-slate-600 mb-1">Vencimiento</div>
-            <input
-              type="datetime-local"
-              className="border rounded-lg px-2 py-1.5 w-full"
-              value={taskForm.due_at.replace(" ", "T").slice(0, 16)}
-              onChange={(e) =>
-                setTaskForm((f) => ({
-                  ...f,
-                  due_at: e.target.value.replace("T", " "),
-                }))
-              }
-            />
-          </label>
-
-          <label className="text-sm">
-            <div className="text-xs text-slate-600 mb-1">Prioridad</div>
-            <select
-              className="border rounded-lg px-2 py-1.5 w-full"
-              value={taskForm.priority}
-              onChange={(e) =>
-                setTaskForm((f) => ({ ...f, priority: e.target.value }))
-              }
-            >
-              <option value="low">Baja</option>
-              <option value="medium">Media</option>
-              <option value="high">Alta</option>
-            </select>
-          </label>
-
-          <label className="text-sm md:col-span-2">
-            <div className="text-xs text-slate-600 mb-1">
-              Título / Próximo paso
-            </div>
-            <input
-              className="border rounded-lg px-3 py-1.5 w-full"
-              placeholder="Ej: Llamar para confirmar cotización..."
-              value={taskForm.title}
-              onChange={(e) =>
-                setTaskForm((f) => ({ ...f, title: e.target.value }))
-              }
-            />
-          </label>
-
-          <div className="md:col-span-3">
-            <button className="px-3 py-2 rounded-lg bg-black text-white">
-              Guardar tarea
-            </button>
           </div>
-        </form>
+        )}
+      </div>
 
-        {/* Lista de próximas tareas */}
-<div className="overflow-x-auto">
-  <table className="w-full text-sm">
-    <thead className="bg-slate-50">
-      <tr>
-        <th className="text-left p-2 border">Tarea</th>
-        <th className="text-left p-2 border">Prioridad</th>
-        <th className="text-left p-2 border">Organización</th>
-        <th className="text-left p-2 border">Contacto</th>
-        <th className="text-right p-2 border">Acción</th>
-      </tr>
-    </thead>
-    <tbody>
-      {tasksNext.length ? (
-        tasksNext.map((t) => {
-          const d = fmtDate(t.due_at);
-          const isOver = d && d < now();
-          return (
-            <tr key={t.id} className="hover:bg-slate-50">
-              {/* Tarea */}
-              <td className="p-2 border">{t.title}</td>
+      {/* Tabs Dashboard / Visitas */}
+      <div className="bg-white rounded-2xl shadow p-2">
+        <div className="flex gap-2">
+          <button
+            className={`px-4 py-2 rounded-lg transition-colors ${activeTab === "dashboard"
+              ? "bg-black text-white"
+              : "hover:bg-slate-100"
+              }`}
+            onClick={() => setActiveTab("dashboard")}
+          >
+            📊 Dashboard
+          </button>
+          <button
+            className={`px-4 py-2 rounded-lg transition-colors ${activeTab === "visits"
+              ? "bg-black text-white"
+              : "hover:bg-slate-100"
+              }`}
+            onClick={() => setActiveTab("visits")}
+          >
+            🚗 Visitas
+          </button>
+        </div>
+      </div>
 
-              {/* Prioridad (con indicador de atrasada) */}
-              <td className="p-2 border">
-                <span
-                  className={`inline-flex px-2 py-0.5 rounded-full text-[11px] ${
-                    t.priority === "high"
-                      ? "bg-rose-100 text-rose-700"
-                      : t.priority === "medium"
-                      ? "bg-amber-100 text-amber-700"
-                      : "bg-emerald-100 text-emerald-700"
-                  }`}
+      {/* TAB: Dashboard de seguimiento */}
+      {activeTab === "dashboard" && (
+        <div className="space-y-4">
+          {/* Header card original (sin selector de usuario, solo búsqueda) */}
+          <div className="bg-white rounded-2xl shadow p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs text-slate-500">Seguimiento</div>
+                <div className="text-2xl font-bold">
+                  Dashboard de seguimiento
+                </div>
+                <div className="text-xs text-slate-500">
+                  Usuario: {currentUserName || "—"}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  placeholder="Buscar en llamadas…"
+                  className="border rounded-lg px-3 py-1.5 text-sm"
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* KPI cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <KPI title="Organizaciones asignadas" value={orgsMine.length} />
+            <KPI title="Llamadas hoy" value={callsToday.length} />
+            <KPI
+              title="Tareas hoy"
+              value={tasksToday.length}
+              sub={`${tasksOverdue.length} atrasadas`}
+            />
+            <KPI
+              title="Org. sin contacto"
+              value={notContactedOrgs.length}
+              sub="Nunca se registró llamada"
+            />
+          </div>
+
+          {/* Activity + Contactados vs No + Qué tengo que hacer */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Gráfico de llamadas últimos 30 días */}
+            <div className="bg-white rounded-2xl shadow p-4 lg:col-span-2">
+              <div className="font-medium mb-2">
+                Actividad (llamadas últimos 30 días)
+              </div>
+              <LineMiniChart data={last30} />
+            </div>
+
+            {/* Contactados vs no contactados */}
+            <div className="bg-white rounded-2xl shadow p-4 space-y-4">
+              <div>
+                <div className="font-medium mb-2">
+                  Contactados vs No contactados
+                </div>
+                <Bars
+                  items={[
+                    {
+                      label: "Contactados",
+                      value: orgsMine.length - notContactedOrgs.length,
+                    },
+                    {
+                      label: "No contactados",
+                      value: notContactedOrgs.length,
+                    },
+                  ]}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Qué tengo que hacer: tareas */}
+          <div className="bg-white rounded-2xl shadow p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <div className="font-medium">Qué tengo que hacer</div>
+                <div className="text-xs text-slate-500">
+                  Tareas pendientes: {tasksPending.length} · Hoy:{" "}
+                  {tasksToday.length} · Atrasadas: {tasksOverdue.length}
+                </div>
+              </div>
+            </div>
+
+            {/* Form tarea */}
+            <form
+              onSubmit={submitTask}
+              className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end mb-4"
+            >
+              <label className="text-sm">
+                <div className="text-xs text-slate-600 mb-1">Organización</div>
+                <select
+                  className="border rounded-lg px-2 py-1.5 w-full"
+                  value={taskForm.org_id}
+                  onChange={(e) =>
+                    setTaskForm((f) => ({
+                      ...f,
+                      org_id: e.target.value,
+                      // si cambio de org, reseteo contacto
+                      contact_id: "",
+                    }))
+                  }
                 >
-                  {t.priority === "high"
-                    ? "Alta"
-                    : t.priority === "medium"
-                    ? "Media"
-                    : "Baja"}
-                </span>
-                {isOver && (
-                  <span className="ml-2 text-[11px] text-rose-600">
-                    Atrasada
-                  </span>
-                )}
-              </td>
+                  <option value="">—</option>
+                  {orgsMine.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-              {/* Organización */}
-              <td className="p-2 border">{t.org_name || "—"}</td>
-
-              {/* Contacto */}
-              <td className="p-2 border">{t.contact_name || "—"}</td>
-
-              {/* Acción */}
-              <td className="p-2 border text-right">
-                <button
-                  className="px-2 py-1 text-xs rounded-lg border hover:bg-slate-100"
-                  onClick={() => markTaskDone(t.id)}
+              <label className="text-sm">
+                <div className="text-xs text-slate-600 mb-1">Contacto</div>
+                <select
+                  className="border rounded-lg px-2 py-1.5 w-full"
+                  value={taskForm.contact_id}
+                  onChange={(e) =>
+                    setTaskForm((f) => ({ ...f, contact_id: e.target.value }))
+                  }
                 >
-                  Hecho
+                  <option value="">—</option>
+                  {contacts
+                    .filter((c) =>
+                      taskForm.org_id
+                        ? String(c.org_id) === String(taskForm.org_id)
+                        : true
+                    )
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} {c.email ? `(${c.email})` : ""}
+                      </option>
+                    ))}
+                </select>
+              </label>
+
+              <label className="text-sm">
+                <div className="text-xs text-slate-600 mb-1">Vencimiento</div>
+                <input
+                  type="datetime-local"
+                  className="border rounded-lg px-2 py-1.5 w-full"
+                  value={taskForm.due_at.replace(" ", "T").slice(0, 16)}
+                  onChange={(e) =>
+                    setTaskForm((f) => ({
+                      ...f,
+                      due_at: e.target.value.replace("T", " "),
+                    }))
+                  }
+                />
+              </label>
+
+              <label className="text-sm">
+                <div className="text-xs text-slate-600 mb-1">Prioridad</div>
+                <select
+                  className="border rounded-lg px-2 py-1.5 w-full"
+                  value={taskForm.priority}
+                  onChange={(e) =>
+                    setTaskForm((f) => ({ ...f, priority: e.target.value }))
+                  }
+                >
+                  <option value="low">Baja</option>
+                  <option value="medium">Media</option>
+                  <option value="high">Alta</option>
+                </select>
+              </label>
+
+              <label className="text-sm md:col-span-2">
+                <div className="text-xs text-slate-600 mb-1">
+                  Título / Próximo paso
+                </div>
+                <input
+                  className="border rounded-lg px-3 py-1.5 w-full"
+                  placeholder="Ej: Llamar para confirmar cotización..."
+                  value={taskForm.title}
+                  onChange={(e) =>
+                    setTaskForm((f) => ({ ...f, title: e.target.value }))
+                  }
+                />
+              </label>
+
+              <div className="md:col-span-3">
+                <button className="px-3 py-2 rounded-lg bg-black text-white">
+                  Guardar tarea
                 </button>
-              </td>
-            </tr>
-          );
-        })
-      ) : (
-        <tr>
-          <td colSpan={5} className="p-4 text-center text-slate-500">
-            No tenés tareas pendientes.
-          </td>
-        </tr>
-      )}
-    </tbody>
-  </table>
-</div>
-      </div>
+              </div>
+            </form>
 
-      {/* Formulario de llamada */}
-      <div className="bg-white rounded-2xl shadow p-4">
-        <div className="font-medium mb-3">Registrar llamada</div>
-        <form
-          onSubmit={submitCall}
-          className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end"
-        >
-          <label className="text-sm">
-            <div className="text-xs text-slate-600 mb-1">Organización</div>
-            <select
-              className="border rounded-lg px-2 py-1.5 w-full"
-              value={callForm.org_id}
-              onChange={(e) =>
-                setCallForm((f) => ({ ...f, org_id: e.target.value }))
-              }
-            >
-              <option value="">—</option>
-              {orgsMine.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.name}
-                </option>
-              ))}
-            </select>
-          </label>
+            {/* Lista de próximas tareas */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="text-left p-2 border">Tarea</th>
+                    <th className="text-left p-2 border">Prioridad</th>
+                    <th className="text-left p-2 border">Organización</th>
+                    <th className="text-left p-2 border">Contacto</th>
+                    <th className="text-right p-2 border">Acción</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tasksNext.length ? (
+                    tasksNext.map((t) => {
+                      const d = fmtDate(t.due_at);
+                      const isOver = d && d < now();
+                      return (
+                        <tr key={t.id} className="hover:bg-slate-50">
+                          {/* Tarea */}
+                          <td className="p-2 border">{t.title}</td>
 
-          <label className="text-sm">
-            <div className="text-xs text-slate-600 mb-1">Contacto</div>
-            <select
-              className="border rounded-lg px-2 py-1.5 w-full"
-              value={callForm.contact_id}
-              onChange={(e) =>
-                setCallForm((f) => ({ ...f, contact_id: e.target.value }))
-              }
-            >
-              <option value="">—</option>
-              {contacts
-                .filter((c) =>
-                  callForm.org_id
-                    ? String(c.org_id) === String(callForm.org_id)
-                    : true
-                )
-                .map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} {c.email ? `(${c.email})` : ""}
-                  </option>
-                ))}
-            </select>
-          </label>
+                          {/* Prioridad */}
+                          <td className="p-2 border">
+                            <span
+                              className={`inline-flex px-2 py-0.5 rounded-full text-[11px] ${t.priority === "high"
+                                ? "bg-rose-100 text-rose-700"
+                                : t.priority === "medium"
+                                  ? "bg-amber-100 text-amber-700"
+                                  : "bg-emerald-100 text-emerald-700"
+                                }`}
+                            >
+                              {t.priority === "high"
+                                ? "Alta"
+                                : t.priority === "medium"
+                                  ? "Media"
+                                  : "Baja"}
+                            </span>
+                            {isOver && (
+                              <span className="ml-2 text-[11px] text-rose-600">
+                                Atrasada
+                              </span>
+                            )}
+                          </td>
 
-          <label className="text-sm">
-            <div className="text-xs text-slate-600 mb-1">Fecha y hora</div>
-            <input
-              type="datetime-local"
-              className="border rounded-lg px-2 py-1.5 w-full"
-              value={callForm.happened_at.replace(" ", "T").slice(0, 16)}
-              onChange={(e) =>
-                setCallForm((f) => ({
-                  ...f,
-                  happened_at: e.target.value.replace("T", " "),
-                }))
-              }
-            />
-          </label>
+                          {/* Organización */}
+                          <td className="p-2 border">{t.org_name || "—"}</td>
 
-          <label className="text-sm">
-            <div className="text-xs text-slate-600 mb-1">Duración (min)</div>
-            <input
-              type="number"
-              min="0"
-              className="border rounded-lg px-2 py-1.5 w-full"
-              value={callForm.duration_min}
-              onChange={(e) =>
-                setCallForm((f) => ({
-                  ...f,
-                  duration_min: Number(e.target.value || 0),
-                }))
-              }
-            />
-          </label>
+                          {/* Contacto */}
+                          <td className="p-2 border">{t.contact_name || "—"}</td>
 
-          {/* NUEVO: resultado de la llamada */}
-          <label className="text-sm">
-            <div className="text-xs text-slate-600 mb-1">Resultado</div>
-            <select
-              className="border rounded-lg px-2 py-1.5 w-full"
-              value={callForm.outcome}
-              onChange={(e) =>
-                setCallForm((f) => ({ ...f, outcome: e.target.value }))
-              }
-            >
-              <option value="no_contesta">No contesta</option>
-              <option value="interesado">Interesado</option>
-              <option value="no_interesado">No interesado</option>
-              <option value="volver_a_llamar">Volver a llamar</option>
-              <option value="en_negociacion">En negociación</option>
-            </select>
-          </label>
-
-          <label className="md:col-span-5 text-sm">
-            <div className="text-xs text-slate-600 mb-1">Asunto</div>
-            <input
-              className="border rounded-lg px-3 py-1.5 w-full"
-              value={callForm.subject}
-              onChange={(e) =>
-                setCallForm((f) => ({ ...f, subject: e.target.value }))
-              }
-            />
-          </label>
-
-          <label className="md:col-span-5 text-sm">
-            <div className="text-xs text-slate-600 mb-1">Notas</div>
-            <textarea
-              rows={3}
-              className="border rounded-lg px-3 py-1.5 w-full"
-              value={callForm.notes}
-              onChange={(e) =>
-                setCallForm((f) => ({ ...f, notes: e.target.value }))
-              }
-            />
-          </label>
-
-          <div className="md:col-span-5">
-            <button className="px-3 py-2 rounded-lg bg-black text-white">
-              Guardar llamada
-            </button>
-          </div>
-        </form>
-      </div>
-
-      {/* Tabla de actividad (llamadas) */}
-      <div className="bg-white rounded-2xl shadow p-4">
-        <div className="flex items-center justify-between mb-2">
-          <div className="font-medium">
-            {showCallsReport
-              ? "Planilla de resumen de llamadas"
-              : "Historial de llamadas"}
-          </div>
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            {!showCallsReport && (
-              <span>
-                Total: <b>{callsFiltered.length}</b>
-              </span>
-            )}
-            {showCallsReport && (
-              <span>
-                Total filas: <b>{callsReportFiltered.length}</b>
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={() => setShowCallsReport((v) => !v)}
-              className="px-2 py-1 rounded border text-xs hover:bg-slate-50"
-            >
-              {showCallsReport
-                ? "Ver detalle de llamadas"
-                : "Ver planilla de resumen"}
-            </button>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          {!showCallsReport ? (
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="text-left p-2 border">Fecha</th>
-                  <th className="text-left p-2 border">Organización</th>
-                  <th className="text-left p-2 border">Contacto</th>
-                  <th className="text-left p-2 border">Resultado</th>
-                  <th className="text-left p-2 border">Asunto</th>
-                  <th className="text-left p-2 border">Notas</th>
-                  <th className="text-right p-2 border">Duración</th>
-                </tr>
-              </thead>
-              <tbody>
-                {callsFiltered.length ? (
-                  callsFiltered.map((c) => (
-                    <tr key={c.id} className="hover:bg-slate-50">
-                      <td className="p-2 border">
-                        {fmtDate(c.happened_at)?.toLocaleString() || "—"}
-                      </td>
-                      <td className="p-2 border">{c.org_name || "—"}</td>
-                      <td className="p-2 border">{c.contact_name || "—"}</td>
-                      <td className="p-2 border">
-                        <OutcomePill outcome={c.outcome} />
-                      </td>
-                      <td className="p-2 border">{c.subject || "—"}</td>
-                      <td className="p-2 border">
-                        <span className="line-clamp-2">{c.notes || "—"}</span>
-                      </td>
-                      <td className="p-2 border text-right">
-                        {c.duration_min ? `${c.duration_min} min` : "—"}
+                          {/* Acción */}
+                          <td className="p-2 border text-right">
+                            <button
+                              className="px-2 py-1 text-xs rounded-lg border hover:bg-slate-100"
+                              onClick={() => markTaskDone(t.id)}
+                            >
+                              Hecho
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  ) : (
+                    <tr>
+                      <td
+                        colSpan={5}
+                        className="p-4 text-center text-slate-500"
+                      >
+                        No tenés tareas pendientes.
                       </td>
                     </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={7} className="p-4 text-center text-slate-500">
-                      Sin llamadas registradas.
-                    </td>
-                  </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Formulario de llamada */}
+          <div className="bg-white rounded-2xl shadow p-4">
+            <div className="font-medium mb-3">Registrar llamada</div>
+            <form
+              onSubmit={submitCall}
+              className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end"
+            >
+              <label className="text-sm">
+                <div className="text-xs text-slate-600 mb-1">Organización</div>
+                <select
+                  className="border rounded-lg px-2 py-1.5 w-full"
+                  value={callForm.org_id}
+                  onChange={(e) =>
+                    setCallForm((f) => ({ ...f, org_id: e.target.value }))
+                  }
+                >
+                  <option value="">—</option>
+                  {orgsMine.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-sm">
+                <div className="text-xs text-slate-600 mb-1">Contacto</div>
+                <select
+                  className="border rounded-lg px-2 py-1.5 w-full"
+                  value={callForm.contact_id}
+                  onChange={(e) =>
+                    setCallForm((f) => ({
+                      ...f,
+                      contact_id: e.target.value,
+                    }))
+                  }
+                >
+                  <option value="">—</option>
+                  {contacts
+                    .filter((c) =>
+                      callForm.org_id
+                        ? String(c.org_id) === String(callForm.org_id)
+                        : true
+                    )
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} {c.email ? `(${c.email})` : ""}
+                      </option>
+                    ))}
+                </select>
+              </label>
+
+              <label className="text-sm">
+                <div className="text-xs text-slate-600 mb-1">Fecha y hora</div>
+                <input
+                  type="datetime-local"
+                  className="border rounded-lg px-2 py-1.5 w-full"
+                  value={callForm.happened_at.replace(" ", "T").slice(0, 16)}
+                  onChange={(e) =>
+                    setCallForm((f) => ({
+                      ...f,
+                      happened_at: e.target.value.replace("T", " "),
+                    }))
+                  }
+                />
+              </label>
+
+              <label className="text-sm">
+                <div className="text-xs text-slate-600 mb-1">
+                  Duración (min)
+                </div>
+                <input
+                  type="number"
+                  min="0"
+                  className="border rounded-lg px-2 py-1.5 w-full"
+                  value={callForm.duration_min}
+                  onChange={(e) =>
+                    setCallForm((f) => ({
+                      ...f,
+                      duration_min: Number(e.target.value || 0),
+                    }))
+                  }
+                />
+              </label>
+
+              {/* Resultado de la llamada */}
+              <label className="text-sm">
+                <div className="text-xs text-slate-600 mb-1">Resultado</div>
+                <select
+                  className="border rounded-lg px-2 py-1.5 w-full"
+                  value={callForm.outcome}
+                  onChange={(e) =>
+                    setCallForm((f) => ({ ...f, outcome: e.target.value }))
+                  }
+                >
+                  <option value="no_contesta">No contesta</option>
+                  <option value="interesado">Interesado</option>
+                  <option value="no_interesado">No interesado</option>
+                  <option value="volver_a_llamar">Volver a llamar</option>
+                  <option value="en_negociacion">En negociación</option>
+                </select>
+              </label>
+
+              <label className="md:col-span-5 text-sm">
+                <div className="text-xs text-slate-600 mb-1">Asunto</div>
+                <input
+                  className="border rounded-lg px-3 py-1.5 w-full"
+                  value={callForm.subject}
+                  onChange={(e) =>
+                    setCallForm((f) => ({ ...f, subject: e.target.value }))
+                  }
+                />
+              </label>
+
+              <label className="md:col-span-5 text-sm">
+                <div className="text-xs text-slate-600 mb-1">Notas</div>
+                <textarea
+                  rows={3}
+                  className="border rounded-lg px-3 py-1.5 w-full"
+                  value={callForm.notes}
+                  onChange={(e) =>
+                    setCallForm((f) => ({ ...f, notes: e.target.value }))
+                  }
+                />
+              </label>
+
+              <div className="md:col-span-5">
+                <button className="px-3 py-2 rounded-lg bg-black text-white">
+                  Guardar llamada
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* Tabla de actividad (llamadas) */}
+          <div className="bg-white rounded-2xl shadow p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="font-medium">
+                {showCallsReport
+                  ? "Planilla de resumen de llamadas"
+                  : "Historial de llamadas"}
+              </div>
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                {!showCallsReport && (
+                  <span>
+                    Total: <b>{callsFiltered.length}</b>
+                  </span>
                 )}
-              </tbody>
-            </table>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="text-left p-2 border">Organización</th>
-                  <th className="text-left p-2 border">Contacto</th>
-                  <th className="text-right p-2 border">Cant. llamadas</th>
-                  <th className="text-left p-2 border">Última fecha</th>
-                  <th className="text-left p-2 border">Resultado última</th>
-                  <th className="text-left p-2 border">¿Respondió?</th>
-                  <th className="text-left p-2 border">Qué se habló</th>
-                </tr>
-              </thead>
-              <tbody>
-                {callsReportFiltered.length ? (
-                  callsReportFiltered.map((r, idx) => {
-                    const responded =
-                      r.last_outcome && r.last_outcome !== "no_contesta";
-                    return (
-                      <tr
-                        key={`${r.org_id}-${r.contact_id}-${idx}`}
-                        className="hover:bg-slate-50"
-                      >
-                        <td className="p-2 border">{r.org_name || "—"}</td>
-                        <td className="p-2 border">{r.contact_name || "—"}</td>
-                        <td className="p-2 border text-right">
-                          {r.total_calls}
-                        </td>
-                        <td className="p-2 border text-xs">
-                          {r.last_call_date
-                            ? r.last_call_date.toLocaleString()
-                            : "—"}
-                        </td>
-                        <td className="p-2 border">
-                          <OutcomePill outcome={r.last_outcome} />
-                        </td>
-                        <td className="p-2 border text-xs">
-                          {responded ? "Sí" : "No"}
-                        </td>
-                        <td className="p-2 border">
-                          <span className="line-clamp-2">
-                            {r.last_note_content
-                              ? r.last_note_content
-                              : r.last_subject
-                              ? r.last_subject
-                              : r.last_notes || "—"}
-                          </span>
+                {showCallsReport && (
+                  <span>
+                    Total filas: <b>{callsReportFiltered.length}</b>
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowCallsReport((v) => !v)}
+                  className="px-2 py-1 rounded border text-xs hover:bg-slate-50"
+                >
+                  {showCallsReport
+                    ? "Ver detalle de llamadas"
+                    : "Ver planilla de resumen"}
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              {!showCallsReport ? (
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="text-left p-2 border">Fecha</th>
+                      <th className="text-left p-2 border">Organización</th>
+                      <th className="text-left p-2 border">Contacto</th>
+                      <th className="text-left p-2 border">Resultado</th>
+                      <th className="text-left p-2 border">Asunto</th>
+                      <th className="text-left p-2 border">Notas</th>
+                      <th className="text-right p-2 border">Duración</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {callsFiltered.length ? (
+                      callsFiltered.map((c) => (
+                        <tr key={c.id} className="hover:bg-slate-50">
+                          <td className="p-2 border">
+                            {fmtDate(c.happened_at)?.toLocaleString() || "—"}
+                          </td>
+                          <td className="p-2 border">{c.org_name || "—"}</td>
+                          <td className="p-2 border">{c.contact_name || "—"}</td>
+                          <td className="p-2 border">
+                            <OutcomePill outcome={c.outcome} />
+                          </td>
+                          <td className="p-2 border">{c.subject || "—"}</td>
+                          <td className="p-2 border">
+                            <span className="line-clamp-2">
+                              {c.notes || "—"}
+                            </span>
+                          </td>
+                          <td className="p-2 border text-right">
+                            {c.duration_min ? `${c.duration_min} min` : "—"}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td
+                          colSpan={7}
+                          className="p-4 text-center text-slate-500"
+                        >
+                          Sin llamadas registradas.
                         </td>
                       </tr>
-                    );
-                  })
-                ) : (
-                  <tr>
-                    <td colSpan={7} className="p-4 text-center text-slate-500">
-                      No hay llamadas para resumir.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          )}
+                    )}
+                  </tbody>
+                </table>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="text-left p-2 border">Organización</th>
+                      <th className="text-left p-2 border">Contacto</th>
+                      <th className="text-right p-2 border">Cant. llamadas</th>
+                      <th className="text-left p-2 border">Última fecha</th>
+                      <th className="text-left p-2 border">
+                        Resultado última
+                      </th>
+                      <th className="text-left p-2 border">¿Respondió?</th>
+                      <th className="text-left p-2 border">Qué se habló</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {callsReportFiltered.length ? (
+                      callsReportFiltered.map((r, idx) => {
+                        const responded =
+                          r.last_outcome &&
+                          r.last_outcome !== "no_contesta";
+                        return (
+                          <tr
+                            key={`${r.org_id}-${r.contact_id}-${idx}`}
+                            className="hover:bg-slate-50"
+                          >
+                            <td className="p-2 border">
+                              {r.org_name || "—"}
+                            </td>
+                            <td className="p-2 border">
+                              {r.contact_name || "—"}
+                            </td>
+                            <td className="p-2 border text-right">
+                              {r.total_calls}
+                            </td>
+                            <td className="p-2 border text-xs">
+                              {r.last_call_date
+                                ? r.last_call_date.toLocaleString()
+                                : "—"}
+                            </td>
+                            <td className="p-2 border">
+                              <OutcomePill outcome={r.last_outcome} />
+                            </td>
+                            <td className="p-2 border text-xs">
+                              {responded ? "Sí" : "No"}
+                            </td>
+                            <td className="p-2 border">
+                              <span className="line-clamp-2">
+                                {r.last_note_content
+                                  ? r.last_note_content
+                                  : r.last_subject
+                                    ? r.last_subject
+                                    : r.last_notes || "—"}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    ) : (
+                      <tr>
+                        <td
+                          colSpan={7}
+                          className="p-4 text-center text-slate-500"
+                        >
+                          No hay llamadas para resumir.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* TAB: Visitas */}
+      {activeTab === "visits" && (
+        <div className="space-y-4">
+          {/* Calendario */}
+          <VisitsCalendar
+            visits={visits}
+            tasks={tasksPending}
+            onVisitClick={(visit) => {
+              console.log("Click en visita:", visit);
+            }}
+            onTaskClick={(task) => {
+              console.log("Click en tarea:", task);
+            }}
+          />
+
+          {/* Formulario de nueva visita */}
+          <VisitForm
+            orgs={orgsMine}
+            contacts={contacts}
+            onSuccess={loadData}
+          />
+
+          {/* Lista de visitas */}
+          <VisitsList
+            visits={visits}
+            onRefresh={loadData}
+            orgs={orgs}
+            contacts={contacts}
+          />
+        </div>
+      )}
     </div>
   );
 }
