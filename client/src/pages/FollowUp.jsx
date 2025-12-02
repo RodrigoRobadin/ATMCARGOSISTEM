@@ -5,6 +5,7 @@ import { useAuth } from "../auth.jsx";
 import VisitsList from "../components/visits/VisitsList";
 import VisitForm from "../components/visits/VisitForm";
 import VisitsCalendar from "../components/visits/VisitsCalendar"; // ← NUEVO
+import RoutesList from "../components/routes/RoutesList"; // ← NUEVO: Recorridos
 
 /* ---------- helpers ---------- */
 const fmtDate = (s) => (s ? new Date(s) : null);
@@ -417,6 +418,18 @@ export default function FollowUp() {
           >
             🚗 Visitas
           </button>
+
+          <button
+            className={`px-4 py-2 rounded-lg transition-colors ${activeTab === "routes"
+              ? "bg-black text-white"
+              : "hover:bg-slate-100"
+              }`}
+            onClick={() => setActiveTab("routes")}
+          >
+            🗺️ Recorridos
+          </button>
+
+
         </div>
       </div>
 
@@ -1005,6 +1018,19 @@ export default function FollowUp() {
             onRefresh={loadData}
             orgs={orgs}
             contacts={contacts}
+          />
+        </div>
+      )}
+
+
+      {/* TAB: Recorridos */}
+      {activeTab === "routes" && (
+        <div className="space-y-4">
+          <RoutesList
+            onSelectRoute={(route) => {
+              console.log("Recorrido seleccionado:", route);
+              // TODO: Abrir modal de detalle
+            }}
           />
         </div>
       )}

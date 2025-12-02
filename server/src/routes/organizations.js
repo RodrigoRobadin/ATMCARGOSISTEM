@@ -46,6 +46,8 @@ router.get('/', requireAuth, async (req, res) => {
         label, owner_user_id, visibility, notes,
         is_agent, modalities_supported,
         email, rubro, tipo_org, operacion, hoja_ruta,
+        zone_id, department,
+        latitude, longitude,
         created_at, updated_at,
         budget_status,
         budget_profit AS budget_profit_value,
@@ -406,6 +408,8 @@ router.get('/:id', requireAuth, async (req, res) => {
         label, owner_user_id, visibility, notes,
         is_agent, modalities_supported,
         email, rubro, tipo_org, operacion, hoja_ruta,
+        zone_id, department,
+        latitude, longitude,
         created_at, updated_at,
         budget_status, budget_profit AS budget_profit_value,
         NULL AS advisor_name
@@ -455,6 +459,10 @@ router.patch('/:id', requireAuth, async (req, res) => {
       'tipo_org',
       'operacion',
       'hoja_ruta',
+      'zone_id',
+      'department',
+      'latitude',
+      'longitude',
     ];
 
     const sets = [];
@@ -486,6 +494,8 @@ router.patch('/:id', requireAuth, async (req, res) => {
         label, owner_user_id, visibility, notes,
         is_agent, modalities_supported,
         email, rubro, tipo_org, operacion, hoja_ruta,
+        zone_id, department,
+        latitude, longitude,
         created_at, updated_at,
         budget_status, budget_profit AS budget_profit_value,
         NULL AS advisor_name

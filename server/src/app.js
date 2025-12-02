@@ -35,6 +35,9 @@ import zonesRouter from './routes/zones.js';
 import routesModuleRouter from './routes/routesModule.js';
 import routeStopsRouter from './routes/routeStops.js';
 
+// ⭐️ NUEVO: Facturación
+import invoicesRouter from './routes/invoices.js';
+
 // ⭐️ Operaciones (nuestro router nuevo)
 import operationsRouter from './routes/operations.js';
 import reportsRouter from './routes/reports.js';
@@ -197,7 +200,10 @@ app.use('/api/visits', visitsRouter);
 // ⭐️ NUEVO: Recorridos (Routes Module)
 app.use('/api/zones', zonesRouter);
 app.use('/api/routes', routesModuleRouter);
-app.use('/api/route-stops', routeStopsRouter);
+app.use('/api/routes', routeStopsRouter);
+
+// ⭐️ NUEVO: Facturación
+app.use('/api/invoices', invoicesRouter);
 
 app.use('/api/search', searchRouter);
 app.use('/api/reports', reportsRouter);

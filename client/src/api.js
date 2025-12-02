@@ -32,7 +32,7 @@ function getRawToken() {
 // instancia de axios
 export const api = axios.create({
   baseURL: BASE,
-  withCredentials: false,
+  withCredentials: true,
 });
 
 // Interceptor de request

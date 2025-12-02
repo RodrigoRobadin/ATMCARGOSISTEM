@@ -85,7 +85,7 @@ async function fetchUsersIndex() {
     const { data } = await api.get('/users/select', { params: { active: 0 } });
     USERS_CACHE = Array.isArray(data) ? data : [];
     if (USERS_CACHE.length) return USERS_CACHE;
-  } catch {}
+  } catch { }
   try {
     const { data } = await api.get('/users');
     USERS_CACHE = Array.isArray(data) ? data : [];
@@ -609,9 +609,8 @@ export default function OrganizationDetail() {
         kind: 'deal',
         title: d.title || 'Trato',
         description: d.value
-          ? `Valor: ${Number(d.value).toLocaleString()} ${
-              d.currency || ''
-            }`
+          ? `Valor: ${Number(d.value).toLocaleString()} ${d.currency || ''
+          }`
           : '',
         date,
       });
@@ -750,6 +749,8 @@ export default function OrganizationDetail() {
                 <FieldRow label="Rubro" value={org.rubro} />
                 <FieldRow label="Tipo org" value={org.tipo_org} />
                 <FieldRow label="Operación" value={org.operacion} />
+                <FieldRow label="Latitud" value={org.latitude} />
+                <FieldRow label="Longitud" value={org.longitude} />
                 <FieldRow label="Notas" value={org.notes} />
                 <FieldRow label="Creado">
                   {org.created_at
@@ -1075,11 +1076,10 @@ export default function OrganizationDetail() {
                   <button
                     key={t.key}
                     onClick={() => setTab(t.key)}
-                    className={`px-3 py-2 rounded-t-lg text-sm ${
-                      tab === t.key
-                        ? 'bg-black text-white'
-                        : 'hover:bg-slate-100'
-                    }`}
+                    className={`px-3 py-2 rounded-t-lg text-sm ${tab === t.key
+                      ? 'bg-black text-white'
+                      : 'hover:bg-slate-100'
+                      }`}
                   >
                     <span className="mr-1">{t.icon}</span>
                     {t.label}
@@ -1209,8 +1209,8 @@ export default function OrganizationDetail() {
                             Vence: {a.due_date || '—'} • Creado:{' '}
                             {a.created_at
                               ? new Date(
-                                  a.created_at
-                                ).toLocaleDateString()
+                                a.created_at
+                              ).toLocaleDateString()
                               : '—'}
                           </div>
                           {a.notes && (
@@ -1252,8 +1252,8 @@ export default function OrganizationDetail() {
                                 {item.kind === 'activity'
                                   ? 'Actividad'
                                   : item.kind === 'deal'
-                                  ? 'Trato'
-                                  : item.kind}
+                                    ? 'Trato'
+                                    : item.kind}
                               </span>
                               <span>
                                 {fmtDate(item.date)}{' '}
@@ -1470,9 +1470,16 @@ function EditOrgModal({ org, onClose, onSaved }) {
     is_agent: Number(org.is_agent) ? 1 : 0,
     modalities_supported: org.modalities_supported || null,
     hoja_ruta: org.hoja_ruta || '',
+    zone_id: org.zone_id || null,
+    department: org.department || '',
+    latitude: org.latitude || '',
+    longitude: org.longitude || '',
   });
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
+  const [zones, setZones] = useState([]);
+  const [mapsLink, setMapsLink] = useState('');
+
   function upd(k, v) {
     setForm((prev) => ({ ...prev, [k]: v }));
   }
@@ -1490,6 +1497,50 @@ function EditOrgModal({ org, onClose, onSaved }) {
     (org.tipo_org || '').toLowerCase().includes('flete') ||
     (org.rubro || '').toLowerCase().includes('flete');
 
+  // Cargar zonas al montar el componente
+  useEffect(() => {
+    async function loadZones() {
+      try {
+        const res = await api.get('/zones');
+        setZones(res.data || []);
+      } catch (e) {
+        console.error('Error loading zones:', e);
+      }
+    }
+    loadZones();
+  }, []);
+
+  // Función para extraer coordenadas de un link de Google Maps
+  function extractCoordinates() {
+    if (!mapsLink.trim()) {
+      alert('Pega un link de Google Maps primero');
+      return;
+    }
+    try {
+      // Patrones para diferentes formatos de Google Maps
+      // Formato 1: @-25.2637,-57.5759
+      const pattern1 = /@(-?\d+\.\d+),(-?\d+\.\d+)/;
+      // Formato 2: !3d-25.2637!4d-57.5759
+      const pattern2 = /!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/;
+      // Formato 3: ll=-25.2637,-57.5759
+      const pattern3 = /ll=(-?\d+\.\d+),(-?\d+\.\d+)/;
+      let match = mapsLink.match(pattern1) || mapsLink.match(pattern2) || mapsLink.match(pattern3);
+      if (match) {
+        const lat = match[1];
+        const lng = match[2];
+        upd('latitude', lat);
+        upd('longitude', lng);
+        setMapsLink('');
+        alert(`Coordenadas extraídas:\nLatitud: ${lat}\nLongitud: ${lng}`);
+      } else {
+        alert('No se pudieron extraer las coordenadas del link.\n\nAsegúrate de copiar el link completo de Google Maps.');
+      }
+    } catch (e) {
+      console.error('Error extracting coordinates:', e);
+      alert('Error al procesar el link');
+    }
+  }
+
   async function submit(e) {
     e.preventDefault();
     setErr('');
@@ -1506,6 +1557,7 @@ function EditOrgModal({ org, onClose, onSaved }) {
         payload.owner_user_id =
           Number.isFinite(n) && n > 0 ? n : null;
       }
+      console.log('Payload antes de enviar:', payload);
       payload.is_agent = payload.is_agent ? 1 : 0;
       await api.patch(`/organizations/${org.id}`, payload);
       onSaved?.();
@@ -1602,6 +1654,100 @@ function EditOrgModal({ org, onClose, onSaved }) {
               onChange={(e) => upd('country', e.target.value)}
             />
           </label>
+          <label className="block text-sm">
+            Departamento
+            <input
+              className="w-full border rounded-lg px-3 py-2"
+              value={form.department}
+              onChange={(e) => upd('department', e.target.value)}
+              placeholder="Ej: Central, Alto Paraná, etc."
+            />
+          </label>
+          <label className="block text-sm">
+            Zona Geográfica
+            <select
+              className="w-full border rounded-lg px-3 py-2"
+              value={form.zone_id || ''}
+              onChange={(e) =>
+                upd(
+                  'zone_id',
+                  e.target.value ? Number(e.target.value) : null
+                )
+              }
+            >
+              <option value="">— Sin zona asignada —</option>
+              {zones.map((zone) => (
+                <option key={zone.id} value={zone.id}>
+                  {zone.name}
+                </option>
+              ))}
+            </select>
+            <div className="text-xs text-slate-500 mt-1">
+              Asigna la zona para que aparezca en los recorridos
+            </div>
+          </label>
+
+          {/* Helper para Google Maps */}
+          <div className="md:col-span-2 border-t pt-3 mt-2">
+            <div className="text-sm font-medium mb-2">📍 Ubicación en Mapa</div>
+            <div className="bg-blue-50 p-3 rounded-lg space-y-2">
+              <div className="text-xs text-blue-700">
+                <strong>Cómo obtener coordenadas:</strong>
+                <ol className="list-decimal ml-4 mt-1">
+                  <li>Abre Google Maps y busca la ubicación</li>
+                  <li>Click derecho en el lugar → "¿Qué hay aquí?"</li>
+                  <li>Copia el link completo de la barra de direcciones</li>
+                  <li>Pégalo abajo y haz click en "Extraer Coordenadas"</li>
+                </ol>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  className="flex-1 border rounded-lg px-3 py-2 text-sm"
+                  placeholder="Pega aquí el link de Google Maps..."
+                  value={mapsLink}
+                  onChange={(e) => setMapsLink(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={extractCoordinates}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+                >
+                  Extraer Coordenadas
+                </button>
+              </div>
+            </div>
+          </div>
+          {/* Campos de coordenadas */}
+          <label className="block text-sm">
+            Latitud
+            <input
+              type="number"
+              step="any"
+              className="w-full border rounded-lg px-3 py-2"
+              value={form.latitude}
+              onChange={(e) => upd('latitude', e.target.value)}
+              placeholder="-25.2637"
+            />
+            <div className="text-xs text-slate-500 mt-1">
+              Ejemplo: -25.2637 (Asunción)
+            </div>
+          </label>
+          <label className="block text-sm">
+            Longitud
+            <input
+              type="number"
+              step="any"
+              className="w-full border rounded-lg px-3 py-2"
+              value={form.longitude}
+              onChange={(e) => upd('longitude', e.target.value)}
+              placeholder="-57.5759"
+            />
+            <div className="text-xs text-slate-500 mt-1">
+              Ejemplo: -57.5759 (Asunción)
+            </div>
+          </label>
+
           <label className="block text-sm">
             Etiqueta
             <input
@@ -1733,7 +1879,7 @@ function EditOrgModal({ org, onClose, onSaved }) {
   );
 }
 
-/* 
+/*
   🔻 Desde acá para abajo podés dejar tus versiones actuales de:
   - AddCustomFieldModal
   - NewActivityModal

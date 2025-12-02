@@ -124,8 +124,8 @@ router.post('/:routeId/stops', requireAuth, async (req, res) => {
     }
 });
 
-// PUT /api/route-stops/:id - Actualizar parada
-router.put('/:id', requireAuth, async (req, res) => {
+// PUT /api/routes/:routeId/stops/:id - Actualizar parada
+router.put('/:routeId/stops/:id', requireAuth, async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -208,8 +208,8 @@ router.put('/:id', requireAuth, async (req, res) => {
     }
 });
 
-// PATCH /api/route-stops/:id/order - Reordenar parada
-router.patch('/:id/order', requireAuth, async (req, res) => {
+// PATCH /api/routes/:routeId/stops/:id/order - Reordenar parada
+router.patch('/:routeId/stops/:id/order', requireAuth, async (req, res) => {
     try {
         const { id } = req.params;
         const { new_order } = req.body;
@@ -283,8 +283,8 @@ router.patch('/:id/order', requireAuth, async (req, res) => {
     }
 });
 
-// PATCH /api/route-stops/:id/complete - Marcar parada como completada
-router.patch('/:id/complete', requireAuth, async (req, res) => {
+// PATCH /api/routes/:routeId/stops/:id/complete - Marcar parada como completada
+router.patch('/:routeId/stops/:id/complete', requireAuth, async (req, res) => {
     try {
         const { id } = req.params;
         const { visit_id } = req.body;
@@ -332,8 +332,8 @@ router.patch('/:id/complete', requireAuth, async (req, res) => {
     }
 });
 
-// DELETE /api/route-stops/:id - Eliminar parada
-router.delete('/:id', requireAuth, async (req, res) => {
+// DELETE /api/routes/:routeId/stops/:id - Eliminar parada
+router.delete('/:routeId/stops/:id', requireAuth, async (req, res) => {
     try {
         const { id } = req.params;
 
