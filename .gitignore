@@ -44,3 +44,6 @@ nginx*.conf
 # backups de código (los que vi en tu tree)
 *.bak
 *.bak.*
+
+# Ignore uploaded files
+server/uploads/
