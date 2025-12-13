@@ -1,4 +1,4 @@
-// client/src/App.jsx
+﻿// client/src/App.jsx
 import React from 'react';
 import { NavLink, Routes, Route } from 'react-router-dom';
 
@@ -16,6 +16,8 @@ import OperationDetailSwitcher from './pages/OperationDetailSwitcher.jsx';
 import OperationDetailIndustrial from './pages/OperationDetailIndustrial.jsx';
 
 import Login from './pages/Login.jsx';
+import Quotes from './pages/Quotes.jsx';
+import QuoteEditor from './pages/QuoteEditor.jsx';
 import GlobalSearchBar from './components/GlobalSearchBar.jsx';
 
 // Admin
@@ -33,7 +35,11 @@ import { RequireAuth, RequireRole, useAuth } from './auth.jsx';
 import QuoteGenerator from './pages/QuoteGenerator.jsx';
 
 // Seguimiento
+import Invoices from './pages/Invoices.jsx';
 import FollowUp from './pages/FollowUp.jsx';
+import InvoiceDetail from './pages/InvoiceDetail.jsx';
+import PurchaseOrders from './pages/PurchaseOrders.jsx';
+import PurchaseOrderDetail from './pages/PurchaseOrderDetail.jsx';
 
 // ⭐️ NUEVO: Editor de Pipeline (pantalla completa)
 import PipelineEditorPage from './pages/PipelineEditorPage.jsx';
@@ -117,7 +123,9 @@ function Layout({ children }) {
           <SideLink to="/organizations" icon="🏢" label="Organizaciones" />
 
           <hr className="my-2" />
-          <SideLink to="/followup" icon="📞" label="Seguimiento" />
+          <SideLink to="/invoices" icon="💵" label="Facturas" />
+          <SideLink to="/purchase-orders" icon="📦" label="Órdenes de compra" />
+          <SideLink to="/followup" icon="📞" label="Seguimiento" />\n          <SideLink to="/quotes" icon="??" label="Cotizaciones" />
 
           <hr className="my-3" />
           {/* Sesión */}
@@ -255,6 +263,14 @@ export default function App() {
                   element={<RequestFreight />}
                 />
 
+                {/* Cotizaciones */}
+                <Route path="/quotes" element={<Quotes />} />
+                <Route path="/quotes/:id" element={<QuoteEditor />} />
+
+                <Route path="/invoices" element={<Invoices />} />
+                <Route path="/invoices/:id" element={<InvoiceDetail />} />
+                <Route path="/purchase-orders" element={<PurchaseOrders />} />
+                <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />
                 {/* Seguimiento */}
                 <Route path="/followup" element={<FollowUp />} />
               </Routes>
@@ -265,3 +281,5 @@ export default function App() {
     </Routes>
   );
 }
+
+

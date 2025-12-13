@@ -687,4 +687,9 @@ router.post('/:id/budget/reopen', requireAuth, requireRole('admin'), async (req,
   }
 });
 
+// Stub de custom fields (para compatibilidad con UI)
+router.get('/:id/custom-fields', requireAuth, async (_req, res) => {
+  res.json([]);
+});
+
 export default router;

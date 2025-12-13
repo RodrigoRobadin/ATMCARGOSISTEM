@@ -4,6 +4,7 @@ import db from "../services/db.js";
 import multer from "multer";
 import fs from "fs";
 import path from "path";
+import { sendMail } from "../services/mailer.js";
 
 const router = Router();
 
@@ -356,5 +357,153 @@ router.delete("/industrial-doors/:doorId/images/:imageId", async (req, res) => {
     console.error("No se pudo asegurar la tabla industrial_door_images:", e);
   }
 })();
+
+// Envío de correo de cotización (filtrable por door_ids)
+router.post("/deals/:dealId/industrial-quote-email", async (req, res) => {
+  try {
+    const dealId = toInt(req.params.dealId, 0);
+    if (!dealId) return res.status(400).json({ error: "dealId inválido" });
+
+    let { to_emails, cc_emails, subject, door_ids } = req.body || {};
+
+    // Normalizar destinatarios
+    const normalizeList = (v) => {
+      if (!v) return [];
+      if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean);
+      return String(v)
+        .split(/[;,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+    };
+
+    const toList = normalizeList(to_emails);
+    const ccList = normalizeList(cc_emails);
+
+    if (!toList.length) {
+      return res.status(400).json({ error: "Debe indicar al menos un destinatario" });
+    }
+
+    const filterIds = Array.isArray(door_ids)
+      ? door_ids.map((n) => toInt(n, 0)).filter(Boolean)
+      : [];
+
+    const [doors] = await db.query(
+      `
+        SELECT id,
+               product_id,
+               product_name,
+               brand,
+               identifier,
+               width_available,
+               height_available,
+               side_install,
+               overheight_available,
+               frame_type,
+               canvas_type,
+               frame_material,
+               finish,
+               clearance_right,
+               clearance_left,
+               motor_side,
+               actuators,
+               visor_lines,
+               right_leg,
+               notes,
+               place,
+               quantity,
+               canvas_color
+          FROM industrial_doors
+         WHERE deal_id = ?
+         ${filterIds.length ? "AND id IN (?)" : ""}
+         ORDER BY id ASC
+      `,
+      filterIds.length ? [dealId, filterIds] : [dealId]
+    );
+
+    if (!doors.length) {
+      return res.status(400).json({ error: "No hay puertas para incluir en la cotización" });
+    }
+
+    const htmlRows = doors
+      .map((d, idx) => {
+        const item = String(idx + 1).padStart(2, "0");
+        const qty = d.quantity || 1;
+        const tipo = (d.product_name || d.frame_type || d.canvas_type || "-").toUpperCase();
+        const dim = `ANCHO: ${d.width_available ?? "-"} mm / ALTO: ${d.height_available ?? "-"} mm`;
+        const lugar = (d.identifier || "-").toUpperCase();
+        const marco = (d.frame_material || d.frame_type || "-").toUpperCase();
+        const acc = (d.actuators || "-").toUpperCase();
+        const vis = (d.visor_lines || "-").toUpperCase();
+        const acab = (d.finish || "-").toUpperCase();
+        const color = (d.canvas_color || d.canvas_type || "-").toUpperCase();
+
+        return `
+          <tr>
+            <td style="border:1px solid #555;padding:6px 10px;">${item}</td>
+            <td style="border:1px solid #555;padding:6px 10px;text-align:center;">${qty}</td>
+            <td style="border:1px solid #555;padding:6px 10px;">${tipo}</td>
+            <td style="border:1px solid #555;padding:6px 10px;">${dim}</td>
+            <td style="border:1px solid #555;padding:6px 10px;">${lugar}</td>
+            <td style="border:1px solid #555;padding:6px 10px;">${marco}</td>
+            <td style="border:1px solid #555;padding:6px 10px;">${acc}</td>
+            <td style="border:1px solid #555;padding:6px 10px;">${vis}</td>
+            <td style="border:1px solid #555;padding:6px 10px;">${acab}</td>
+            <td style="border:1px solid #555;padding:6px 10px;">${color}</td>
+          </tr>
+        `;
+      })
+      .join("");
+
+    const subj =
+      subject && String(subject).trim()
+        ? String(subject).trim()
+        : `Solicitud de cotizacion - OP ${dealId}`;
+
+    const html = `
+      <div style="font-family:Arial, sans-serif; font-size:13px; color:#111; line-height:1.5;">
+        <p>Estimados,</p>
+        <p>Solicitamos cotizacion para los siguientes productos:</p>
+        <table style="border-collapse:collapse; width:100%; margin:14px 0; background:#fdfdfd;">
+          <thead>
+            <tr style="background:#2f3136; color:#fff;">
+              <th style="border:1px solid #555;padding:6px 10px;">ITEM</th>
+              <th style="border:1px solid #555;padding:6px 10px;">CANT</th>
+              <th style="border:1px solid #555;padding:6px 10px;">TIPO PRODUCTO</th>
+              <th style="border:1px solid #555;padding:6px 10px;">DIMENSIONES L x H</th>
+              <th style="border:1px solid #555;padding:6px 10px;">LUGAR DESTINADO</th>
+              <th style="border:1px solid #555;padding:6px 10px;">TIPO MARCO</th>
+              <th style="border:1px solid #555;padding:6px 10px;">ACCIONADORES</th>
+              <th style="border:1px solid #555;padding:6px 10px;">VISORES</th>
+              <th style="border:1px solid #555;padding:6px 10px;">ACABADO</th>
+              <th style="border:1px solid #555;padding:6px 10px;">COLOR LONA</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${htmlRows}
+          </tbody>
+        </table>
+        <p><strong>Datos necesarios para cotizar FLETE:</strong></p>
+        <ol style="padding-left:20px;">
+          <li>Peso y dimensiones de producto embalado.</li>
+          <li>Listado de precios con identificacion de producto.</li>
+          <li>Detalles adicionales relevantes para la cotizacion.</li>
+        </ol>
+        <p>Saludos,<br/>Grupo ATM</p>
+      </div>
+    `;
+
+    await sendMail({
+      to: toList.join(", "),
+      subject: subj,
+      html,
+      from: req.user?.email || process.env.MAIL_FROM || process.env.SMTP_USER,
+    });
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("[industrial-quote-email] Error:", e);
+    res.status(500).json({ error: "No se pudo enviar el correo de cotizacion" });
+  }
+});
 
 export default router;

@@ -1,22 +1,19 @@
-// server/src/routes/deals.js
+﻿// server/src/routes/deals.js
 import { Router } from 'express';
 import { pool } from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
 import { logAudit } from '../services/audit.js';
 
-/* ====== SOPORTE DE ARCHIVOS ====== */
 import multer from 'multer';
 import fs from 'fs';
 import path from 'path';
 
 const router = Router();
 
-/** Util: arma la referencia con un prefijo y un número */
 function formatReference(n) {
   return `OP-${String(n).padStart(6, '0')}`;
 }
 
-/* ========= Asegurar columnas nuevas en deals ========= */
 (async () => {
   try {
     const q = `
@@ -39,7 +36,6 @@ function formatReference(n) {
   }
 })();
 
-/* ========= Storage de archivos (multer) ========= */
 const storage = multer.diskStorage({
   destination(req, file, cb) {
     const dealId = String(req.params.id);
@@ -59,7 +55,6 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-/* ========= Asegurar tabla deal_files ========= */
 (async () => {
   try {
     await pool.query(`
@@ -81,10 +76,8 @@ const upload = multer({ storage });
   }
 })();
 
-/* ========= Asegurar tabla deal_custom_fields + columnas/índices ========= */
 (async () => {
   try {
-    // Crea tabla base si no existe
     await pool.query(`
       CREATE TABLE IF NOT EXISTS deal_custom_fields (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -97,7 +90,6 @@ const upload = multer({ storage });
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
-    // Leer columnas actuales
     const [cols] = await pool.query(`
       SELECT COLUMN_NAME
       FROM INFORMATION_SCHEMA.COLUMNS
@@ -105,7 +97,6 @@ const upload = multer({ storage });
     `);
     const cset = new Set(cols.map(c => c.COLUMN_NAME));
 
-    // Agregar/asegurar updated_at con ON UPDATE
     if (!cset.has('updated_at')) {
       await pool.query(`
         ALTER TABLE deal_custom_fields
@@ -125,7 +116,6 @@ const upload = multer({ storage });
       } catch (_) {}
     }
 
-    // Índices y FK
     try { await pool.query(`ALTER TABLE deal_custom_fields ADD INDEX idx_dcf_deal (deal_id)`); } catch (_) {}
     try {
       await pool.query(`
@@ -136,7 +126,6 @@ const upload = multer({ storage });
       `);
     } catch (_) {}
 
-    // Único por (deal_id, key)
     const [idxs] = await pool.query(`
       SELECT INDEX_NAME
       FROM INFORMATION_SCHEMA.STATISTICS
@@ -155,16 +144,12 @@ const upload = multer({ storage });
   }
 })();
 
-/** Preview no vinculante de referencia */
 router.get('/next-reference', async (_req, res) => {
   const [rows] = await pool.query(`SHOW TABLE STATUS LIKE 'deals'`);
   const nextId = rows?.[0]?.Auto_increment || 1;
   res.json({ preview: formatReference(nextId) });
 });
 
-/**
- * GET /api/deals
- */
 router.get('/', async (req, res) => {
   const {
     org_id,
@@ -242,7 +227,6 @@ router.get('/', async (req, res) => {
   res.json(rows);
 });
 
-/** ========= DETALLE DE UN DEAL ========= */
 router.get('/:id', async (req, res) => {
   const { id } = req.params;
 
@@ -255,7 +239,13 @@ router.get('/:id', async (req, res) => {
        d.created_by_user_id,
        cu.name                    AS created_by_name,
 
-       o.name  AS org_name,
+       o.id   AS org_id,
+       o.name AS org_name,
+       o.ruc  AS org_ruc,
+       o.email AS org_email,
+       o.address AS org_address,
+       o.city AS org_city,
+
        c.name  AS contact_name, c.email AS contact_email, c.phone AS contact_phone,
        bu.name AS business_unit_name, bu.key_slug AS business_unit_key,
 
@@ -287,12 +277,18 @@ router.get('/:id', async (req, res) => {
     activities = acts;
   } catch { /* si no hay tabla, ignoramos */ }
 
-  res.json({ deal: row, activities });
+  const organization = row.org_id ? {
+    id: row.org_id,
+    name: row.org_name,
+    ruc: row.org_ruc,
+    email: row.org_email,
+    address: row.org_address,
+    city: row.org_city,
+  } : null;
+
+  res.json({ deal: row, organization, activities });
 });
 
-/* ========= CUSTOM FIELDS POR DEAL ========= */
-
-// GET /api/deals/:id/custom-fields
 router.get('/:id/custom-fields', async (req, res) => {
   const { id } = req.params;
   try {
@@ -307,7 +303,6 @@ router.get('/:id/custom-fields', async (req, res) => {
   }
 });
 
-// POST /api/deals/:id/custom-fields  (upsert por (deal_id, key))
 router.post('/:id/custom-fields', requireAuth, async (req, res) => {
   const { id } = req.params;
   const { key, label, type, value } = req.body;
@@ -355,7 +350,6 @@ router.post('/:id/custom-fields', requireAuth, async (req, res) => {
   }
 });
 
-// PUT /api/deals/:id/custom-fields/:cfId
 router.put('/:id/custom-fields/:cfId', requireAuth, async (req, res) => {
   const { id, cfId } = req.params;
   const { label = undefined, type = undefined, value = undefined } = req.body;
@@ -393,9 +387,7 @@ router.put('/:id/custom-fields/:cfId', requireAuth, async (req, res) => {
   }
 });
 
-/* ========= FILES POR DEAL ========= */
-
-// POST /api/deals/:id/files (subir archivo)
+// POST /api/deals/:id/files
 router.post('/:id/files', requireAuth, upload.single('file'), async (req, res) => {
   try {
     const { id } = req.params;
@@ -428,14 +420,16 @@ router.post('/:id/files', requireAuth, upload.single('file'), async (req, res) =
   }
 });
 
-// GET /api/deals/:id/files (listar archivos)
+// GET /api/deals/:id/files (listar archivos) con filtro opcional type
 router.get('/:id/files', async (req, res) => {
   try {
     const { id } = req.params;
-    const [rows] = await pool.query(
-      `SELECT id, type, filename, url, created_at FROM deal_files WHERE deal_id = ? ORDER BY created_at DESC`,
-      [id]
-    );
+    const { type } = req.query;
+    let sql = `SELECT id, type, filename, url, created_at FROM deal_files WHERE deal_id = ?`;
+    const params = [id];
+    if (type) { sql += ' AND type = ?'; params.push(type); }
+    sql += ' ORDER BY created_at DESC';
+    const [rows] = await pool.query(sql, params);
     res.json(rows);
   } catch (e) {
     console.error(e);
@@ -443,7 +437,23 @@ router.get('/:id/files', async (req, res) => {
   }
 });
 
-// GET /api/deals/:id/files/:fileId/download
+// GET /api/deals/:id/documents (alias de files)
+router.get('/:id/documents', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type } = req.query;
+    let sql = `SELECT id, type, filename, url, created_at FROM deal_files WHERE deal_id = ?`;
+    const params = [id];
+    if (type) { sql += ' AND type = ?'; params.push(type); }
+    sql += ' ORDER BY created_at DESC';
+    const [rows] = await pool.query(sql, params);
+    res.json(rows);
+  } catch (e) {
+    console.error('[deal documents] list', e?.message || e);
+    res.status(500).json({ error: 'No se pudieron listar documentos' });
+  }
+});
+
 router.get('/:id/files/:fileId/download', async (req, res) => {
   try {
     const { id, fileId } = req.params;
@@ -461,7 +471,6 @@ router.get('/:id/files/:fileId/download', async (req, res) => {
   }
 });
 
-// DELETE /api/deals/:id/files/:fileId
 router.delete('/:id/files/:fileId', requireAuth, async (req, res) => {
   try {
     const { id, fileId } = req.params;
@@ -475,7 +484,7 @@ router.delete('/:id/files/:fileId', requireAuth, async (req, res) => {
     const filename = rows[0].filename;
 
     const abs = path.resolve('uploads', 'deals', String(id), filename);
-    try { fs.unlinkSync(abs); } catch (_) { /* ignorar si no existe */ }
+    try { fs.unlinkSync(abs); } catch (_) {}
 
     await pool.query('DELETE FROM deal_files WHERE id = ?', [fileId]);
 
@@ -491,14 +500,8 @@ router.delete('/:id/files/:fileId', requireAuth, async (req, res) => {
   }
 });
 
-/**
- * POST /api/deals
- * Crea una operación nueva
- */
 router.post('/', requireAuth, async (req, res) => {
   const body = req.body || {};
-
-  // Campos core
   const pipeline_id      = body.pipeline_id;
   const stage_id         = body.stage_id;
   const business_unit_id = body.business_unit_id || null;
@@ -508,7 +511,6 @@ router.post('/', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'pipeline_id y stage_id son requeridos' });
   }
 
-  // Organización / contacto: soportar ambos formatos
   const organization = body.organization || null;
   const contact      = body.contact || null;
 
@@ -520,21 +522,19 @@ router.post('/', requireAuth, async (req, res) => {
   const contact_phone   = body.contact_phone || contact?.phone || null;
   const contact_id_body = contact?.id || null;
 
-  // Hints -> CF
   const hints = {
-    modalidad_carga : body.transport_type_hint || "",   // select
-    tipo_carga      : body.cargo_class_hint    || "",   // select
-    origen_pto      : body.origin_hint         || "",   // text
-    destino_pto     : body.destination_hint    || "",   // text
-    mercaderia      : body.commodity_hint      || "",   // text
-    cant_bultos     : body.quantity_hint       || "",   // number/text
-    unidad_bultos   : body.unit_hint           || "",   // text
-    peso_bruto      : body.weight_hint         || "",   // text
-    vol_m3          : body.volume_hint         || "",   // text
-    tipo_operacion  : body.operation_type_hint || "",   // select (IMPORT/EXPORT)
+    modalidad_carga : body.transport_type_hint || '',
+    tipo_carga      : body.cargo_class_hint    || '',
+    origen_pto      : body.origin_hint         || '',
+    destino_pto     : body.destination_hint    || '',
+    mercaderia      : body.commodity_hint      || '',
+    cant_bultos     : body.quantity_hint       || '',
+    unidad_bultos   : body.unit_hint           || '',
+    peso_bruto      : body.weight_hint         || '',
+    vol_m3          : body.volume_hint         || '',
+    tipo_operacion  : body.operation_type_hint || '',
   };
 
-  // title seguro
   const trim = (s) => (typeof s === 'string' ? s.trim() : '');
   const title =
     trim(body.title) ||
@@ -546,7 +546,6 @@ router.post('/', requireAuth, async (req, res) => {
   try {
     await conn.beginTransaction();
 
-    // ===== ORGANIZACIÓN =====
     let orgId = null;
     if (org_id_body) {
       orgId = org_id_body;
@@ -566,7 +565,6 @@ router.post('/', requireAuth, async (req, res) => {
       }
     }
 
-    // ===== CONTACTO =====
     let contactId = null;
     if (contact_id_body) {
       contactId = contact_id_body;
@@ -586,11 +584,7 @@ router.post('/', requireAuth, async (req, res) => {
       }
     }
 
-    // ===== ASESOR / EJECUTIVO DE CUENTA =====
     const createdById = req.user?.id ?? null;
-
-    // 1) Intentamos usar lo que venga explícito del front:
-    //    soportamos varios nombres de campo por compatibilidad
     let dealAdvisorId = null;
 
     if (body.account_exec_id != null && body.account_exec_id !== '') {
@@ -601,7 +595,6 @@ router.post('/', requireAuth, async (req, res) => {
       dealAdvisorId = Number(body.advisor_user_id) || null;
     }
 
-    // 2) Si todavía no tenemos, miramos el asesor de la organización
     if (!dealAdvisorId && orgId) {
       const [[oAdv] = []] = await conn.query(
         'SELECT advisor_user_id FROM organizations WHERE id = ? LIMIT 1',
@@ -612,15 +605,12 @@ router.post('/', requireAuth, async (req, res) => {
       }
     }
 
-    // 3) Último fallback: el usuario que crea la operación
     if (!dealAdvisorId) {
       dealAdvisorId = createdById;
     }
 
-    // Placeholder temporal para reference
     const tmpRef = `TMP-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`.slice(0, 32);
 
-    // ===== INSERT PRINCIPAL =====
     const [dealIns] = await conn.query(
       `INSERT INTO deals(
          reference, title, value, status,
@@ -647,13 +637,11 @@ router.post('/', requireAuth, async (req, res) => {
     const newId = dealIns.insertId;
     const reference = formatReference(newId);
 
-    // Referencia definitiva
     await conn.query(
       'UPDATE deals SET reference = ? WHERE id = ?',
       [reference, newId]
     );
 
-    // ===== CUSTOM FIELDS DESDE HINTS =====
     const upsertCF = async (key, label, type, val) => {
       const v = val != null ? String(val).trim() : '';
       if (!v) return;
@@ -666,6 +654,19 @@ router.post('/', requireAuth, async (req, res) => {
            \`type\`  = VALUES(\`type\`)`,
         [newId, key, label, type, v]
       );
+    };
+
+    const hints = {
+      modalidad_carga : body.transport_type_hint || '',
+      tipo_carga      : body.cargo_class_hint    || '',
+      origen_pto      : body.origin_hint         || '',
+      destino_pto     : body.destination_hint    || '',
+      mercaderia      : body.commodity_hint      || '',
+      cant_bultos     : body.quantity_hint       || '',
+      unidad_bultos   : body.unit_hint           || '',
+      peso_bruto      : body.weight_hint         || '',
+      vol_m3          : body.volume_hint         || '',
+      tipo_operacion  : body.operation_type_hint || '',
     };
 
     await upsertCF('modalidad_carga', 'Tipo de embarque', 'select', hints.modalidad_carga);
@@ -717,7 +718,6 @@ router.post('/', requireAuth, async (req, res) => {
   }
 });
 
-/** PATCH /api/deals/:id */
 router.patch('/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
   const {
@@ -730,7 +730,6 @@ router.patch('/:id', requireAuth, async (req, res) => {
   const fields = [];
   const params = [];
 
-  // Compat: si viene description usarlo para title; si viene title, respetar
   const nextTitle = (title !== undefined ? title : description);
 
   if (nextTitle !== undefined)       { fields.push('title = ?');            params.push(nextTitle); }

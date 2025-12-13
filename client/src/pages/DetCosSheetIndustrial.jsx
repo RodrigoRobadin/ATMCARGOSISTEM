@@ -841,6 +841,11 @@ export default function DetCosSheet() {
   const totalCostos = useMemo(() => totalCompra + totalLocalesUsd + segCostoUsd, [totalCompra, totalLocalesUsd, segCostoUsd]);
   const totalVentas = useMemo(() => totalVenta + totalLocalesClienteUsd + segVentaUsd, [totalVenta, totalLocalesClienteUsd, segVentaUsd]);
   const profitGeneral = useMemo(() => totalVentas - totalCostos, [totalVentas, totalCostos]);
+  const [profitVendedorPct, setProfitVendedorPct] = useState(0);
+  const profitVendedor = useMemo(
+    () => profitGeneral * (profitVendedorPct / 100),
+    [profitGeneral, profitVendedorPct]
+  );
 
   // === actualiza deal.value con el profit calculado
   async function updateDealValue(profit) {
@@ -1226,6 +1231,21 @@ export default function DetCosSheet() {
                 <div className="grid grid-cols-[1fr_160px] items-center">
                   <div className="font-semibold">VENTA</div>
                   <div className="text-right font-bold text-lg">$ {money(totalVentas)}</div>
+                </div>
+                <div className="grid grid-cols-[1fr_160px] items-center gap-2">
+                  <div className="font-semibold flex items-center gap-2">
+                    Profit vendedor
+                    <input
+                      type="number"
+                      className="border rounded px-2 py-1 w-20"
+                      value={profitVendedorPct}
+                      onChange={(e) => setProfitVendedorPct(Number(e.target.value) || 0)}
+                    />
+                    <span>%</span>
+                  </div>
+                  <div className="text-right font-bold text-lg">
+                    $ {money(profitVendedor)}
+                  </div>
                 </div>
                 <div className="grid grid-cols-[1fr_160px] items-center">
                   <div className="font-semibold">PROFIT GENERAL</div>

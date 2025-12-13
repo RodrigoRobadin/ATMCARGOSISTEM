@@ -33,10 +33,16 @@ import visitsRouter from './routes/visits.js';
 // ⭐️ NUEVO: Recorridos (Routes Module)
 import zonesRouter from './routes/zones.js';
 import routesModuleRouter from './routes/routesModule.js';
+
 import routeStopsRouter from './routes/routeStops.js';
 
 // ⭐️ NUEVO: Facturación
 import invoicesRouter from './routes/invoices.js';
+
+// ⭐️ NUEVO: Órdenes de Compra y Facturas de Compra
+import purchaseOrdersRouter from './routes/purchaseOrders.js';
+import purchaseInvoicesRouter from './routes/purchaseInvoices.js';
+import suppliersRouter from './routes/suppliers.js';
 
 // ⭐️ Operaciones (nuestro router nuevo)
 import operationsRouter from './routes/operations.js';
@@ -50,6 +56,9 @@ import freightRequestsRouter from './routes/freightRequests.js';
 // ⭐️ NUEVO: envío de informes por correo
 import emailRoutes from './routes/emailRoutes.js';
 import industrialDoorsRouter from "./routes/industrialDoors.js";
+import industrialQuotesRouter from "./routes/industrialQuotes.js";
+import quotesRouter from "./routes/quotes.js";
+
 
 
 // ====== Cargar variables de entorno ======
@@ -116,6 +125,7 @@ let sameSite = (process.env.SESSION_SAMESITE || 'None').toLowerCase(); // 'none'
 if (!['none', 'lax', 'strict'].includes(sameSite)) sameSite = 'none';
 
 const sessionDomain = (process.env.SESSION_DOMAIN || '').trim() || undefined;
+
 
 app.use(session({
   name: SESSION_NAME,
@@ -205,6 +215,11 @@ app.use('/api/routes', routeStopsRouter);
 // ⭐️ NUEVO: Facturación
 app.use('/api/invoices', invoicesRouter);
 
+// ⭐️ NUEVO: Órdenes de Compra y Facturas de Compra
+app.use('/api/purchase-orders', purchaseOrdersRouter);
+app.use('/api/purchase-invoices', purchaseInvoicesRouter);
+app.use('/api/suppliers', suppliersRouter);
+
 app.use('/api/search', searchRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/admin', adminRouter);
@@ -233,6 +248,8 @@ app.use((err, _req, res, next) => {
 // ...
 app.use("/api", catalogRouter);
 app.use("/api", industrialDoorsRouter);
+app.use("/api", industrialQuotesRouter);
+app.use("/api", quotesRouter);
 // ...
 
 /* ================ Arranque ================ */

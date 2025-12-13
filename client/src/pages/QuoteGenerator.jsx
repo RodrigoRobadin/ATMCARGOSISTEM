@@ -13,10 +13,29 @@ const PDF_PAGE_W_MM = 210;
 const PDF_MARGIN = { top: 10, right: 10, bottom: 12, left: 10 };
 const CONTENT_W_MM = PDF_PAGE_W_MM - PDF_MARGIN.left - PDF_MARGIN.right - 0.2;
 
-const money = (n) =>
-  isNaN(n)
-    ? '0,00'
-    : Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const decimalsFrom = (raw) => {
+  const m = String(raw ?? '').match(/[.,](\d+)/);
+  return m ? m[1].length : 0;
+};
+
+const money = (n, decimalsHint) => {
+  if (n === null || n === undefined || n === '') return '0';
+  const numeric = Number(n);
+  if (!Number.isFinite(numeric)) return String(n);
+
+  const decs =
+    typeof decimalsHint === 'number' && decimalsHint >= 0
+      ? decimalsHint
+      : decimalsFrom(n);
+
+  const hasFraction = Math.abs(numeric - Math.trunc(numeric)) > 0;
+  if (!hasFraction) {
+    return String(Math.trunc(numeric));
+  }
+
+  const out = decs > 0 ? numeric.toFixed(decs) : String(numeric);
+  return out.replace('.', ','); // usa coma si hay decimales
+};
 
 const num = (v) => {
   if (v === '' || v === null || v === undefined) return 0;
@@ -518,7 +537,8 @@ export default function QuoteGenerator(){
             ventaItems = (d.ventaRows || []).map(v => {
               let valor = 0;
               if (v.total !== '' && !v.lockPerKg) {
-                valor = num(v.total);
+                // usa exactamente lo cargado en la planilla de costos
+                valor = v.total;
               } else {
                 valor = num(v.usdXKg) * num(h.pesoKg || 0);
               }
@@ -547,7 +567,7 @@ export default function QuoteGenerator(){
             servicio: v.concepto || 'Seguro',
             observacion: '',
             moneda: 'USD',
-            precio: num(v.usd || 0),
+            precio: v.usd ?? 0,
             impuesto: '10%',
           }));
 
@@ -561,6 +581,13 @@ export default function QuoteGenerator(){
 
   const totalUSD = useMemo(
     () => items.reduce((acc, it) => acc + (it.moneda === 'USD' ? num(it.precio) * (num(it.cantidad) || 1) : 0), 0),
+    [items]
+  );
+  const totalUsdDecimals = useMemo(
+    () => items.reduce(
+      (acc, it) => Math.max(acc, decimalsFrom(it.precio), decimalsFrom(it.cantidad)),
+      0
+    ),
     [items]
   );
 
@@ -829,7 +856,7 @@ export default function QuoteGenerator(){
         {/* Ítems */}
         <div className="bg-white rounded-xl border p-3 space-y-2">
           <div className="text-sm font-semibold">Ítems del presupuesto</div>
-          <ItemsTable items={items} setItems={setItems} totalUSD={totalUSD} />
+          <ItemsTable items={items} setItems={setItems} totalUSD={totalUSD} totalDecimals={totalUsdDecimals} />
         </div>
 
         {/* Observaciones / Términos */}
@@ -959,7 +986,12 @@ export default function QuoteGenerator(){
                     <td className="px-2 py-1">{it.servicio}</td>
                     <td className="px-2 py-1">{it.observacion}</td>
                     <td className="px-2 py-1">{it.moneda}</td>
-                    <td className="px-2 py-1 text-right">{money((num(it.cantidad)||1) * num(it.precio))}</td>
+                    <td className="px-2 py-1 text-right">
+                      {money(
+                        (num(it.cantidad) || 1) * num(it.precio),
+                        Math.max(decimalsFrom(it.precio), decimalsFrom(it.cantidad))
+                      )}
+                    </td>
                     <td className="px-2 py-1">{it.impuesto}</td>
                   </tr>
                 ))}
@@ -967,7 +999,7 @@ export default function QuoteGenerator(){
               <tfoot>
                 <tr className="border-t" style={{ borderColor: '#e5e7eb' }}>
                   <td colSpan={4} className="px-2 py-2 font-semibold text-right">TOTAL</td>
-                  <td className="px-2 py-2 font-extrabold text-right">{money(totalUSD)}</td>
+                  <td className="px-2 py-2 font-extrabold text-right">{money(totalUSD, totalUsdDecimals)}</td>
                   <td className="px-2 py-2 font-semibold">USD</td>
                 </tr>
               </tfoot>
@@ -1075,18 +1107,14 @@ function Row({ label, value, className = '' }){
 }
 
 /** Tabla de ítems separada (para mantener limpio el componente) */
-function ItemsTable({ items, setItems, totalUSD }) {
-  const money = (n) =>
-    isNaN(n)
-      ? '0,00'
-      : Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-  const num = (v) => {
-    if (v === '' || v === null || v === undefined) return 0;
-    const s = String(v).replace(/\./g, '').replace(',', '.');
-    const n = Number(s);
-    return isNaN(n) ? 0 : n;
-  };
+function ItemsTable({ items, setItems, totalUSD, totalDecimals }) {
+  const decimalsForTotal =
+    typeof totalDecimals === 'number'
+      ? totalDecimals
+      : items.reduce(
+          (acc, it) => Math.max(acc, decimalsFrom(it.precio), decimalsFrom(it.cantidad)),
+          0
+        );
 
   const updateItem = (idx, patch) => setItems(prev => prev.map((it,i)=> i===idx ? { ...it, ...patch } : it));
   const removeItem = (idx) => setItems(prev => prev.filter((_,i)=>i!==idx));
@@ -1135,7 +1163,7 @@ function ItemsTable({ items, setItems, totalUSD }) {
       </table>
       <div className="flex justify-between mt-2">
         <button className="px-3 py-1 rounded bg-blue-600 text-white" onClick={addItem}>+ Agregar ítem</button>
-        <div className="text-sm font-bold">TOTAL USD {money(totalUSD)}</div>
+        <div className="text-sm font-bold">TOTAL USD {money(totalUSD, decimalsForTotal)}</div>
       </div>
     </>
   );

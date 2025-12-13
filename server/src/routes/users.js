@@ -2,308 +2,156 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { pool } from '../services/db.js';
-import { signToken, requireAuth, requireRole } from '../middlewares/auth.js';
+import { requireAuth, signToken } from '../middlewares/auth.js';
 
 const router = Router();
 
-// Helpers
-function toNull(v) {
-  return v === '' ? null : v;
-}
-function toLowerTrim(v) {
-  return String(v || '').trim().toLowerCase();
-}
-
-// ================== LOGIN ==================
+// Login estilo JWT (alias de /auth/login)
 router.post('/login', async (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) {
-    return res
-      .status(400)
-      .json({ error: 'Email y password requeridos' });
-  }
-
   try {
-    const [[user]] = await pool.query(
-      `SELECT id, name, email, password_hash, role, is_active
-         FROM users
-        WHERE email = ? LIMIT 1`,
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    if (!email || !password) return res.status(400).json({ error: 'Email y password son requeridos' });
+
+    const [[u]] = await pool.query(
+      'SELECT id, name, email, role, is_active, password_hash FROM users WHERE LOWER(email)=? LIMIT 1',
       [email]
     );
+    if (!u || u.is_active === 0) return res.status(401).json({ error: 'Credenciales inválidas' });
+    if (!u.password_hash) return res.status(401).json({ error: 'Usuario sin contraseña configurada' });
 
-    if (!user) {
-      return res.status(401).json({ error: 'Credenciales inválidas' });
-    }
-    if (!user.is_active) {
-      return res.status(403).json({ error: 'Usuario inactivo' });
-    }
+    const ok = await bcrypt.compare(password, u.password_hash);
+    if (!ok) return res.status(401).json({ error: 'Credenciales inválidas' });
 
-    const ok = await bcrypt.compare(password, user.password_hash || '');
-    if (!ok) {
-      return res.status(401).json({ error: 'Credenciales inválidas' });
-    }
-
-    // Normalizamos el role SOLO en el token/respuesta
-    const roleNorm = toLowerTrim(user.role);
-
-    // 🔐 Generar JWT
-    const token = signToken({
-      id: user.id,
-      email: user.email,
-      role: roleNorm,
-      name: user.name,
-    });
-
-    const userOut = {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: roleNorm,
-      is_active: user.is_active,
-    };
-
-    // 👉 IMPORTANTE: devolver { token, user }
-    return res.json({ token, user: userOut });
+    const user = { id: u.id, name: u.name, email: u.email, role: u.role };
+    const token = signToken(user);
+    return res.json({ token, user });
   } catch (err) {
-    console.error('Error en /users/login:', err);
-    return res.status(500).json({ error: 'Error en el servidor' });
+    console.error('[users/login] Error:', err);
+    res.status(500).json({ error: 'Error al iniciar sesión' });
   }
 });
 
-// ================== YO MISMO ==================
 router.get('/me', requireAuth, async (req, res) => {
   try {
-    const [[u]] = await pool.query(
-      `SELECT id, name, email, role, is_active
-         FROM users
-        WHERE id = ? LIMIT 1`,
-      [req.user.id]
-    );
-    if (!u) {
-      return res.status(404).json({ error: 'Usuario no encontrado' });
-    }
-    u.role = toLowerTrim(u.role);
-    return res.json(u);
+    return res.json(req.user);
   } catch (err) {
-    console.error('Error en /users/me:', err);
-    return res.status(500).json({ error: 'Error en el servidor' });
+    console.error('[users/me] Error:', err);
+    res.status(500).json({ error: 'Error al obtener usuario' });
   }
 });
 
-// ============ SELECT (lista simple para combos) ============
-router.get('/select', requireAuth, async (req, res) => {
-  const requesterRole = toLowerTrim(req.user?.role);
-  if (!['admin', 'venta'].includes(requesterRole)) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
-
-  const rawActive = toLowerTrim(
-    req.query.active ?? req.query.is_active ?? '1'
-  );
-  const onlyActive = !(
-    rawActive === '0' ||
-    rawActive === 'false' ||
-    rawActive === 'no'
-  );
-
-  const rolesParam = String(req.query.roles || 'admin,venta')
-    .split(',')
-    .map((s) => toLowerTrim(s))
-    .filter(Boolean);
-
-  const allowedRoles = ['admin', 'venta', 'manager', 'viewer'];
-  const roles = rolesParam.filter((r) => allowedRoles.includes(r));
-  const finalRoles = roles.length ? roles : ['admin', 'venta'];
-
-  const params = [];
-  const placeholders = finalRoles.map(() => '?').join(',');
-  let where = `WHERE LOWER(TRIM(role)) IN (${placeholders})`;
-  params.push(...finalRoles);
-
-  if (onlyActive) where += ' AND is_active = 1';
-
-  try {
-    const [rows] = await pool.query(
-      `SELECT id, name, email
-         FROM users
-         ${where}
-        ORDER BY name ASC, id ASC`,
-      params
-    );
-
-    const out = rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      email: r.email,
-    }));
-
-    return res.json(out);
-  } catch (err) {
-    console.error('Error en /users/select:', err);
-    return res.status(500).json({ error: 'Error en el servidor' });
-  }
-});
-
-// ============ LISTAR (visibilidad según rol) ============
 router.get('/', requireAuth, async (req, res) => {
   try {
-    const requesterRole = toLowerTrim(req.user?.role);
-
-    let rows;
-
-    if (['admin', 'manager'].includes(requesterRole)) {
-      // Admin / manager ven todo
-      const [full] = await pool.query(
-        `SELECT id, name, email, role, is_active, created_at, updated_at
-           FROM users
-          ORDER BY id ASC`
-      );
-      rows = full;
-    } else {
-      // venta / ops / viewer → sólo usuarios activos, datos básicos
-      const [basic] = await pool.query(
-        `SELECT id, name, email
-           FROM users
-          WHERE is_active = 1
-          ORDER BY name ASC, id ASC`
-      );
-      rows = basic;
+    const { role } = req.query;
+    let sql = `SELECT id, name, email, role, is_active FROM users`;
+    const params = [];
+    if (role) {
+      sql += ' WHERE role = ?';
+      params.push(role);
     }
-
-    return res.json(rows);
+    sql += ' ORDER BY name ASC';
+    const [rows] = await pool.query(sql, params);
+    res.json(rows);
   } catch (err) {
-    console.error('Error en GET /users:', err);
-    return res.status(500).json({ error: 'Error en el servidor' });
+    console.error('[users] Error listing:', err);
+    res.status(500).json({ error: 'Error al listar usuarios' });
   }
 });
 
-// ============ OBTENER UNO (cualquiera autenticado) ============
-router.get('/:id', requireAuth, async (req, res) => {
-  const { id } = req.params;
+// Compat: /users/select?active=1
+router.get('/select', requireAuth, async (req, res) => {
   try {
-    const [[u]] = await pool.query(
-      `SELECT id, name, email, role, is_active
-         FROM users
-        WHERE id = ? LIMIT 1`,
-      [id]
-    );
-    if (!u) {
-      return res.status(404).json({ error: 'Usuario no encontrado' });
+    const { active } = req.query;
+    let sql = `SELECT id, name, email, role, is_active FROM users`;
+    const params = [];
+    if (active !== undefined) {
+      sql += ' WHERE is_active = ?';
+      params.push(Number(active) ? 1 : 0);
     }
-    u.role = toLowerTrim(u.role);
-    return res.json(u);
+    sql += ' ORDER BY name ASC';
+    const [rows] = await pool.query(sql, params);
+    res.json(rows || []);
   } catch (err) {
-    console.error('Error en GET /users/:id:', err);
-    return res.status(500).json({ error: 'Error en el servidor' });
+    console.error('[users/select] Error:', err);
+    res.status(500).json({ error: 'Error al listar usuarios' });
   }
 });
 
-// ============ CREAR (solo admin) ============
-router.post('/', requireAuth, requireRole('admin'), async (req, res) => {
-  const { name, email, role = 'viewer', is_active = 1 } = req.body || {};
-  if (!name || !email) {
-    return res
-      .status(400)
-      .json({ error: 'name y email requeridos' });
-  }
-
+// Crear usuario (admin)
+router.post('/', requireAuth, async (req, res) => {
   try {
-    const [[ex]] = await pool.query(
-      'SELECT id FROM users WHERE email = ? LIMIT 1',
-      [email]
-    );
-    if (ex) {
-      return res
-        .status(409)
-        .json({ error: 'Email ya existe', id: ex.id });
+    const role = String(req.user?.role || '').toLowerCase();
+    if (role !== 'admin') return res.status(403).json({ error: 'Permiso denegado' });
+
+    const { name, email, password, is_active = 1, user_role = 'viewer', role: bodyRole } = req.body;
+    if (!name || !email) return res.status(400).json({ error: 'name y email son requeridos' });
+
+    const useRole = bodyRole || user_role || 'viewer';
+    let password_hash = null;
+    if (password) {
+      password_hash = await bcrypt.hash(password, 10);
     }
 
-    const roleNorm = toLowerTrim(role);
     const [ins] = await pool.query(
-      `INSERT INTO users (name, email, password_hash, role, is_active)
-       VALUES (?, ?, ?, ?, ?)`,
-      [name, email, '', roleNorm, Number(is_active) ? 1 : 0]
+      `INSERT INTO users (name, email, role, is_active, password_hash)
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE name=VALUES(name), role=VALUES(role), is_active=VALUES(is_active)`,
+      [name, email, useRole, is_active ? 1 : 0, password_hash]
     );
-    return res.status(201).json({ id: ins.insertId });
+
+    res.status(201).json({ id: ins.insertId || null, ok: true });
   } catch (err) {
-    console.error('Error en POST /users:', err);
-    return res.status(500).json({ error: 'Error en el servidor' });
+    console.error('[users] Error creating:', err);
+    res.status(500).json({ error: 'Error al crear usuario' });
   }
 });
 
-// ============ PATCH (solo admin) ============
-router.patch('/:id', requireAuth, requireRole('admin'), async (req, res) => {
-  const { id } = req.params;
-  const sets = [];
-  const params = [];
-
-  const allowed = ['name', 'email', 'role', 'is_active'];
-  for (const k of allowed) {
-    if (Object.prototype.hasOwnProperty.call(req.body, k)) {
-      if (k === 'is_active') {
-        sets.push('is_active = ?');
-        params.push(req.body[k] ? 1 : 0);
-      } else if (k === 'role') {
-        sets.push('role = ?');
-        params.push(toLowerTrim(req.body[k]));
-      } else {
-        sets.push(`${k} = ?`);
-        params.push(toNull(req.body[k]));
-      }
-    }
-  }
-
-  if (!sets.length) {
-    return res
-      .status(400)
-      .json({ error: 'Nada para actualizar' });
-  }
-  params.push(id);
-
+// Actualizar rol/activo (admin)
+router.patch('/:id', requireAuth, async (req, res) => {
   try {
-    const [r] = await pool.query(
-      `UPDATE users SET ${sets.join(', ')} WHERE id = ?`,
-      params
-    );
-    if (r.affectedRows === 0) {
-      return res.status(404).json({ error: 'No encontrado' });
+    const role = String(req.user?.role || '').toLowerCase();
+    if (role !== 'admin') return res.status(403).json({ error: 'Permiso denegado' });
+
+    const { id } = req.params;
+    const fields = [];
+    const params = [];
+
+    if (req.body.role !== undefined) {
+      fields.push('role = ?');
+      params.push(req.body.role);
     }
-    return res.json({ ok: true });
+    if (req.body.is_active !== undefined) {
+      fields.push('is_active = ?');
+      params.push(Number(req.body.is_active) ? 1 : 0);
+    }
+    if (!fields.length) return res.status(400).json({ error: 'Nada para actualizar' });
+
+    params.push(id);
+    await pool.query(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, params);
+    res.json({ ok: true });
   } catch (err) {
-    console.error('Error en PATCH /users/:id:', err);
-    return res.status(500).json({ error: 'Error en el servidor' });
+    console.error('[users] Error updating:', err);
+    res.status(500).json({ error: 'Error al actualizar usuario' });
   }
 });
 
-// ============ SET PASSWORD (admin o el mismo user) ============
+// Set password (admin)
 router.post('/:id/set-password', requireAuth, async (req, res) => {
-  const { id } = req.params;
-  const { new_password } = req.body || {};
-
-  if (!new_password || String(new_password).length < 6) {
-    return res
-      .status(400)
-      .json({ error: 'Password mínimo 6 caracteres' });
-  }
-
-  const requesterRole = toLowerTrim(req.user.role);
-  if (requesterRole !== 'admin' && Number(id) !== Number(req.user.id)) {
-    return res.status(403).json({ error: 'Permiso denegado' });
-  }
-
   try {
-    const hash = await bcrypt.hash(String(new_password), 10);
-    const [r] = await pool.query(
-      'UPDATE users SET password_hash = ? WHERE id = ?',
-      [hash, id]
-    );
-    if (r.affectedRows === 0) {
-      return res.status(404).json({ error: 'Usuario no encontrado' });
-    }
-    return res.json({ ok: true });
+    const role = String(req.user?.role || '').toLowerCase();
+    if (role !== 'admin') return res.status(403).json({ error: 'Permiso denegado' });
+
+    const { id } = req.params;
+    const { new_password } = req.body;
+    if (!new_password) return res.status(400).json({ error: 'new_password requerido' });
+
+    const password_hash = await bcrypt.hash(new_password, 10);
+    await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [password_hash, id]);
+    res.json({ ok: true });
   } catch (err) {
-    console.error('Error en POST /users/:id/set-password:', err);
-    return res.status(500).json({ error: 'Error en el servidor' });
+    console.error('[users] Error set-password:', err);
+    res.status(500).json({ error: 'Error al actualizar password' });
   }
 });
 

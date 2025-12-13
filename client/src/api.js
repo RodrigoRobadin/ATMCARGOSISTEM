@@ -112,3 +112,7 @@ export function loadSavedAuth() {
 }
 
 export default api;
+export async function fetchUsersByRole(role) {
+  const { data } = await api.get('/users', { params: role ? { role } : {} });
+  return data || [];
+}

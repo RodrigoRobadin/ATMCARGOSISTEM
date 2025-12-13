@@ -1,7 +1,7 @@
 // client/src/pages/Organizations.jsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import api from '../api';
+import api, { fetchUsersByRole } from '../api';
 
 function normalizeUrl(u) {
   if (!u) return '';
@@ -25,13 +25,18 @@ function ExecSelect({
       setLoading(true);
       setErr('');
       try {
-        const { data } = await api.get('/users/select', { params: { active: 1 } });
-        const list = Array.isArray(data)
-          ? data
-          : Array.isArray(data?.items)
-          ? data.items
-          : [];
-        const mapped = list
+        // Primero intentamos traer solo ejecutivos
+        let list = await fetchUsersByRole('ejecutivo');
+        // Fallback: lista completa activa
+        if (!list || list.length === 0) {
+          const { data } = await api.get('/users/select', { params: { active: 1 } });
+          list = Array.isArray(data)
+            ? data
+            : Array.isArray(data?.items)
+            ? data.items
+            : [];
+        }
+        const mapped = (list || [])
           .map((u) => {
             const id = u.id ?? u.user_id ?? null;
             const name =
@@ -378,10 +383,10 @@ function NewOrganizationModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 md:p-6">
       <form
         onSubmit={submit}
-        className="bg-white rounded-2xl p-4 w-full max-w-2xl space-y-3"
+        className="bg-white rounded-2xl p-4 w-full max-w-5xl space-y-3 max-h-[90vh] overflow-y-auto"
       >
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold">Nueva organización</h3>

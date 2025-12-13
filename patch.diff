@@ -1,0 +1,67 @@
+*** Begin Patch
+*** Update File: server/src/routes/industrialDoors.js
+@@
+-    const [rows] = await db.query(
+-      `
+-      SELECT id,
+-             deal_id,
+-             product_id,
+-             product_name,
+-             brand,
+-             identifier,
+-             width_available,
+-             height_available,
+-             side_install,
+-             overheight_available,
+-             frame_type,
+-             canvas_type,
+-             frame_material,
+-             finish,
+-             clearance_right,
+-             clearance_left,
+-             motor_side,
+-             actuators,
+-             visor_lines,
+-             right_leg,
+-             notes,
+-             created_at
+-        FROM industrial_doors
+-       WHERE deal_id = ?
+-       ORDER BY created_at DESC
+-      `,
+-      [dealId]
+-    );
++    const [rows] = await db.query(
++      `
++      SELECT id,
++             deal_id,
++             product_id,
++             product_name,
++             brand,
++             identifier,
++             width_available,
++             height_available,
++             side_install,
++             overheight_available,
++             frame_type,
++             canvas_type,
++             frame_material,
++             finish,
++             clearance_right,
++             clearance_left,
++             motor_side,
++             actuators,
++             visor_lines,
++             right_leg,
++             notes,
++             place,
++             quantity,
++             canvas_color,
++             created_at
++        FROM industrial_doors
++       WHERE deal_id = ?
++       ORDER BY created_at DESC
++      `,
++      [dealId]
++    );
+*** End Patch

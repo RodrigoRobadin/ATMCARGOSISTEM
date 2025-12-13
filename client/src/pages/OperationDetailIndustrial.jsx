@@ -1,4 +1,4 @@
-// client/src/pages/OperationDetailIndustrial.jsx
+﻿// client/src/pages/OperationDetailIndustrial.jsx
 import React, {
   useEffect,
   useMemo,
@@ -10,7 +10,10 @@ import { api } from "../api";
 import DetCosSheet from "./DetCosSheet";
 import ReportPreview from "../components/op-details/ReportPreview";
 import IndustrialDoorList from "../components/op-details/IndustrialDoorList";
-import { generateQuoteEmail } from "../utils/generateQuoteEmail";
+import {
+  buildQuoteEmailPlainText,
+  buildQuoteEmailHtml,
+} from "../utils/generateQuoteEmail";
 /* ---------- helpers ---------- */
 
 // nombre visible actual de un file (fallback si no hay rótulo)
@@ -368,6 +371,16 @@ export default function OperationDetailIndustrial() {
   const [providers, setProviders] = useState([]);
   const [providersLoading, setProvidersLoading] = useState(false);
   const [selectedProviderIds, setSelectedProviderIds] = useState([]);
+  const [showQuoteModal, setShowQuoteModal] = useState(false);
+  const [quoteDoors, setQuoteDoors] = useState([]);
+  const [quoteDoorsLoading, setQuoteDoorsLoading] = useState(false);
+  const [selectedDoorIds, setSelectedDoorIds] = useState([]);
+  const [quoteTo, setQuoteTo] = useState("");
+  const [quoteCc, setQuoteCc] = useState("");
+  const [quoteSubject, setQuoteSubject] = useState("");
+  const [quotePreviewHtml, setQuotePreviewHtml] = useState("");
+  const [quotePreviewText, setQuotePreviewText] = useState("");
+  const [quoteSending, setQuoteSending] = useState(false);
 
   /* ---------- CF helpers ---------- */
 
@@ -1278,6 +1291,138 @@ export default function OperationDetailIndustrial() {
     setShowEmailModal(true);
   }
 
+  async function copyHtmlToClipboard(html) {
+    if (!html) return;
+    try {
+      if (
+        navigator.clipboard &&
+        navigator.clipboard.write &&
+        window.ClipboardItem
+      ) {
+        const item = new ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+        });
+        await navigator.clipboard.write([item]);
+      } else {
+        await navigator.clipboard.writeText(html);
+      }
+    } catch (e) {
+      console.warn("No se pudo copiar HTML al portapapeles:", e);
+    }
+  }
+
+  function updateQuotePreview(doors = []) {
+    try {
+      const { body } = buildQuoteEmailPlainText(
+        doors,
+        deal?.reference || id
+      );
+      const { html } = buildQuoteEmailHtml(
+        doors,
+        deal?.reference || id
+      );
+      setQuotePreviewText(body);
+      setQuotePreviewHtml(html);
+      // copia automatica del HTML para pegar en Outlook / correo
+      copyHtmlToClipboard(html);
+    } catch (e) {
+      console.error("Error armando vista previa de cotizacion:", e);
+    }
+  }
+
+  async function loadQuoteDoors({ preserveSelection = false } = {}) {
+    setQuoteDoorsLoading(true);
+    try {
+      const { data } = await api.get(
+        `/deals/${id}/industrial-doors`
+      );
+      const list = data || [];
+      setQuoteDoors(list);
+      const ids = preserveSelection
+        ? selectedDoorIds.filter((id) =>
+            list.some((d) => d.id === id)
+          )
+        : list.map((d) => d.id);
+      setSelectedDoorIds(ids);
+      const chosen = list.filter((d) => ids.includes(d.id));
+      updateQuotePreview(chosen);
+    } catch (e) {
+      console.error(
+        "Error cargando puertas para cotizacion:",
+        e
+      );
+    } finally {
+      setQuoteDoorsLoading(false);
+    }
+  }
+
+  function toggleDoorSelection(doorId) {
+    setSelectedDoorIds((prev) => {
+      const next = prev.includes(doorId)
+        ? prev.filter((d) => d !== doorId)
+        : [...prev, doorId];
+      const chosen = quoteDoors.filter((d) =>
+        next.includes(d.id)
+      );
+      updateQuotePreview(chosen);
+      return next;
+    });
+  }
+
+  async function openQuoteEmailModal() {
+    setShowQuoteModal(true);
+    const subjDefault = `Solicitud de cotizacion - ${deal?.reference || id
+      }`;
+    setQuoteSubject((prev) => prev || subjDefault);
+    await loadQuoteDoors({ preserveSelection: false });
+  }
+
+  function copyQuoteBody() {
+    if (!quotePreviewText) return;
+    navigator.clipboard
+      .writeText(quotePreviewText)
+      .then(() =>
+        alert("Texto copiado al portapapeles")
+      )
+      .catch(() =>
+        alert("No se pudo copiar el texto")
+      );
+  }
+
+  function copyQuoteHtml() {
+    if (!quotePreviewHtml) return;
+    copyHtmlToClipboard(quotePreviewHtml).then(() =>
+      alert("Diseño copiado (HTML) al portapapeles")
+    );
+  }
+
+  function sendQuoteEmail() {
+    const chosen = quoteDoors.filter((d) =>
+      selectedDoorIds.includes(d.id)
+    );
+    if (!chosen.length) {
+      alert("Selecciona al menos una puerta.");
+      return;
+    }
+    const subj =
+      quoteSubject ||
+      `Solicitud de cotizacion - ${deal?.reference || id}`;
+    const { body } = buildQuoteEmailPlainText(
+      chosen,
+      deal?.reference || id
+    );
+    const to = quoteTo
+      ? `mailto:${encodeURIComponent(quoteTo)}`
+      : "mailto:";
+    const params = [];
+    params.push(`subject=${encodeURIComponent(subj)}`);
+    params.push(`body=${encodeURIComponent(body)}`);
+    if (quoteCc)
+      params.push(`cc=${encodeURIComponent(quoteCc)}`);
+    window.location.href = `${to}?${params.join("&")}`;
+    setShowQuoteModal(false);
+  }
+
   function toggleProvider(provider) {
     setSelectedProviderIds((prev) => {
       const exists = prev.includes(provider.id);
@@ -2156,32 +2301,32 @@ export default function OperationDetailIndustrial() {
                 className="px-3 py-2 text-sm rounded-lg border w-full text-center"
                 onClick={() => setShowReportPreview(true)}
               >
-                📄 Informe de estado (vista previa)
+                Informe de estado (vista previa)
               </button>
 
               <button
                 className="px-3 py-2 text-sm rounded-lg border w-full text-left"
                 onClick={() => setActiveTab("documentos")}
               >
-                📎 Abrir pestaña Documentos
+                Abrir pestaña Documentos
               </button>
 
               <button
                 className="px-3 py-2 text-sm rounded-lg bg-green-600 text-white text-center hover:opacity-90 disabled:opacity-60"
                 onClick={generateStatusReport}
                 disabled={generatingReport}
-                title="Generar informe del estado actual de la operación industrial"
+                title="Generar informe del estado actual de la operacion industrial"
               >
                 {generatingReport
                   ? "Generando informe…"
-                  : "📄 Generar informe de estado"}
+                  : "Generar informe de estado"}
               </button>
 
               <Link
                 to={`/operations/${id}/quote`}
                 className="px-3 py-2 text-sm rounded-lg bg-blue-600 text-white text-center hover:opacity-90"
               >
-                🧾 Presupuesto (Industrial)
+                Presupuesto (Industrial)
               </Link>
 
               <button
@@ -2195,6 +2340,12 @@ export default function OperationDetailIndustrial() {
                 onClick={() => openEmailModal("flete")}
               >
                 Pedir tarifa (flete)
+              </button>
+              <button
+                className="px-3 py-2 text-sm rounded-lg border"
+                onClick={openQuoteEmailModal}
+              >
+                Solicitar cotizacion (puertas)
               </button>
             </div>
           </div>
@@ -2391,6 +2542,136 @@ export default function OperationDetailIndustrial() {
           </div>
         </div>
       )}
+
+      {showQuoteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+            <div className="px-4 py-3 border-b flex items-center justify-between">
+              <h3 className="font-medium text-sm">Solicitar cotizacion (puertas)</h3>
+              <button
+                className="text-xs px-2 py-1 rounded hover:bg-slate-100"
+                onClick={() => setShowQuoteModal(false)}
+              >
+                Cerrar
+              </button>
+            </div>
+            <div className="p-4 text-sm space-y-3 overflow-auto">
+              <div className="grid grid-cols-[70px_1fr] items-center gap-2">
+                <span className="text-right text-slate-500">Para</span>
+                <input
+                  className="border rounded px-2 py-1 w-full text-sm"
+                  value={quoteTo}
+                  onChange={(e) => setQuoteTo(e.target.value)}
+                  placeholder="destinatarios@example.com; otro@proveedor.com"
+                />
+              </div>
+              <div className="grid grid-cols-[70px_1fr] items-center gap-2">
+                <span className="text-right text-slate-500">CC</span>
+                <input
+                  className="border rounded px-2 py-1 w-full text-sm"
+                  value={quoteCc}
+                  onChange={(e) => setQuoteCc(e.target.value)}
+                  placeholder="opcional"
+                />
+              </div>
+              <div className="grid grid-cols-[70px_1fr] items-center gap-2">
+                <span className="text-right text-slate-500">Asunto</span>
+                <input
+                  className="border rounded px-2 py-1 w-full text-sm"
+                  value={quoteSubject}
+                  onChange={(e) => setQuoteSubject(e.target.value)}
+                  placeholder="Solicitud de cotizacion - OP ..."
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] gap-4">
+                <div className="border rounded-lg p-2">
+                  <div className="text-xs font-semibold mb-2">Puertas a incluir</div>
+                  {quoteDoorsLoading ? (
+                    <div className="text-xs text-slate-500">Cargando puertas...</div>
+                  ) : quoteDoors.length === 0 ? (
+                    <div className="text-xs text-slate-500">No hay puertas.</div>
+                  ) : (
+                    <div className="space-y-1 max-h-64 overflow-auto">
+                      {quoteDoors.map((d) => (
+                        <label key={d.id} className="flex items-center gap-2 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={selectedDoorIds.includes(d.id)}
+                            onChange={() => toggleDoorSelection(d.id)}
+                          />
+                          <span className="font-medium">
+                            {d.identifier || d.product_name || `Puerta ${d.id}`}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="border rounded-lg p-2">
+                  <div className="text-xs font-semibold mb-2">Vista previa</div>
+                  <div
+                    className="border rounded bg-slate-50 p-2 text-xs overflow-auto max-h-64"
+                    dangerouslySetInnerHTML={{ __html: quotePreviewHtml }}
+                  />
+                  <div className="mt-2 text-[11px] text-slate-500">
+                    Texto plano:
+                    <pre className="whitespace-pre-wrap border rounded p-2 bg-white mt-1">
+                      {quotePreviewText}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="px-4 py-3 border-t flex justify-end gap-2">
+              <button
+                className="px-3 py-1.5 text-xs rounded-lg border"
+                onClick={() => setShowQuoteModal(false)}
+              >
+                Cerrar
+              </button>
+              <button
+                className="px-3 py-1.5 text-xs rounded-lg border"
+                onClick={copyQuoteHtml}
+                disabled={!quotePreviewHtml}
+              >
+                Copiar HTML
+              </button>
+              <button
+                className="px-3 py-1.5 text-xs rounded-lg border"
+                onClick={copyQuoteBody}
+                disabled={!quotePreviewText}
+              >
+                Copiar cuerpo
+              </button>
+              <button
+                className="px-3 py-1.5 text-xs rounded-lg bg-blue-600 text-white disabled:opacity-60"
+                onClick={sendQuoteEmail}
+                disabled={quoteSending}
+              >
+                {quoteSending ? "Enviando..." : "Abrir en mail"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
