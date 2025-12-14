@@ -196,7 +196,7 @@ export default function Organizations() {
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-lg font-semibold">OrganizacionesS</h2>
+        <h2 className="text-lg font-semibold">Organizaciones</h2>
         <div className="text-sm">
           <span className="text-slate-500 mr-1">
             Acumulado Valor Profit:
@@ -225,7 +225,6 @@ export default function Organizations() {
         <table className="w-full text-sm">
           <thead className="bg-slate-50">
             <tr>
-              <th className="p-2 text-left w-12">ID</th>
               <th className="p-2 text-left">Razón Social</th>
               <th className="p-2 text-left">RUC</th>
               <th className="p-2 text-left">Dirección</th>
@@ -242,7 +241,7 @@ export default function Organizations() {
             {loadingRows && (
               <tr>
                 <td
-                  colSpan={11}
+                  colSpan={10}
                   className="p-6 text-center text-slate-500"
                 >
                   Cargando organizaciones…
@@ -252,7 +251,6 @@ export default function Organizations() {
             {!loadingRows &&
               rows.map((r) => (
                 <tr key={r.id} className="border-b last:border-0">
-                  <td className="p-2">{r.id}</td>
                   <td className="p-2">
                     <Link
                       to={`/organizations/${r.id}`}
@@ -275,7 +273,7 @@ export default function Organizations() {
             {!loadingRows && !rows.length && (
               <tr>
                 <td
-                  colSpan={11}
+                  colSpan={10}
                   className="p-6 text-center text-slate-500"
                 >
                   Sin organizaciones

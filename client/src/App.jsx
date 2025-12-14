@@ -125,7 +125,7 @@ function Layout({ children }) {
           <hr className="my-2" />
           <SideLink to="/invoices" icon="💵" label="Facturas" />
           <SideLink to="/purchase-orders" icon="📦" label="Órdenes de compra" />
-          <SideLink to="/followup" icon="📞" label="Seguimiento" />\n          <SideLink to="/quotes" icon="??" label="Cotizaciones" />
+          <SideLink to="/followup" icon="📞" label="Seguimiento" />          <SideLink to="/quotes" icon="" label="Cotizaciones" />
 
           <hr className="my-3" />
           {/* Sesión */}

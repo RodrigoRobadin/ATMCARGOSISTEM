@@ -1572,7 +1572,7 @@ function EditOrgModal({ org, onClose, onSaved }) {
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50">
       <form
         onSubmit={submit}
-        className="bg-white rounded-2xl p-4 w-full max-w-2xl space-y-3"
+        className="bg-white rounded-2xl p-4 w-full max-w-2xl space-y-3 max-h-[85vh] overflow-y-auto"
       >
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold">
