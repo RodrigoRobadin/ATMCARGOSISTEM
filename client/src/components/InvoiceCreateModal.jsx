@@ -29,6 +29,19 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
   const [executives, setExecutives] = useState([]);
   const [ocDocs, setOcDocs] = useState([]);
   const [dealOrg, setDealOrg] = useState(null);
+  const [suggestedNumber, setSuggestedNumber] = useState("");
+  const [timbreFetched, setTimbreFetched] = useState(false);
+  const [businessUnitKey, setBusinessUnitKey] = useState("");
+  const [dueDateTouched, setDueDateTouched] = useState(false);
+
+  const toISO = (val) => {
+    if (!val) return "";
+    // Si ya viene en formato YYYY-MM-DD lo dejamos
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(val))) return String(val);
+    const d = new Date(val);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toISOString().slice(0, 10);
+  };
 
   useEffect(() => {
     loadExecutives();
@@ -37,6 +50,29 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultDealId]);
+
+  useEffect(() => {
+    const dealId = defaultDealId || form.deal_id || undefined;
+    loadDefaults(dealId, businessUnitKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultDealId, form.deal_id, businessUnitKey]);
+
+  // Recalcula vencimiento según términos de pago (días) si no fue tocado manualmente
+  useEffect(() => {
+    const match = String(form.payment_terms || "").match(/(\d+)/);
+    const days = match ? parseInt(match[1], 10) : NaN;
+    if (!Number.isFinite(days)) return;
+
+    const today = new Date();
+    today.setDate(today.getDate() + days);
+    const nextDue = today.toISOString().slice(0, 10);
+
+    setForm((prev) => {
+      if (dueDateTouched) return prev;
+      if (prev.due_date === nextDue) return prev;
+      return { ...prev, due_date: nextDue };
+    });
+  }, [form.payment_terms, dueDateTouched]);
 
   async function loadExecutives() {
     try {
@@ -52,6 +88,7 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
       const { data } = await api.get(`/deals/${dealId}`);
       if (data && data.organization) {
         setDealOrg(data.organization);
+        setBusinessUnitKey(data.business_unit_key || "");
         setForm((prev) => ({
           ...prev,
           customer_doc: prev.customer_doc || data.organization.ruc || '',
@@ -74,6 +111,74 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
       console.error('No se pudo precargar datos del deal', err);
     }
   }
+
+  async function loadDefaults(dealId, buKeyHint = "") {
+    try {
+      const { data } = await api.get('/invoices/defaults', {
+        params: dealId ? { deal_id: dealId } : {},
+      });
+      const effectiveBU =
+        String(data?.business_unit_key || buKeyHint || businessUnitKey || "").toLowerCase();
+      const isIndustrial =
+        effectiveBU === "atm-industrial" ||
+        effectiveBU === "industrial-rayflex" ||
+        effectiveBU === "industrial-boplan" ||
+        effectiveBU.includes("industrial");
+      const fallbackExp = isIndustrial ? "001-005" : "001-004";
+      const [defPoint, defEst] = fallbackExp.split("-").concat(["", ""]);
+
+      const point = data?.point_of_issue || defPoint || "001";
+      const est = data?.establishment || defEst || "000";
+      const fallbackNumber = `${point}-${est}-${String(1).padStart(7, "0")}`;
+      setSuggestedNumber((data && data.invoice_number) || fallbackNumber);
+      setForm((prev) => ({
+        ...prev,
+        timbrado_number: prev.timbrado_number || data?.timbrado_number || "",
+        timbrado_start_date: prev.timbrado_start_date || toISO(data?.timbrado_start_date) || "",
+        timbrado_expires_at: prev.timbrado_expires_at || toISO(data?.timbrado_expires_at) || "",
+        // Siempre forzamos el punto/establecimiento según la BU detectada
+        point_of_issue: point,
+        establishment: est,
+      }));
+      setTimbreFetched(Boolean(data?.timbrado_number));
+    } catch (err) {
+      console.warn('No se pudieron cargar defaults de factura', err?.message);
+      // fallback básico por si falla la API
+      const fallbackNumber = `001-004-${String(1).padStart(7, "0")}`;
+      setSuggestedNumber((prev) => prev || fallbackNumber);
+      setForm((prev) => ({
+        ...prev,
+        point_of_issue: prev.point_of_issue || "001",
+        establishment: prev.establishment || "004",
+      }));
+    }
+  }
+
+  // Si el timbrado llegó vacío, intentamos leerlo directamente de /params
+  useEffect(() => {
+    if (timbreFetched) return;
+    (async () => {
+      try {
+        const { data } = await api.get('/params', {
+          params: { keys: 'invoice_timbre_number,invoice_timbre_valid_from,invoice_timbre_valid_to' },
+        });
+        const tnum = data?.invoice_timbre_number?.[0]?.value || "";
+        const tFrom = data?.invoice_timbre_valid_from?.[0]?.value || "";
+        const tTo = data?.invoice_timbre_valid_to?.[0]?.value || "";
+        if (tnum || tFrom || tTo) {
+          setForm((prev) => ({
+            ...prev,
+            timbrado_number: prev.timbrado_number || tnum,
+            timbrado_start_date: prev.timbrado_start_date || toISO(tFrom),
+            timbrado_expires_at: prev.timbrado_expires_at || toISO(tTo),
+          }));
+          setTimbreFetched(true);
+        }
+      } catch (err) {
+        console.warn('No se pudo leer timbrado desde parametros', err?.message);
+      }
+    })();
+  }, [timbreFetched]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -136,7 +241,10 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
                 type="date"
                 className="w-full border rounded-lg px-3 py-2"
                 value={form.due_date}
-                onChange={(e) => setForm({ ...form, due_date: e.target.value })}
+                onChange={(e) => {
+                  setDueDateTouched(true);
+                  setForm({ ...form, due_date: e.target.value });
+                }}
               />
             </div>
             <div>
@@ -168,7 +276,14 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
               <select
                 className="w-full border rounded-lg px-3 py-2"
                 value={form.mode}
-                onChange={(e) => setForm({ ...form, mode: e.target.value })}
+                onChange={(e) => {
+                  const mode = e.target.value;
+                  if (mode === "total") {
+                    setForm((prev) => ({ ...prev, mode, percentage: "100" }));
+                  } else {
+                    setForm((prev) => ({ ...prev, mode, percentage: prev.percentage || "60" }));
+                  }
+                }}
               >
                 <option value="total">100% del presupuesto</option>
                 <option value="percentage">Porcentaje</option>
@@ -176,14 +291,25 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">Porcentaje a facturar</label>
-              <input
-                type="number"
-                className="w-full border rounded-lg px-3 py-2"
-                value={form.percentage}
-                onChange={(e) => setForm({ ...form, percentage: e.target.value })}
-                placeholder="Ej: 60"
-                required
-              />
+              {form.mode === "percentage" ? (
+                <select
+                  className="w-full border rounded-lg px-3 py-2"
+                  value={form.percentage}
+                  onChange={(e) => setForm({ ...form, percentage: e.target.value })}
+                  required
+                >
+                  <option value="60">60%</option>
+                  <option value="30">30%</option>
+                  <option value="10">10%</option>
+                </select>
+              ) : (
+                <input
+                  type="number"
+                  className="w-full border rounded-lg px-3 py-2 bg-slate-100"
+                  value="100"
+                  readOnly
+                />
+              )}
             </div>
           </div>
 
@@ -192,9 +318,9 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
               <label className="block text-sm font-medium mb-1">Timbrado</label>
               <input
                 type="text"
-                className="w-full border rounded-lg px-3 py-2"
+                className="w-full border rounded-lg px-3 py-2 bg-slate-100"
                 value={form.timbrado_number}
-                onChange={(e) => setForm({ ...form, timbrado_number: e.target.value })}
+                readOnly
                 placeholder="Numero de timbrado"
               />
             </div>
@@ -202,18 +328,18 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
               <label className="block text-sm font-medium mb-1">Vigencia desde</label>
               <input
                 type="date"
-                className="w-full border rounded-lg px-3 py-2"
+                className="w-full border rounded-lg px-3 py-2 bg-slate-100"
                 value={form.timbrado_start_date}
-                onChange={(e) => setForm({ ...form, timbrado_start_date: e.target.value })}
+                readOnly
               />
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">Vigencia hasta</label>
               <input
                 type="date"
-                className="w-full border rounded-lg px-3 py-2"
+                className="w-full border rounded-lg px-3 py-2 bg-slate-100"
                 value={form.timbrado_expires_at}
-                onChange={(e) => setForm({ ...form, timbrado_expires_at: e.target.value })}
+                readOnly
               />
             </div>
           </div>
@@ -223,9 +349,9 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
               <label className="block text-sm font-medium mb-1">Punto de expedicion</label>
               <input
                 type="text"
-                className="w-full border rounded-lg px-3 py-2"
+                className="w-full border rounded-lg px-3 py-2 bg-slate-100"
                 value={form.point_of_issue}
-                onChange={(e) => setForm({ ...form, point_of_issue: e.target.value })}
+                readOnly
                 placeholder="Ej: 001"
               />
             </div>
@@ -233,11 +359,17 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
               <label className="block text-sm font-medium mb-1">Establecimiento</label>
               <input
                 type="text"
-                className="w-full border rounded-lg px-3 py-2"
+                className="w-full border rounded-lg px-3 py-2 bg-slate-100"
                 value={form.establishment}
-                onChange={(e) => setForm({ ...form, establishment: e.target.value })}
+                readOnly
                 placeholder="Ej: 001"
               />
+            </div>
+            <div className="md:col-span-4">
+              <label className="block text-sm font-medium mb-1">Número factura</label>
+              <div className="w-full border rounded-lg px-3 py-2 bg-slate-100 text-slate-700">
+                {suggestedNumber || '-'}
+              </div>
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">Moneda</label>

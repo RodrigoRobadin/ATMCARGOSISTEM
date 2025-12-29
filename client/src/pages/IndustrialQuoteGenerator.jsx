@@ -1,4 +1,4 @@
-// client/src/pages/QuoteGenerator.jsx
+// client/src/pages/IndustrialQuoteGenerator.jsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
@@ -10,7 +10,7 @@ const HEADER_SRC = `${import.meta.env.BASE_URL}quote-header.png`;
 
 // ====== Constantes PDF (A4) ======
 const PDF_PAGE_W_MM = 210;
-const PDF_MARGIN = { top: 10, right: 10, bottom: 12, left: 10 };
+const PDF_MARGIN = { top: 10, right: 8, bottom: 12, left: 8 };
 const CONTENT_W_MM = PDF_PAGE_W_MM - PDF_MARGIN.left - PDF_MARGIN.right - 0.2;
 
 const decimalsFrom = (raw) => {
@@ -39,13 +39,25 @@ const money = (n, decimalsHint) => {
 
 const num = (v) => {
   if (v === '' || v === null || v === undefined) return 0;
-  const s = String(v).replace(/\./g, '').replace(',', '.');
-  const n = Number(s);
-  return isNaN(n) ? 0 : n;
+  const s = String(v).trim();
+  if (!s) return 0;
+  if (s.includes('.') && s.includes(',')) {
+    const normalized = s.replace(/\./g, '').replace(',', '.');
+    const n = Number(normalized);
+    return Number.isFinite(n) ? n : 0;
+  }
+  if (s.includes(',')) {
+    const normalized = s.replace(/\./g, '').replace(',', '.');
+    const n = Number(normalized);
+    return Number.isFinite(n) ? n : 0;
+  }
+  const normalized = s.replace(/,/g, '');
+  const n = Number(normalized);
+  return Number.isFinite(n) ? n : 0;
 };
 
 // Paleta de branding
-const BRAND_BLUE = '#2F4866';
+const BRAND_BLUE = '#c62828'; // rojo para barras y cabeceras
 
 // =================== helpers de normalización y búsqueda ===================
 const DEBUG_PREFILL = false;
@@ -245,6 +257,13 @@ const CF_SCHEMA = {
   // ✨ NUEVOS CF:
   que_incluye:        { label: 'Qué incluye', type: 'text' },
   que_no_incluye:     { label: 'Qué no incluye', type: 'text' },
+  quote_template:     { label: 'Plantilla seleccionada', type: 'text' },
+  responsabilidad_cliente: { label: 'Responsabilidad del cliente', type: 'text' },
+  plazos_entrega:     { label: 'Plazos de entrega', type: 'text' },
+  condicion_pago:     { label: 'Condicion de pago', type: 'text' },
+  tipo_instalacion:   { label: 'Tipo de instalacion', type: 'text' },
+  garantia:           { label: 'Garantia', type: 'text' },
+  observaciones_producto: { label: 'Observaciones de producto', type: 'text' },
 };
 
 // ===== Utilidades de Tags =====
@@ -257,6 +276,24 @@ function parseTags(raw='') {
 }
 const tagsToText = (tags=[]) => tags.map(t => t.trim()).filter(Boolean).join('\n');
 
+function normalizeTemplateSection(val) {
+  if (Array.isArray(val)) return val.map(String).map(s => s.trim()).filter(Boolean);
+  if (typeof val === 'string') return parseTags(val);
+  return [];
+}
+
+function parseTemplateValue(raw) {
+  if (!raw) return null;
+  try {
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object') return null;
+    const name = String(data.name || data.titulo || data.title || '').trim();
+    return { name: name || 'Plantilla', data };
+  } catch (e) {
+    return null;
+  }
+}
+
 export default function QuoteGenerator(){
   const { id } = useParams();
   const [searchParams] = useSearchParams();
@@ -266,7 +303,6 @@ export default function QuoteGenerator(){
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState(null);
   const [cf, setCf] = useState({});
-  const [cs, setCs] = useState(null);
 
   // Cabecera
   const [cliente, setCliente] = useState('');
@@ -306,6 +342,16 @@ export default function QuoteGenerator(){
   // ✨ NUEVOS estados como TAGS
   const [incluyeTags, setIncluyeTags] = useState([]);     // string[]
   const [noIncluyeTags, setNoIncluyeTags] = useState([]); // string[]
+  const [responsabilidadClienteTags, setResponsabilidadClienteTags] = useState([]);
+  const [plazosEntregaTags, setPlazosEntregaTags] = useState([]);
+  const [condicionPagoTags, setCondicionPagoTags] = useState([]);
+  const [tipoInstalacionTags, setTipoInstalacionTags] = useState([]);
+  const [garantiaTags, setGarantiaTags] = useState([]);
+  const [observacionesProductoTags, setObservacionesProductoTags] = useState([]);
+
+  const [templateOptions, setTemplateOptions] = useState([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [selectedTemplateName, setSelectedTemplateName] = useState('');
 
   // Ítems
   const [items, setItems] = useState([]);
@@ -324,15 +370,65 @@ export default function QuoteGenerator(){
     { onlyActive: true, asValues: true }
   );
 
-  // =================== Carga + PREFILL robusto ===================
+  const selectedTemplate = useMemo(
+    () => templateOptions.find((t) => String(t.id) === String(selectedTemplateId)),
+    [templateOptions, selectedTemplateId]
+  );
+
+  const applyTemplate = (template) => {
+    if (!template) return;
+    setIncluyeTags(normalizeTemplateSection(template.incluye ?? template.que_incluye));
+    setNoIncluyeTags(normalizeTemplateSection(template.no_incluye ?? template.que_no_incluye));
+    setResponsabilidadClienteTags(normalizeTemplateSection(template.responsabilidad_cliente));
+    setPlazosEntregaTags(normalizeTemplateSection(template.plazos_entrega ?? template.plazo_entrega));
+    setCondicionPagoTags(normalizeTemplateSection(template.condicion_pago));
+    setTipoInstalacionTags(normalizeTemplateSection(template.tipo_instalacion));
+    setGarantiaTags(normalizeTemplateSection(template.garantia));
+    setObservacionesProductoTags(normalizeTemplateSection(template.observaciones ?? template.observaciones_producto));
+  };
+
+
+
+  
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await api.get('/params', {
+          params: { keys: 'quote_template', only_active: 1 },
+        });
+        const rows = Array.isArray(data?.quote_template) ? data.quote_template : [];
+        const parsed = rows
+          .map((row) => {
+            const parsedValue = parseTemplateValue(row.value);
+            if (!parsedValue) return null;
+            const name = parsedValue.name || `Plantilla ${row.id}`;
+            return { id: row.id, name, data: parsedValue.data };
+          })
+          .filter(Boolean);
+        setTemplateOptions(parsed);
+      } catch (e) {
+        console.error('No se pudieron cargar plantillas:', e);
+        setTemplateOptions([]);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedTemplateId && selectedTemplateName && templateOptions.length) {
+      const found = templateOptions.find((t) => t.name === selectedTemplateName);
+      if (found) setSelectedTemplateId(String(found.id));
+    }
+  }, [selectedTemplateId, selectedTemplateName, templateOptions]);
+
+// =================== Carga + PREFILL robusto ===================
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        const [{ data: detail }, cfRes, csMaybe] = await Promise.all([
+        const [{ data: detail }, cfRes, quoteRes] = await Promise.all([
           api.get(`/deals/${id}`),
           api.get(`/deals/${id}/custom-fields`).catch(() => ({ data: [] })),
-          api.get(`/deals/${id}/cost-sheet`).then(r => r.data).catch(() => null),
+          api.get(`/deals/${id}/quote`, { params: revisionId ? { revision_id: revisionId } : {} }).catch(() => ({ data: null })),
         ]);
         setDeal(detail.deal);
 
@@ -340,8 +436,7 @@ export default function QuoteGenerator(){
         (cfRes.data || []).forEach((r) => (cfMap[r.key] = r.value ?? ''));
         setCf(cfMap);
 
-        const header = csMaybe?.data?.header || {};
-        setCs(csMaybe?.data || null);
+        const header = {};
 
         const merged = {
           ...buildNormalizedMap(cfMap, 'cf'),
@@ -458,122 +553,58 @@ export default function QuoteGenerator(){
             pick(merged, ['cf:forma_pago', /forma.*pago|payment.*method/], 'Forma de pago') || 'TRANSFERENCIA',
         });
 
-        // ✨ Prefill de "Qué incluye" / "Qué no incluye" como TAGS
+        // Prefill de "Que incluye" / "Que no incluye" como tags
         setIncluyeTags(parseTags(
-          pick(merged, ['cf:que_incluye', 'cf:incluye', /que.*incluye|incluye/], 'Qué incluye') || ''
+          pick(merged, ['cf:que_incluye', 'cf:incluye', /que.*incluye|incluye/], 'Que incluye') || ''
         ));
         setNoIncluyeTags(parseTags(
-          pick(merged, ['cf:que_no_incluye', 'cf:no_incluye', /no.*incluye|excluye|exclusiones/], 'Qué no incluye') || ''
+          pick(merged, ['cf:que_no_incluye', 'cf:no_incluye', /no.*incluye|excluye|exclusiones/], 'Que no incluye') || ''
+        ));
+        setSelectedTemplateName(
+          pick(merged, ['cf:quote_template', /quote.*template|plantilla/], 'Plantilla') || ''
+        );
+        setResponsabilidadClienteTags(parseTags(
+          pick(merged, ['cf:responsabilidad_cliente', /responsabilidad.*cliente/], 'Responsabilidad del cliente') || ''
+        ));
+        setPlazosEntregaTags(parseTags(
+          pick(merged, ['cf:plazos_entrega', /plazos?.*entrega/], 'Plazos de entrega') || ''
+        ));
+        setCondicionPagoTags(parseTags(
+          pick(merged, ['cf:condicion_pago', /condicion.*pago/], 'Condicion de pago') || ''
+        ));
+        setTipoInstalacionTags(parseTags(
+          pick(merged, ['cf:tipo_instalacion', /tipo.*instalacion/], 'Tipo de instalacion') || ''
+        ));
+        setGarantiaTags(parseTags(
+          pick(merged, ['cf:garantia', /garantia/], 'Garantia') || ''
+        ));
+        setObservacionesProductoTags(parseTags(
+          pick(merged, ['cf:observaciones_producto', /observaciones.*producto/], 'Observaciones de producto') || ''
         ));
 
-        // ======= Ítems desde cost sheet =======
-        if (csMaybe?.data) {
-          const d = csMaybe.data;
-          const h = d.header || {};
-          const gsRate = num(h.gsRate) || 0;
-
-          const allInEnabled = !!h.allInEnabled;
-          const allInName = String(h.allInServiceName || '').trim();
-
-          // Total base de venta (suma de cada ítem interno)
-          const ventaBaseTotal = (d.ventaRows || []).reduce((acc, v) => {
-            const manualInt = (v.ventaInt !== '' && v.ventaInt !== undefined && v.ventaInt !== null)
-              ? num(v.ventaInt)
-              : null;
-            let line;
-            if (allInEnabled) {
-              // Para total base: prioriza ventaInt; si no hay, usa total o usdXKg*peso
-              if (manualInt !== null) line = manualInt;
-              else if (v.total !== '' && !v.lockPerKg) line = num(v.total);
-              else line = num(v.usdXKg) * num(h.pesoKg || 0);
-            } else {
-              // modo normal
-              if (v.total !== '' && !v.lockPerKg) line = num(v.total);
-              else line = num(v.usdXKg) * num(h.pesoKg || 0);
-            }
-            return acc + (isNaN(line) ? 0 : line);
-          }, 0);
-
-          let ventaItems = [];
-
-          if (allInEnabled && allInName) {
-            // Modo ALL-IN en el PRESUPUESTO:
-            // - Todos los ítems a 0
-            // - El servicio principal = total acumulado
-            const target = allInName.toLowerCase();
-            const hasTarget = (d.ventaRows || []).some(
-              (v) => String(v.concepto || '').trim().toLowerCase() === target
-            );
-
-            const baseZeroed = (d.ventaRows || []).map(v => ({
-              cantidad: 1,
-              servicio: v.concepto || 'Servicio',
-              observacion: '',
-              moneda: 'USD',
-              precio: 0,
-              impuesto: 'EXENTA',
-            }));
-
-            if (hasTarget) {
-              ventaItems = baseZeroed.map(it =>
-                String(it.servicio || '').trim().toLowerCase() === target
-                  ? { ...it, precio: ventaBaseTotal }
-                  : it
-              );
-            } else {
-              // Si no existe la fila del servicio principal, agregamos una línea extra con el total
-              ventaItems = [
-                ...baseZeroed,
-                {
-                  cantidad: 1,
-                  servicio: allInName,
-                  observacion: '',
-                  moneda: 'USD',
-                  precio: ventaBaseTotal,
-                  impuesto: 'EXENTA',
-                },
-              ];
-            }
-          } else {
-            // Modo normal: cada ítem con su valor correspondiente
-            ventaItems = (d.ventaRows || []).map(v => {
-              let valor = 0;
-              if (v.total !== '' && !v.lockPerKg) {
-                // usa exactamente lo cargado en la planilla de costos
-                valor = v.total;
-              } else {
-                valor = num(v.usdXKg) * num(h.pesoKg || 0);
-              }
+        // ======= Items desde cotizacion industrial =======
+        const quoteItems = quoteRes?.data?.computed?.oferta?.items || [];
+        if (quoteItems.length) {
+          const mapped = quoteItems
+            .filter((it) => Number(it.qty || 0) > 0 || String(it.description || "").trim())
+            .map((it) => {
+              const qty = Number(it.qty || 0) || 1;
+              const unit =
+                it.unit_price ??
+                (qty ? Number(it.total_sales || 0) / qty : Number(it.total_sales || 0));
               return {
-                cantidad: 1,
-                servicio: v.concepto || 'Servicio',
-                observacion: '',
-                moneda: 'USD',
-                precio: valor,
-                impuesto: 'EXENTA',
+                cantidad: qty,
+                servicio: it.description || "Item",
+                observacion: "",
+                moneda: "USD",
+                precio: unit,
+                impuesto: "EXENTA",
+                include: true,
               };
             });
-          }
-
-          const locCliItems = (d.locCliRows || []).map(v => ({
-            cantidad: 1,
-            servicio: v.concepto || 'Gasto local',
-            observacion: '',
-            moneda: 'USD',
-            precio: gsRate ? num(v.gs) / gsRate : 0,
-            impuesto: 'EXENTA',
-          }));
-
-          const segVentaItems = (d.segVentaRows || []).map(v => ({
-            cantidad: 1,
-            servicio: v.concepto || 'Seguro',
-            observacion: '',
-            moneda: 'USD',
-            precio: v.usd ?? 0,
-            impuesto: '10%',
-          }));
-
-          setItems([...ventaItems, ...locCliItems, ...segVentaItems]);
+          setItems(mapped);
+        } else {
+          setItems([]);
         }
       } finally {
         setLoading(false);
@@ -581,15 +612,31 @@ export default function QuoteGenerator(){
     })();
   }, [id]);
 
+  const displayItems = useMemo(
+    () => items.filter((it) => it.include !== false),
+    [items]
+  );
   const totalUSD = useMemo(
-    () => items.reduce((acc, it) => acc + (it.moneda === 'USD' ? num(it.precio) * (num(it.cantidad) || 1) : 0), 0),
+    () =>
+      items.reduce(
+        (acc, it) =>
+          it.include === false
+            ? acc
+            : acc +
+              (it.moneda === 'USD' ? num(it.precio) * (num(it.cantidad) || 1) : 0),
+        0
+      ),
     [items]
   );
   const totalUsdDecimals = useMemo(
-    () => items.reduce(
-      (acc, it) => Math.max(acc, decimalsFrom(it.precio), decimalsFrom(it.cantidad)),
-      0
-    ),
+    () =>
+      items.reduce(
+        (acc, it) =>
+          it.include === false
+            ? acc
+            : Math.max(acc, decimalsFrom(it.precio), decimalsFrom(it.cantidad)),
+        0
+      ),
     [items]
   );
 
@@ -626,9 +673,16 @@ export default function QuoteGenerator(){
         ['plazo_credito',    terminos.plazoCredito],
         ['forma_pago',       terminos.formaPago],
 
-        // ✨ nuevos como LISTA (líneas)
+        // nuevos como lista (lineas)
         ['que_incluye',      tagsToText(incluyeTags)],
         ['que_no_incluye',   tagsToText(noIncluyeTags)],
+        ['quote_template',   selectedTemplate?.name || selectedTemplateName || ''],
+        ['responsabilidad_cliente', tagsToText(responsabilidadClienteTags)],
+        ['plazos_entrega',   tagsToText(plazosEntregaTags)],
+        ['condicion_pago',   tagsToText(condicionPagoTags)],
+        ['tipo_instalacion', tagsToText(tipoInstalacionTags)],
+        ['garantia',         tagsToText(garantiaTags)],
+        ['observaciones_producto', tagsToText(observacionesProductoTags)],
       ];
 
       await Promise.all(entries.map(async ([key, value]) => {
@@ -741,12 +795,105 @@ export default function QuoteGenerator(){
           letter-spacing: .02em;
           color: #334155; /* slate-700 */
         }
+        .quote-header{
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 10px 12px 8px 12px;
+          column-gap: 16px;
+        }
+        .quote-logo{
+          display: inline-flex;
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 4px;
+          font-family: "Georgia", "Times New Roman", serif;
+          font-size: 26px;
+          letter-spacing: .6px;
+          line-height: 1.05;
+          font-weight: 600;
+        }
+        .quote-logo-text{
+          display: inline-flex;
+          align-items: flex-end;
+          gap: 2px;
+          text-transform: uppercase;
+        }
+        .quote-logo-grupo{
+          color: #0f172a; /* slate-900 */
+          font-weight: 600;
+        }
+        .quote-logo-atm{
+          color: #ef4444;
+          font-weight: 600;
+          letter-spacing: .2px;
+        }
+        .quote-logo-swoosh{
+          position: relative;
+          width: 150px;
+          height: 12px;
+          margin-top: 6px;
+        }
+        .quote-logo-swoosh::before{
+          content: "";
+          position: absolute;
+          left: 0;
+          right: 0;
+          top: 3px;
+          height: 9px;
+          background: #ef4444;
+          border-radius: 0 0 90px 90px;
+          transform: skewX(-12deg);
+        }
+        .quote-logo-swoosh::after{
+          content: "";
+          position: absolute;
+          left: 20px;
+          top: 1px;
+          width: 86px;
+          height: 6px;
+          background: #ffffff;
+          border-radius: 0 0 40px 40px;
+          transform: skewX(-12deg);
+          opacity: .9;
+        }
+        .quote-banner{
+          position: relative;
+          height: 48px;
+          width: 420px;
+        }
+        .quote-banner-orange{
+          position: absolute;
+          left: 0;
+          top: 0;
+          height: 48px;
+          width: 140px;
+          background: #c62828;
+          border-top-right-radius: 40px;
+          border-bottom-right-radius: 40px;
+        }
+        .quote-banner-blue{
+          position: absolute;
+          right: 0;
+          top: 0;
+          height: 48px;
+          width: 320px;
+          background: #b71c1c;
+          border-top-left-radius: 40px;
+          border-bottom-left-radius: 40px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #ffffff;
+          font-weight: 700;
+          letter-spacing: .08em;
+        }
       `}</style>
 
       {/* Header actions */}
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Generar Presupuesto — REF {deal.reference}</h1>
-        <div className="space-x-2">
+        <div className="space-x-2 flex items-center">
           <button
             onClick={saveToCustomFields}
             disabled={saving}
@@ -893,7 +1040,39 @@ export default function QuoteGenerator(){
           </div>
         </div>
 
-        {/* ✨ Alcances: Qué incluye / Qué no incluye como TAGS */}
+        {/* Plantilla de condiciones */}
+        <div className="bg-white rounded-xl border p-3 space-y-2">
+          <div className="text-sm font-semibold">Plantilla de condiciones</div>
+          <label className="block text-sm">
+            Seleccionar plantilla
+            <select
+              className="mt-1 w-full border rounded px-2 py-1"
+              value={selectedTemplateId}
+              onChange={(e) => {
+                const nextId = e.target.value;
+                setSelectedTemplateId(nextId);
+                const next = templateOptions.find((t) => String(t.id) === String(nextId));
+                if (next) {
+                  setSelectedTemplateName(next.name);
+                  applyTemplate(next.data);
+                } else {
+                  setSelectedTemplateName('');
+                }
+              }}
+            >
+              <option value="">-- Seleccionar --</option>
+              {templateOptions.map((opt) => (
+                <option key={opt.id} value={opt.id}>
+                  {opt.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {selectedTemplate?.name && (
+            <div className="text-xs text-slate-500">Origen: Parametros</div>
+          )}
+        </div>
+
         <div className="bg-white rounded-xl border p-3 space-y-3">
           <div className="text-sm font-semibold">Alcances del servicio</div>
 
@@ -915,10 +1094,70 @@ export default function QuoteGenerator(){
         </div>
       </div>
 
+              {/* Condiciones industriales */}
+        <div className="bg-white rounded-xl border p-3 space-y-3">
+          <div className="text-sm font-semibold">Condiciones industriales</div>
+
+          <TagMultiInput
+            label="Responsabilidad del cliente"
+            tags={responsabilidadClienteTags}
+            setTags={setResponsabilidadClienteTags}
+            placeholder="Escribi y presiona Enter..."
+          />
+
+          <TagMultiInput
+            label="Plazos de entrega"
+            tags={plazosEntregaTags}
+            setTags={setPlazosEntregaTags}
+            placeholder="Escribi y presiona Enter..."
+          />
+
+          <TagMultiInput
+            label="Condicion de pago"
+            tags={condicionPagoTags}
+            setTags={setCondicionPagoTags}
+            placeholder="Escribi y presiona Enter..."
+          />
+
+          <TagMultiInput
+            label="Tipo de instalacion"
+            tags={tipoInstalacionTags}
+            setTags={setTipoInstalacionTags}
+            placeholder="Escribi y presiona Enter..."
+          />
+
+          <TagMultiInput
+            label="Garantia"
+            tags={garantiaTags}
+            setTags={setGarantiaTags}
+            placeholder="Escribi y presiona Enter..."
+          />
+
+          <TagMultiInput
+            label="Observaciones de producto"
+            tags={observacionesProductoTags}
+            setTags={setObservacionesProductoTags}
+            placeholder="Escribi y presiona Enter..."
+          />
+        </div>
+
+
       {/* ================= PREVIEW / PDF (A4) ================= */}
       <div id="quote-print" className="bg-white border rounded-xl p-0">
-        <div className="mx-auto text-[13px] leading-5" style={{ width: `${CONTENT_W_MM}mm` }}>
-          <img src={HEADER_SRC} crossOrigin="anonymous" alt="Cabecera presupuesto" className="w-full h-auto" />
+        <div className="mx-auto text-[12px] leading-5" style={{ width: `${CONTENT_W_MM}mm` }}>
+          <div className="quote-header">
+            <div className="quote-logo">
+              <div className="quote-logo-text">
+                <span className="quote-logo-grupo">grupo</span>
+                <span className="quote-logo-atm">atm</span>
+              </div>
+              <div className="quote-logo-swoosh" aria-hidden="true"></div>
+            </div>
+            <div className="quote-banner">
+              <div className="quote-banner-orange"></div>
+              <div className="quote-banner-blue">COTIZACION</div>
+            </div>
+          </div>
 
           <div className="flex justify-between items-start px-4 mt-3 avoid-break">
             <div className="text-[14px]">
@@ -931,36 +1170,47 @@ export default function QuoteGenerator(){
             </div>
           </div>
 
-          {/* COTIZACIÓN */}
+          {/* COTIZACION */}
           <div className="px-4 mt-3 avoid-break">
-            <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
-              Cotización de Flete
+            <div className="text-center font-bold underline">COTIZACION</div>
+            <div className="mt-3 text-[11px] text-slate-800">
+              <div>
+                CON GUSTO LE PRESENTAMOS NUESTRO PRESUPUESTO PARA LOS PRODUCTOS QUE ESTA
+                CONSIDERANDO ADQUIRIR. NOS COMPLACE
+              </div>
+              <div>OFRECERLE SOLUCIONES QUE SE ADAPTEN PERFECTAMENTE A SUS NECESIDADES.</div>
+              <div>
+                A CONTINUACION, DETALLAMOS LOS PRODUCTOS Y LOS COSTOS SEGUN LOS DETALLES
+                DE SU PEDIDO.
+              </div>
             </div>
 
-            {/* Dos columnas simétricas; los valores quedan alineados */}
-            <div className="grid grid-cols-2 gap-x-8 border-x border-b p-3 rounded-b" style={{ borderColor: '#d1d5db' }}>
-              {/* Columna izquierda */}
-              <div className="kv-grid">
-                <KVRow label="Tipo de Operación" value={tipoOperacion} />
-                <KVRow label="Tipo de Envío" value={tipoEnvio} />
-                <KVRow label="País de Origen" value={paisOrigen} />
-                <KVRow label="Ciudad de Origen" value={ciudadOrigen} />
-                <KVRow label="Aeropuerto de Origen" value={aeropuertoOrigen} />
-                <KVRow label="Volumen (m³)" value={volumenM3} />
-                <KVRow label="Mercadería" value={mercaderia} />
-                <KVRow label="Seguro de Carga" value={seguroTipo} />
-              </div>
-
-              {/* Columna derecha */}
-              <div className="kv-grid">
-                <KVRow label="Tipo de Transporte" value={tipoTransporte} />
-                <KVRow label="Incoterms" value={incoterm} />
-                <KVRow label="País de Destino" value={paisDestino} />
-                <KVRow label="Ciudad de Destino" value={ciudadDestino} />
-                <KVRow label="Aeropuerto de Destino" value={aeropuertoDestino} />
-                <KVRow label="Peso Bruto (kg)" value={pesoBrutoKg} />
-                {/* Ocultamos "Aseguradora" y dejamos solo "Monto asegurado" */}
-                <KVRow label="Monto asegurado" value={montoAsegurado} />
+            <div className="mt-3 border rounded" style={{ borderColor: '#9ca3af' }}>
+              <div className="grid grid-cols-2 gap-x-8 p-3 text-[11px]">
+                <div className="space-y-1">
+                  <div>
+                    <span className="font-semibold">CONDICION DE VENTA:</span>{' '}
+                    {terminos.condicionVenta || '-'}
+                  </div>
+                  <div>
+                    <span className="font-semibold">FORMA DE PAGO:</span>{' '}
+                    {terminos.formaPago || '-'}
+                  </div>
+                  <div>
+                    <span className="font-semibold">COMENTARIO:</span>{' '}
+                    {observaciones || '-'}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <div>
+                    <span className="font-semibold">PLAZO DE CREDITO:</span>{' '}
+                    {terminos.plazoCredito || '-'}
+                  </div>
+                  <div>
+                    <span className="font-semibold">VALIDEZ DE LA OFERTA:</span>{' '}
+                    {terminos.validez || '-'}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -982,7 +1232,7 @@ export default function QuoteGenerator(){
                 </tr>
               </thead>
               <tbody>
-                {items.map((it, i) => (
+                {displayItems.map((it, i) => (
                   <tr key={i} className="border-t" style={{ borderColor: '#e5e7eb' }}>
                     <td className="px-2 py-1">{it.cantidad || 1}</td>
                     <td className="px-2 py-1">{it.servicio}</td>
@@ -1031,6 +1281,73 @@ export default function QuoteGenerator(){
               </div>
             </div>
           )}
+
+          {responsabilidadClienteTags.length > 0 && (
+            <div className="px-4 mt-4 avoid-break">
+              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
+                Responsabilidad del cliente
+              </div>
+              <div className="border-x border-b p-3 rounded-b" style={{ borderColor: '#d1d5db' }}>
+                <ListFromText text={tagsToText(responsabilidadClienteTags)} />
+              </div>
+            </div>
+          )}
+
+          {plazosEntregaTags.length > 0 && (
+            <div className="px-4 mt-4 avoid-break">
+              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
+                Plazos de entrega
+              </div>
+              <div className="border-x border-b p-3 rounded-b" style={{ borderColor: '#d1d5db' }}>
+                <ListFromText text={tagsToText(plazosEntregaTags)} />
+              </div>
+            </div>
+          )}
+
+          {condicionPagoTags.length > 0 && (
+            <div className="px-4 mt-4 avoid-break">
+              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
+                Condicion de pago
+              </div>
+              <div className="border-x border-b p-3 rounded-b" style={{ borderColor: '#d1d5db' }}>
+                <ListFromText text={tagsToText(condicionPagoTags)} />
+              </div>
+            </div>
+          )}
+
+          {tipoInstalacionTags.length > 0 && (
+            <div className="px-4 mt-4 avoid-break">
+              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
+                Tipo de instalacion
+              </div>
+              <div className="border-x border-b p-3 rounded-b" style={{ borderColor: '#d1d5db' }}>
+                <ListFromText text={tagsToText(tipoInstalacionTags)} />
+              </div>
+            </div>
+          )}
+
+          {garantiaTags.length > 0 && (
+            <div className="px-4 mt-4 avoid-break">
+              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
+                Garantia
+              </div>
+              <div className="border-x border-b p-3 rounded-b" style={{ borderColor: '#d1d5db' }}>
+                <ListFromText text={tagsToText(garantiaTags)} />
+              </div>
+            </div>
+          )}
+
+          {observacionesProductoTags.length > 0 && (
+            <div className="px-4 mt-4 avoid-break">
+              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
+                Observaciones de producto
+              </div>
+              <div className="border-x border-b p-3 rounded-b" style={{ borderColor: '#d1d5db' }}>
+                <ListFromText text={tagsToText(observacionesProductoTags)} />
+              </div>
+            </div>
+          )}
+
 
           {/* OBSERVACIONES */}
           {observaciones && (
@@ -1110,23 +1427,37 @@ function Row({ label, value, className = '' }){
 
 /** Tabla de ítems separada (para mantener limpio el componente) */
 function ItemsTable({ items, setItems, totalUSD, totalDecimals }) {
+  const included = items.filter((it) => it.include !== false);
   const decimalsForTotal =
     typeof totalDecimals === 'number'
       ? totalDecimals
-      : items.reduce(
+      : included.reduce(
           (acc, it) => Math.max(acc, decimalsFrom(it.precio), decimalsFrom(it.cantidad)),
           0
         );
 
   const updateItem = (idx, patch) => setItems(prev => prev.map((it,i)=> i===idx ? { ...it, ...patch } : it));
   const removeItem = (idx) => setItems(prev => prev.filter((_,i)=>i!==idx));
-  const addItem = () => setItems(prev => [...prev, { cantidad: 1, servicio: '', observacion: '', moneda: 'USD', precio: '', impuesto: 'EXENTA' }]);
+  const addItem = () =>
+    setItems((prev) => [
+      ...prev,
+      {
+        cantidad: 1,
+        servicio: '',
+        observacion: '',
+        moneda: 'USD',
+        precio: '',
+        impuesto: 'EXENTA',
+        include: true,
+      },
+    ]);
 
   return (
     <>
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b">
+            <th className="text-left py-1 uppercase text-slate-600">Incluye</th>
             <th className="text-left py-1 uppercase text-slate-600">Cantidad</th>
             <th className="text-left py-1 uppercase text-slate-600">Servicio</th>
             <th className="text-left py-1 uppercase text-slate-600">Observación</th>
@@ -1139,6 +1470,13 @@ function ItemsTable({ items, setItems, totalUSD, totalDecimals }) {
         <tbody>
           {items.map((it, idx) => (
             <tr key={idx} className="border-b">
+              <td>
+                <input
+                  type="checkbox"
+                  checked={it.include !== false}
+                  onChange={(e) => updateItem(idx, { include: e.target.checked })}
+                />
+              </td>
               <td><input className="w-16 border rounded px-1" value={it.cantidad} onChange={e=>updateItem(idx, { cantidad: e.target.value })} /></td>
               <td><input className="w-full border rounded px-1" value={it.servicio} onChange={e=>updateItem(idx, { servicio: e.target.value })} /></td>
               <td><input className="w-full border rounded px-1" value={it.observacion} onChange={e=>updateItem(idx, { observacion: e.target.value })} /></td>

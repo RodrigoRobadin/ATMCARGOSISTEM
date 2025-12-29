@@ -190,11 +190,15 @@ export default function WorkspaceTable() {
     peso: "",
     volumen: "",
     ejecutivo: "",
+    presupuesto: "",
+    fecha: "",
   });
   const [openFilterKey, setOpenFilterKey] = useState(null);
 
   const isIndustrial =
-    key === "industrial-rayflex" || key === "industrial-boplan";
+    key === "atm-industrial" ||
+    key === "industrial-rayflex" ||
+    key === "industrial-boplan";
 
   /* ---------- Carga base ---------- */
   useEffect(() => {
@@ -222,9 +226,17 @@ export default function WorkspaceTable() {
           chosenPid = Number(buPid || basePid) || null;
         } catch {}
 
-        // 2) Fallback al primer pipeline si no hay param
+        // 2) Fallback al pipeline correcto segÚn workspace
         const { data: p } = await api.get("/pipelines");
-        const pid = chosenPid || (Array.isArray(p) && p.length ? p[0].id : null);
+        let pid = chosenPid || null;
+
+        if (!pid && Array.isArray(p) && p.length) {
+          if (key === "atm-industrial") {
+            pid = 1;
+          } else {
+            pid = p[0].id;
+          }
+        }
         setPipelineId(pid);
 
         if (pid) {
@@ -304,19 +316,29 @@ export default function WorkspaceTable() {
       const tipoRaw = det.tipo || "—";
       const tipoLabel = TIPO_LABEL[tipoRaw] || tipoRaw; // 👈 SOLO UI
 
+      const presupuestoRaw = String(d.org_budget_status || "").toLowerCase();
+      const presupuesto =
+        presupuestoRaw === "confirmado" ? "Confirmado" : "A confirmar";
+
+      const fecha = d.created_at
+        ? new Date(d.created_at).toLocaleDateString()
+        : "—";
+
       return {
         id: d.id,
         referencia: d.reference ?? d.title ?? "—",
         estado: etapa,
         organizacion: d.org_name || "—",
+        tipo: tipoLabel, // visible / filtro
         tipoRaw, // interno (por si lo necesitás)
-        tipoLabel, // visible / filtro
         origen: det.origin || "—",
         destino: det.destination || "—",
         docHouse: det.docHouse || "—",
         peso: det.peso || "—",
         volumen: det.volumen || "—",
         ejecutivo,
+        presupuesto,
+        fecha,
       };
     });
   }, [deals, stages, detailCache]);
@@ -333,15 +355,17 @@ export default function WorkspaceTable() {
         like(r.referencia, colFilter.referencia) &&
         like(r.estado, colFilter.estado) &&
         like(r.organizacion, colFilter.organizacion) &&
-        like(r.tipoLabel, colFilter.tipo) && // 👈 filtra por lo que se ve
-        like(r.origen, colFilter.origen) &&
-        like(r.destino, colFilter.destino) &&
-        like(r.docHouse, colFilter.docHouse) &&
-        like(r.peso, colFilter.peso) &&
-        like(r.volumen, colFilter.volumen) &&
-        like(r.ejecutivo, colFilter.ejecutivo)
+        (isIndustrial || like(r.tipo, colFilter.tipo)) &&
+        (isIndustrial || like(r.origen, colFilter.origen)) &&
+        (isIndustrial || like(r.destino, colFilter.destino)) &&
+        (isIndustrial || like(r.docHouse, colFilter.docHouse)) &&
+        (isIndustrial || like(r.peso, colFilter.peso)) &&
+        (isIndustrial || like(r.volumen, colFilter.volumen)) &&
+        like(r.ejecutivo, colFilter.ejecutivo) &&
+        (!isIndustrial || like(r.presupuesto, colFilter.presupuesto)) &&
+        (!isIndustrial || like(r.fecha, colFilter.fecha))
     );
-  }, [rows, colFilter]);
+  }, [rows, colFilter, isIndustrial]);
 
   if (loading)
     return <div className="text-sm text-slate-600">Cargando…</div>;
@@ -350,18 +374,27 @@ export default function WorkspaceTable() {
       <div className="text-sm text-slate-600">Workspace no encontrado.</div>
     );
 
-  const COLUMNS = [
-    { key: "referencia", label: "Referencia" },
-    { key: "estado", label: "Estado" }, // etapa del pipeline
-    { key: "organizacion", label: "Organización" },
-    { key: "tipo", label: "Tipo de embarque" },
-    { key: "origen", label: "Origen" },
-    { key: "destino", label: "Destino" },
-    { key: "docHouse", label: "DOC HOUSE" },
-    { key: "peso", label: "Peso Bruto" },
-    { key: "volumen", label: "Volumen" },
-    { key: "ejecutivo", label: "Ejecutivo de cuenta" },
-  ];
+  const COLUMNS = isIndustrial
+    ? [
+        { key: "referencia", label: "Referencia" },
+        { key: "estado", label: "Estado" }, // etapa del pipeline
+        { key: "organizacion", label: "Organización" },
+        { key: "presupuesto", label: "Presupuesto" },
+        { key: "fecha", label: "Fecha" },
+        { key: "ejecutivo", label: "Ejecutivo" },
+      ]
+    : [
+        { key: "referencia", label: "Referencia" },
+        { key: "estado", label: "Estado" }, // etapa del pipeline
+        { key: "organizacion", label: "Organización" },
+        { key: "tipo", label: "Tipo de embarque" },
+        { key: "origen", label: "Origen" },
+        { key: "destino", label: "Destino" },
+        { key: "docHouse", label: "DOC HOUSE" },
+        { key: "peso", label: "Peso Bruto" },
+        { key: "volumen", label: "Volumen" },
+        { key: "ejecutivo", label: "Ejecutivo de cuenta" },
+      ];
 
   return (
     <div>
@@ -466,25 +499,28 @@ export default function WorkspaceTable() {
           <tbody className="text-sm">
             {filteredRows.map((r) => (
               <tr key={r.id} className="hover:bg-slate-50">
-                <td className="px-4 py-2 border-b">
-                  <a
-                    href={`/operations/${r.id}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-blue-600 hover:underline"
-                  >
-                    {r.referencia}
-                  </a>
-                </td>
-                <td className="px-4 py-2 border-b">{r.estado}</td>
-                <td className="px-4 py-2 border-b">{r.organizacion}</td>
-                <td className="px-4 py-2 border-b">{r.tipoLabel}</td>
-                <td className="px-4 py-2 border-b">{r.origen}</td>
-                <td className="px-4 py-2 border-b">{r.destino}</td>
-                <td className="px-4 py-2 border-b">{r.docHouse}</td>
-                <td className="px-4 py-2 border-b">{r.peso}</td>
-                <td className="px-4 py-2 border-b">{r.volumen}</td>
-                <td className="px-4 py-2 border-b">{r.ejecutivo}</td>
+                {COLUMNS.map((c, idx) => {
+                  const val = r[c.key];
+                  if (c.key === "referencia") {
+                    return (
+                      <td key={c.key} className="px-4 py-2 border-b">
+                        <a
+                          href={`/operations/${r.id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-blue-600 hover:underline"
+                        >
+                          {val}
+                        </a>
+                      </td>
+                    );
+                  }
+                  return (
+                    <td key={c.key} className="px-4 py-2 border-b">
+                      {val}
+                    </td>
+                  );
+                })}
               </tr>
             ))}
             {!filteredRows.length && (

@@ -33,6 +33,7 @@ import { RequireAuth, RequireRole, useAuth } from './auth.jsx';
 
 // (opcional) generator dedicado:
 import QuoteGenerator from './pages/QuoteGenerator.jsx';
+import IndustrialQuoteGenerator from './pages/IndustrialQuoteGenerator.jsx';
 
 // Seguimiento
 import Invoices from './pages/Invoices.jsx';
@@ -125,7 +126,8 @@ function Layout({ children }) {
           <hr className="my-2" />
           <SideLink to="/invoices" icon="💵" label="Facturas" />
           <SideLink to="/purchase-orders" icon="📦" label="Órdenes de compra" />
-          <SideLink to="/followup" icon="📞" label="Seguimiento" />          <SideLink to="/quotes" icon="" label="Cotizaciones" />
+          <SideLink to="/followup" icon="📞" label="Seguimiento" />
+          <SideLink to="/quotes" icon="" label="Cotizaciones" />
 
           <hr className="my-3" />
           {/* Sesión */}
@@ -245,19 +247,14 @@ export default function App() {
                 {/* ----------------------------------------------- */}
 
                 {/* Operaciones */}
-                {/* 🔀 Ahora usamos el switcher para decidir normal vs industrial */}
                 <Route path="/operations/:id" element={<OperationDetailSwitcher />} />
-
-                {/* Ruta directa opcional al detalle industrial */}
                 <Route
                   path="/operations/:id/industrial"
                   element={<OperationDetailIndustrial />}
                 />
 
-                <Route
-                  path="/operations/:id/quote"
-                  element={<QuoteGenerator />}
-                />
+                <Route path="/operations/:id/quote" element={<QuoteGenerator />} />
+                <Route path="/operations/:id/industrial-quote" element={<IndustrialQuoteGenerator />} />
                 <Route
                   path="/operations/:id/request-freight"
                   element={<RequestFreight />}
@@ -265,12 +262,14 @@ export default function App() {
 
                 {/* Cotizaciones */}
                 <Route path="/quotes" element={<Quotes />} />
+                <Route path="/quotes/new" element={<QuoteEditor />} />
                 <Route path="/quotes/:id" element={<QuoteEditor />} />
 
                 <Route path="/invoices" element={<Invoices />} />
                 <Route path="/invoices/:id" element={<InvoiceDetail />} />
                 <Route path="/purchase-orders" element={<PurchaseOrders />} />
                 <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />
+
                 {/* Seguimiento */}
                 <Route path="/followup" element={<FollowUp />} />
               </Routes>
@@ -281,5 +280,3 @@ export default function App() {
     </Routes>
   );
 }
-
-

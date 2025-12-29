@@ -24,6 +24,13 @@ export default function Quotes() {
     loadQuotes();
   }, []);
 
+  function exportXlsx(id) {
+    // usa baseURL de axios
+    // con api.js tu base ya es /api o localhost:4000/api
+    const url = `${api.defaults.baseURL}/quotes/${id}/export-xlsx`;
+    window.open(url, "_blank");
+  }
+
   return (
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
@@ -32,7 +39,7 @@ export default function Quotes() {
           className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:opacity-90"
           onClick={() => navigate("/quotes/new")}
         >
-          Nueva cotizacion
+          Nueva cotización
         </button>
       </div>
 
@@ -75,12 +82,18 @@ export default function Quotes() {
                     {q.updated_at ? new Date(q.updated_at).toLocaleString() : "-"}
                   </td>
                   <td className="px-3 py-2">
-                    <Link
-                      className="text-blue-600 underline"
-                      to={`/quotes/${q.id}`}
-                    >
-                      Editar
-                    </Link>
+                    <div className="flex gap-3 items-center">
+                      <Link className="text-blue-600 underline" to={`/quotes/${q.id}`}>
+                        Editar
+                      </Link>
+
+                      <button
+                        className="text-emerald-700 underline"
+                        onClick={() => exportXlsx(q.id)}
+                      >
+                        Export XLSX
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

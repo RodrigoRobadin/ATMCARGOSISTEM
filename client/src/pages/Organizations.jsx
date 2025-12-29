@@ -90,6 +90,9 @@ export default function Organizations() {
   const [rows, setRows] = useState([]);
   const [open, setOpen] = useState(false);
   const [loadingRows, setLoadingRows] = useState(false);
+  const [page, setPage] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
+  const pageSize = 15;
 
   // Se mantienen para futuro
   const [owners, setOwners] = useState([]);
@@ -119,18 +122,37 @@ export default function Organizations() {
   async function fetchOrgs() {
     try {
       setLoadingRows(true);
-      const { data } = await api.get('/organizations');
-      setRows(Array.isArray(data) ? data : []);
+      const offset = page * pageSize;
+      const res = await api.get('/organizations', {
+        params: { limit: pageSize, offset, include_total: 1 },
+      });
+      const data = res?.data;
+      const items = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.items)
+        ? data.items
+        : [];
+      setRows(items);
+      const totalFromBody = Number(data?.total);
+      if (Number.isFinite(totalFromBody) && totalFromBody >= 0) {
+        setTotalCount(totalFromBody);
+      } else {
+        setTotalCount(offset + items.length);
+      }
     } catch {
       setRows([]);
+      setTotalCount(0);
     } finally {
       setLoadingRows(false);
     }
   }
 
   useEffect(() => {
-    // ✅ Igual que en el VPS: cargamos sin mirar auth
     fetchOrgs();
+  }, [page]);
+
+  useEffect(() => {
+    // ✅ Igual que en el VPS: cargamos sin mirar auth
 
     (async () => {
       try {
@@ -192,6 +214,17 @@ export default function Organizations() {
       }
     })();
   }, []);
+
+  const totalPages = useMemo(() => {
+    const count = Math.max(totalCount, 0);
+    return Math.max(1, Math.ceil(count / pageSize));
+  }, [totalCount, pageSize]);
+
+  useEffect(() => {
+    if (page > totalPages - 1) {
+      setPage(Math.max(0, totalPages - 1));
+    }
+  }, [page, totalPages]);
 
   return (
     <div>
@@ -282,6 +315,42 @@ export default function Organizations() {
             )}
           </tbody>
         </table>
+      </div>
+      <div className="flex flex-wrap items-center justify-between mt-3 text-sm gap-2">
+        <div className="text-slate-600">
+          Pagina {page + 1} de {totalPages} ({totalCount} organizaciones)
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="px-3 py-1 border rounded disabled:opacity-50"
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            disabled={page === 0}
+          >
+            Anterior
+          </button>
+          {Array.from({ length: totalPages }, (_, i) => i).map((p) => (
+            <button
+              key={p}
+              type="button"
+              className={
+                "px-3 py-1 border rounded " +
+                (p === page ? "bg-black text-white border-black" : "")
+              }
+              onClick={() => setPage(p)}
+            >
+              {p + 1}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="px-3 py-1 border rounded disabled:opacity-50"
+            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+            disabled={page >= totalPages - 1}
+          >
+            Siguiente
+          </button>
+        </div>
       </div>
 
       {open && (

@@ -35,6 +35,7 @@ router.get('/', requireAuth, async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 50, 200);
     const offset = Number(req.query.offset) || 0;
+    const includeTotal = String(req.query.include_total || '') === '1';
 
     const [rows] = await db.query(
       `
@@ -58,6 +59,14 @@ router.get('/', requireAuth, async (req, res) => {
       `,
       [limit, offset]
     );
+
+    if (includeTotal) {
+      const [[countRow]] = await db.query(
+        `SELECT COUNT(*) AS total FROM organizations`
+      );
+      const total = Number(countRow?.total || 0);
+      return res.json({ items: rows, total });
+    }
 
     res.json(rows);
   } catch (e) {

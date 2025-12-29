@@ -8,6 +8,7 @@ import React, {
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import DetCosSheet from "./DetCosSheet";
+import QuoteEditor from "./QuoteEditor";
 import ReportPreview from "../components/op-details/ReportPreview";
 import IndustrialDoorList from "../components/op-details/IndustrialDoorList";
 import {
@@ -136,14 +137,15 @@ const Select = ({ readOnly, children, ...props }) => (
 
 /* ---------- documentos requeridos ---------- */
 const FILE_TYPES = [
-  { key: "doc_house", label: "DOC HOUSE" },
-  { key: "doc_master", label: "DOC MASTER" },
+  { key: "doc_house", label: "Presupuesto" },
+  { key: "doc_master", label: "Orden de compra" },
   { key: "factura", label: "FACTURA" },
-  { key: "packing_list", label: "PACKING LIST" },
-  { key: "certificado_origen", label: "CERTIFICADO DE ORIGEN - C.O" },
-  { key: "certificado_seguro", label: "CERTIFICADO DE SEGURO/POLIZA" },
+  { key: "packing_list", label: "PACKING LIST", hidden: true },
+  { key: "certificado_origen", label: "CERTIFICADO DE ORIGEN - C.O", hidden: true },
+  { key: "certificado_seguro", label: "CERTIFICADO DE SEGURO/POLIZA", hidden: true },
   { key: "note_attachment", label: "ADJUNTO (NOTAS / OTROS)" },
 ];
+const VISIBLE_FILE_TYPES = FILE_TYPES.filter((t) => !t.hidden);
 
 function getExt(name = "") {
   const m = String(name).toLowerCase().match(/\.([a-z0-9]+)(?:\?|#|$)/);
@@ -178,18 +180,8 @@ const docLabelFor = (type, mode) => {
   const base =
     FILE_TYPES.find((t) => t.key === type)?.label || "Documento";
 
-  if (type === "doc_master") {
-    if (mode === "AIR") return "DOC MASTER";
-    if (mode === "OCEAN") return "MBL";
-    if (mode === "ROAD") return "MIC/DTA";
-    if (mode === "MULTIMODAL") return "DOC MASTER";
-  }
-  if (type === "doc_house") {
-    if (mode === "AIR") return "DOC HOUSE";
-    if (mode === "OCEAN") return "HBL";
-    if (mode === "ROAD") return "CRT";
-    if (mode === "MULTIMODAL") return "DOC HOUSE";
-  }
+  if (type === "doc_master") return "Orden de compra";
+  if (type === "doc_house") return "Presupuesto";
 
   return base;
 };
@@ -344,6 +336,10 @@ export default function OperationDetailIndustrial() {
   const [activeTab, setActiveTab] = useState("detalle");
   const [uploadingFiles, setUploadingFiles] = useState([]);
 
+  const [quoteId, setQuoteId] = useState(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteErr, setQuoteErr] = useState("");
+
   const [notesList, setNotesList] = useState([]);
   const [notesLoading, setNotesLoading] = useState(false);
   const [note, setNote] = useState("");
@@ -381,6 +377,21 @@ export default function OperationDetailIndustrial() {
   const [quotePreviewHtml, setQuotePreviewHtml] = useState("");
   const [quotePreviewText, setQuotePreviewText] = useState("");
   const [quoteSending, setQuoteSending] = useState(false);
+
+  async function ensureQuoteForDeal(dealId) {
+    if (!dealId) return;
+    setQuoteLoading(true);
+    setQuoteErr("");
+    try {
+      const { data } = await api.get(`/deals/${dealId}/quote`);
+      setQuoteId(data?.id || null);
+    } catch (e) {
+      console.error("No se pudo obtener/crear la cotización del deal:", e);
+      setQuoteErr("No se pudo cargar/crear la cotización.");
+    } finally {
+      setQuoteLoading(false);
+    }
+  }
 
   /* ---------- CF helpers ---------- */
 
@@ -647,6 +658,11 @@ export default function OperationDetailIndustrial() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  useEffect(() => {
+    ensureQuoteForDeal(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   /* ---------- guardar ---------- */
 
   async function saveAll() {
@@ -887,6 +903,11 @@ export default function OperationDetailIndustrial() {
       id: "detcos",
       kind: "base",
       label: "Planilla de costos (DET COS)",
+    },
+    {
+      id: "detalle-oferta",
+      kind: "base",
+      label: "Detalle de oferta",
     },
     ...flatUploadingTabs,
     ...flatFileTabs,
@@ -1600,6 +1621,27 @@ export default function OperationDetailIndustrial() {
                 mercaderia: (cf["mercaderia"] || {}).value,
               }}
             />
+          ) : activeTab === "detalle-oferta" ? (
+            quoteLoading ? (
+              <div className="bg-white rounded-2xl shadow p-4 text-sm text-slate-600">
+                Cargando detalle de oferta…
+              </div>
+            ) : quoteErr ? (
+              <div className="bg-white rounded-2xl shadow p-4 text-sm text-red-600">
+                {quoteErr}
+              </div>
+            ) : quoteId ? (
+              <QuoteEditor
+                embedded
+                quoteId={quoteId}
+                dealId={Number(id)}
+                key={quoteId}
+              />
+            ) : (
+              <div className="bg-white rounded-2xl shadow p-4 text-sm text-slate-600">
+                No se encontró la cotización.
+              </div>
+            )
           ) : isFileTab(activeTab) ? (
             <FileTabViewer
               context={getFileFromTab(activeTab)}
@@ -1610,7 +1652,7 @@ export default function OperationDetailIndustrial() {
               <h3 className="font-medium mb-3">
                 Documentos de la operación industrial
               </h3>
-              {FILE_TYPES.map((t) => {
+              {VISIBLE_FILE_TYPES.map((t) => {
                 const cfKey = t.key;
                 const list = filesByType[cfKey] || [];
                 const latest = list[0] || null;
@@ -2283,7 +2325,7 @@ export default function OperationDetailIndustrial() {
           <div className="bg-white rounded-2xl shadow p-4">
             <h3 className="font-medium mb-2">Acciones</h3>
             <div className="flex flex-col gap-2">
-              {FILE_TYPES.map((t) => (
+              {VISIBLE_FILE_TYPES.map((t) => (
                 <input
                   key={`input-${t.key}`}
                   type="file"
@@ -2323,7 +2365,7 @@ export default function OperationDetailIndustrial() {
               </button>
 
               <Link
-                to={`/operations/${id}/quote`}
+                to={`/operations/${id}/industrial-quote`}
                 className="px-3 py-2 text-sm rounded-lg bg-blue-600 text-white text-center hover:opacity-90"
               >
                 Presupuesto (Industrial)
@@ -2659,16 +2701,6 @@ export default function OperationDetailIndustrial() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
 
 
 

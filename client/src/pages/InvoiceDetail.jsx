@@ -384,6 +384,9 @@ async function handlePdf() {
         <CreditNoteViewModal
           creditNoteId={viewingCredit}
           onClose={() => setViewingCredit(null)}
+          onRefresh={async () => {
+            await loadInvoice();
+          }}
         />
       )}
     </div>
@@ -649,9 +652,11 @@ function CreditNoteModal({ invoice, availableCredit, onClose, onSuccess }) {
   );
 }
 
-function CreditNoteViewModal({ creditNoteId, onClose }) {
+function CreditNoteViewModal({ creditNoteId, onClose, onRefresh }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [issuing, setIssuing] = useState(false);
+  const [canceling, setCanceling] = useState(false);
 
   useEffect(() => {
     loadDetail();
@@ -672,6 +677,40 @@ function CreditNoteViewModal({ creditNoteId, onClose }) {
     }
   }
 
+  async function handleIssue() {
+    if (!data) return;
+    if (!confirm(`¿Emitir la nota de crédito ${data.credit_note_number}?`)) return;
+    setIssuing(true);
+    try {
+      await api.post(`/invoices/credit-notes/${creditNoteId}/issue`);
+      await loadDetail();
+      onRefresh?.();
+      alert('Nota de crédito emitida');
+    } catch (e) {
+      console.error('Error issuing credit note', e);
+      alert(e.response?.data?.error || 'No se pudo emitir la nota de crédito');
+    } finally {
+      setIssuing(false);
+    }
+  }
+
+  async function handleCancel() {
+    if (!data) return;
+    if (!confirm(`¿Anular la nota de crédito ${data.credit_note_number}?`)) return;
+    setCanceling(true);
+    try {
+      await api.post(`/invoices/credit-notes/${creditNoteId}/cancel`);
+      await loadDetail();
+      onRefresh?.();
+      alert('Nota de crédito anulada');
+    } catch (e) {
+      console.error('Error canceling credit note', e);
+      alert(e.response?.data?.error || 'No se pudo anular la nota de crédito');
+    } finally {
+      setCanceling(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 md:p-6 z-50">
@@ -689,13 +728,33 @@ function CreditNoteViewModal({ creditNoteId, onClose }) {
       <div className="bg-white rounded-lg p-6 w-full max-w-2xl shadow-xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <div className="text-sm text-slate-500">Nota de crédito</div>
+            <div className="text-sm text-slate-500">Nota de credito</div>
             <div className="text-xl font-bold">{data.credit_note_number}</div>
             <div className="text-sm text-slate-500">
               Estado: {data.status} · {fmtDate(data.issue_date)}
             </div>
           </div>
-          <button onClick={onClose} className="text-2xl leading-none">×</button>
+          <div className="flex items-center gap-2">
+            {data.status === 'borrador' && (
+              <button
+                onClick={handleIssue}
+                className="px-3 py-1 rounded bg-amber-600 text-white text-sm hover:bg-amber-700 disabled:opacity-50"
+                disabled={issuing}
+              >
+                {issuing ? 'Emitiendo…' : 'Emitir'}
+              </button>
+            )}
+            {data.status !== 'anulada' && (
+              <button
+                onClick={handleCancel}
+                className="px-3 py-1 rounded border border-slate-300 text-sm hover:bg-slate-50 disabled:opacity-50"
+                disabled={canceling}
+              >
+                {canceling ? 'Anulando…' : 'Anular'}
+              </button>
+            )}
+            <button onClick={onClose} className="text-2xl leading-none">×</button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
@@ -758,4 +817,3 @@ function CreditNoteViewModal({ creditNoteId, onClose }) {
     </div>
   );
 }
-

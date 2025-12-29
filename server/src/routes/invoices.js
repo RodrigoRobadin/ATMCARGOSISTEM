@@ -1,8 +1,8 @@
-ï»¿// server/src/routes/invoices.js
+// server/src/routes/invoices.js
 import { Router } from 'express';
 import { pool } from '../services/db.js';
 import { requireAuth, requireRole } from '../middlewares/auth.js';
-import PDFDocument from 'pdfkit';
+import generateInvoicePDF from '../services/invoiceTemplatePdfkit.js';
 
 const router = Router();
 
@@ -85,6 +85,74 @@ async function ensureInvoiceCreditColumns() {
   }
 }
 
+async function ensureParamsTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS params (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      \`key\` VARCHAR(100) NOT NULL,
+      value TEXT NULL,
+      ord INT NULL DEFAULT 0,
+      active TINYINT(1) NULL DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_params_key (\`key\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+}
+
+async function ensureParamValuesTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS param_values (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      \`key\`   VARCHAR(100) NOT NULL,
+      \`value\` TEXT NOT NULL,
+      \`ord\`   INT NULL DEFAULT 0,
+      \`active\` TINYINT(1) NULL DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_key(\`key\`, \`ord\`),
+      INDEX idx_active(\`active\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+}
+
+async function creditAvailability(invoiceId, { excludeNoteId = null } = {}) {
+  // Totales facturados por tasa
+  const [invItems] = await pool.query(
+    'SELECT subtotal, tax_rate FROM invoice_items WHERE invoice_id = ?',
+    [invoiceId]
+  );
+  const facturado = breakdownByRate(invItems);
+
+  // Totales ya acreditados (notas no anuladas)
+  const params = [invoiceId];
+  let noteFilter = '';
+  if (excludeNoteId) {
+    noteFilter = ' AND cn.id <> ?';
+    params.push(excludeNoteId);
+  }
+  const [cnItems] = await pool.query(
+    `
+    SELECT cni.subtotal, cni.tax_rate
+      FROM credit_note_items cni
+      JOIN credit_notes cn ON cn.id = cni.credit_note_id
+     WHERE cn.invoice_id = ?
+       AND cn.status <> 'anulada'
+       ${noteFilter}
+    `,
+    params
+  );
+  const acreditado = breakdownByRate(cnItems);
+
+  const disponible = {
+    base0: Math.max(0, Number((facturado.base0 - acreditado.base0).toFixed(2))),
+    base5: Math.max(0, Number((facturado.base5 - acreditado.base5).toFixed(2))),
+    base10: Math.max(0, Number((facturado.base10 - acreditado.base10).toFixed(2))),
+  };
+
+  return { facturado, acreditado, disponible };
+}
+
 async function ensureCreditNoteTables() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS credit_notes (
@@ -98,12 +166,38 @@ async function ensureCreditNoteTables() {
       tax_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
       total_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
       balance DECIMAL(15,2) NOT NULL DEFAULT 0,
+      credit_type VARCHAR(20) NULL,
+      mode VARCHAR(20) NULL,
+      apply_mode VARCHAR(20) NULL,
+      observations TEXT NULL,
       created_by INT NULL,
       issued_by INT NULL,
+      point_of_issue VARCHAR(8) NULL,
+      establishment VARCHAR(8) NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+
+  // Garantiza columnas nuevas si la tabla ya existía
+  const alters = [
+    "ALTER TABLE credit_notes ADD COLUMN point_of_issue VARCHAR(8) NULL",
+    "ALTER TABLE credit_notes ADD COLUMN establishment VARCHAR(8) NULL",
+    "ALTER TABLE credit_notes ADD COLUMN credit_type VARCHAR(20) NULL",
+    "ALTER TABLE credit_notes ADD COLUMN mode VARCHAR(20) NULL",
+    "ALTER TABLE credit_notes ADD COLUMN apply_mode VARCHAR(20) NULL",
+    "ALTER TABLE credit_notes ADD COLUMN observations TEXT NULL",
+  ];
+  for (const sql of alters) {
+    try {
+      await pool.query(sql);
+    } catch (err) {
+      if (err?.code !== 'ER_DUP_FIELDNAME') {
+        // Si es otro error, lo propagamos
+        throw err;
+      }
+    }
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS credit_note_items (
@@ -137,22 +231,214 @@ async function ensureCreditNoteTables() {
   );
 }
 
-async function generateCreditNoteNumber() {
+async function generateCreditNoteNumber(forcePoint, forceEst) {
   await ensureCreditNoteTables();
-  const [[seq]] = await pool.query(
-    'SELECT last_number, prefix, year FROM credit_note_sequence WHERE id = 1'
-  );
-  const currentYear = new Date().getFullYear();
-  let nextNumber = seq.last_number + 1;
-  if (currentYear !== seq.year) {
-    nextNumber = 1;
-    await pool.query(
-      'UPDATE credit_note_sequence SET year = ?, last_number = 0 WHERE id = 1',
-      [currentYear]
-    );
+  const defaultExp = '001-004'; // fallback general único
+  let expRaw = defaultExp;
+  try {
+    expRaw =
+      (await getParamValue('credit_exp', pool))?.value ||
+      (await getParamValue('credit_exp_industrial', pool))?.value ||
+      (await getParamValue('credit_exp_cargo', pool))?.value ||
+      defaultExp;
+  } catch (_) {
+    expRaw = defaultExp;
   }
-  await pool.query('UPDATE credit_note_sequence SET last_number = ? WHERE id = 1', [nextNumber]);
-  return `${seq.prefix}-${currentYear}-${String(nextNumber).padStart(4, '0')}`;
+  let { point, establishment } = parseExpedition(expRaw, {
+    point: defaultExp.split('-')[0] || '001',
+    establishment: defaultExp.split('-')[1] || '004',
+  });
+
+  // Forzar punto/establecimiento desde la factura si llega
+  if (forcePoint && String(forcePoint).trim()) point = String(forcePoint).padStart(3, '0');
+  if (forceEst && String(forceEst).trim()) establishment = String(forceEst).padStart(3, '0');
+
+  // último correlativo registrado
+  const lastSeq =
+    (await fetchLastSeq(point, establishment, pool, 'credit_note_number', 'credit_notes')) || 0;
+
+  // correlativo desde params
+  let next = lastSeq + 1;
+  try {
+    const paramVal =
+      parseInt((await getParamValue('credit_next_number', pool))?.value || 'NaN', 10);
+    if (Number.isFinite(paramVal)) next = Math.max(next, paramVal);
+  } catch (_) {
+    next = lastSeq + 1;
+  }
+  if (!Number.isFinite(next) || next < lastSeq + 1) next = lastSeq + 1;
+
+  const creditNoteNumber = `${point}-${establishment}-${String(next).padStart(7, '0')}`;
+  try {
+    await upsertParam('credit_next_number', String(next + 1), pool);
+  } catch (_) {}
+  return { creditNoteNumber, point, establishment };
+}
+
+async function getParamValue(key, conn = pool) {
+  try {
+    await ensureParamValuesTable();
+    const [[rowPV]] = await conn.query(
+      `SELECT id, value FROM param_values WHERE \`key\` = ? AND (active IS NULL OR active <> 0) ORDER BY ord LIMIT 1`,
+      [key]
+    );
+    if (rowPV) return { id: rowPV.id, value: rowPV.value, table: 'param_values' };
+  } catch (err) {
+    if (err?.code !== 'ER_NO_SUCH_TABLE') throw err;
+  }
+  try {
+    await ensureParamsTable();
+    const [[row]] = await conn.query(
+      `SELECT id, value FROM params WHERE \`key\` = ? AND (active IS NULL OR active <> 0) ORDER BY ord LIMIT 1`,
+      [key]
+    );
+    return row ? { id: row.id, value: row.value, table: 'params' } : null;
+  } catch (err) {
+    if (err?.code === 'ER_NO_SUCH_TABLE') return null;
+    throw err;
+  }
+}
+
+async function upsertParam(key, value, conn = pool) {
+  try {
+    await ensureParamValuesTable();
+    const existing = await getParamValue(key, conn);
+    if (existing?.id) {
+      const table = existing.table === 'params' ? 'params' : 'param_values';
+      await conn.query(`UPDATE ${table} SET value = ? WHERE id = ?`, [value, existing.id]);
+      return existing.id;
+    }
+    const [res] = await conn.query(
+      `INSERT INTO param_values (\`key\`, value, ord, active) VALUES (?, ?, 0, 1)`,
+      [key, value]
+    );
+    return res.insertId;
+  } catch (err) {
+    if (err?.code === 'ER_NO_SUCH_TABLE') {
+      // Si no existe la tabla params, simplemente no persiste
+      return null;
+    }
+    throw err;
+  }
+}
+
+function extractSeqFromNumber(num = '') {
+  const m = String(num).match(/^\d{3}-\d{3}-(\d{1,7})$/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+async function fetchLastSeq(point, establishment, conn = pool, numberField = 'invoice_number', table = 'invoices') {
+  try {
+    const [[row]] = await conn.query(
+      `SELECT ${numberField} 
+       FROM ${table} 
+       WHERE point_of_issue = ? AND establishment = ?
+       ORDER BY id DESC LIMIT 1`,
+      [point, establishment]
+    );
+    const val = row?.[numberField];
+    if (!val) return null;
+    return extractSeqFromNumber(val);
+  } catch (_) {
+    return null;
+  }
+}
+
+function parseExpedition(raw = '', fallback = { point: '001', establishment: '000' }) {
+  const matches = String(raw).match(/\d+/g) || [];
+  const point = (matches[0] || fallback.point || '001').padStart(3, '0');
+  const establishment = (matches[1] || fallback.establishment || '000').padStart(3, '0');
+  return { point, establishment };
+}
+
+async function peekInvoiceDefaults({ buKey = '', pipelineName = '' } = {}, conn = pool) {
+  const isIndustrial = isIndustrialContext({ buKey, pipelineName });
+  const expKey = isIndustrial ? 'invoice_exp_industrial' : 'invoice_exp_cargo';
+  const sharedNumKey = 'invoice_next_number';
+  const legacyNumKey = isIndustrial
+    ? 'invoice_next_number_industrial'
+    : 'invoice_next_number_cargo';
+
+  const timbKey = 'invoice_timbre_number';
+  const vigFromKey = 'invoice_timbre_valid_from';
+  const vigToKey = 'invoice_timbre_valid_to';
+
+  const defaultExp = isIndustrial ? '001-005' : '001-004';
+  let expRaw = defaultExp;
+  try {
+    expRaw = (await getParamValue(expKey, conn))?.value || defaultExp;
+  } catch (_) {
+    expRaw = defaultExp;
+  }
+  const { point, establishment } = parseExpedition(expRaw, {
+    point: defaultExp.split('-')[0] || '001',
+    establishment: defaultExp.split('-')[1] || '000',
+  });
+  const lastSeq = (await fetchLastSeq(point, establishment, conn)) || 0;
+  let next = lastSeq + 1;
+  try {
+    const paramVal =
+      parseInt((await getParamValue(sharedNumKey, conn))?.value || 'NaN', 10);
+    const legacyVal =
+      parseInt((await getParamValue(legacyNumKey, conn))?.value || 'NaN', 10);
+    const chosen =
+      Number.isFinite(paramVal) ? paramVal : Number.isFinite(legacyVal) ? legacyVal : NaN;
+    if (Number.isFinite(chosen)) next = Math.max(next, chosen);
+  } catch (_) {
+    next = lastSeq + 1;
+  }
+  if (!Number.isFinite(next) || next < lastSeq + 1) next = lastSeq + 1;
+
+  const invoice_number = `${point}-${establishment}-${String(next).padStart(7, '0')}`;
+
+  return {
+    invoice_number,
+    point_of_issue: point,
+    establishment,
+    timbrado_number: (await getParamValue(timbKey, conn))?.value || '',
+    timbrado_start_date: (await getParamValue(vigFromKey, conn))?.value || '',
+    timbrado_expires_at: (await getParamValue(vigToKey, conn))?.value || '',
+  };
+}
+
+async function nextInvoiceNumber(buKey = '', conn) {
+  const isIndustrial = isIndustrialContext({ buKey });
+  const expKey = isIndustrial ? 'invoice_exp_industrial' : 'invoice_exp_cargo';
+  const sharedNumKey = 'invoice_next_number';
+  const legacyNumKey = isIndustrial
+    ? 'invoice_next_number_industrial'
+    : 'invoice_next_number_cargo';
+
+  const defaultExp = isIndustrial ? '001-005' : '001-004';
+  const expRaw = (await getParamValue(expKey, conn))?.value || defaultExp;
+  const { point, establishment } = parseExpedition(expRaw, {
+    point: defaultExp.split('-')[0] || '001',
+    establishment: defaultExp.split('-')[1] || '000',
+  });
+
+  const lastSeq = (await fetchLastSeq(point, establishment, conn)) || 0;
+  let next = lastSeq + 1;
+  try {
+    const paramVal =
+      parseInt((await getParamValue(sharedNumKey, conn))?.value || 'NaN', 10);
+    const legacyVal =
+      parseInt((await getParamValue(legacyNumKey, conn))?.value || 'NaN', 10);
+    const chosen =
+      Number.isFinite(paramVal) ? paramVal : Number.isFinite(legacyVal) ? legacyVal : NaN;
+    if (Number.isFinite(chosen)) next = Math.max(next, chosen);
+  } catch (_) {
+    next = lastSeq + 1;
+  }
+  if (!Number.isFinite(next) || next < lastSeq + 1) next = lastSeq + 1;
+
+  const invoice_number = `${point}-${establishment}-${String(next).padStart(7, '0')}`;
+  try {
+    await upsertParam(sharedNumKey, String(next + 1), conn);
+  } catch (_) {}
+
+  return { invoice_number, point_of_issue: point, establishment };
 }
 
 async function recomputeInvoiceCredits(invoiceId) {
@@ -215,6 +501,37 @@ function calculateTotals(items) {
   };
 }
 
+function breakdownByRate(items) {
+  const acc = {
+    base0: 0,
+    base5: 0,
+    base10: 0,
+    iva5: 0,
+    iva10: 0,
+  };
+  (items || []).forEach((it) => {
+    const rate = parseFloat(it.tax_rate ?? 10) || 0;
+    const base = parseFloat(it.subtotal || 0) || 0;
+    if (rate < 1) {
+      acc.base0 += base;
+    } else if (rate < 9) {
+      acc.base5 += base;
+      acc.iva5 += (base * rate) / 100;
+    } else {
+      acc.base10 += base;
+      acc.iva10 += (base * rate) / 100;
+    }
+  });
+  return {
+    base0: Number(acc.base0.toFixed(2)),
+    base5: Number(acc.base5.toFixed(2)),
+    base10: Number(acc.base10.toFixed(2)),
+    iva5: Number(acc.iva5.toFixed(2)),
+    iva10: Number(acc.iva10.toFixed(2)),
+    total: Number((acc.base0 + acc.base5 + acc.base10 + acc.iva5 + acc.iva10).toFixed(2)),
+  };
+}
+
 function formatCurrency(value) {
   const num = Number(value || 0);
   return `USD ${num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -231,6 +548,34 @@ function formatDate(date) {
   } catch (_e) {
     return '';
   }
+}
+
+async function getDealInfo(dealId, conn = pool) {
+  const [[row]] = await conn.query(
+    `SELECT bu.key_slug AS business_unit_key, d.pipeline_id, p.name AS pipeline_name
+     FROM deals d
+     LEFT JOIN business_units bu ON bu.id = d.business_unit_id
+     LEFT JOIN pipelines p ON p.id = d.pipeline_id
+     WHERE d.id = ? LIMIT 1`,
+    [dealId]
+  );
+  return {
+    business_unit_key: row?.business_unit_key || '',
+    pipeline_id: row?.pipeline_id || null,
+    pipeline_name: row?.pipeline_name || '',
+  };
+}
+
+function isIndustrialContext({ buKey = '', pipelineName = '' } = {}) {
+  const bu = String(buKey || '').toLowerCase();
+  const pipe = String(pipelineName || '').toLowerCase();
+  return (
+    bu === 'atm-industrial' ||
+    bu === 'industrial-rayflex' ||
+    bu === 'industrial-boplan' ||
+    bu.includes('industrial') ||
+    pipe.includes('industrial')
+  );
 }
 
 function canManageInvoice(user, invoice) {
@@ -318,6 +663,28 @@ function extractCostItems(rawData = {}) {
 
 // =================== ENDPOINTS ===================
 
+// GET /api/invoices/defaults?deal_id=#
+router.get('/defaults', requireAuth, async (req, res) => {
+  try {
+    const { deal_id } = req.query;
+    let buKey = '';
+    let pipelineId = null;
+    let pipelineName = '';
+    if (deal_id) {
+      const info = await getDealInfo(deal_id);
+      buKey = info.business_unit_key || '';
+      pipelineId = info.pipeline_id || null;
+      pipelineName = info.pipeline_name || '';
+    }
+    const isIndustrial = isIndustrialContext({ buKey, pipelineName }) || pipelineId === 1;
+    const defaults = await peekInvoiceDefaults({ buKey: isIndustrial ? (buKey || 'atm-industrial') : buKey, pipelineName });
+    res.json({ ...defaults, business_unit_key: buKey || null, pipeline_id: pipelineId, is_industrial: isIndustrial });
+  } catch (e) {
+    console.error('[invoices] Error getting defaults:', e);
+    res.status(500).json({ error: 'No se pudieron obtener los valores por defecto' });
+  }
+});
+
 // GET /api/invoices
 router.get('/', requireAuth, async (req, res) => {
   try {
@@ -388,420 +755,23 @@ router.get('/:id', requireAuth, async (req, res) => {
     );
 
     if (!invoice) return res.status(404).json({ error: 'Factura no encontrada' });
-    if (!canManageInvoice(req.user, invoice)) return res.status(403).json({ error: 'No tienes permiso para ver esta factura' });
+    if (!canManageInvoice(req.user, invoice)) {
+      return res.status(403).json({ error: 'No tienes permiso para ver esta factura' });
+    }
 
     const [items] = await pool.query(
       'SELECT * FROM invoice_items WHERE invoice_id = ? ORDER BY item_order, id',
       [id]
     );
-    const [payments] = await pool.query(
-      `SELECT p.*, u.name as registered_by_name
-       FROM invoice_payments p
-       LEFT JOIN users u ON u.id = p.registered_by
-       WHERE p.invoice_id = ?
-       ORDER BY p.payment_date DESC`,
-      [id]
-    );
 
-    res.json({ ...invoice, items, payments });
+    res.json({ ...invoice, items });
   } catch (e) {
-    console.error('[invoices] Error getting detail:', e);
+    console.error('[invoices] Error fetching invoice:', e);
     res.status(500).json({ error: 'Error al obtener factura' });
   }
 });
 
-// POST /api/invoices - Crear factura
-router.post('/', requireAuth, async (req, res) => {
-  try {
-    const {
-      deal_id,
-      due_date,
-      payment_terms,
-      notes,
-      percentage,
-      payment_condition,
-      timbrado_number,
-      timbrado_expires_at,
-      timbrado_start_date,
-      customer_doc,
-      customer_doc_type,
-      customer_email,
-      customer_address,
-      currency_code,
-      exchange_rate,
-      point_of_issue,
-      establishment,
-      sales_rep,
-      purchase_order_ref,
-    } = req.body;
-    const userId = req.user.id;
-    if (!deal_id) return res.status(400).json({ error: 'deal_id es requerido' });
-
-    await ensureInvoiceExtraColumns();
-    await ensureInvoiceItemsTaxColumn();
-    await ensureInvoiceCreditColumns();
-
-    const [[deal]] = await pool.query(
-      `SELECT d.*, s.name as stage_name 
-       FROM deals d
-       LEFT JOIN stages s ON s.id = d.stage_id
-       WHERE d.id = ? LIMIT 1`,
-      [deal_id]
-    );
-    if (!deal) return res.status(404).json({ error: 'Deal no encontrado' });
-
-    const stageName = String(deal.stage_name || '').toLowerCase();
-    const isConfirmed = stageName.includes('conf') || stageName.includes('coord');
-    if (!isConfirmed) {
-      return res.status(400).json({ error: 'La operacion debe estar confirmada (etapa con conf/coord) para generar factura' });
-    }
-
-    let pct = Number(percentage ?? 100);
-    if (Number.isNaN(pct) || pct <= 0 || pct > 100) pct = 100;
-    const factor = pct / 100;
-
-    if (pct < 100) {
-      const [[row]] = await pool.query(
-        `SELECT COALESCE(SUM(percentage), 0) as used_pct
-         FROM invoices
-         WHERE deal_id = ? AND status != 'anulada'`,
-        [deal_id]
-      );
-      const used = parseFloat(row.used_pct || 0);
-      if (used + pct > 100.01) {
-        return res.status(400).json({ error: `El porcentaje acumulado (${used.toFixed(2)}%) supera el 100%` });
-      }
-    }
-
-    const [[costSheet]] = await pool.query(
-      `SELECT cs.current_version_id, cs.data as legacy_data, v.data as version_data
-       FROM deal_cost_sheets cs
-       LEFT JOIN deal_cost_sheet_versions v ON v.id = cs.current_version_id
-       WHERE cs.deal_id = ?
-       LIMIT 1`,
-      [deal_id]
-    );
-    const rawData = costSheet?.version_data ?? costSheet?.legacy_data;
-    if (!costSheet || !rawData) return res.status(400).json({ error: 'El deal no tiene presupuesto' });
-
-    let costSheetData;
-    try {
-      costSheetData = typeof rawData === 'string' ? JSON.parse(rawData) : rawData;
-    } catch (_e) {
-      return res.status(400).json({ error: 'Error al leer el presupuesto' });
-    }
-
-    const items = extractCostItems(costSheetData);
-    let invoiceItemsRaw = Array.isArray(items) ? items : [];
-
-    if (invoiceItemsRaw.length === 0) {
-      try {
-        const [legacyItems] = await pool.query(
-          `SELECT description, quantity, unit_price, item_order
-           FROM deal_cost_sheet_items
-           WHERE deal_id = ? AND is_active = 1
-           ORDER BY item_order, id`,
-          [deal_id]
-        );
-        invoiceItemsRaw = legacyItems || [];
-      } catch (err) {
-        console.warn('[invoices] no se pudo leer deal_cost_sheet_items:', err?.message);
-      }
-    }
-
-    if (invoiceItemsRaw.length === 0) {
-      return res.status(400).json({ error: 'El presupuesto no tiene items' });
-    }
-
-    const invoiceItems = invoiceItemsRaw
-      .filter((item) => item && (item.description || item.name))
-      .map((item, idx) => {
-        const qty = parseFloat(item.quantity ?? item.qty ?? 1) || 1;
-        const basePrice = parseFloat(item.unit_price ?? item.price ?? item.unitPrice ?? 0) || 0;
-        const price = parseFloat((basePrice * factor).toFixed(2));
-        const taxRate = 10; // OpciÃ³n A: IVA 10% por defecto
-        return {
-          description: item.description || item.name || 'Sin descripcion',
-          quantity: qty,
-          unit_price: price,
-          tax_rate: taxRate,
-          subtotal: parseFloat((qty * price).toFixed(2)),
-          base_unit_price: basePrice,
-          item_order: item.item_order ?? idx,
-        };
-      });
-
-    const baseSubtotal = invoiceItems.reduce(
-      (sum, it) => sum + (parseFloat(it.base_unit_price || 0) * (parseFloat(it.quantity) || 1)),
-      0
-    );
-
-    const totals = calculateTotals(invoiceItems);
-    const invoiceNumber = await generateInvoiceNumber();
-
-    const [result] = await pool.query(
-      `INSERT INTO invoices 
-       (invoice_number, deal_id, organization_id, subtotal, tax_rate, tax_amount, 
-        total_amount, balance, due_date, payment_terms, notes, created_by,
-        percentage, base_amount, payment_condition, timbrado_number, timbrado_expires_at,
-        credited_total, net_total_amount, net_balance,
-        timbrado_start_date, customer_doc, customer_doc_type, customer_email, customer_address,
-        currency_code, exchange_rate, point_of_issue, establishment, sales_rep, purchase_order_ref)
-       VALUES (?, ?, ?, ?, 10.00, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        invoiceNumber,
-        deal_id,
-        deal.organization_id || deal.org_id,
-        totals.subtotal,
-        totals.tax_amount,
-        totals.total_amount,
-        totals.total_amount,
-        due_date || null,
-        payment_terms || null,
-        notes || null,
-        userId,
-        pct,
-        baseSubtotal.toFixed(2),
-        payment_condition || null,
-        timbrado_number || null,
-        timbrado_expires_at || null,
-        totals.total_amount,
-        totals.total_amount,
-        timbrado_start_date || null,
-        customer_doc || null,
-        customer_doc_type || null,
-        customer_email || null,
-        customer_address || null,
-        currency_code || 'USD',
-        exchange_rate || 1,
-        point_of_issue || null,
-        establishment || null,
-        sales_rep || null,
-        purchase_order_ref || null,
-      ]
-    );
-
-    const invoiceId = result.insertId;
-
-    for (let i = 0; i < invoiceItems.length; i++) {
-      const item = invoiceItems[i];
-      await pool.query(
-        `INSERT INTO invoice_items 
-         (invoice_id, description, quantity, unit_price, subtotal, cost_sheet_item_id, item_order, tax_rate)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [invoiceId, item.description, item.quantity, item.unit_price, item.subtotal, null, item.item_order, item.tax_rate]
-      );
-    }
-
-    const [[invoice]] = await pool.query(
-      `SELECT i.*, d.title as deal_title, d.reference as deal_reference
-       FROM invoices i
-       LEFT JOIN deals d ON d.id = i.deal_id
-       WHERE i.id = ?`,
-      [invoiceId]
-    );
-
-    res.status(201).json(invoice);
-  } catch (e) {
-    console.error('[invoices] Error creating:', e);
-    res.status(500).json({ error: 'Error al crear factura' });
-  }
-});
-
-// PATCH /api/invoices/:id - Actualizar factura (borrador)
-router.patch('/:id', requireAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { due_date, payment_terms, notes, items } = req.body;
-
-    const [[invoice]] = await pool.query('SELECT * FROM invoices WHERE id = ?', [id]);
-    if (!invoice) return res.status(404).json({ error: 'Factura no encontrada' });
-    if (invoice.status !== 'borrador') return res.status(400).json({ error: 'Solo se pueden editar facturas en borrador' });
-    if (!canManageInvoice(req.user, invoice)) return res.status(403).json({ error: 'No tienes permiso para editar esta factura' });
-
-    if (items && Array.isArray(items)) {
-      await pool.query('DELETE FROM invoice_items WHERE invoice_id = ?', [id]);
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        await pool.query(
-          `INSERT INTO invoice_items 
-           (invoice_id, description, quantity, unit_price, subtotal, item_order)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          [id, item.description, item.quantity, item.unit_price, item.subtotal, i]
-        );
-      }
-      const totals = calculateTotals(items);
-      await pool.query(
-        `UPDATE invoices 
-         SET subtotal = ?, tax_amount = ?, total_amount = ?, balance = ?
-         WHERE id = ?`,
-        [totals.subtotal, totals.tax_amount, totals.total_amount, totals.total_amount, id]
-      );
-    }
-
-    const updates = [];
-    const params = [];
-    if (due_date !== undefined) { updates.push('due_date = ?'); params.push(due_date); }
-    if (payment_terms !== undefined) { updates.push('payment_terms = ?'); params.push(payment_terms); }
-    if (notes !== undefined) { updates.push('notes = ?'); params.push(notes); }
-
-    if (updates.length > 0) {
-      params.push(id);
-      await pool.query(`UPDATE invoices SET ${updates.join(', ')} WHERE id = ?`, params);
-    }
-
-    const [[updated]] = await pool.query('SELECT * FROM invoices WHERE id = ?', [id]);
-    res.json(updated);
-  } catch (e) {
-    console.error('[invoices] Error updating:', e);
-    res.status(500).json({ error: 'Error al actualizar factura' });
-  }
-});
-
-// DELETE /api/invoices/:id - Eliminar factura (borrador)
-router.delete('/:id', requireAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const [[invoice]] = await pool.query('SELECT * FROM invoices WHERE id = ?', [id]);
-    if (!invoice) return res.status(404).json({ error: 'Factura no encontrada' });
-    if (invoice.status !== 'borrador') return res.status(400).json({ error: 'Solo se pueden eliminar facturas en borrador' });
-    if (!canManageInvoice(req.user, invoice)) return res.status(403).json({ error: 'No tienes permiso para eliminar esta factura' });
-    await pool.query('DELETE FROM invoices WHERE id = ?', [id]);
-    res.json({ message: 'Factura eliminada correctamente' });
-  } catch (e) {
-    console.error('[invoices] Error deleting:', e);
-    res.status(500).json({ error: 'Error al eliminar factura' });
-  }
-});
-
-// POST /api/invoices/:id/issue - Emitir factura
-router.post('/:id/issue', requireAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const userId = req.user.id;
-
-    const [[invoice]] = await pool.query('SELECT * FROM invoices WHERE id = ?', [id]);
-    if (!invoice) return res.status(404).json({ error: 'Factura no encontrada' });
-    if (invoice.status !== 'borrador') return res.status(400).json({ error: 'Solo se pueden emitir facturas en borrador' });
-    if (!canManageInvoice(req.user, invoice)) return res.status(403).json({ error: 'No tienes permiso para emitir esta factura' });
-
-    const [[count]] = await pool.query(
-      'SELECT COUNT(*) as total FROM invoice_items WHERE invoice_id = ?',
-      [id]
-    );
-    if (count.total === 0) return res.status(400).json({ error: 'La factura debe tener al menos un Ã­tem' });
-
-    await pool.query(
-      `UPDATE invoices 
-       SET status = 'emitida', issue_date = CURDATE(), issued_by = ?
-       WHERE id = ?`,
-      [userId, id]
-    );
-
-    const [[updated]] = await pool.query('SELECT * FROM invoices WHERE id = ?', [id]);
-    res.json(updated);
-  } catch (e) {
-    console.error('[invoices] Error issuing:', e);
-    res.status(500).json({ error: 'Error al emitir factura' });
-  }
-});
-
-// POST /api/invoices/:id/cancel - Anular factura
-router.post('/:id/cancel', requireAuth, requireRole(['admin', 'finanzas']), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { reason } = req.body;
-    if (!reason) return res.status(400).json({ error: 'Debe proporcionar un motivo de anulaciÃ³n' });
-
-    const [[invoice]] = await pool.query('SELECT * FROM invoices WHERE id = ?', [id]);
-    if (!invoice) return res.status(404).json({ error: 'Factura no encontrada' });
-    if (invoice.status === 'pagada') return res.status(400).json({ error: 'No se puede anular una factura pagada completamente' });
-    if (invoice.status === 'anulada') return res.status(400).json({ error: 'La factura ya estÃ¡ anulada' });
-
-    await pool.query(
-      `UPDATE invoices 
-       SET status = 'anulada', cancellation_reason = ?
-       WHERE id = ?`,
-      [reason, id]
-    );
-
-    const [[updated]] = await pool.query('SELECT * FROM invoices WHERE id = ?', [id]);
-    res.json(updated);
-  } catch (e) {
-    console.error('[invoices] Error canceling:', e);
-    res.status(500).json({ error: 'Error al anular factura' });
-  }
-});
-
-// POST /api/invoices/:id/payments - Registrar pago
-router.post('/:id/payments', requireAuth, requireRole(['admin', 'finanzas']), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { payment_date, amount, payment_method, reference_number, notes } = req.body;
-    const userId = req.user.id;
-
-    if (!payment_date || !amount || !payment_method) {
-      return res.status(400).json({ error: 'payment_date, amount y payment_method son requeridos' });
-    }
-
-    const [[invoice]] = await pool.query('SELECT * FROM invoices WHERE id = ?', [id]);
-    if (!invoice) return res.status(404).json({ error: 'Factura no encontrada' });
-    if (invoice.status !== 'emitida' && invoice.status !== 'pago_parcial') {
-      return res.status(400).json({ error: 'Solo se pueden registrar pagos en facturas emitidas o con pago parcial' });
-    }
-
-    const paymentAmount = parseFloat(amount);
-    const currentBalance = parseFloat(invoice.balance);
-    if (paymentAmount > currentBalance) {
-      return res.status(400).json({ error: 'El monto del pago no puede ser mayor al saldo pendiente' });
-    }
-
-    await pool.query(
-      `INSERT INTO invoice_payments 
-       (invoice_id, payment_date, amount, payment_method, reference_number, notes, registered_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [id, payment_date, paymentAmount, payment_method, reference_number, notes, userId]
-    );
-
-    const newPaidAmount = parseFloat(invoice.paid_amount) + paymentAmount;
-    const newBalance = parseFloat(invoice.total_amount) - newPaidAmount;
-    const newStatus = newBalance === 0 ? 'pagada' : 'pago_parcial';
-
-    await pool.query(
-      `UPDATE invoices 
-       SET paid_amount = ?, balance = ?, status = ?, paid_date = IF(? = 0, CURDATE(), paid_date)
-       WHERE id = ?`,
-      [newPaidAmount, newBalance, newStatus, newBalance, id]
-    );
-
-    const [[updated]] = await pool.query('SELECT * FROM invoices WHERE id = ?', [id]);
-    res.json(updated);
-  } catch (e) {
-    console.error('[invoices] Error registering payment:', e);
-    res.status(500).json({ error: 'Error al registrar pago' });
-  }
-});
-
-// GET /api/invoices/:id/payments
-router.get('/:id/payments', requireAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const [payments] = await pool.query(
-      `SELECT p.*, u.name as registered_by_name
-       FROM invoice_payments p
-       LEFT JOIN users u ON u.id = p.registered_by
-       WHERE p.invoice_id = ?
-       ORDER BY p.payment_date DESC`,
-      [id]
-    );
-    res.json(payments);
-  } catch (e) {
-    console.error('[invoices] Error listing payments:', e);
-    res.status(500).json({ error: 'Error al listar pagos' });
-  }
-});
-
-// GET /api/invoices/:id/pdf - Generar PDF
+// GET /api/invoices/:id/pdf - Generar PDF usando plantilla PDFKit
 router.get('/:id/pdf', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
@@ -821,7 +791,9 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
       [id]
     );
     if (!invoice) return res.status(404).json({ error: 'Factura no encontrada' });
-    if (!canManageInvoice(req.user, invoice)) return res.status(403).json({ error: 'No tienes permiso para ver esta factura' });
+    if (!canManageInvoice(req.user, invoice)) {
+      return res.status(403).json({ error: 'No tienes permiso para ver esta factura' });
+    }
 
     const [items] = await pool.query(
       'SELECT * FROM invoice_items WHERE invoice_id = ? ORDER BY item_order, id',
@@ -832,36 +804,13 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
       name: process.env.INVOICE_ISSUER_NAME || 'ATM CARGO S.R.L.',
       ruc: process.env.INVOICE_ISSUER_RUC || '80056841-6',
       phone: process.env.INVOICE_ISSUER_PHONE || '+595 21 493082',
-      address: process.env.INVOICE_ISSUER_ADDRESS || 'Cap. Milciades Urbieta 175 e/ Rio de Janeiro y Mcal. Lopez',
+      address:
+        process.env.INVOICE_ISSUER_ADDRESS || 'Cap. Milciades Urbieta 175 e/ Rio de Janeiro y Mcal. Lopez',
       city: process.env.INVOICE_ISSUER_CITY || 'Asuncion - Paraguay',
       timbrado: invoice.timbrado_number || process.env.INVOICE_TIMBRADO_NUMBER || '',
       timbrado_start: formatDate(invoice.timbrado_start_date || process.env.INVOICE_TIMBRADO_START),
       timbrado_end: formatDate(invoice.timbrado_expires_at || process.env.INVOICE_TIMBRADO_END),
     };
-
-    const breakdown = { exentas: 0, vat5: 0, vat10: 0, iva5: 0, iva10: 0 };
-    const mappedItems = items.map((it) => {
-      const qty = Number(it.quantity || 0);
-      const price = Number(it.unit_price || 0);
-      const rate = Number(it.tax_rate ?? 10) || 0;
-      const lineBase = qty * price;
-      const iva = (lineBase * rate) / 100;
-      const total = lineBase + iva;
-
-      if (rate >= 9) {
-        breakdown.vat10 += total;
-        breakdown.iva10 += iva;
-      } else if (rate >= 4) {
-        breakdown.vat5 += total;
-        breakdown.iva5 += iva;
-      } else {
-        breakdown.exentas += total;
-      }
-      return { ...it, qty, price, rate, lineBase, iva, total };
-    });
-
-    const totalAmount = breakdown.exentas + breakdown.vat5 + breakdown.vat10;
-    const totalIva = breakdown.iva5 + breakdown.iva10;
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
@@ -869,97 +818,51 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
       `inline; filename="invoice-${invoice.invoice_number || id}.pdf"`
     );
 
-    const doc = new PDFDocument({ size: 'A4', margin: 40 });
-    doc.pipe(res);
+    const issueDate = invoice.issue_date ? new Date(invoice.issue_date) : new Date();
+    const data = {
+      issuer: {
+        name: issuer.name,
+        address: issuer.address,
+        phone: issuer.phone,
+        city: issuer.city,
+        activities:
+          process.env.INVOICE_ISSUER_ACTIVITIES ||
+          'Transporte terrestre / aereo / acuatico y actividades auxiliares',
+        ruc: issuer.ruc,
+        timbrado: issuer.timbrado,
+        timbrado_start: issuer.timbrado_start,
+        timbrado_end: issuer.timbrado_end,
+      },
+      invoiceNumber: invoice.invoice_number || '',
+      fechaEmision: formatDate(issueDate),
+      hora: new Date().toLocaleTimeString('es-PY', { hour12: false }),
+      client: {
+        name: invoice.customer_name || invoice.organization_name || '',
+        address: invoice.customer_address || invoice.organization_address || '',
+        phone: invoice.customer_phone || invoice.organization_phone || '',
+        email: invoice.customer_email || '',
+        ruc: invoice.customer_doc || invoice.organization_ruc || '',
+      },
+      condicionVenta: invoice.payment_condition || 'credito',
+      moneda: invoice.currency_code || 'USD',
+      refNumero: invoice.deal_reference || invoice.deal_id || '',
+      refDetalle: invoice.deal_title || '',
+      items: items.map((it) => ({
+        description: it.description || 'Item',
+        quantity: Number(it.quantity || 0),
+        unit_price: Number(it.unit_price || 0),
+        tax_rate: Number(it.tax_rate ?? 0),
+      })),
+      totalEnLetras: invoice.total_in_words || '',
+      notes: invoice.notes || '',
+    };
 
-    // Encabezado
-    doc.fontSize(16).text(issuer.name, 40, 40);
-    doc.fontSize(10).text(`RUC: ${issuer.ruc}`, { align: 'left' });
-    doc.text(issuer.address);
-    doc.text(`${issuer.city}  Tel: ${issuer.phone}`);
-
-    doc.fontSize(16).text(`Factura ${invoice.invoice_number || ''}`, { align: 'right' });
-    if (issuer.timbrado) {
-      doc.fontSize(10).text(`Timbrado: ${issuer.timbrado}`, { align: 'right' });
-      if (issuer.timbrado_end) doc.text(`Vigencia: hasta ${issuer.timbrado_end}`, { align: 'right' });
-    }
-
-    // Datos del cliente
-    doc.moveDown(1);
-    doc.rect(40, doc.y, 515, 70).stroke();
-    const startY = doc.y + 10;
-    doc.fontSize(11).text('Cliente', 50, startY);
-    doc.fontSize(10)
-      .text(`Razon social: ${invoice.organization_name || ''}`, 50, startY + 15)
-      .text(`RUC: ${invoice.customer_doc || invoice.organization_ruc || ''}`, 50, startY + 30)
-      .text(`Direccion: ${invoice.customer_address || invoice.organization_address || ''}`, 50, startY + 45)
-      .text(`Correo: ${invoice.customer_email || ''}`, 50, startY + 60);
-    doc.fontSize(10)
-      .text(`Fecha emision: ${formatDate(invoice.issue_date || new Date())}`, 360, startY + 15)
-      .text(`Condicion de venta: ${invoice.payment_condition || 'Credito'}`, 360, startY + 30)
-      .text(`Moneda: ${invoice.currency_code || 'USD'}`, 360, startY + 45)
-      .text(`Cambio: ${invoice.exchange_rate || 1}`, 360, startY + 60);
-
-    // Referencia
-    doc.moveDown(3);
-    doc.fontSize(11).text(
-      `Ref: ${invoice.deal_reference || invoice.deal_id || ''}  ${invoice.deal_title || ''}`
-    );
-
-    // Tabla de items
-    const tableTop = doc.y + 10;
-    const colX = [45, 90, 240, 340, 400, 460];
-    doc.fontSize(10).text('Cant.', colX[0], tableTop);
-    doc.text('Descripcion', colX[1], tableTop);
-    doc.text('Exentas', colX[2], tableTop);
-    doc.text('5 %', colX[3], tableTop);
-    doc.text('10 %', colX[4], tableTop);
-    doc.moveTo(40, tableTop + 12).lineTo(555, tableTop + 12).stroke();
-
-    let currentY = tableTop + 20;
-    mappedItems.forEach((it) => {
-      if (currentY > 700) {
-        doc.addPage();
-        currentY = 50;
-      }
-      const exentasText = it.rate < 1 ? formatCurrency(it.total) : '';
-      const vat5Text = it.rate >= 4 && it.rate < 9 ? formatCurrency(it.total) : '';
-      const vat10Text = it.rate >= 9 ? formatCurrency(it.total) : '';
-
-      doc.text(it.qty, colX[0], currentY);
-      doc.text(it.description || 'Item', colX[1], currentY, { width: 140 });
-      doc.text(exentasText, colX[2], currentY);
-      doc.text(vat5Text, colX[3], currentY);
-      doc.text(vat10Text, colX[4], currentY);
-      currentY += 16;
-    });
-
-    doc.moveTo(40, currentY + 5).lineTo(555, currentY + 5).stroke();
-    currentY += 15;
-
-    // Totales
-    doc.fontSize(11).text('Totales', 45, currentY);
-    doc.fontSize(10)
-      .text(`Exentas: ${formatCurrency(breakdown.exentas)}`, 200, currentY)
-      .text(`Gravadas 5%: ${formatCurrency(breakdown.vat5)}`, 200, currentY + 14)
-      .text(`Gravadas 10%: ${formatCurrency(breakdown.vat10)}`, 200, currentY + 28)
-      .text(`IVA 5%: ${formatCurrency(breakdown.iva5)}`, 400, currentY)
-      .text(`IVA 10%: ${formatCurrency(breakdown.iva10)}`, 400, currentY + 14)
-      .text(`Total IVA: ${formatCurrency(totalIva)}`, 400, currentY + 28)
-      .text(`TOTAL: ${formatCurrency(totalAmount)}`, 400, currentY + 45);
-
-    if (invoice.notes) {
-      doc.moveDown(2);
-      doc.fontSize(10).text(`Notas: ${invoice.notes}`);
-    }
-
-    doc.end();
+    await generateInvoicePDF(data, res);
   } catch (e) {
     console.error('[invoices] Error generating PDF:', e);
     res.status(500).json({ error: 'Error al generar PDF' });
   }
 });
-
 // =================== CREDIT NOTES ===================
 async function loadInvoiceWithPerms(req, invoiceId) {
   const [[invoice]] = await pool.query('SELECT * FROM invoices WHERE id = ?', [invoiceId]);
@@ -990,7 +893,7 @@ router.get('/:id/credit-notes', requireAuth, async (req, res) => {
     res.json(notes);
   } catch (e) {
     console.error('[credit-notes] Error listing:', e);
-    res.status(500).json({ error: 'Error al listar notas de crÃ©dito' });
+    res.status(500).json({ error: 'Error al listar notas de crédito' });
   }
 });
 
@@ -1000,7 +903,7 @@ router.get('/credit-notes/:id', requireAuth, async (req, res) => {
     await ensureCreditNoteTables();
     await ensureInvoiceCreditColumns();
     const [[note]] = await pool.query('SELECT * FROM credit_notes WHERE id = ?', [id]);
-    if (!note) return res.status(404).json({ error: 'Nota de crÃ©dito no encontrada' });
+    if (!note) return res.status(404).json({ error: 'Nota de crédito no encontrada' });
 
     const { invoice, error } = await loadInvoiceWithPerms(req, note.invoice_id);
     if (error) return res.status(error.code).json({ error: error.msg });
@@ -1012,13 +915,22 @@ router.get('/credit-notes/:id', requireAuth, async (req, res) => {
     res.json({ ...note, items, invoice });
   } catch (e) {
     console.error('[credit-notes] Error getting detail:', e);
-    res.status(500).json({ error: 'Error al obtener nota de crÃ©dito' });
+    res.status(500).json({ error: 'Error al obtener nota de crédito' });
   }
 });
 
 router.post('/credit-notes', requireAuth, async (req, res) => {
   try {
-    const { invoice_id, reason, items: payloadItems } = req.body;
+    const {
+      invoice_id,
+      reason,
+      items: payloadItems,
+      mode: payloadMode,
+      global_amounts,
+      credit_type,
+      apply_mode,
+      observations,
+    } = req.body;
     if (!invoice_id) return res.status(400).json({ error: 'invoice_id es requerido' });
 
     await ensureCreditNoteTables();
@@ -1028,17 +940,40 @@ router.post('/credit-notes', requireAuth, async (req, res) => {
     const { invoice, error } = await loadInvoiceWithPerms(req, invoice_id);
     if (error) return res.status(error.code).json({ error: error.msg });
     if (['borrador', 'anulada'].includes(invoice.status)) {
-      return res.status(400).json({ error: 'Solo se puede crear nota de crÃ©dito sobre facturas emitidas' });
+      return res.status(400).json({ error: 'Solo se puede crear nota de crédito sobre facturas emitidas' });
     }
 
     const items = Array.isArray(payloadItems) ? payloadItems : null;
+    const mode = ['items', 'global'].includes(String(payloadMode || '').toLowerCase())
+      ? String(payloadMode).toLowerCase()
+      : items && items.length > 0
+      ? 'items'
+      : 'global';
+
     let creditItems = [];
-    if (items && items.length > 0) {
+    if (mode === 'global') {
+      const ga = global_amounts || {};
+      const rows = [
+        { rate: 0, base: parseFloat(ga.exentas || ga.base0 || 0) || 0, label: 'Exentas' },
+        { rate: 5, base: parseFloat(ga.base5 || ga.gravado5 || 0) || 0, label: 'IVA 5%' },
+        { rate: 10, base: parseFloat(ga.base10 || ga.gravado10 || 0) || 0, label: 'IVA 10%' },
+      ];
+      creditItems = rows
+        .filter((r) => r.base > 0)
+        .map((r, idx) => ({
+          description: r.label,
+          quantity: 1,
+          unit_price: Number(r.base.toFixed(2)),
+          subtotal: Number(r.base.toFixed(2)),
+          tax_rate: r.rate,
+          item_order: idx,
+        }));
+    } else if (items && items.length > 0) {
       creditItems = items.map((it, idx) => {
-        const qty = parseFloat(it.quantity || 1) || 1;
-        const price = parseFloat(it.unit_price || 0) || 0;
+        const qty = parseFloat(it.quantity || it.qty || 1) || 1;
+        const price = parseFloat(it.unit_price || it.price || 0) || 0;
         const subtotal = parseFloat((qty * price).toFixed(2));
-        const rate = parseFloat(it.tax_rate ?? 10) || 0;
+        const rate = parseFloat(it.tax_rate ?? it.rate ?? 10) || 0;
         return {
           description: it.description || 'Item',
           quantity: qty,
@@ -1064,26 +999,38 @@ router.post('/credit-notes', requireAuth, async (req, res) => {
     }
 
     if (creditItems.length === 0) {
-      return res.status(400).json({ error: 'La nota de crÃ©dito debe tener al menos un Ã­tem' });
+      return res.status(400).json({ error: 'La nota de crédito debe tener al menos un ítem' });
     }
 
     const totals = calculateTotals(creditItems);
-    const availableCredit = Math.max(
-      0,
-      parseFloat(invoice.total_amount || 0) -
-        (parseFloat(invoice.credited_total || 0) || 0)
-    );
-    if (parseFloat(totals.total_amount) > availableCredit + 0.01) {
-      return res.status(400).json({ error: 'El monto de la nota excede lo disponible de la factura' });
+    const breakdown = breakdownByRate(creditItems);
+    const availability = await creditAvailability(invoice.id);
+    if (breakdown.base10 > availability.disponible.base10 + 0.01) {
+      return res
+        .status(400)
+        .json({ error: `Excede lo disponible en 10% (disp: ${availability.disponible.base10})` });
+    }
+    if (breakdown.base5 > availability.disponible.base5 + 0.01) {
+      return res
+        .status(400)
+        .json({ error: `Excede lo disponible en 5% (disp: ${availability.disponible.base5})` });
+    }
+    if (breakdown.base0 > availability.disponible.base0 + 0.01) {
+      return res
+        .status(400)
+        .json({ error: `Excede lo disponible exentas (disp: ${availability.disponible.base0})` });
     }
 
-    const creditNumber = await generateCreditNoteNumber();
+    const { creditNoteNumber, point, establishment } = await generateCreditNoteNumber(
+      invoice.point_of_issue,
+      invoice.establishment
+    );
     const [result] = await pool.query(
       `INSERT INTO credit_notes 
-       (credit_note_number, invoice_id, issue_date, status, reason, subtotal, tax_amount, total_amount, balance, created_by)
-       VALUES (?, ?, NULL, 'borrador', ?, ?, ?, ?, ?, ?)`,
+       (credit_note_number, invoice_id, issue_date, status, reason, subtotal, tax_amount, total_amount, balance, created_by, point_of_issue, establishment, credit_type, mode, apply_mode, observations)
+       VALUES (?, ?, NULL, 'borrador', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        creditNumber,
+        creditNoteNumber,
         invoice_id,
         reason || null,
         totals.subtotal,
@@ -1091,6 +1038,12 @@ router.post('/credit-notes', requireAuth, async (req, res) => {
         totals.total_amount,
         totals.total_amount,
         req.user.id,
+        point,
+        establishment,
+        credit_type || null,
+        mode,
+        apply_mode || null,
+        observations || null,
       ]
     );
     const creditId = result.insertId;
@@ -1104,10 +1057,10 @@ router.post('/credit-notes', requireAuth, async (req, res) => {
       );
     }
 
-    res.status(201).json({ id: creditId, credit_note_number: creditNumber, status: 'borrador' });
+    res.status(201).json({ id: creditId, credit_note_number: creditNoteNumber, status: 'borrador' });
   } catch (e) {
     console.error('[credit-notes] Error creating:', e);
-    res.status(500).json({ error: 'Error al crear nota de crÃ©dito' });
+    res.status(500).json({ error: 'Error al crear nota de crédito' });
   }
 });
 
@@ -1117,7 +1070,7 @@ router.post('/credit-notes/:id/issue', requireAuth, async (req, res) => {
     await ensureCreditNoteTables();
     await ensureInvoiceCreditColumns();
     const [[note]] = await pool.query('SELECT * FROM credit_notes WHERE id = ?', [id]);
-    if (!note) return res.status(404).json({ error: 'Nota de crÃ©dito no encontrada' });
+    if (!note) return res.status(404).json({ error: 'Nota de crédito no encontrada' });
     if (note.status !== 'borrador') return res.status(400).json({ error: 'Solo se puede emitir desde borrador' });
 
     const { invoice, error } = await loadInvoiceWithPerms(req, note.invoice_id);
@@ -1129,25 +1082,34 @@ router.post('/credit-notes/:id/issue', requireAuth, async (req, res) => {
        WHERE id = ?`,
       [req.user.id, id]
     );
-    // Anular la factura original y marcar el vÃ­nculo con la NC
-    await pool.query(
-      `UPDATE invoices 
-       SET status = 'anulada',
-           cancellation_reason = ?,
-           canceled_by_credit_note_id = ?,
-           credited_total = total_amount,
-           net_total_amount = 0,
-           net_balance = 0,
-           balance = 0
-       WHERE id = ?`,
-      [`Anulada por nota de crÃ©dito ${note.credit_note_number}`, id, invoice.id]
-    );
+
+    // Recalcular crédito aplicado y estado de la factura (ajustada/anulada)
+    await recomputeInvoiceCredits(invoice.id);
+    const [[invAfter]] = await pool.query('SELECT * FROM invoices WHERE id = ?', [invoice.id]);
+
+    if (parseFloat(invAfter.net_total_amount || 0) <= 0.01) {
+      await pool.query(
+        `UPDATE invoices 
+         SET status = 'anulada',
+             cancellation_reason = ?,
+             canceled_by_credit_note_id = ?
+         WHERE id = ?`,
+        [`Anulada por nota de crédito ${note.credit_note_number}`, id, invoice.id]
+      );
+    } else {
+      await pool.query(
+        `UPDATE invoices 
+         SET status = 'ajustada'
+         WHERE id = ?`,
+        [invoice.id]
+      );
+    }
     await recomputeInvoiceCredits(invoice.id);
     const [[updated]] = await pool.query('SELECT * FROM credit_notes WHERE id = ?', [id]);
     res.json(updated);
   } catch (e) {
     console.error('[credit-notes] Error issuing:', e);
-    res.status(500).json({ error: 'Error al emitir nota de crÃ©dito' });
+    res.status(500).json({ error: 'Error al emitir nota de crédito' });
   }
 });
 
@@ -1157,8 +1119,8 @@ router.post('/credit-notes/:id/cancel', requireAuth, async (req, res) => {
     await ensureCreditNoteTables();
     await ensureInvoiceCreditColumns();
     const [[note]] = await pool.query('SELECT * FROM credit_notes WHERE id = ?', [id]);
-    if (!note) return res.status(404).json({ error: 'Nota de crÃ©dito no encontrada' });
-    if (note.status === 'anulada') return res.status(400).json({ error: 'Ya estÃ¡ anulada' });
+    if (!note) return res.status(404).json({ error: 'Nota de crédito no encontrada' });
+    if (note.status === 'anulada') return res.status(400).json({ error: 'Ya está anulada' });
 
     const { invoice, error } = await loadInvoiceWithPerms(req, note.invoice_id);
     if (error) return res.status(error.code).json({ error: error.msg });
@@ -1169,8 +1131,15 @@ router.post('/credit-notes/:id/cancel', requireAuth, async (req, res) => {
     res.json(updated);
   } catch (e) {
     console.error('[credit-notes] Error canceling:', e);
-    res.status(500).json({ error: 'Error al anular nota de crÃ©dito' });
+    res.status(500).json({ error: 'Error al anular nota de crédito' });
   }
 });
 
 export default router;
+
+
+
+
+
+
+

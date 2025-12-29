@@ -112,14 +112,9 @@ export default function Workspace() {
 
         // Si NO hay pid por parámetros, decidimos según el workspace
         if (!pid) {
+          // Para ATM INDUSTRIAL forzamos pipeline 1
           if (key === "atm-industrial") {
-            // Buscamos el pipeline específico de ATM INDUSTRIAL
-            const industrial = (p || []).find(
-              (pl) =>
-                String(pl.name).toLowerCase().trim() ===
-                "atm industrial".toLowerCase()
-            );
-            pid = industrial?.id || p?.[0]?.id;
+            pid = 1;
           } else {
             // Resto de workspaces (ej: atm-cargo) usan el primer pipeline
             pid = p?.[0]?.id;

@@ -42,6 +42,31 @@ const OP_LABELS = {
 };
 const opLabel = (v) => OP_LABELS[v] || v || "";
 
+const FALLBACK_COUNTRIES = [
+  { iso2: "PY", iso3: "PRY", iso_num: "600", name: "Paraguay" },
+  { iso2: "AR", iso3: "ARG", iso_num: "032", name: "Argentina" },
+  { iso2: "BR", iso3: "BRA", iso_num: "076", name: "Brazil" },
+  { iso2: "UY", iso3: "URY", iso_num: "858", name: "Uruguay" },
+  { iso2: "CL", iso3: "CHL", iso_num: "152", name: "Chile" },
+  { iso2: "BO", iso3: "BOL", iso_num: "068", name: "Bolivia" },
+  { iso2: "PE", iso3: "PER", iso_num: "604", name: "Peru" },
+  { iso2: "US", iso3: "USA", iso_num: "840", name: "United States" },
+  { iso2: "ES", iso3: "ESP", iso_num: "724", name: "Spain" },
+];
+
+const FALLBACK_CITIES = [
+  { id: 1, country_iso2: "PY", city_code: "ASU", name: "Asuncion" },
+  { id: 2, country_iso2: "PY", city_code: "AGT", name: "Ciudad del Este" },
+  { id: 3, country_iso2: "AR", city_code: "BUE", name: "Buenos Aires" },
+  { id: 4, country_iso2: "AR", city_code: "COR", name: "Cordoba" },
+  { id: 5, country_iso2: "BR", city_code: "SAO", name: "Sao Paulo" },
+  { id: 6, country_iso2: "BR", city_code: "RIO", name: "Rio de Janeiro" },
+  { id: 7, country_iso2: "UY", city_code: "MVD", name: "Montevideo" },
+  { id: 8, country_iso2: "CL", city_code: "SCL", name: "Santiago" },
+  { id: 9, country_iso2: "US", city_code: "MIA", name: "Miami" },
+  { id: 10, country_iso2: "ES", city_code: "MAD", name: "Madrid" },
+];
+
 // Normalizador robusto para options de tipo de operación
 function normalizeOpTypeOptions(raw) {
   let src = raw;
@@ -345,6 +370,13 @@ export default function NewOperationModal({
   const [clase, setClase] = useState("");
   const [origen, setOrigen] = useState("");
   const [destino, setDestino] = useState("");
+  const [originCountry, setOriginCountry] = useState("");
+  const [destinationCountry, setDestinationCountry] = useState("");
+  const [originCityId, setOriginCityId] = useState("");
+  const [destinationCityId, setDestinationCityId] = useState("");
+
+  const [countries] = useState(FALLBACK_COUNTRIES);
+  const [cities] = useState(FALLBACK_CITIES);
 
   // Tipo de operación
   const [tipoOp, setTipoOp] = useState(""); // IMPORT | EXPORT | EXTERIOR
@@ -408,6 +440,61 @@ export default function NewOperationModal({
     if (!modo) return [];
     return LOAD_TYPES[modo] || [];
   }, [modo]);
+  const countryByIso2 = useMemo(() => {
+    return new Map(countries.map((c) => [c.iso2, c]));
+  }, [countries]);
+
+  const cityOptions = useMemo(() => {
+    return cities.slice().sort((a, b) => a.name.localeCompare(b.name));
+  }, [cities]);
+
+  function handleOriginValue(val) {
+    setOrigen(val);
+    const match = /^([A-Z]{2})\s*-\s*([A-Z0-9]{3})/i.exec(val || "");
+    if (!match) {
+      setOriginCityId("");
+      setOriginCountry("");
+      return;
+    }
+    const iso2 = match[1].toUpperCase();
+    const code = match[2].toUpperCase();
+    const city = cities.find(
+      (c) =>
+        c.country_iso2 === iso2 &&
+        String(c.city_code || "").toUpperCase() === code
+    );
+    if (!city) {
+      setOriginCityId("");
+      setOriginCountry(iso2);
+      return;
+    }
+    setOriginCityId(String(city.id));
+    setOriginCountry(iso2);
+  }
+
+  function handleDestinationValue(val) {
+    setDestino(val);
+    const match = /^([A-Z]{2})\s*-\s*([A-Z0-9]{3})/i.exec(val || "");
+    if (!match) {
+      setDestinationCityId("");
+      setDestinationCountry("");
+      return;
+    }
+    const iso2 = match[1].toUpperCase();
+    const code = match[2].toUpperCase();
+    const city = cities.find(
+      (c) =>
+        c.country_iso2 === iso2 &&
+        String(c.city_code || "").toUpperCase() === code
+    );
+    if (!city) {
+      setDestinationCityId("");
+      setDestinationCountry(iso2);
+      return;
+    }
+    setDestinationCityId(String(city.id));
+    setDestinationCountry(iso2);
+  }
 
   // Ajuste de tipo de carga al cambiar modalidad
   useEffect(() => {
@@ -624,6 +711,9 @@ export default function NewOperationModal({
       const { data: created } = await api.post("/deals", payload);
       const dealId = created?.id;
       if (!dealId) throw new Error("No se obtuvo el ID de la operación");
+      const originCountryObj = countries.find((c) => c.iso2 === originCountry) || null;
+      const destinationCountryObj =
+        countries.find((c) => c.iso2 === destinationCountry) || null;
 
       const cfPayloads = [
         { key: "modalidad_carga", label: "Modalidad de carga", type: "select", value: modo },
@@ -637,6 +727,46 @@ export default function NewOperationModal({
         { key: "vol_m3", label: "Vol m³", type: "text", value: volumen || "" },
         { key: "unidad", label: "Unidad", type: "text", value: unidad || "" },
       ];
+      if (originCountryObj) {
+        cfPayloads.push(
+          { key: "origen_pais_iso2", label: "Origen Pais ISO2", type: "text", value: originCountryObj.iso2 },
+          { key: "origen_pais_iso3", label: "Origen Pais ISO3", type: "text", value: originCountryObj.iso3 },
+          {
+            key: "origen_pais_num",
+            label: "Origen Pais ISO Num",
+            type: "number",
+            value: String(Number(originCountryObj.iso_num || 0)),
+          }
+        );
+      }
+      if (destinationCountryObj) {
+        cfPayloads.push(
+          { key: "destino_pais_iso2", label: "Destino Pais ISO2", type: "text", value: destinationCountryObj.iso2 },
+          { key: "destino_pais_iso3", label: "Destino Pais ISO3", type: "text", value: destinationCountryObj.iso3 },
+          {
+            key: "destino_pais_num",
+            label: "Destino Pais ISO Num",
+            type: "number",
+            value: String(Number(destinationCountryObj.iso_num || 0)),
+          }
+        );
+      }
+      if (originCityId) {
+        cfPayloads.push({
+          key: "origen_ciudad_id",
+          label: "Origen Ciudad ID",
+          type: "number",
+          value: String(originCityId),
+        });
+      }
+      if (destinationCityId) {
+        cfPayloads.push({
+          key: "destino_ciudad_id",
+          label: "Destino Ciudad ID",
+          type: "number",
+          value: String(destinationCityId),
+        });
+      }
       await Promise.all(cfPayloads.map((p) => api.post(`/deals/${dealId}/custom-fields`, p)));
 
       if (modo === "MARITIMO") {
@@ -871,19 +1001,43 @@ export default function NewOperationModal({
                 Origen
                 <Input
                   value={origen}
-                  onChange={(e) => setOrigen(e.target.value)}
-                  placeholder="Ciudad / Puerto / Aeropuerto"
+                  onChange={(e) => handleOriginValue(e.target.value)}
+                  onInput={(e) => handleOriginValue(e.target.value)}
+                  list="origin-city-options"
+                  placeholder="PY - ASU"
                   required
                 />
+                <datalist id="origin-city-options">
+                  {cityOptions.map((c) => {
+                    const country = countryByIso2.get(c.country_iso2);
+                    const code =
+                      c.city_code || (c.name ? c.name.slice(0, 3).toUpperCase() : "");
+                    const value = `${c.country_iso2} - ${code}`;
+                    const label = `${country?.name || c.country_iso2} - ${c.name}`;
+                    return <option key={c.id} value={value} label={label} />;
+                  })}
+                </datalist>
               </label>
               <label className="text-sm">
                 Destino
                 <Input
                   value={destino}
-                  onChange={(e) => setDestino(e.target.value)}
-                  placeholder="Ciudad / Puerto / Aeropuerto"
+                  onChange={(e) => handleDestinationValue(e.target.value)}
+                  onInput={(e) => handleDestinationValue(e.target.value)}
+                  list="destination-city-options"
+                  placeholder="PY - ASU"
                   required
                 />
+                <datalist id="destination-city-options">
+                  {cityOptions.map((c) => {
+                    const country = countryByIso2.get(c.country_iso2);
+                    const code =
+                      c.city_code || (c.name ? c.name.slice(0, 3).toUpperCase() : "");
+                    const value = `${c.country_iso2} - ${code}`;
+                    const label = `${country?.name || c.country_iso2} - ${c.name}`;
+                    return <option key={c.id} value={value} label={label} />;
+                  })}
+                </datalist>
               </label>
 
               {/* Campo visible y robusto */}

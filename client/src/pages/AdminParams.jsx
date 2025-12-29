@@ -2,35 +2,28 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 
-// === Grupos de parámetros administrables ===
+// === Grupos de parametros administrables ===
 const PARAM_GROUPS = [
   {
     title: "Organizaciones",
     description: "Opciones usadas en el formulario de organizaciones.",
-    // ⬇️ Agregamos org_operacion para el desplegable de “Operación” del formulario
     keys: ["org_tipo", "org_rubro", "org_operacion"],
   },
   {
-    title: "Operación",
-    description: "Listas para usar en la operación (detalle).",
+    title: "Operacion",
+    description: "Listas para usar en la operacion (detalle).",
     keys: ["tipo_operacion", "modalidad_carga", "tipo_carga", "incoterm"],
   },
   {
     title: "Kanban / Pipeline",
     description:
-      "Configura alias y visibilidad de columnas. Para un workspace en particular, creá la misma clave con sufijo __{key_slug}, ej.: kanban_stage_labels__atm-cargo.",
-    keys: [
-      "kanban_stage_labels",
-      "kanban_hide_stages",
-      "kanban_pipeline_id",
-      // podés crear variantes con sufijo __{key_slug} desde esta misma pantalla
-    ],
- },
-
+      "Configura alias y visibilidad de columnas. Para un workspace en particular, crea la misma clave con sufijo __{key_slug}, ej.: kanban_stage_labels__atm-cargo.",
+    keys: ["kanban_stage_labels", "kanban_hide_stages", "kanban_pipeline_id"],
+  },
   {
-    title: "Presupuesto — Términos",
+    title: "Presupuesto - Terminos",
     description:
-      "Opciones administrables del presupuesto (se verán como sugerencias en el generador).",
+      "Opciones administrables del presupuesto (se veran como sugerencias en el generador).",
     keys: [
       "quote_validez",
       "quote_condicion_venta",
@@ -41,13 +34,40 @@ const PARAM_GROUPS = [
     ],
   },
   {
-  title: "Kanban",
-  description: "Config simple por nombre o ID (los nombres ganan).",
-  keys: ["kanban_pipeline", "kanban_pipeline_id", "kanban_stage_alias", "kanban_hide_stage"],
-}
-
-
-
+    title: "Presupuesto - Plantillas de condiciones",
+    description:
+      "Plantillas completas para presupuesto industrial (contenido en JSON).",
+    keys: ["quote_template"],
+  },
+  {
+    title: "Kanban",
+    description: "Config simple por nombre o ID (los nombres ganan).",
+    keys: [
+      "kanban_pipeline",
+      "kanban_pipeline_id",
+      "kanban_stage_alias",
+      "kanban_hide_stage",
+    ],
+  },
+  {
+    title: "Facturación",
+    description:
+      "Timbrado, vigencia y numeración de facturas (por unidad de negocio).",
+    keys: [
+      "invoice_timbre_number",
+      "invoice_timbre_valid_from",
+      "invoice_timbre_valid_to",
+      "invoice_exp_industrial",
+      "invoice_exp_cargo",
+      "invoice_next_number",
+    ],
+  },
+  {
+    title: "Notas de crédito",
+    description:
+      "Punto de expedición único y correlativo independiente para NC.",
+    keys: ["credit_exp", "credit_next_number"],
+  },
 ];
 
 // Normaliza la forma de pedir todas las claves
@@ -185,6 +205,7 @@ export default function AdminParams() {
               <ParamCard
                 key={key}
                 label={key}
+                keyName={key}
                 rows={map[key] || []}
                 onChangeRow={(idx, patch) =>
                   setKeyList(key, (list) =>
@@ -207,6 +228,7 @@ export default function AdminParams() {
 /** Tarjeta de edición de una clave de parámetros */
 function ParamCard({
   label,
+  keyName,
   rows,
   onChangeRow,
   onClickSave,
@@ -215,6 +237,10 @@ function ParamCard({
   saving,
 }) {
   const [newVal, setNewVal] = useState("");
+  const isTemplate = keyName === "quote_template";
+  const isDate =
+    keyName === "invoice_timbre_valid_from" ||
+    keyName === "invoice_timbre_valid_to";
 
   return (
     <div className="border rounded-xl p-3">
@@ -236,13 +262,25 @@ function ParamCard({
               rows.map((r, idx) => (
                 <tr key={r.id || idx} className="border-b last:border-0">
                   <td className="py-1 pr-2">
-                    <input
-                      className="w-full border rounded px-2 py-1"
-                      value={r.value || ""}
-                      onChange={(e) =>
-                        onChangeRow(idx, { value: e.target.value })
-                      }
-                    />
+                    {isTemplate ? (
+                      <textarea
+                        className="w-full border rounded px-2 py-1"
+                        rows={6}
+                        value={r.value || ""}
+                        onChange={(e) =>
+                          onChangeRow(idx, { value: e.target.value })
+                        }
+                      />
+                    ) : (
+                      <input
+                        type={isDate ? "date" : "text"}
+                        className="w-full border rounded px-2 py-1"
+                        value={r.value || ""}
+                        onChange={(e) =>
+                          onChangeRow(idx, { value: e.target.value })
+                        }
+                      />
+                    )}
                   </td>
                   <td className="py-1 pr-2">
                     <input
@@ -297,14 +335,24 @@ function ParamCard({
         </table>
       </div>
 
-      {/* Alta rápida */}
+            {/* Alta rapida */}
       <div className="mt-3 flex gap-2">
-        <input
-          className="flex-1 border rounded px-2 py-1 text-sm"
-          placeholder="Nuevo valor…"
-          value={newVal}
-          onChange={(e) => setNewVal(e.target.value)}
-        />
+        {isTemplate ? (
+          <textarea
+            className="flex-1 border rounded px-2 py-1 text-sm"
+            rows={4}
+            placeholder="Nuevo valor (JSON)"
+            value={newVal}
+            onChange={(e) => setNewVal(e.target.value)}
+          />
+        ) : (
+          <input
+            className="flex-1 border rounded px-2 py-1 text-sm"
+            placeholder="Nuevo valor"
+            value={newVal}
+            onChange={(e) => setNewVal(e.target.value)}
+          />
+        )}
         <button
           className="px-3 py-1.5 text-sm rounded bg-blue-600 text-white disabled:opacity-60"
           onClick={() => {
@@ -324,31 +372,32 @@ function ParamCard({
 function prettyLabel(key) {
   const map = {
     // Organizaciones
-    org_tipo: "Tipo de organización",
-    org_rubro: "Rubro (organización)",
-    org_operacion: "Operación (organización)", // ⬅️ NUEVO
+    org_tipo: "Tipo de organizacion",
+    org_rubro: "Rubro (organizacion)",
+    org_operacion: "Operacion (organizacion)",
 
-    // Operación
-    tipo_operacion: "Tipo de operación",
+    // Operacion
+    tipo_operacion: "Tipo de operacion",
     modalidad_carga: "Modalidad de carga",
     tipo_carga: "Tipo de carga (LCL/FCL)",
     incoterm: "Incoterms",
 
     // Presupuesto
     quote_validez: "Validez de la oferta",
-    quote_condicion_venta: "Condición de venta",
-    quote_plazo_credito: "Plazo de crédito",
+    quote_condicion_venta: "Condicion de venta",
+    quote_plazo_credito: "Plazo de credito",
     quote_forma_pago: "Forma de pago",
-    quote_incluye: "Qué incluye",
-    quote_no_incluye: "Qué no incluye",
+    quote_incluye: "Que incluye",
+    quote_no_incluye: "Que no incluye",
+    quote_template: "Plantillas de condiciones",
 
-    // +++ Agregar en prettyLabel():
+    // Kanban
     kanban_pipeline: "Pipeline (por nombre)",
-    kanban_pipeline_id: "Pipeline (por ID) – opcional",
+    kanban_pipeline_id: "Pipeline (por ID) opcional",
     kanban_stage_alias: "Alias de columnas (por nombre)",
     kanban_hide_stage: "Ocultar columnas (por nombre)",
-
-    // Kanban    
+    kanban_stage_labels: "Etiquetas de columnas",
+    kanban_hide_stages: "Ocultar columnas",
   };
   return map[key] || key;
 }

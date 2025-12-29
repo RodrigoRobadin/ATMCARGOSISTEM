@@ -366,10 +366,9 @@ Asunto: ${subject}`);
                                                 value={doorFormData.side_install || ""}
                                                 onChange={(e) => updateFormField("side_install", e.target.value)}
                                             >
-                                                <option value="">—</option>
-                                                <option value="DERECHA">Derecha</option>
-                                                <option value="IZQUIERDA">Izquierda</option>
-                                                <option value="CENTRO">Centro</option>
+                                                <option value="">–</option>
+                                                <option value="INTERIOR">Interior</option>
+                                                <option value="EXTERIOR">Exterior</option>
                                             </Select>
                                         </Field>
 
