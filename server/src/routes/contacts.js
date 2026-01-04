@@ -11,7 +11,7 @@ router.get('/', async (req, res) => {
   const {
     q, org_id, label, owner_user_id, visibility,
     has_email, deleted, sort = 'created_at', order = 'desc',
-    limit = 50, offset = 0
+    limit = 10000, offset = 0
   } = req.query;
 
   const where = [];

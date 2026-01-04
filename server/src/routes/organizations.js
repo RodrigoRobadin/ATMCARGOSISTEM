@@ -33,9 +33,20 @@ const toNull = (v) => (v === '' || typeof v === 'undefined' ? null : v);
 /* ===================== LISTAR ===================== */
 router.get('/', requireAuth, async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    // Sin límite práctico por defecto (pero con tope alto para evitar abusos)
+    const limit = Math.min(Number(req.query.limit) || 10000, 10000);
     const offset = Number(req.query.offset) || 0;
     const includeTotal = String(req.query.include_total || '') === '1';
+    const q = (req.query.q || '').trim();
+
+    const where = [];
+    const params = [];
+    if (q) {
+      const like = `%${q}%`;
+      where.push('(name LIKE ? OR razon_social LIKE ? OR ruc LIKE ? OR industry LIKE ?)');
+      params.push(like, like, like, like);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const [rows] = await db.query(
       `
@@ -54,15 +65,17 @@ router.get('/', requireAuth, async (req, res) => {
         budget_profit AS budget_profit_value,
         NULL AS advisor_name
       FROM organizations
+      ${whereSql}
       ORDER BY name ASC
       LIMIT ? OFFSET ?
       `,
-      [limit, offset]
+      [...params, limit, offset]
     );
 
     if (includeTotal) {
       const [[countRow]] = await db.query(
-        `SELECT COUNT(*) AS total FROM organizations`
+        `SELECT COUNT(*) AS total FROM organizations ${whereSql}`,
+        params
       );
       const total = Number(countRow?.total || 0);
       return res.json({ items: rows, total });

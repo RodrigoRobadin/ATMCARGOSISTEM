@@ -9,6 +9,7 @@ const router = Router();
 // Ensures (best-effort) for credit tables/columns on startup
 ensureCreditNoteTables().catch((err) => console.error('init credit tables', err?.message));
 ensureInvoiceCreditColumns().catch((err) => console.error('init credit cols', err?.message));
+ensureReceiptTables().catch((err) => console.error('init receipts', err?.message));
 
 // =================== HELPERS ===================
 async function ensureInvoiceSequence() {
@@ -96,6 +97,44 @@ async function ensureParamsTable() {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       INDEX idx_params_key (\`key\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+}
+
+async function ensureReceiptTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS receipts (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      receipt_number VARCHAR(64) NOT NULL,
+      invoice_id INT NOT NULL,
+      issue_date DATE NULL,
+      status ENUM('borrador','emitido','anulado') NOT NULL DEFAULT 'emitido',
+      currency_code VARCHAR(8) NULL,
+      payment_method VARCHAR(32) NULL,
+      bank_account VARCHAR(32) NULL,
+      reference_number VARCHAR(128) NULL,
+      amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+      retention_pct DECIMAL(6,2) NOT NULL DEFAULT 0,
+      retention_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+      net_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+      point_of_issue VARCHAR(8) NULL,
+      establishment VARCHAR(8) NULL,
+      created_by INT NULL,
+      issued_by INT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS receipt_applications (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      receipt_id INT NOT NULL,
+      invoice_id INT NOT NULL,
+      amount_applied DECIMAL(15,2) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (receipt_id) REFERENCES receipts(id) ON DELETE CASCADE,
+      FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 }
@@ -229,6 +268,48 @@ async function ensureCreditNoteTables() {
     `INSERT IGNORE INTO credit_note_sequence (id, prefix, year, last_number)
      VALUES (1, 'NC', YEAR(CURDATE()), 0);`
   );
+}
+
+
+async function generateReceiptNumber(forcePoint, forceEst) {
+  await ensureReceiptTables();
+  const defaultExp = '001-004';
+  let expRaw = defaultExp;
+  try {
+    expRaw =
+      (await getParamValue('receipt_exp', pool))?.value ||
+      (await getParamValue('receipt_exp_industrial', pool))?.value ||
+      (await getParamValue('receipt_exp_cargo', pool))?.value ||
+      defaultExp;
+  } catch (_) {
+    expRaw = defaultExp;
+  }
+  let { point, establishment } = parseExpedition(expRaw, {
+    point: defaultExp.split('-')[0] || '001',
+    establishment: defaultExp.split('-')[1] || '004',
+  });
+
+  if (forcePoint && String(forcePoint).trim()) point = String(forcePoint).padStart(3, '0');
+  if (forceEst && String(forceEst).trim()) establishment = String(forceEst).padStart(3, '0');
+
+  const lastSeq =
+    (await fetchLastSeq(point, establishment, pool, 'receipt_number', 'receipts')) || 0;
+
+  let next = lastSeq + 1;
+  try {
+    const paramVal =
+      parseInt((await getParamValue('receipt_next_number', pool))?.value || 'NaN', 10);
+    if (Number.isFinite(paramVal)) next = Math.max(next, paramVal);
+  } catch (_) {
+    next = lastSeq + 1;
+  }
+  if (!Number.isFinite(next) || next < lastSeq + 1) next = lastSeq + 1;
+
+  const receiptNumber = `${point}-${establishment}-${String(next).padStart(7, '0')}`;
+  try {
+    await upsertParam('receipt_next_number', String(next + 1), pool);
+  } catch (_) {}
+  return { receiptNumber, point, establishment };
 }
 
 async function generateCreditNoteNumber(forcePoint, forceEst) {
@@ -439,6 +520,30 @@ async function nextInvoiceNumber(buKey = '', conn) {
   } catch (_) {}
 
   return { invoice_number, point_of_issue: point, establishment };
+}
+
+
+async function recomputeInvoicePayments(invoiceId) {
+  const [[inv]] = await pool.query('SELECT id, net_total_amount FROM invoices WHERE id = ?', [invoiceId]);
+  if (!inv) return;
+  const [[agg]] = await pool.query(
+    `SELECT COALESCE(SUM(net_amount),0) AS paid
+       FROM receipts
+      WHERE invoice_id = ? AND status = 'emitido'`,
+    [invoiceId]
+  );
+  const paid = parseFloat(agg.paid || 0);
+  const netTotal = parseFloat(inv.net_total_amount || 0);
+  const netBalance = Math.max(0, netTotal - paid);
+  let newStatus = 'emitida';
+  if (netBalance <= 0.01) newStatus = 'pagada';
+  else if (paid > 0) newStatus = 'pago_parcial';
+  await pool.query(
+    `UPDATE invoices 
+     SET paid_amount = ?, net_balance = ?, status = ?
+     WHERE id = ?`,
+    [paid.toFixed(2), netBalance.toFixed(2), newStatus, invoiceId]
+  );
 }
 
 async function recomputeInvoiceCredits(invoiceId) {
@@ -729,6 +834,353 @@ router.get('/', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/invoices - Crear factura (borrador)
+router.post('/', requireAuth, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    await ensureInvoiceExtraColumns();
+    await ensureInvoiceCreditColumns();
+
+    const {
+      deal_id,
+      due_date,
+      payment_terms,
+      notes,
+      payment_condition,
+      timbrado_number,
+      timbrado_start_date,
+      timbrado_expires_at,
+      point_of_issue,
+      establishment,
+      customer_doc_type,
+      customer_doc,
+      customer_email,
+      customer_address,
+      currency_code,
+      exchange_rate,
+      sales_rep,
+      purchase_order_ref,
+      percentage,
+    } = req.body || {};
+
+    if (!deal_id) {
+      return res.status(400).json({ error: 'deal_id es requerido' });
+    }
+
+    await conn.beginTransaction();
+
+    const [[deal]] = await conn.query(
+      `SELECT d.id, d.org_id AS organization_id, d.reference, d.title, d.value AS deal_value, bu.key_slug AS business_unit_key
+       FROM deals d
+       LEFT JOIN business_units bu ON bu.id = d.business_unit_id
+       WHERE d.id = ?`,
+      [deal_id]
+    );
+    if (!deal) {
+      await conn.rollback();
+      return res.status(400).json({ error: 'Operacion no encontrada' });
+    }
+
+    const buKey = deal.business_unit_key || '';
+    const { invoice_number, point_of_issue: poi, establishment: est } = await nextInvoiceNumber(
+      buKey,
+      conn
+    );
+
+    const issueDate = new Date();
+    const dueDate = due_date ? new Date(due_date) : null;
+    const perc = Number(percentage || 100);
+
+    const [[agg]] = await conn.query(
+      `SELECT COALESCE(SUM(percentage),0) AS used_pct
+         FROM invoices
+        WHERE deal_id = ?
+          AND status <> 'anulada'`,
+      [deal_id]
+    );
+    const usedPct = Number(agg.used_pct || 0);
+    if (usedPct + perc > 100.0001) {
+      await conn.rollback();
+      return res.status(400).json({ error: `El porcentaje supera el 100% (ya facturado ${usedPct.toFixed(2)}%)` });
+    }
+
+    const dealValue = Number(deal.deal_value || 0);
+    const subtotal = Number((dealValue * (perc / 100)).toFixed(2));
+    const tax_amount = 0;
+    const total_amount = subtotal;
+
+    const [result] = await conn.query(
+      `INSERT INTO invoices (
+        deal_id, organization_id, invoice_number, issue_date, due_date, payment_terms, notes,
+        payment_condition, timbrado_number, timbrado_start_date, timbrado_expires_at,
+        point_of_issue, establishment, customer_doc_type, customer_doc, customer_email, customer_address,
+        currency_code, exchange_rate, sales_rep, purchase_order_ref,
+        percentage, subtotal, tax_amount, total_amount, balance, status, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'borrador', ?)`,
+      [
+        deal.id,
+        deal.organization_id,
+        invoice_number,
+        issueDate,
+        dueDate,
+        payment_terms || null,
+        notes || '',
+        payment_condition || 'credito',
+        timbrado_number || null,
+        timbrado_start_date || null,
+        timbrado_expires_at || null,
+        point_of_issue || poi,
+        establishment || est,
+        customer_doc_type || 'RUC',
+        customer_doc || null,
+        customer_email || null,
+        customer_address || null,
+        currency_code || 'USD',
+        Number(exchange_rate || 1) || 1,
+        sales_rep || null,
+        purchase_order_ref || null,
+        perc,
+        subtotal,
+        tax_amount,
+        total_amount,
+        total_amount,
+        req.user.id,
+      ]
+    );
+
+    const newId = result.insertId;
+
+    // Guardar item generico del presupuesto
+    await ensureInvoiceItemsTaxColumn();
+    await conn.query(
+      `INSERT INTO invoice_items
+       (invoice_id, description, quantity, unit_price, subtotal, tax_rate, item_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        newId,
+        'Presupuesto de la operacion',
+        1,
+        subtotal,
+        subtotal,
+        0,
+        0,
+      ]
+    );
+
+    await conn.commit();
+
+    const [[created]] = await pool.query(
+      `SELECT i.*, o.name as organization_name
+       FROM invoices i
+       LEFT JOIN organizations o ON o.id = i.organization_id
+       WHERE i.id = ?`,
+      [newId]
+    );
+    res.status(201).json(created);
+  } catch (e) {
+    await conn.rollback();
+    console.error('[invoices] Error creating invoice:', e?.message || e, e?.sqlMessage || null);
+    res.status(500).json({ error: e?.sqlMessage || e?.message || 'Error al crear factura' });
+  } finally {
+    conn.release();
+  }
+});
+
+// DELETE /api/invoices/:id - Anular/eliminar factura
+router.delete('/:id', requireAuth, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const { id } = req.params;
+    const [[invoice]] = await conn.query('SELECT * FROM invoices WHERE id = ?', [id]);
+    if (!invoice) {
+      conn.release();
+      return res.status(404).json({ error: 'Factura no encontrada' });
+    }
+    if (!canManageInvoice(req.user, invoice)) {
+      conn.release();
+      return res.status(403).json({ error: 'No tienes permiso para eliminar esta factura' });
+    }
+    if (invoice.status === 'anulada') {
+      conn.release();
+      return res.status(400).json({ error: 'La factura ya est? anulada' });
+    }
+
+    await conn.beginTransaction();
+    await conn.query(
+      `UPDATE invoices 
+         SET status = 'anulada',
+             cancellation_reason = ?,
+             canceled_by_credit_note_id = NULL,
+             balance = 0
+       WHERE id = ?`,
+      ['Eliminada manualmente', id]
+    );
+    await conn.commit();
+
+    const [[updated]] = await pool.query(
+      `SELECT i.*, o.name as organization_name
+         FROM invoices i
+         LEFT JOIN organizations o ON o.id = i.organization_id
+        WHERE i.id = ?`,
+      [id]
+    );
+    res.json(updated);
+  } catch (e) {
+    await conn.rollback();
+    console.error('[invoices] Error deleting invoice:', e);
+    res.status(500).json({ error: 'Error al eliminar factura' });
+  } finally {
+    conn.release();
+  }
+});
+
+
+
+// GET /api/invoices/receipts - Lista de recibos
+router.get('/receipts', requireAuth, async (req, res) => {
+  try {
+    await ensureReceiptTables();
+    const [rows] = await pool.query(
+      `SELECT r.*, i.invoice_number, i.organization_id, i.deal_id, d.reference as deal_reference, o.name as organization_name
+         FROM receipts r
+         LEFT JOIN invoices i ON i.id = r.invoice_id
+         LEFT JOIN deals d ON d.id = i.deal_id
+         LEFT JOIN organizations o ON o.id = i.organization_id
+        WHERE r.status = 'emitido'
+        ORDER BY r.issue_date DESC, r.id DESC`
+    );
+    res.json(rows);
+  } catch (e) {
+    console.error('[receipts] Error listing', e);
+    res.status(500).json({ error: 'Error al listar recibos' });
+  }
+});
+
+// POST /api/invoices/:id/receipts - Registrar recibo/pago
+router.post('/:id/receipts', requireAuth, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const { id } = req.params;
+    const { amount, payment_method, payment_date, currency, bank_account, reference_number, retention_pct, net_amount } = req.body;
+    await ensureReceiptTables();
+    await ensureInvoiceCreditColumns();
+    const [[invoice]] = await conn.query('SELECT * FROM invoices WHERE id = ?', [id]);
+    if (!invoice) {
+      conn.release();
+      return res.status(404).json({ error: 'Factura no encontrada' });
+    }
+    if (!canManageInvoice(req.user, invoice)) {
+      conn.release();
+      return res.status(403).json({ error: 'Sin permiso' });
+    }
+    const effBalance = parseFloat(invoice.net_balance ?? invoice.balance ?? 0);
+    const amt = parseFloat(amount || 0);
+    const retPct = parseFloat(retention_pct || 0);
+    const retAmt = Math.max(0, amt * retPct / 100);
+    const netAmt = net_amount ? parseFloat(net_amount) : Math.max(0, amt - retAmt);
+    if (amt <= 0 || netAmt <= 0) {
+      conn.release();
+      return res.status(400).json({ error: 'Monto inv?lido' });
+    }
+    if (netAmt - effBalance > 0.01) {
+      conn.release();
+      return res.status(400).json({ error: 'Monto excede saldo' });
+    }
+
+    await conn.beginTransaction();
+    const { receiptNumber, point, establishment } = await generateReceiptNumber(
+      invoice.point_of_issue,
+      invoice.establishment
+    );
+    const [ins] = await conn.query(
+      `INSERT INTO receipts 
+       (receipt_number, invoice_id, issue_date, status, currency_code, payment_method, bank_account, reference_number, amount, retention_pct, retention_amount, net_amount, point_of_issue, establishment, created_by, issued_by)
+       VALUES (?, ?, ?, 'emitido', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        receiptNumber,
+        invoice.id,
+        payment_date || null,
+        currency || invoice.currency_code || 'USD',
+        payment_method || 'transferencia',
+        bank_account || null,
+        reference_number || null,
+        amt,
+        retPct || 0,
+        retAmt,
+        netAmt,
+        point,
+        establishment,
+        req.user.id,
+        req.user.id,
+      ]
+    );
+    // Aplicaci?n directa a la factura
+    await conn.query(
+      `INSERT INTO receipt_applications (receipt_id, invoice_id, amount_applied) VALUES (?, ?, ?)`,
+      [ins.insertId, invoice.id, netAmt]
+    );
+
+    await conn.commit();
+    await recomputeInvoiceCredits(invoice.id);
+    await recomputeInvoicePayments(invoice.id);
+    const [[receipt]] = await pool.query('SELECT * FROM receipts WHERE id = ?', [ins.insertId]);
+    res.status(201).json(receipt);
+  } catch (e) {
+    if (conn?.rollback) await conn.rollback();
+    console.error('[receipts] Error creating', e);
+    res.status(500).json({ error: 'Error al registrar recibo' });
+  } finally {
+    conn.release();
+  }
+});
+
+// POST /api/invoices/:id/issue - Emitir factura
+router.post('/:id/issue', requireAuth, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const { id } = req.params;
+    const [[invoice]] = await conn.query('SELECT * FROM invoices WHERE id = ?', [id]);
+    if (!invoice) {
+      conn.release();
+      return res.status(404).json({ error: 'Factura no encontrada' });
+    }
+    if (!canManageInvoice(req.user, invoice)) {
+      conn.release();
+      return res.status(403).json({ error: 'No tienes permiso para emitir esta factura' });
+    }
+    if (invoice.status != 'borrador') {
+      conn.release();
+      return res.status(400).json({ error: 'Solo se puede emitir desde borrador' });
+    }
+
+    await conn.beginTransaction();
+    await conn.query(
+      `UPDATE invoices 
+         SET status = 'emitida',
+             issue_date = CURDATE(),
+             issued_by = ?
+       WHERE id = ?`,
+      [req.user.id, id]
+    );
+    await conn.commit();
+
+    const [[updated]] = await pool.query(
+      `SELECT i.*, o.name as organization_name
+         FROM invoices i
+         LEFT JOIN organizations o ON o.id = i.organization_id
+        WHERE i.id = ?`,
+      [id]
+    );
+    res.json(updated);
+  } catch (e) {
+    await conn.rollback();
+    console.error('[invoices] Error issuing invoice:', e);
+    res.status(500).json({ error: 'Error al emitir factura' });
+  } finally {
+    conn.release();
+  }
+});
+
 // GET /api/invoices/:id
 router.get('/:id', requireAuth, async (req, res) => {
   try {
@@ -764,7 +1216,16 @@ router.get('/:id', requireAuth, async (req, res) => {
       [id]
     );
 
-    res.json({ ...invoice, items });
+    const [receipts] = await pool.query(
+      `SELECT r.*, u.name as issued_by_name
+         FROM receipts r
+         LEFT JOIN users u ON u.id = r.issued_by
+        WHERE r.invoice_id = ? AND r.status = 'emitido'
+        ORDER BY r.issue_date DESC, r.id DESC`,
+      [id]
+    );
+
+    res.json({ ...invoice, items, receipts });
   } catch (e) {
     console.error('[invoices] Error fetching invoice:', e);
     res.status(500).json({ error: 'Error al obtener factura' });
@@ -843,10 +1304,11 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
         email: invoice.customer_email || '',
         ruc: invoice.customer_doc || invoice.organization_ruc || '',
       },
+      facturaAfectada: '',
       condicionVenta: invoice.payment_condition || 'credito',
       moneda: invoice.currency_code || 'USD',
       refNumero: invoice.deal_reference || invoice.deal_id || '',
-      refDetalle: invoice.deal_title || '',
+      refDetalle: invoice.deal_title || '' ,
       items: items.map((it) => ({
         description: it.description || 'Item',
         quantity: Number(it.quantity || 0),
@@ -1084,24 +1546,40 @@ router.post('/credit-notes/:id/issue', requireAuth, async (req, res) => {
     );
 
     // Recalcular crédito aplicado y estado de la factura (ajustada/anulada)
+    
     await recomputeInvoiceCredits(invoice.id);
-    const [[invAfter]] = await pool.query('SELECT * FROM invoices WHERE id = ?', [invoice.id]);
+    const [[invAfter]] = await pool.query(
+      'SELECT id, status, total_amount, credited_total, net_total_amount, paid_amount, net_balance FROM invoices WHERE id = ?',
+      [invoice.id]
+    );
 
-    if (parseFloat(invAfter.net_total_amount || 0) <= 0.01) {
+    const netTotal = parseFloat(invAfter?.net_total_amount || 0);
+    const netBalance = parseFloat(invAfter?.net_balance || 0);
+    const paid = parseFloat(invAfter?.paid_amount || 0);
+
+    if (netTotal <= 0.01) {
       await pool.query(
         `UPDATE invoices 
          SET status = 'anulada',
              cancellation_reason = ?,
              canceled_by_credit_note_id = ?
          WHERE id = ?`,
-        [`Anulada por nota de crédito ${note.credit_note_number}`, id, invoice.id]
+        [`Anulada por nota de credito ${note.credit_note_number}`, id, invoice.id]
       );
     } else {
+      let newStatus = 'emitida';
+      if (netBalance <= 0.01) {
+        newStatus = 'pagada';
+      } else if (paid > 0) {
+        newStatus = 'pago_parcial';
+      } else if (['emitida', 'pago_parcial', 'pagada', 'vencida'].includes(invAfter.status)) {
+        newStatus = invAfter.status;
+      }
       await pool.query(
         `UPDATE invoices 
-         SET status = 'ajustada'
+         SET status = ?
          WHERE id = ?`,
-        [invoice.id]
+        [newStatus, invoice.id]
       );
     }
     await recomputeInvoiceCredits(invoice.id);
@@ -1135,7 +1613,147 @@ router.post('/credit-notes/:id/cancel', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/invoices/:id/issue - Emitir factura
+router.post('/:id/issue', requireAuth, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const { id } = req.params;
+    const [[invoice]] = await conn.query('SELECT * FROM invoices WHERE id = ?', [id]);
+    if (!invoice) {
+      conn.release();
+      return res.status(404).json({ error: 'Factura no encontrada' });
+    }
+    if (!canManageInvoice(req.user, invoice)) {
+      conn.release();
+      return res.status(403).json({ error: 'No tienes permiso para emitir esta factura' });
+    }
+    if (invoice.status != 'borrador') {
+      conn.release();
+      return res.status(400).json({ error: 'Solo se puede emitir desde borrador' });
+    }
+
+    await conn.beginTransaction();
+    await conn.query(
+      `UPDATE invoices 
+         SET status = 'emitida',
+             issue_date = CURDATE(),
+             issued_by = ?
+       WHERE id = ?`,
+      [req.user.id, id]
+    );
+    await conn.commit();
+
+    const [[updated]] = await pool.query(
+      `SELECT i.*, o.name as organization_name
+         FROM invoices i
+         LEFT JOIN organizations o ON o.id = i.organization_id
+        WHERE i.id = ?`,
+      [id]
+    );
+    res.json(updated);
+  } catch (e) {
+    await conn.rollback();
+    console.error('[invoices] Error issuing invoice:', e);
+    res.status(500).json({ error: 'Error al emitir factura' });
+  } finally {
+    conn.release();
+  }
+});
+
+// GET /api/invoices/credit-notes/:id/pdf - PDF de nota de credito
+router.get('/credit-notes/:id/pdf', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await ensureCreditNoteTables();
+    await ensureInvoiceCreditColumns();
+    const [[note]] = await pool.query(
+      `SELECT cn.*, i.invoice_number, i.organization_id, i.payment_condition, i.currency_code,
+              o.name as organization_name, o.ruc as organization_ruc, o.address as organization_address, o.city as organization_city
+         FROM credit_notes cn
+         LEFT JOIN invoices i ON i.id = cn.invoice_id
+         LEFT JOIN organizations o ON o.id = i.organization_id
+        WHERE cn.id = ?`,
+      [id]
+    );
+    if (!note) return res.status(404).json({ error: 'Nota de credito no encontrada' });
+    const { invoice, error } = await loadInvoiceWithPerms(req, note.invoice_id);
+    if (error) return res.status(error.code).json({ error: error.msg });
+
+    const [items] = await pool.query(
+      'SELECT * FROM credit_note_items WHERE credit_note_id = ? ORDER BY item_order, id',
+      [id]
+    );
+
+    const issuer = {
+      name: process.env.INVOICE_ISSUER_NAME || 'ATM CARGO S.R.L.',
+      ruc: process.env.INVOICE_ISSUER_RUC || '80056841-6',
+      phone: process.env.INVOICE_ISSUER_PHONE || '+595 21 493082',
+      address:
+        process.env.INVOICE_ISSUER_ADDRESS || 'Cap. Milciades Urbieta 175 e/ Rio de Janeiro y Mcal. Lopez',
+      city: process.env.INVOICE_ISSUER_CITY || 'Asuncion - Paraguay',
+      timbrado: invoice.timbrado_number || process.env.INVOICE_TIMBRADO_NUMBER || '',
+      timbrado_start: formatDate(invoice.timbrado_start_date || process.env.INVOICE_TIMBRADO_START),
+      timbrado_end: formatDate(invoice.timbrado_expires_at || process.env.INVOICE_TIMBRADO_END),
+    };
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="credit-note-${note.credit_note_number || id}.pdf"`
+    );
+
+    const issueDate = note.issue_date ? new Date(note.issue_date) : new Date();
+    const data = {
+      headerTitle: 'NOTA DE CREDITO',
+      invoiceNumber: note.credit_note_number || '',
+      issuer: {
+        name: issuer.name,
+        address: issuer.address,
+        phone: issuer.phone,
+        city: issuer.city,
+        activities:
+          process.env.INVOICE_ISSUER_ACTIVITIES ||
+          'Transporte terrestre / aereo / acuatico y actividades auxiliares',
+        ruc: issuer.ruc,
+        timbrado: issuer.timbrado,
+        timbrado_start: issuer.timbrado_start,
+        timbrado_end: issuer.timbrado_end,
+      },
+      fechaEmision: formatDate(issueDate),
+      hora: new Date().toLocaleTimeString('es-PY', { hour12: false }),
+      client: {
+        name: note.organization_name || '',
+        address: note.organization_address || '',
+        phone: '',
+        email: '',
+        ruc: note.organization_ruc || '',
+      },
+      facturaAfectada: note.invoice_number || invoice.invoice_number || '',
+      condicionVenta: note.payment_condition || invoice.payment_condition || 'credito',
+      moneda: note.currency_code || invoice.currency_code || 'USD',
+      refNumero: note.invoice_number || invoice.invoice_number || '',
+      refDetalle: 'Factura afectada',
+      items: items.map((it) => ({
+        description: it.description || 'Item',
+        quantity: Number(it.quantity || 0),
+        unit_price: Number(it.unit_price || 0),
+        tax_rate: Number(it.tax_rate ?? 0),
+      })),
+      totalEnLetras: '',
+      notes: note.reason || note.observations || '',
+    };
+
+    await generateInvoicePDF(data, res);
+  } catch (e) {
+    console.error('[credit-notes] Error generating PDF:', e);
+    res.status(500).json({ error: 'Error al generar PDF de nota de credito' });
+  }
+});
+
 export default router;
+
+
+
 
 
 

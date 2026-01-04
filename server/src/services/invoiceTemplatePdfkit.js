@@ -113,7 +113,7 @@ function drawHeader(doc, data, y) {
     .font('Helvetica-Bold')
     .fontSize(12)
     .fillColor(COLORS.gray)
-    .text('FACTURA NUMERO', rightX, ry, {
+    .text(data.headerTitle || 'FACTURA NUMERO', rightX, ry, {
       width: colRightW,
       align: 'center',
     });
@@ -127,7 +127,7 @@ function drawHeader(doc, data, y) {
 }
 
 function drawClientBox(doc, data, y) {
-  const box = { x: M, y, w: W, h: 85 };
+  const box = { x: M, y, w: W, h: 115 };
   drawBox(doc, box);
   const leftX = box.x + 10;
   const rightX = box.x + 340;
@@ -140,7 +140,9 @@ function drawClientBox(doc, data, y) {
   drawLabelValueRow(doc, { label: 'RUC:', value: data.clienteRuc, x: rightX, y: ry });
   ly += 14; ry += 14;
   drawLabelValueRow(doc, { label: 'DIRECCION:', value: data.clienteDireccion, x: leftX, y: ly });
-  ry += 14; // espacio en blanco
+  ry += 14;
+  drawLabelValueRow(doc, { label: 'FACTURA AFECTADA:', value: data.facturaAfectada, x: rightX, y: ry });
+  ry += 14;
   drawLabelValueRow(doc, { label: 'TELEFONO:', value: data.clienteTelefono, x: leftX, y: (ly += 14) });
   drawLabelValueRow(doc, { label: 'CONDICION DE VENTA:', value: data.condicionVenta, x: rightX, y: ry });
   drawLabelValueRow(doc, { label: 'CORREO ELECTRONICO:', value: data.clienteEmail, x: leftX, y: (ly += 14) });
@@ -354,6 +356,7 @@ export async function generateInvoicePDF(data, outputStream) {
         timbradoStart: data.issuer?.timbrado_start || '',
         timbradoEnd: data.issuer?.timbrado_end || '',
         invoiceNumber: data.invoiceNumber || '',
+        headerTitle: data.headerTitle || '',
       }, M);
 
       // Client box

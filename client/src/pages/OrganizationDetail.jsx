@@ -2192,8 +2192,42 @@ function NewPersonModal({ orgId, onClose, onCreated }) {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [title, setTitle] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [matches, setMatches] = useState([]);
+  const [searching, setSearching] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
+
+  useEffect(() => {
+    const term = searchTerm.trim();
+    if (!term) {
+      setMatches([]);
+      return;
+    }
+    const handle = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const { data } = await api.get('/contacts', {
+          params: { q: term, limit: 12 },
+        });
+        setMatches(Array.isArray(data) ? data : []);
+      } catch {
+        setMatches([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [searchTerm]);
+
+  function pickContact(c) {
+    setName(c.name || '');
+    setEmail(c.email || '');
+    setPhone(c.phone || '');
+    setTitle(c.title || '');
+    setSearchTerm('');
+    setMatches([]);
+  }
 
   async function submit(e) {
     e.preventDefault();
@@ -2233,6 +2267,41 @@ function NewPersonModal({ orgId, onClose, onCreated }) {
           </button>
         </div>
         {err && <div className="text-sm text-red-600">{err}</div>}
+
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
+          <div className="text-sm font-semibold text-slate-700">
+            Buscar contacto existente
+          </div>
+          <input
+            className="w-full border rounded-lg px-3 py-2 text-sm"
+            placeholder="Buscar por nombre, email o teléfono..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+          {searching && (
+            <div className="text-xs text-slate-500">Buscando...</div>
+          )}
+          {!!matches.length && (
+            <div className="max-h-40 overflow-y-auto border rounded-lg divide-y bg-white">
+              {matches.map((c) => (
+                <button
+                  type="button"
+                  key={c.id}
+                  onClick={() => pickContact(c)}
+                  className="w-full text-left px-3 py-2 hover:bg-slate-100"
+                >
+                  <div className="text-sm font-medium text-slate-900">
+                    {c.name || 'Sin nombre'}
+                  </div>
+                  <div className="text-xs text-slate-600">
+                    {[c.email, c.phone].filter(Boolean).join(' · ') || '—'}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
         <label className="block text-sm">
           Nombre
           <input

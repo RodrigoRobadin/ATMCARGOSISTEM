@@ -24,6 +24,8 @@ import GlobalSearchBar from './components/GlobalSearchBar.jsx';
 import UsersAdmin from './pages/UsersAdmin.jsx';
 import AdminParams from './pages/AdminParams.jsx';
 import AdminActivity from './pages/AdminActivity.jsx';
+import AccountStatement from './pages/AccountStatement.jsx';
+import Payments from './pages/Payments.jsx';
 
 // ⭐️ NUEVO: Workspace de Administración (Ops)
 import AdminWorkspace from './pages/admin/AdminWorkspace.jsx';
@@ -113,7 +115,21 @@ function Layout({ children }) {
               <SideLink to="/admin" icon="🧾" label="Administración" />
               <SideLink to="/admin/users" icon="👤" label="Usuarios" />
               <SideLink to="/admin/params" icon="⚙️" label="Parámetros" />
-              <SideLink to="/admin-ops" icon="📂" label="Administración (Ops)" />
+              <div className="relative group/admin-ops">
+                <SideLink to="/admin-ops" icon="📂" label="Administración (Ops)" />
+                <div className="hidden group-hover/admin-ops:block ml-8 mt-1 space-y-1">
+                  <SideLink
+                    to="/account-statement"
+                    icon="🧾"
+                    label="Estado de cuenta de clientes"
+                  />
+                  <SideLink
+                    to="/payments"
+                    icon="💵"
+                    label="Pagos / Recibos"
+                  />
+                </div>
+              </div>
               <hr className="my-2" />
               <SideLink to="/catalog" icon="🧾" label="Productos y servicios" />
             </>
@@ -233,6 +249,22 @@ export default function App() {
                   element={
                     <RequireRole allow={['admin', 'manager']}>
                       <AdminWorkspace />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/payments"
+                  element={
+                    <RequireRole allow={['admin', 'manager']}>
+                      <Payments />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/account-statement"
+                  element={
+                    <RequireRole allow={['admin', 'manager']}>
+                      <AccountStatement />
                     </RequireRole>
                   }
                 />

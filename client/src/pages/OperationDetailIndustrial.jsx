@@ -2346,24 +2346,6 @@ export default function OperationDetailIndustrial() {
                 Informe de estado (vista previa)
               </button>
 
-              <button
-                className="px-3 py-2 text-sm rounded-lg border w-full text-left"
-                onClick={() => setActiveTab("documentos")}
-              >
-                Abrir pestaña Documentos
-              </button>
-
-              <button
-                className="px-3 py-2 text-sm rounded-lg bg-green-600 text-white text-center hover:opacity-90 disabled:opacity-60"
-                onClick={generateStatusReport}
-                disabled={generatingReport}
-                title="Generar informe del estado actual de la operacion industrial"
-              >
-                {generatingReport
-                  ? "Generando informe…"
-                  : "Generar informe de estado"}
-              </button>
-
               <Link
                 to={`/operations/${id}/industrial-quote`}
                 className="px-3 py-2 text-sm rounded-lg bg-blue-600 text-white text-center hover:opacity-90"
@@ -2701,7 +2683,6 @@ export default function OperationDetailIndustrial() {
     </div>
   );
 }
-
 
 
 

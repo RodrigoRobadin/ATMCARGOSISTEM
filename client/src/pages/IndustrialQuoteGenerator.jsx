@@ -8,8 +8,9 @@ import useParamOptions from '../hooks/useParamOptions';
 // 👉 Cabecera gráfica desde /public (no requiere import):
 const HEADER_SRC = `${import.meta.env.BASE_URL}quote-header.png`;
 
-// ====== Constantes PDF (A4) ======
-const PDF_PAGE_W_MM = 210;
+// ====== Constantes PDF (tamaño industrial 320 x 541 mm) ======
+const PDF_PAGE_W_MM = 320;
+const PDF_PAGE_H_MM = 541;
 const PDF_MARGIN = { top: 10, right: 8, bottom: 12, left: 8 };
 const CONTENT_W_MM = PDF_PAGE_W_MM - PDF_MARGIN.left - PDF_MARGIN.right - 0.2;
 
@@ -264,6 +265,7 @@ const CF_SCHEMA = {
   tipo_instalacion:   { label: 'Tipo de instalacion', type: 'text' },
   garantia:           { label: 'Garantia', type: 'text' },
   observaciones_producto: { label: 'Observaciones de producto', type: 'text' },
+  industrial_items_json: { label: 'Items industrial (JSON)', type: 'text' },
 };
 
 // ===== Utilidades de Tags =====
@@ -384,7 +386,7 @@ export default function QuoteGenerator(){
     setCondicionPagoTags(normalizeTemplateSection(template.condicion_pago));
     setTipoInstalacionTags(normalizeTemplateSection(template.tipo_instalacion));
     setGarantiaTags(normalizeTemplateSection(template.garantia));
-    setObservacionesProductoTags(normalizeTemplateSection(template.observaciones ?? template.observaciones_producto));
+    setObservacionesProductoTags(normalizeTemplateSection(template.observaciones_producto || template.observaciones));
   };
 
 
@@ -524,7 +526,7 @@ export default function QuoteGenerator(){
           pick(merged, ['cf:peso_bruto_kg', 'cf:peso_bruto', /peso.*kg|peso.*bruto|weight.*kg/], 'Peso bruto') || ''
         );
         setMercaderia(
-          pick(merged, ['cf:mercaderia', 'cf:mercaderia_desc', 'cf:producto', /mercader|commodity|goods|descripcion/], 'Mercadería') || ''
+          pick(merged, ['cf:mercaderia', 'cf:mercaderia_desc', 'cf:producto', /mercader|commodity|goods|Observacion/], 'Mercadería') || ''
         );
 
         // ---- Seguro
@@ -538,9 +540,13 @@ export default function QuoteGenerator(){
           pick(merged, ['cf:aseguradora', /aseguradora|insurer|insurance.*company/], 'Aseguradora') || ''
         );
 
-        // ---- Observaciones / Términos
+        // ---- Observaciones
         setObservaciones(
-          pick(merged, ['cf:observaciones', 'cf:obs', /observaci|remarks|notes/], 'Observaciones') || ''
+          pick(
+            merged,
+            ['cf:observaciones', 'cf:observacion', 'cf:obs', /observaci|remarks|notes/],
+            'Observaciones'
+          ) || ''
         );
         setTerminos({
           validez:
@@ -583,29 +589,59 @@ export default function QuoteGenerator(){
         ));
 
         // ======= Items desde cotizacion industrial =======
-        const quoteItems = quoteRes?.data?.computed?.oferta?.items || [];
-        if (quoteItems.length) {
-          const mapped = quoteItems
-            .filter((it) => Number(it.qty || 0) > 0 || String(it.description || "").trim())
-            .map((it) => {
+        // Ítems: si hay guardados en CF, usarlos; si no, usar los de la cotización
+        const savedItemsRaw = cf['industrial_items_json'];
+        let mapped = [];
+        if (savedItemsRaw) {
+          try {
+            const parsed = JSON.parse(savedItemsRaw);
+            if (Array.isArray(parsed)) {
+              mapped = parsed.map((it) => ({
+                cantidad: it.cantidad || 1,
+                servicio: it.servicio || it.description || 'Item',
+                observacion: it.observacion || it.Observacion || '',
+                moneda: it.moneda || 'USD',
+                precio: it.precio ?? it.unit_price ?? 0,
+                impuesto: it.impuesto || 'EXENTA',
+                include: it.include !== false,
+              }));
+            }
+          } catch (e) {
+            console.warn('No se pudo parsear items guardados', e);
+          }
+        }
+        if (!mapped.length) {
+          // Preferimos los ítems crudos guardados en la cotización (inputs) para traer observación
+          const rawItems =
+            quoteRes?.data?.quote?.inputs?.items ||
+            quoteRes?.data?.inputs?.items ||
+            [];
+          const computedItems = quoteRes?.data?.computed?.oferta?.items || [];
+          const sourceItems = rawItems.length ? rawItems : computedItems;
+
+          mapped = sourceItems
+            .filter((it) => Number(it.qty || 0) > 0 || String(it.description || it.servicio || "").trim())
+            .map((it, idx) => {
               const qty = Number(it.qty || 0) || 1;
+              const door = Number(it.door_value_usd || 0);
+              const extra = Number(it.additional_usd || 0);
               const unit =
                 it.unit_price ??
+                it.precio ??
+                (door + extra) ??
                 (qty ? Number(it.total_sales || 0) / qty : Number(it.total_sales || 0));
               return {
                 cantidad: qty,
-                servicio: it.description || "Item",
-                observacion: "",
-                moneda: "USD",
+                servicio: it.servicio || it.description || `Item ${idx + 1}`,
+                observacion: it.observacion || it.observation || "",
+                moneda: it.moneda || "USD",
                 precio: unit,
-                impuesto: "EXENTA",
-                include: true,
+                impuesto: it.impuesto || "EXENTA",
+                include: it.include !== false,
               };
             });
-          setItems(mapped);
-        } else {
-          setItems([]);
         }
+        setItems(mapped);
       } finally {
         setLoading(false);
       }
@@ -667,6 +703,7 @@ export default function QuoteGenerator(){
         ['aseguradora',      aseguradora],
 
         ['observaciones',    observaciones],
+        ['observacion',      observaciones], // alias por si otras vistas usan singular
 
         ['validez_oferta',   terminos.validez],
         ['condicion_venta',  terminos.condicionVenta],
@@ -683,6 +720,7 @@ export default function QuoteGenerator(){
         ['tipo_instalacion', tagsToText(tipoInstalacionTags)],
         ['garantia',         tagsToText(garantiaTags)],
         ['observaciones_producto', tagsToText(observacionesProductoTags)],
+        ['industrial_items_json', JSON.stringify(items)],
       ];
 
       await Promise.all(entries.map(async ([key, value]) => {
@@ -758,7 +796,7 @@ export default function QuoteGenerator(){
         filename: fileName,
         image: { type: 'jpeg', quality: 0.98 },
         html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        jsPDF: { unit: 'mm', format: [PDF_PAGE_W_MM, PDF_PAGE_H_MM], orientation: 'portrait' },
         pagebreak: { mode: ['css', 'legacy'] },
       };
       html2pdf().from(el).set(opt).save();
@@ -1008,10 +1046,16 @@ export default function QuoteGenerator(){
           <ItemsTable items={items} setItems={setItems} totalUSD={totalUSD} totalDecimals={totalUsdDecimals} />
         </div>
 
-        {/* Observaciones / Términos */}
+        {/* Observaciones */}
         <div className="bg-white rounded-xl border p-3 space-y-2">
-          <div className="text-sm font-semibold">Observaciones / Términos</div>
-          <textarea rows={4} className="w-full border rounded px-2 py-1 text-sm" placeholder="Observaciones…" value={observaciones} onChange={e=>setObservaciones(e.target.value)} />
+          <div className="text-sm font-semibold">Observaciones</div>
+          <textarea
+            rows={4}
+            className="w-full border rounded px-2 py-1 text-sm"
+            placeholder="Observaciones..."
+            value={observaciones}
+            onChange={(e)=>setObservaciones(e.target.value)}
+          />
           <div className="grid grid-cols-2 gap-2 text-sm">
             <ParamWithInput
               label="Validez de la oferta"
@@ -1137,7 +1181,7 @@ export default function QuoteGenerator(){
             label="Observaciones de producto"
             tags={observacionesProductoTags}
             setTags={setObservacionesProductoTags}
-            placeholder="Escribi y presiona Enter..."
+            placeholder="Escribí y presioná Enter..."
           />
         </div>
 
@@ -1225,10 +1269,9 @@ export default function QuoteGenerator(){
                 <tr className="text-white uppercase" style={{ backgroundColor: BRAND_BLUE }}>
                   <th className="text-left px-2 py-2">Cantidad</th>
                   <th className="text-left px-2 py-2">Servicio</th>
-                  <th className="text-left px-2 py-2">Observación</th>
+                  <th className="text-left px-2 py-2">Descripción</th>
                   <th className="text-left px-2 py-2">Moneda</th>
                   <th className="text-right px-2 py-2">Valor</th>
-                  <th className="text-left px-2 py-2">Impuesto</th>
                 </tr>
               </thead>
               <tbody>
@@ -1244,15 +1287,13 @@ export default function QuoteGenerator(){
                         Math.max(decimalsFrom(it.precio), decimalsFrom(it.cantidad))
                       )}
                     </td>
-                    <td className="px-2 py-1">{it.impuesto}</td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
                 <tr className="border-t" style={{ borderColor: '#e5e7eb' }}>
-                  <td colSpan={4} className="px-2 py-2 font-semibold text-right">TOTAL</td>
+                  <td colSpan={4} className="px-2 py-2 font-semibold text-right">TOTAL USD</td>
                   <td className="px-2 py-2 font-extrabold text-right">{money(totalUSD, totalUsdDecimals)}</td>
-                  <td className="px-2 py-2 font-semibold">USD</td>
                 </tr>
               </tfoot>
             </table>
@@ -1349,7 +1390,7 @@ export default function QuoteGenerator(){
           )}
 
 
-          {/* OBSERVACIONES */}
+          {/* Observaciones */}
           {observaciones && (
             <div className="px-4 mt-4 avoid-break">
               <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
@@ -1444,7 +1485,7 @@ function ItemsTable({ items, setItems, totalUSD, totalDecimals }) {
       {
         cantidad: 1,
         servicio: '',
-        observacion: '',
+        Observacion: '',
         moneda: 'USD',
         precio: '',
         impuesto: 'EXENTA',
@@ -1460,10 +1501,9 @@ function ItemsTable({ items, setItems, totalUSD, totalDecimals }) {
             <th className="text-left py-1 uppercase text-slate-600">Incluye</th>
             <th className="text-left py-1 uppercase text-slate-600">Cantidad</th>
             <th className="text-left py-1 uppercase text-slate-600">Servicio</th>
-            <th className="text-left py-1 uppercase text-slate-600">Observación</th>
+            <th className="text-left py-1 uppercase text-slate-600">Descripción</th>
             <th className="text-left py-1 uppercase text-slate-600">Moneda</th>
             <th className="text-right py-1 uppercase text-slate-600">Valor</th>
-            <th className="text-left py-1 uppercase text-slate-600">Impuesto</th>
             <th></th>
           </tr>
         </thead>
@@ -1479,7 +1519,7 @@ function ItemsTable({ items, setItems, totalUSD, totalDecimals }) {
               </td>
               <td><input className="w-16 border rounded px-1" value={it.cantidad} onChange={e=>updateItem(idx, { cantidad: e.target.value })} /></td>
               <td><input className="w-full border rounded px-1" value={it.servicio} onChange={e=>updateItem(idx, { servicio: e.target.value })} /></td>
-              <td><input className="w-full border rounded px-1" value={it.observacion} onChange={e=>updateItem(idx, { observacion: e.target.value })} /></td>
+              <td><input className="w-full border rounded px-1" placeholder="Descripción / observación" value={it.observacion} onChange={e=>updateItem(idx, { observacion: e.target.value })} /></td>
               <td>
                 <select className="border rounded px-1" value={it.moneda} onChange={e=>updateItem(idx, { moneda: e.target.value })}>
                   <option>USD</option>
@@ -1487,12 +1527,6 @@ function ItemsTable({ items, setItems, totalUSD, totalDecimals }) {
               </td>
               <td className="text-right">
                 <input className="w-28 text-right border rounded px-1" value={it.precio} onChange={e=>updateItem(idx, { precio: e.target.value })} />
-              </td>
-              <td>
-                <select className="border rounded px-1" value={it.impuesto} onChange={e=>updateItem(idx, { impuesto: e.target.value })}>
-                  <option>EXENTA</option>
-                  <option>10%</option>
-                </select>
               </td>
               <td>
                 <button className="text-red-600" onClick={()=>removeItem(idx)}>✕</button>

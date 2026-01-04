@@ -280,25 +280,27 @@ async function handlePdf() {
           <thead className="bg-slate-50 text-left">
             <tr>
               <th className="px-4 py-2">Fecha</th>
+              <th className="px-4 py-2">N° recibo</th>
               <th className="px-4 py-2">Método</th>
               <th className="px-4 py-2">Referencia</th>
-              <th className="px-4 py-2">Monto</th>
+              <th className="px-4 py-2">Monto neto</th>
               <th className="px-4 py-2">Registrado por</th>
             </tr>
           </thead>
           <tbody>
-            {(invoice.payments || []).map((p) => (
+            {(invoice.receipts || []).map((p) => (
               <tr key={p.id} className="border-t">
-                <td className="px-4 py-2">{fmtDate(p.payment_date)}</td>
+                <td className="px-4 py-2">{fmtDate(p.issue_date)}</td>
+                <td className="px-4 py-2">{p.receipt_number || '—'}</td>
                 <td className="px-4 py-2 capitalize">{p.payment_method}</td>
                 <td className="px-4 py-2">{p.reference_number || '—'}</td>
-                <td className="px-4 py-2 font-medium">{fmtMoney(p.amount)}</td>
-                <td className="px-4 py-2">{p.registered_by_name || '—'}</td>
+                <td className="px-4 py-2 font-medium">{fmtMoney(p.net_amount ?? p.amount)}</td>
+                <td className="px-4 py-2">{p.issued_by_name || '—'}</td>
               </tr>
             ))}
-            {(!invoice.payments || invoice.payments.length === 0) && (
+            {(!invoice.receipts || invoice.receipts.length === 0) && (
               <tr>
-                <td className="px-4 py-3 text-center text-slate-500" colSpan={5}>
+                <td className="px-4 py-3 text-center text-slate-500" colSpan={6}>
                   Sin pagos registrados
                 </td>
               </tr>
@@ -325,7 +327,7 @@ async function handlePdf() {
               <th className="px-4 py-2">Número</th>
               <th className="px-4 py-2">Estado</th>
               <th className="px-4 py-2">Fecha</th>
-              <th className="px-4 py-2 text-right">Monto</th>
+              <th className="px-4 py-2 text-right">Monto neto</th>
               <th className="px-4 py-2 text-center">Acciones</th>
             </tr>
           </thead>
@@ -394,30 +396,44 @@ async function handlePdf() {
 }
 
 function PaymentModal({ invoice, onClose, onSuccess }) {
+  const effectiveBalance = Number(invoice?.net_balance ?? invoice?.balance ?? 0);
   const [form, setForm] = useState({
-    payment_date: new Date().toISOString().split('T')[0],
-    amount: '',
+    issue_date: new Date().toISOString().split('T')[0],
+    amount: effectiveBalance.toFixed(2),
+    currency: invoice?.currency_code || 'USD',
     payment_method: 'transferencia',
+    bank_account: 'gs',
+    retention_pct: 0,
     reference_number: '',
     notes: '',
   });
   const [saving, setSaving] = useState(false);
+  const receiptPoint =
+    (invoice?.invoice_number || '').split('-').slice(0, 2).join('-') || '';
+  const retentionAmount =
+    Math.max(0, (Number(form.amount) || 0) * (Number(form.retention_pct) || 0) / 100);
+  const netAmount = Math.max(0, (Number(form.amount) || 0) - retentionAmount);
 
   async function handleSubmit(e) {
     e.preventDefault();
     if (!form.amount || Number(form.amount) <= 0) {
-      alert('Ingrese un monto válido');
+      alert('Ingrese un Monto neto válido');
       return;
     }
-    if (Number(form.amount) > Number(invoice.balance)) {
-      alert('El monto no puede ser mayor al saldo pendiente');
+    if (Number(form.amount) - retentionAmount > effectiveBalance + 0.01) {
+      alert('El Monto neto no puede ser mayor al saldo pendiente');
       return;
     }
     setSaving(true);
     try {
-      await api.post(`/invoices/${invoice.id}/payments`, {
+      await api.post(`/invoices/${invoice.id}/receipts`, {
         ...form,
         amount: Number(form.amount),
+        currency: form.currency,
+        bank_account: form.bank_account,
+        retention_pct: Number(form.retention_pct) || 0,
+        retention_amount: Number(retentionAmount.toFixed(2)),
+        net_amount: Number(netAmount.toFixed(2)),
       });
       alert('Pago registrado');
       onSuccess();
@@ -444,23 +460,42 @@ function PaymentModal({ invoice, onClose, onSuccess }) {
           <div className="text-slate-600">{invoice.organization_name}</div>
           <div className="mt-2 flex justify-between">
             <span>Saldo pendiente:</span>
-            <span className="font-bold text-orange-600">{fmtMoney(invoice.balance)}</span>
+            <span className="font-bold text-orange-600">
+              {fmtMoney(invoice.net_balance ?? invoice.balance)}
+            </span>
           </div>
+          {receiptPoint && (
+            <div className="mt-2 text-slate-600">
+              Punto de expedición (recibo): <strong>{receiptPoint}</strong>
+            </div>
+          )}
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Fecha de pago</label>
+            <label className="block text-sm font-medium mb-1">Fecha de emisión</label>
             <input
               type="date"
               className="w-full border rounded-lg px-3 py-2"
-              value={form.payment_date}
-              onChange={(e) => setForm({ ...form, payment_date: e.target.value })}
+              value={form.issue_date}
+              onChange={(e) => setForm({ ...form, issue_date: e.target.value })}
               required
             />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Monto</label>
+            <label className="block text-sm font-medium mb-1">Moneda</label>
+            <select
+              className="w-full border rounded-lg px-3 py-2"
+              value={form.currency}
+              onChange={(e) => setForm({ ...form, currency: e.target.value })}
+            >
+              <option value="USD">USD</option>
+              <option value="PYG">GS</option>
+              <option value="EUR">EUR</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Monto neto</label>
             <input
               type="number"
               step="0.01"
@@ -487,6 +522,17 @@ function PaymentModal({ invoice, onClose, onSuccess }) {
             </select>
           </div>
           <div>
+            <label className="block text-sm font-medium mb-1">Banco / cuenta destino</label>
+            <select
+              className="w-full border rounded-lg px-3 py-2"
+              value={form.bank_account}
+              onChange={(e) => setForm({ ...form, bank_account: e.target.value })}
+            >
+              <option value="gs">ITAU</option>
+              <option value="usd">CONTINENTAL</option>
+            </select>
+          </div>
+          <div>
             <label className="block text-sm font-medium mb-1">Referencia</label>
             <input
               type="text"
@@ -495,6 +541,23 @@ function PaymentModal({ invoice, onClose, onSuccess }) {
               onChange={(e) => setForm({ ...form, reference_number: e.target.value })}
               placeholder="Ej: Transferencia #12345"
             />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Retención IVA</label>
+            <select
+              className="w-full border rounded-lg px-3 py-2"
+              value={form.retention_pct}
+              onChange={(e) => setForm({ ...form, retention_pct: e.target.value })}
+            >
+              <option value="0">Sin retención</option>
+              <option value="30">30%</option>
+              <option value="70">70%</option>
+              <option value="100">100%</option>
+            </select>
+            <div className="text-xs text-slate-600 mt-1 space-y-0.5">
+              <div>Retención: {fmtMoney(retentionAmount)}</div>
+              <div>Monto neto recibo (neto): {fmtMoney(netAmount)}</div>
+            </div>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Notas</label>
@@ -532,12 +595,25 @@ function PaymentModal({ invoice, onClose, onSuccess }) {
 function CreditNoteModal({ invoice, availableCredit, onClose, onSuccess }) {
   const [form, setForm] = useState({
     reason: '',
+    mode: 'percentage',
     percentage: 100,
+    amount: '',
   });
   const [saving, setSaving] = useState(false);
 
-  const factor = Math.max(0, Math.min(100, Number(form.percentage) || 0)) / 100;
   const items = Array.isArray(invoice.items) ? invoice.items : [];
+  const baseTotal = items.reduce(
+    (acc, it) => acc + Number(it.quantity || 1) * Number(it.unit_price || 0),
+    0
+  );
+  const pctFactor = Math.max(0, Math.min(100, Number(form.percentage) || 0)) / 100;
+  let factor = pctFactor;
+  if (form.mode === 'amount') {
+    const desired = Number(form.amount) || 0;
+    if (baseTotal > 0 && desired > 0) {
+      factor = Math.max(0, Math.min(1, desired / baseTotal));
+    }
+  }
   const creditItems = items.map((it, idx) => {
     const qty = Number(it.quantity || 1);
     const unit = Number(it.unit_price || 0) * factor;
@@ -565,7 +641,7 @@ function CreditNoteModal({ invoice, availableCredit, onClose, onSuccess }) {
     e.preventDefault();
     if (!invoice) return;
     if (totals.total <= 0) {
-      alert('El monto debe ser mayor a cero');
+      alert('El Monto neto debe ser mayor a cero');
       return;
     }
     setSaving(true);
@@ -623,10 +699,34 @@ function CreditNoteModal({ invoice, availableCredit, onClose, onSuccess }) {
               className="w-full border rounded-lg px-3 py-2"
               value={form.percentage}
               onChange={(e) => setForm({ ...form, percentage: e.target.value })}
+              disabled={form.mode !== 'percentage'}
             />
             <p className="text-xs text-slate-500 mt-1">
               Se prorratea sobre los ítems de la factura. Valor estimado: {fmtMoney(totals.total)}.
             </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Tipo de cálculo</label>
+            <select
+              className="w-full border rounded-lg px-3 py-2 mb-2"
+              value={form.mode}
+              onChange={(e) => setForm({ ...form, mode: e.target.value })}
+            >
+              <option value="percentage">Porcentaje</option>
+              <option value="amount">Monto neto</option>
+            </select>
+            <label className="block text-sm font-medium mb-1">Monto neto a acreditar</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              className="w-full border rounded-lg px-3 py-2"
+              value={form.amount}
+              onChange={(e) => setForm({ ...form, amount: e.target.value })}
+              disabled={form.mode !== 'amount'}
+              placeholder="Ej: 500.00"
+            />
           </div>
 
           <div className="flex gap-2 pt-2">
@@ -657,6 +757,7 @@ function CreditNoteViewModal({ creditNoteId, onClose, onRefresh }) {
   const [loading, setLoading] = useState(true);
   const [issuing, setIssuing] = useState(false);
   const [canceling, setCanceling] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
     loadDetail();
@@ -711,6 +812,28 @@ function CreditNoteViewModal({ creditNoteId, onClose, onRefresh }) {
     }
   }
 
+  async function handleDownload() {
+    if (!data) return;
+    setDownloading(true);
+    try {
+      const res = await api.get(`/invoices/credit-notes/${creditNoteId}/pdf`, { responseType: 'blob' });
+      const blob = new Blob([res.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `nc-${data.credit_note_number || creditNoteId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Error descargando PDF de nota de crédito', e);
+      alert(e.response?.data?.error || 'No se pudo descargar el PDF');
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 md:p-6 z-50">
@@ -753,6 +876,13 @@ function CreditNoteViewModal({ creditNoteId, onClose, onRefresh }) {
                 {canceling ? 'Anulando…' : 'Anular'}
               </button>
             )}
+            <button
+              onClick={handleDownload}
+              className="px-3 py-1 rounded bg-orange-600 text-white text-sm hover:bg-orange-700 disabled:opacity-50"
+              disabled={downloading}
+            >
+              {downloading ? 'Descargando…' : 'PDF'}
+            </button>
             <button onClick={onClose} className="text-2xl leading-none">×</button>
           </div>
         </div>
@@ -817,3 +947,4 @@ function CreditNoteViewModal({ creditNoteId, onClose, onRefresh }) {
     </div>
   );
 }
+

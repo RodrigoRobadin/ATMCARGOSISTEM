@@ -7,6 +7,7 @@ import { useAuth } from "../auth.jsx";
 const emptyItem = (n = 1) => ({
   line_no: n,
   description: "",
+  observation: "",
   qty: 1,
   door_value_usd: 0,
   additional_usd: 0, // ✅ adicional por item
@@ -791,6 +792,7 @@ export default function QuoteEditor() {
                 <tr>
                   <th className="px-3 py-2">Item</th>
                   <th className="px-3 py-2">Descripción</th>
+                  <th className="px-3 py-2">Observación</th>
                   <th className="px-3 py-2 text-right">Cant</th>
                   <th className="px-3 py-2 text-right">V. Puerta USD</th>
                   <th className="px-3 py-2 text-right">Adicional USD</th>
@@ -813,6 +815,14 @@ export default function QuoteEditor() {
                         className="w-full border rounded-lg px-2 py-1"
                         value={it.description || ""}
                         onChange={(e) => setItem(idx, "description", e.target.value)}
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <input
+                        className="w-full border rounded-lg px-2 py-1"
+                        placeholder="Observación / detalle"
+                        value={it.observation || ""}
+                        onChange={(e) => setItem(idx, "observation", e.target.value)}
                       />
                     </td>
                     <td className="px-3 py-2 w-28">

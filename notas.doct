@@ -94,3 +94,200 @@ OBSERVACIONES DE PRODUCTO
 PRODUCTOS RAYFLEX
     LOS PRECIOS SON IVA INCLUIDO
 
+
+
+
+
+
+
+
+Esto es de mi VPS 
+Database changed
+MariaDB [crmdb]> SHOW TABLES;
++---------------------------+
+| Tables_in_crmdb           |
++---------------------------+
+| activities                |
+| audit_events              |
+| audit_logs                |
+| business_units            |
+| catalog_items             |
+| contact_emails            |
+| contact_phones            |
+| contacts                  |
+| counters                  |
+| credit_note_items         |
+| credit_note_sequence      |
+| credit_notes              |
+| deal_cost_items           |
+| deal_cost_sheet_versions  |
+| deal_cost_sheets          |
+| deal_custom_fields        |
+| deal_documents            |
+| deal_files                |
+| deals                     |
+| followup_calls            |
+| followup_notes            |
+| followup_tasks            |
+| followup_visits           |
+| industrial_door_images    |
+| industrial_doors          |
+| industrial_quote_forms    |
+| industrial_quote_items    |
+| industrial_quotes         |
+| invoice_items             |
+| invoice_payments          |
+| invoice_sequence          |
+| invoices                  |
+| labels                    |
+| operation_air             |
+| operation_docs            |
+| operation_legs            |
+| operation_multimodal      |
+| operation_ocean           |
+| operation_purchases       |
+| operation_road            |
+| org_custom_fields         |
+| org_flete_routes          |
+| organizations             |
+| param_options             |
+| param_values              |
+| person_custom_fields      |
+| pipelines                 |
+| purchase_invoice_items    |
+| purchase_invoice_payments |
+| purchase_invoices         |
+| purchase_order_items      |
+| purchase_order_sequence   |
+| purchase_orders           |
+| quote_items               |
+| quotes                    |
+| route_stops               |
+| routes                    |
+| stages                    |
+| suppliers                 |
+| users                     |
+| visit_contacts            |
+| zones                     |
++---------------------------+
+62 rows in set (0.001 sec)
+
+ESTO ES MI LOCAL COMPARA QUE FALTA 
+mysql> SHOW TABLES;
++---------------------------+
+| Tables_in_crmdb           |
++---------------------------+
+| activities                |
+| audit_events              |
+| audit_logs                |
+| business_units            |
+| catalog_items             |
+| contact_emails            |
+| contact_phones            |
+| contacts                  |
+| counters                  |
+| credit_note_items         |
+| credit_note_sequence      |
+| credit_notes              |
+| deal_cost_items           |
+| deal_cost_sheet_versions  |
+| deal_cost_sheets          |
+| deal_custom_fields        |
+| deal_files                |
+| deals                     |
+| followup_calls            |
+| followup_notes            |
+| followup_tasks            |
+| followup_visits           |
+| industrial_door_images    |
+| industrial_doors          |
+| industrial_quote_forms    |
+| industrial_quotes         |
+| invoice_items             |
+| invoice_payments          |
+| invoice_sequence          |
+| invoices                  |
+| labels                    |
+| operation_air             |
+| operation_docs            |
+| operation_legs            |
+| operation_multimodal      |
+| operation_ocean           |
+| operation_purchases       |
+| operation_road            |
+| org_custom_fields         |
+| org_flete_routes          |
+| organizations             |
+| param_options             |
+| param_values              |
+| params                    |
+| person_custom_fields      |
+| pipelines                 |
+| purchase_invoice_items    |
+| purchase_invoice_payments |
+| purchase_invoices         |
+| purchase_order_items      |
+| purchase_order_sequence   |
+| purchase_orders           |
+| quote_revisions           |
+| quotes                    |
+| route_stops               |
+| routes                    |
+| stages                    |
+| users                     |
+| visit_contacts            |
+| zones                     |
++---------------------------+
+60 rows in set (0.04 sec)
+
+
+
+
+INFORMES DE VENTAS 
+    Ventas por periodo: Rastrea el rendimiento diario, semanal o mensual frente a objetivos.
+
+    Pipeline de ventas: Muestra las oportunidades actuales y su progreso en el embudo.
+    
+    Ventas por producto o categoría: Identifica cuáles son los artículos más rentables o populares.
+    
+    Rendimiento de vendedores: Evalúa la productividad y el cumplimiento de cuotas de cada representante.
+    
+    Tasa de conversión: Mide la eficiencia de transformar leads en clientes reales.
+    
+    Churn o pérdida de clientes: Analiza cuántos clientes dejan de comprar y por qué.
+
+
+
+INFORME ADMINISTRATIVO 
+    ESTADO DE CUENTA DE CLIENTES 
+    ESTADO DE CUENTA DE PROVEEDORES / AGENTES
+    ESTADO DE CUENTA A PAGAR / COBRAR 
+    
+    
+
+
+CODIGO DE AEROPUERTOS PARA CARGAS 
+    COD AEROPUERTO IATA 
+
+
+CODIGO DE PUERTOS PARA CARGAS 
+
+CODIGO DE TERRESTRE PARA CARGAS 
+
+
+LA NOTA DE CREDITO SE GENERA CUANDO ESTA MAL, HAY QUE FACTURAR DE VUELTA O ALGO POR EL ESTILO
+
+HAY QUE PODER REGISTRAR LOS PAGOS CUANDO EL CLIENTE PAGA Y PODER GENERAR UN RECIBO DE DINERO CON UN FORMATO X 
+
+En el recibo debe de aparecer el nro de la factura relacionada 
+
+Cuando generas recibo, buscas por cliente y lo que debe bajo referencia, 
+    poder cargar el nro de transaccion 
+    definir a que banco se dirige el dinero, itau o continental 
+    poder imprimir el estado de cuenta del cliente 
+    consolidacion bancaria definir 
+    retencion de iva 30 70 100 
+
+    en el recibo tengo que generar con su punto de expedicion correspondiente a la factura a cobrar y debe de tener su correlativo correspondiente 
+    ahi debe de estar relacionada la factura / nro de factura 
+    en el formulario de registrar pago se debe de cargar la referencia de la transaccion 

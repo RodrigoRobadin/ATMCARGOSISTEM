@@ -6,7 +6,7 @@ import api from "../api";
 export default function GlobalSearchBar() {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
-  const [res, setRes] = useState({ deals: [], organizations: [], contacts: [] });
+  const [res, setRes] = useState({ deals: [], organizations: [], contacts: [], notes: [] });
   const timer = useRef();
   const navigate = useNavigate();
 
@@ -14,7 +14,7 @@ export default function GlobalSearchBar() {
     clearTimeout(timer.current);
 
     if (!q) {
-      setRes({ deals: [], organizations: [], contacts: [] });
+      setRes({ deals: [], organizations: [], contacts: [], notes: [] });
       setOpen(false);
       return;
     }
@@ -23,11 +23,11 @@ export default function GlobalSearchBar() {
       try {
         const { data } = await api.get("/search", { params: { q } });
         // data = { deals, organizations, contacts }
-        setRes(data || { deals: [], organizations: [], contacts: [] });
+        setRes(data || { deals: [], organizations: [], contacts: [], notes: [] });
         setOpen(true);
       } catch (e) {
         console.error("search failed", e);
-        setRes({ deals: [], organizations: [], contacts: [] });
+        setRes({ deals: [], organizations: [], contacts: [], notes: [] });
         setOpen(true);
       }
     }, 300);
@@ -35,17 +35,23 @@ export default function GlobalSearchBar() {
     return () => clearTimeout(timer.current);
   }, [q]);
 
-  const go = (type, id) => {
+  const go = (type, id, extra) => {
     setOpen(false);
     if (type === "deal") navigate(`/operations/${id}`);
     if (type === "org") navigate(`/organizations/${id}`);
     if (type === "contact") navigate(`/contacts/${id}`);
+    if (type === "note") {
+      if (extra?.deal_id) return navigate(`/operations/${extra.deal_id}`);
+      if (extra?.org_id) return navigate(`/organizations/${extra.org_id}`);
+      if (extra?.contact_id) return navigate(`/contacts/${extra.contact_id}`);
+    }
   };
 
   const hasResults =
     (res.deals?.length || 0) +
       (res.organizations?.length || 0) +
-      (res.contacts?.length || 0) >
+      (res.contacts?.length || 0) +
+      (res.notes?.length || 0) >
     0;
 
   return (
@@ -125,6 +131,33 @@ export default function GlobalSearchBar() {
                   <div className="text-sm font-medium">{c.name}</div>
                   <div className="text-xs text-slate-500">
                     {c.email || c.phone || "Sin datos de contacto"}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Notas */}
+          {res.notes?.length > 0 && (
+            <div>
+              <div className="px-3 py-1 text-xs text-slate-500">Notas</div>
+              {res.notes.map((n) => (
+                <button
+                  key={`n-${n.id}`}
+                  onClick={() =>
+                    go("note", n.id, {
+                      deal_id: n.deal_id,
+                      org_id: n.org_id,
+                      contact_id: n.contact_id,
+                    })
+                  }
+                  className="block w-full text-left px-3 py-2 hover:bg-slate-50"
+                >
+                  <div className="text-sm font-medium line-clamp-2">{n.content}</div>
+                  <div className="text-[11px] text-slate-500">
+                    {n.deal_reference ? `Op: ${n.deal_reference} · ` : ""}
+                    {n.org_name || ""}
+                    {n.contact_name ? ` · ${n.contact_name}` : ""}
                   </div>
                 </button>
               ))}

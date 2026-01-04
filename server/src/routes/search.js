@@ -17,13 +17,14 @@ const router = express.Router();
  *     origen_pto, destino_pto, incoterm
  *   }],
  *   organizations: [{ id, name }],
- *   contacts: [{ id, name, email, phone }]
+ *   contacts: [{ id, name, email, phone }],
+ *   notes: [{ id, content, deal_id, org_id, org_name, contact_id, contact_name, created_at }]
  * }
  */
 router.get("/", async (req, res) => {
   const q = (req.query.q || "").trim();
   if (!q) {
-    return res.json({ deals: [], organizations: [], contacts: [] });
+    return res.json({ deals: [], organizations: [], contacts: [], notes: [] });
   }
 
   const like = `%${q}%`;
@@ -154,7 +155,47 @@ router.get("/", async (req, res) => {
       [like, like, like]
     );
 
-    return res.json({ deals, organizations, contacts });
+
+    /* ================== NOTES (followup_notes + activities) ================== */
+    const [notesFn] = await pool.query(
+      `
+        SELECT n.id, n.content, n.created_at,
+               n.deal_id, d.reference as deal_reference,
+               n.org_id, o.name as org_name,
+               n.contact_id, c.name as contact_name
+        FROM followup_notes n
+        LEFT JOIN deals d ON d.id = n.deal_id
+        LEFT JOIN organizations o ON o.id = n.org_id
+        LEFT JOIN contacts c ON c.id = n.contact_id
+        WHERE n.content LIKE ?
+           OR o.name LIKE ?
+           OR c.name LIKE ?
+           OR d.reference LIKE ?
+        ORDER BY n.created_at DESC
+        LIMIT 20
+      `,
+      [like, like, like, like]
+    );
+
+    const [notesAct] = await pool.query(
+      `
+        SELECT a.id, COALESCE(a.notes, a.subject) AS content, a.created_at AS created_at,
+               a.deal_id, d.reference AS deal_reference,
+               a.org_id, o.name AS org_name
+        FROM activities a
+        LEFT JOIN deals d ON d.id = a.deal_id
+        LEFT JOIN organizations o ON o.id = a.org_id
+                WHERE (a.notes LIKE ? OR a.subject LIKE ? OR o.name LIKE ? OR d.reference LIKE ?)
+        ORDER BY a.created_at DESC
+        LIMIT 20
+      `,
+      [like, like, like, like]
+    );
+
+    const notes = [...(notesFn || []), ...(notesAct || [])];
+
+    return res.json({ deals, organizations, contacts, notes });
+
   } catch (err) {
     console.error("[search] error", err);
     return res.status(500).json({ error: "search_failed" });
