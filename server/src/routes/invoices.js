@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { pool } from '../services/db.js';
 import { requireAuth, requireRole } from '../middlewares/auth.js';
 import generateInvoicePDF from '../services/invoiceTemplatePdfkit.js';
+import generateReceiptPDF from '../services/receiptTemplatePdfkit.js';
 
 const router = Router();
 
@@ -59,6 +60,33 @@ async function ensureInvoiceExtraColumns() {
       }
     }
   }
+}
+
+function asJson(value) {
+  if (value == null) return null;
+  if (typeof value === 'object') return value;
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+async function fetchQuoteTotalUsd(dealId, conn) {
+  const [[row]] = await conn.query(
+    'SELECT computed_json FROM quotes WHERE deal_id = ? LIMIT 1',
+    [dealId]
+  );
+  if (!row?.computed_json) return null;
+  const computed = asJson(row.computed_json);
+  return (
+    computed?.oferta?.totals?.total_sales_usd ??
+    computed?.operacion?.totals?.total_sell_usd ??
+    null
+  );
 }
 
 async function ensureInvoiceItemsTaxColumn() {
@@ -404,7 +432,7 @@ async function upsertParam(key, value, conn = pool) {
 }
 
 function extractSeqFromNumber(num = '') {
-  const m = String(num).match(/^\d{3}-\d{3}-(\d{1,7})$/);
+  const m = String(num).match(/^d{3}-d{3}-(d{1,7})$/);
   if (!m) return null;
   const n = parseInt(m[1], 10);
   return Number.isFinite(n) ? n : null;
@@ -428,7 +456,7 @@ async function fetchLastSeq(point, establishment, conn = pool, numberField = 'in
 }
 
 function parseExpedition(raw = '', fallback = { point: '001', establishment: '000' }) {
-  const matches = String(raw).match(/\d+/g) || [];
+  const matches = String(raw).match(/d+/g) || [];
   const point = (matches[0] || fallback.point || '001').padStart(3, '0');
   const establishment = (matches[1] || fallback.establishment || '000').padStart(3, '0');
   return { point, establishment };
@@ -653,6 +681,29 @@ function formatDate(date) {
   } catch (_e) {
     return '';
   }
+}
+
+function formatDateLong(date) {
+  if (!date) return '';
+  const d = new Date(date);
+  const months = [
+    'Enero',
+    'Febrero',
+    'Marzo',
+    'Abril',
+    'Mayo',
+    'Junio',
+    'Julio',
+    'Agosto',
+    'Septiembre',
+    'Octubre',
+    'Noviembre',
+    'Diciembre',
+  ];
+  const day = d.getDate();
+  const month = months[d.getMonth()] || '';
+  const year = d.getFullYear();
+  return `${day} de ${month} de ${year}`;
 }
 
 async function getDealInfo(dealId, conn = pool) {
@@ -890,6 +941,8 @@ router.post('/', requireAuth, async (req, res) => {
     const issueDate = new Date();
     const dueDate = due_date ? new Date(due_date) : null;
     const perc = Number(percentage || 100);
+    const quoteTotalUsd = await fetchQuoteTotalUsd(deal_id, conn);
+    const baseAmount = Number(req.body?.base_amount ?? quoteTotalUsd ?? deal.deal_value ?? 0) || 0;
 
     const [[agg]] = await conn.query(
       `SELECT COALESCE(SUM(percentage),0) AS used_pct
@@ -904,8 +957,7 @@ router.post('/', requireAuth, async (req, res) => {
       return res.status(400).json({ error: `El porcentaje supera el 100% (ya facturado ${usedPct.toFixed(2)}%)` });
     }
 
-    const dealValue = Number(deal.deal_value || 0);
-    const subtotal = Number((dealValue * (perc / 100)).toFixed(2));
+    const subtotal = Number((baseAmount * (perc / 100)).toFixed(2));
     const tax_amount = 0;
     const total_amount = subtotal;
 
@@ -915,8 +967,8 @@ router.post('/', requireAuth, async (req, res) => {
         payment_condition, timbrado_number, timbrado_start_date, timbrado_expires_at,
         point_of_issue, establishment, customer_doc_type, customer_doc, customer_email, customer_address,
         currency_code, exchange_rate, sales_rep, purchase_order_ref,
-        percentage, subtotal, tax_amount, total_amount, balance, status, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'borrador', ?)`,
+        percentage, base_amount, subtotal, tax_amount, total_amount, balance, status, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'borrador', ?)`,
       [
         deal.id,
         deal.organization_id,
@@ -939,8 +991,7 @@ router.post('/', requireAuth, async (req, res) => {
         Number(exchange_rate || 1) || 1,
         sales_rep || null,
         purchase_order_ref || null,
-        perc,
-        subtotal,
+        perc, baseAmount, subtotal,
         tax_amount,
         total_amount,
         total_amount,
@@ -1056,6 +1107,109 @@ router.get('/receipts', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/invoices/receipts/:id/pdf - PDF de recibo
+router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await ensureReceiptTables();
+
+    const [[receipt]] = await pool.query(
+      `SELECT r.*, i.invoice_number, i.issue_date as invoice_issue_date, i.currency_code as invoice_currency_code,
+              i.total_amount as invoice_total_amount, i.organization_id,
+              o.name as organization_name, o.ruc as organization_ruc, o.address as organization_address,
+              u.name as issued_by_name
+         FROM receipts r
+         LEFT JOIN invoices i ON i.id = r.invoice_id
+         LEFT JOIN organizations o ON o.id = i.organization_id
+         LEFT JOIN users u ON u.id = r.issued_by
+        WHERE r.id = ?`,
+      [id]
+    );
+    if (!receipt) return res.status(404).json({ error: 'Recibo no encontrado' });
+
+    const { invoice, error } = await loadInvoiceWithPerms(req, receipt.invoice_id);
+    if (error) return res.status(error.code).json({ error: error.msg });
+
+    const [apps] = await pool.query(
+      `SELECT ra.amount_applied, i.invoice_number, i.issue_date, i.currency_code
+         FROM receipt_applications ra
+         LEFT JOIN invoices i ON i.id = ra.invoice_id
+        WHERE ra.receipt_id = ?
+        ORDER BY ra.id`,
+      [id]
+    );
+
+    const issuerActivities =
+      process.env.RECEIPT_ISSUER_ACTIVITIES ||
+      process.env.INVOICE_ISSUER_ACTIVITIES ||
+      'TRANSPORTE TERRESTRE DE CARGA INTERDEPARTAMENTAL E INTERNACIONAL - ' +
+      'ACTIVIDADES DE LOS AGENTES DE TRANSPORTE TERRESTRE - ACTIVIDADES AUXILIARES AL ' +
+      'TRANSPORTE ACUATICO - TRANSPORTE TERRESTRE LOCAL DE CARGA - TRANSPORTE AEREO DE CARGA - ' +
+      'COMERCIO AL POR MENOR DE OTROS PRODUCTOS EN COMERCIOS NO ESPECIALIZADOS.';
+
+    const issuer = {
+      name: process.env.INVOICE_ISSUER_NAME || 'ATM CARGO S.R.L.',
+      ruc: process.env.INVOICE_ISSUER_RUC || '80056841-6',
+      phone: process.env.INVOICE_ISSUER_PHONE || '+595 21 493082',
+      address:
+        process.env.INVOICE_ISSUER_ADDRESS || 'Cap. Milciades Urbieta 175 e/ Rio de Janeiro y Mcal. Lopez',
+      city: process.env.INVOICE_ISSUER_CITY || 'Asuncion - Paraguay',
+    };
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="receipt-${receipt.receipt_number || id}.pdf"`
+    );
+
+    const issueDate = receipt.issue_date ? new Date(receipt.issue_date) : new Date();
+    const cityShort = String(issuer.city || 'Asuncion').split('-')[0].trim();
+    const issuePlaceDate = `${cityShort} ${formatDateLong(issueDate)}`;
+
+    const amount = Number(receipt.net_amount ?? receipt.amount ?? 0);
+    const currency = receipt.currency_code || receipt.invoice_currency_code || 'GS';
+    const paymentType = String(receipt.payment_method || 'PAGO').toUpperCase();
+
+    const fallbackInvoice = {
+      amount_applied: amount,
+      invoice_number: receipt.invoice_number || invoice.invoice_number || '',
+      issue_date: receipt.invoice_issue_date || invoice.issue_date || '',
+      currency_code: currency,
+    };
+
+    const rows = (apps && apps.length ? apps : [fallbackInvoice]).map((row) => ({
+      number: row.invoice_number || '',
+      issueDate: formatDate(row.issue_date),
+      currency: row.currency_code || currency,
+      amount: Number(row.amount_applied || amount),
+      paymentType,
+      paidAmount: Number(row.amount_applied || amount),
+    }));
+
+    const data = {
+      issuer: {
+        name: issuer.name,
+        address: issuer.address,
+        phone: issuer.phone,
+        city: issuer.city,
+        activities: issuerActivities,
+      },
+      receiptNumber: receipt.receipt_number || '',
+      issuePlaceDate,
+      amount,
+      currency,
+      receivedFrom: receipt.organization_name || invoice.organization_name || '',
+      invoices: rows,
+      issuedByName: receipt.issued_by_name || '',
+    };
+
+    await generateReceiptPDF(data, res);
+  } catch (e) {
+    console.error('[receipts] Error generating PDF', e);
+    res.status(500).json({ error: 'Error al generar PDF' });
+  }
+});
+
 // POST /api/invoices/:id/receipts - Registrar recibo/pago
 router.post('/:id/receipts', requireAuth, async (req, res) => {
   const conn = await pool.getConnection();
@@ -1073,7 +1227,24 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
       conn.release();
       return res.status(403).json({ error: 'Sin permiso' });
     }
-    const effBalance = parseFloat(invoice.net_balance ?? invoice.balance ?? 0);
+        // Recalcular saldo pendiente por si net_balance/balance están en 0
+    const [invItems] = await conn.query("SELECT subtotal, tax_rate FROM invoice_items WHERE invoice_id = ?", [id]);
+    const totalsCalc = calculateTotals(invItems || []);
+    const creditedInv = Number(invoice.credited_total || 0);
+    const totalFromItems = Number(totalsCalc.total_amount || 0);
+    const totalFromInvoice = Number(invoice.total_amount || 0) > 0
+      ? Number(invoice.total_amount || 0)
+      : Math.max(0, Number(invoice.subtotal || 0) + Number(invoice.tax_amount || 0));
+    const baseTotal = totalFromItems > 0 ? totalFromItems : totalFromInvoice;
+    const netTotalInv = Number(invoice.net_total_amount || 0) > 0
+      ? Number(invoice.net_total_amount || 0)
+      : Math.max(0, baseTotal - creditedInv);
+    const [[paidRow]] = await conn.query(
+      "SELECT COALESCE(SUM(net_amount),0) AS paid FROM receipts WHERE invoice_id = ? AND status <> 'anulado'",
+      [id]
+    );
+    const paidInv = Number(paidRow?.paid || 0);
+    const effBalance = Math.max(0, netTotalInv - paidInv);
     const amt = parseFloat(amount || 0);
     const retPct = parseFloat(retention_pct || 0);
     const retAmt = Math.max(0, amt * retPct / 100);
@@ -1751,6 +1922,7 @@ router.get('/credit-notes/:id/pdf', requireAuth, async (req, res) => {
 });
 
 export default router;
+
 
 
 

@@ -14,6 +14,18 @@ const fmtBank = (code) => {
   return code;
 };
 
+const openReceiptPdf = async (id) => {
+  try {
+    const res = await api.get(`/invoices/receipts/${id}/pdf`, { responseType: 'blob' });
+    const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (e) {
+    console.error('Error loading receipt PDF', e);
+    alert(e?.response?.data?.error || 'No se pudo abrir el PDF del recibo');
+  }
+};
+
 export default function Payments() {
   const [receipts, setReceipts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -146,7 +158,19 @@ export default function Payments() {
                   <td className="px-3 py-2">
                     {r.issue_date ? new Date(r.issue_date).toLocaleDateString('es-PY') : '-'}
                   </td>
-                  <td className="px-3 py-2">{r.receipt_number || '-'}</td>
+                  <td className="px-3 py-2">
+  {r.id ? (
+    <button
+      type="button"
+      className="text-blue-600 hover:underline"
+      onClick={() => openReceiptPdf(r.id)}
+    >
+      {r.receipt_number || '-'}
+    </button>
+  ) : (
+    r.receipt_number || '-'
+  )}
+</td>
                   <td className="px-3 py-2">
                     {r.invoice_number ? (
                       <a

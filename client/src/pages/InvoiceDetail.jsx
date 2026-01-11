@@ -16,7 +16,62 @@ const fmtMoney = (v) =>
   new Intl.NumberFormat('es-PY', { style: 'currency', currency: 'USD' }).format(
     Number(v || 0),
   );
-const fmtDate = (v) => (v ? new Date(v).toLocaleDateString('es-PY') : '—');
+const fmtDate = (v) => (v ? new Date(v).toLocaleDateString('es-PY') : '�?"');
+const openReceiptPdf = async (id) => {
+  try {
+    const res = await api.get(`/invoices/receipts/${id}/pdf`, { responseType: 'blob' });
+    const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (e) {
+    console.error('Error loading receipt PDF', e);
+    alert(e?.response?.data?.error || 'No se pudo abrir el PDF del recibo');
+  }
+};
+
+// Recalcula totales/saldo desde ítems si los campos vienen en 0
+function computeDerivedTotals(inv = {}) {
+  const items = Array.isArray(inv.items) ? inv.items : [];
+  let subItems = 0;
+  let taxItems = 0;
+  items.forEach((it) => {
+    const qty = Number(it.quantity ?? it.qty ?? 1) || 0;
+    const price = Number(it.unit_price ?? it.price ?? 0) || 0;
+    const sub = Number(it.subtotal ?? qty * price) || 0;
+    subItems += sub;
+    const rate = Number(it.tax_rate ?? it.rate ?? inv.tax_rate ?? 0) || 0;
+    taxItems += sub * (rate / 100);
+  });
+  const calcSubtotal = Number(inv.subtotal) > 0 ? Number(inv.subtotal) : subItems;
+  const calcTax = Number(inv.tax_amount) > 0 ? Number(inv.tax_amount) : taxItems;
+  const totalRaw = Number(inv.total_amount ?? inv.total ?? 0);
+  const calcTotal = totalRaw > 0 ? totalRaw : Math.max(0, calcSubtotal + calcTax);
+  const creditedCalc = Number(inv.credited_total ?? 0);
+  const paidCalc = Number(inv.paid_amount ?? inv.paid ?? inv.payments_total ?? 0);
+  const calcNetTotal =
+    Number(inv.net_total_amount ?? inv.net_total ?? 0) > 0
+      ? Number(inv.net_total_amount ?? inv.net_total ?? 0)
+      : Math.max(0, calcTotal - creditedCalc);
+  let calcPending =
+    inv.net_balance !== undefined && inv.net_balance !== null
+      ? Number(inv.net_balance)
+      : inv.balance !== undefined && inv.balance !== null
+      ? Number(inv.balance)
+      : Math.max(0, calcNetTotal - paidCalc);
+  if (calcPending <= 0 && calcTotal > 0 && paidCalc < calcTotal) {
+    calcPending = Math.max(0, calcNetTotal - paidCalc);
+  }
+  return {
+    ...inv,
+    calcSubtotal,
+    calcTax,
+    calcTotal,
+    calcNetTotal,
+    calcPending,
+    creditedCalc,
+    paidCalc,
+  };
+}
 
 export default function InvoiceDetail() {
   const { id } = useParams();
@@ -37,7 +92,7 @@ export default function InvoiceDetail() {
     setLoading(true);
     try {
       const { data } = await api.get(`/invoices/${id}`);
-      setInvoice(data);
+      setInvoice(computeDerivedTotals(data));
       loadCreditNotes(id);
     } catch (e) {
       console.error('Error loading invoice', e);
@@ -97,7 +152,7 @@ export default function InvoiceDetail() {
     }
   }
 
-async function handlePdf() {
+  async function handlePdf() {
     if (!invoice) return;
     try {
       const res = await api.get(`/invoices/${invoice.id}/pdf`, { responseType: 'blob' });
@@ -109,7 +164,24 @@ async function handlePdf() {
       alert(e.response?.data?.error || 'No se pudo descargar el PDF');
     }
   }
-  const availableCredit = Math.max(0, Number(invoice?.total_amount || 0) - Number(invoice?.credited_total || 0));
+  // Derivados (ya calculados en computeDerivedTotals)
+  const subtotalCalc = Number(invoice?.calcSubtotal ?? invoice?.subtotal ?? 0);
+  const taxCalc = Number(invoice?.calcTax ?? invoice?.tax_amount ?? 0);
+  const totalCalc = Number(invoice?.calcTotal ?? invoice?.total_amount ?? 0);
+  const availableCredit = Math.max(0, totalCalc - Number(invoice?.credited_total || 0));
+  const creditedCalc = Number(invoice?.creditedCalc ?? invoice?.credited_total ?? 0);
+  const paidCalc = Number(invoice?.paidCalc ?? invoice?.paid_amount ?? invoice?.paid ?? 0);
+  const netTotalDisplay = Number(
+    invoice?.calcNetTotal ??
+    invoice?.net_total_amount ??
+    Math.max(0, totalCalc - creditedCalc)
+  );
+  const pendingCalc = Number(
+    invoice?.calcPending ??
+    invoice?.net_balance ??
+    invoice?.balance ??
+    Math.max(0, netTotalDisplay - paidCalc)
+  );
 
 
   if (loading) return <div className="p-6">Cargando factura...</div>;
@@ -198,38 +270,38 @@ async function handlePdf() {
         </div>
       <div className="bg-white border rounded-lg p-4 space-y-1">
         <h3 className="font-semibold">Totales</h3>
-        <div className="flex justify-between text-sm">
-          <span>Subtotal</span>
-          <span className="font-medium">{fmtMoney(invoice.subtotal)}</span>
+          <div className="flex justify-between text-sm">
+            <span>Subtotal</span>
+            <span className="font-medium">{fmtMoney(subtotalCalc)}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span>Impuesto</span>
+              <span className="font-medium">{fmtMoney(taxCalc)}</span>
+          </div>
+          <div className="flex justify-between text-base font-semibold text-slate-800">
+            <span>Total</span>
+            <span>{fmtMoney(totalCalc)}</span>
           </div>
           <div className="flex justify-between text-sm">
-            <span>Impuesto</span>
-            <span className="font-medium">{fmtMoney(invoice.tax_amount)}</span>
-        </div>
-        <div className="flex justify-between text-base font-semibold text-slate-800">
-          <span>Total</span>
-          <span>{fmtMoney(invoice.total_amount)}</span>
-        </div>
-        <div className="flex justify-between text-sm">
-          <span>Notas de crédito</span>
-          <span className="font-medium text-amber-700">
-            {fmtMoney(invoice.credited_total || 0)}
-          </span>
-        </div>
-        <div className="flex justify-between text-sm font-semibold text-slate-800">
-          <span>Total neto</span>
-          <span>{fmtMoney(invoice.net_total_amount ?? (invoice.total_amount - (invoice.credited_total || 0)))}</span>
-        </div>
-        <div className="flex justify-between text-sm text-slate-600">
-          <span>Pagado</span>
-          <span>{fmtMoney(invoice.paid_amount)}</span>
-        </div>
-        <div className="flex justify-between text-sm text-orange-600">
-          <span>Saldo</span>
-          <span className="font-semibold">
-            {fmtMoney(invoice.net_balance ?? invoice.balance)}
-          </span>
-        </div>
+            <span>Notas de crédito</span>
+            <span className="font-medium text-amber-700">
+              {fmtMoney(creditedCalc)}
+            </span>
+          </div>
+          <div className="flex justify-between text-sm font-semibold text-slate-800">
+            <span>Total neto</span>
+            <span>{fmtMoney(netTotalDisplay)}</span>
+          </div>
+          <div className="flex justify-between text-sm text-slate-600">
+            <span>Pagado</span>
+            <span>{fmtMoney(paidCalc)}</span>
+          </div>
+          <div className="flex justify-between text-sm text-orange-600">
+            <span>Saldo</span>
+            <span className="font-semibold">
+              {fmtMoney(pendingCalc)}
+            </span>
+          </div>
       </div>
       </div>
 
@@ -291,7 +363,19 @@ async function handlePdf() {
             {(invoice.receipts || []).map((p) => (
               <tr key={p.id} className="border-t">
                 <td className="px-4 py-2">{fmtDate(p.issue_date)}</td>
-                <td className="px-4 py-2">{p.receipt_number || '—'}</td>
+                <td className="px-4 py-2">
+  {p.id ? (
+    <button
+      type="button"
+      className="text-blue-600 hover:underline"
+      onClick={() => openReceiptPdf(p.id)}
+    >
+      {p.receipt_number || '�?"'}
+    </button>
+  ) : (
+    p.receipt_number || '�?"'
+  )}
+</td>
                 <td className="px-4 py-2 capitalize">{p.payment_method}</td>
                 <td className="px-4 py-2">{p.reference_number || '—'}</td>
                 <td className="px-4 py-2 font-medium">{fmtMoney(p.net_amount ?? p.amount)}</td>
@@ -395,8 +479,22 @@ async function handlePdf() {
   );
 }
 
-function PaymentModal({ invoice, onClose, onSuccess }) {
-  const effectiveBalance = Number(invoice?.net_balance ?? invoice?.balance ?? 0);
+  function PaymentModal({ invoice, onClose, onSuccess }) {
+  // saldo pendiente con fallback (igual que en la tarjeta de totales)
+    const subtotalP = Number(invoice?.calcSubtotal ?? invoice?.subtotal ?? 0);
+    const taxP = Number(invoice?.calcTax ?? invoice?.tax_amount ?? 0);
+    const totalRawP = Number(invoice?.calcTotal ?? invoice?.total_amount ?? invoice?.total ?? 0);
+    const totalP = totalRawP > 0 ? totalRawP : Math.max(0, subtotalP + taxP);
+    const creditedP = Number(invoice?.credited_total ?? 0);
+    const paidP = Number(invoice?.paid_amount ?? invoice?.paid ?? 0);
+    const netTotalP = Math.max(0, totalP - creditedP);
+    let effectiveBalance = invoice?.calcPending ?? invoice?.net_balance ?? invoice?.balance;
+  if (effectiveBalance === null || effectiveBalance === undefined) {
+    effectiveBalance = netTotalP - paidP;
+  }
+  if (effectiveBalance <= 0 && totalP > 0 && paidP < totalP) {
+    effectiveBalance = Math.max(0, netTotalP - paidP);
+  }
   const [form, setForm] = useState({
     issue_date: new Date().toISOString().split('T')[0],
     amount: effectiveBalance.toFixed(2),
@@ -457,13 +555,13 @@ function PaymentModal({ invoice, onClose, onSuccess }) {
 
         <div className="mb-4 p-3 bg-slate-50 rounded text-sm">
           <div className="font-medium">{invoice.invoice_number}</div>
-          <div className="text-slate-600">{invoice.organization_name}</div>
-          <div className="mt-2 flex justify-between">
-            <span>Saldo pendiente:</span>
-            <span className="font-bold text-orange-600">
-              {fmtMoney(invoice.net_balance ?? invoice.balance)}
-            </span>
-          </div>
+            <div className="text-slate-600">{invoice.organization_name}</div>
+            <div className="mt-2 flex justify-between">
+              <span>Saldo pendiente:</span>
+              <span className="font-bold text-orange-600">
+                {fmtMoney(effectiveBalance)}
+              </span>
+            </div>
           {receiptPoint && (
             <div className="mt-2 text-slate-600">
               Punto de expedición (recibo): <strong>{receiptPoint}</strong>
@@ -947,4 +1045,3 @@ function CreditNoteViewModal({ creditNoteId, onClose, onRefresh }) {
     </div>
   );
 }
-

@@ -43,6 +43,7 @@ import invoicesRouter from './routes/invoices.js';
 import purchaseOrdersRouter from './routes/purchaseOrders.js';
 import purchaseInvoicesRouter from './routes/purchaseInvoices.js';
 import suppliersRouter from './routes/suppliers.js';
+import adminExpensesRouter from './routes/adminExpenses.js';
 
 // ⭐️ Operaciones (nuestro router nuevo)
 import operationsRouter from './routes/operations.js';
@@ -219,6 +220,7 @@ app.use('/api/invoices', invoicesRouter);
 app.use('/api/purchase-orders', purchaseOrdersRouter);
 app.use('/api/purchase-invoices', purchaseInvoicesRouter);
 app.use('/api/suppliers', suppliersRouter);
+app.use('/api/admin-expenses', adminExpensesRouter);
 
 app.use('/api/search', searchRouter);
 app.use('/api/reports', reportsRouter);

@@ -40,6 +40,25 @@ function buildHiddenStageSet(rows = []) {
   return set;
 }
 
+function getOperationUrl(id) {
+  const base = import.meta.env.BASE_URL || "/";
+  const normalized = base.endsWith("/") ? base : `${base}/`;
+  return `${window.location.origin}${normalized}operations/${id}`;
+}
+
+function openInNewTab(url) {
+  const link = document.createElement("a");
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.dispatchEvent(
+    new MouseEvent("click", { bubbles: true, cancelable: true, view: window })
+  );
+  document.body.removeChild(link);
+}
+
 export default function Workspace() {
   const { key } = useParams(); // ej: "atm-cargo", "atm-industrial"
   const nav = useNavigate();
@@ -55,6 +74,7 @@ export default function Workspace() {
   const [stageAliasMap, setStageAliasMap] = useState({});
   const [hiddenStageIds, setHiddenStageIds] = useState(new Set());
   const [dealCFMap, setDealCFMap] = useState({});
+  const [quoteTotals, setQuoteTotals] = useState({});
 
   const isIndustrial =
     key === "atm-industrial" || (bu && bu.key_slug === "atm-industrial");
@@ -146,6 +166,7 @@ export default function Workspace() {
 
   useEffect(() => {
     if (!deals.length) return;
+    let cancelled = false;
     (async () => {
       const entries = await Promise.allSettled(
         deals.map(async (deal) => {
@@ -170,8 +191,22 @@ export default function Workspace() {
           next[id] = cf;
         }
       }
-      setDealCFMap(next);
+      if (!cancelled) setDealCFMap(next);
+
+      try {
+        const { data } = await api.get("/quotes");
+        const map = {};
+        for (const row of data || []) {
+          if (row?.deal_id == null || row?.total_sales_usd == null) continue;
+          if (map[row.deal_id] !== undefined) continue;
+          map[row.deal_id] = row.total_sales_usd;
+        }
+        if (!cancelled) setQuoteTotals(map);
+      } catch {}
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [deals]);
 
   const grouped = useMemo(() => {
@@ -309,14 +344,20 @@ export default function Workspace() {
                           key={deal.id}
                         >
                           {(provided) => (
-                            <div
+                            <a
                               ref={provided.innerRef}
                               {...provided.draggableProps}
                               {...provided.dragHandleProps}
-                              onDoubleClick={() =>
-                                nav(`/operations/${deal.id}`)
-                              }
-                              className="border rounded-xl p-3 hover:shadow transition bg-white cursor-pointer"
+                              href={getOperationUrl(deal.id)}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(event) => event.preventDefault()}
+                              onDoubleClickCapture={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                openInNewTab(getOperationUrl(deal.id));
+                              }}
+                              className="block w-full border rounded-xl p-3 hover:shadow transition bg-white cursor-pointer"
                               title="Doble clic para abrir"
                             >
                               <div className="text-sm font-semibold truncate">
@@ -329,7 +370,7 @@ export default function Workspace() {
 
                               <div className="flex items-center gap-2 flex-wrap mt-2">
                                 <span className="text-xs bg-slate-100 rounded px-2 py-0.5">
-                                  $ {Number(deal.value || 0).toLocaleString()}
+                                  $ {Number(quoteTotals[deal.id] ?? (deal.value || 0)).toLocaleString()}
                                 </span>
                                 {typeof createdDays === "number" && (
                                   <span className="text-xs bg-slate-100 rounded px-2 py-0.5">
@@ -349,7 +390,7 @@ export default function Workspace() {
                                     : ""}
                                 </div>
                               )}
-                            </div>
+                            </a>
                           )}
                         </Draggable>
                       );

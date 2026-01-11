@@ -237,6 +237,19 @@ function ParamCard({
   saving,
 }) {
   const [newVal, setNewVal] = useState("");
+  const [tplForm, setTplForm] = useState({
+    name: "",
+    observaciones: "",
+    plazo_entrega: "",
+    asistencia_garantia: "",
+    responsabilidad_cliente: "",
+    que_incluye: "",
+    que_no_incluye: "",
+    condicion_pago: "",
+    tipo_instalacion: "",
+    garantia: "",
+    observaciones_producto: "",
+  });
   const isTemplate = keyName === "quote_template";
   const isDate =
     keyName === "invoice_timbre_valid_from" ||
@@ -336,15 +349,111 @@ function ParamCard({
       </div>
 
             {/* Alta rapida */}
-      <div className="mt-3 flex gap-2">
+      <div className="mt-3 space-y-2">
         {isTemplate ? (
-          <textarea
-            className="flex-1 border rounded px-2 py-1 text-sm"
-            rows={4}
-            placeholder="Nuevo valor (JSON)"
-            value={newVal}
-            onChange={(e) => setNewVal(e.target.value)}
-          />
+          <div className="space-y-2">
+            <div className="font-semibold text-sm">Nueva plantilla (sin JSON)</div>
+            <input
+              className="w-full border rounded px-2 py-1 text-sm"
+              placeholder="Nombre de la plantilla"
+              value={tplForm.name}
+              onChange={(e) => setTplForm((f) => ({ ...f, name: e.target.value }))}
+            />
+            <textarea
+              className="w-full border rounded px-2 py-1 text-sm"
+              rows={3}
+              placeholder="Observaciones"
+              value={tplForm.observaciones}
+              onChange={(e) => setTplForm((f) => ({ ...f, observaciones: e.target.value }))}
+            />
+            <textarea
+              className="w-full border rounded px-2 py-1 text-sm"
+              rows={2}
+              placeholder="Plazo de entrega"
+              value={tplForm.plazo_entrega}
+              onChange={(e) => setTplForm((f) => ({ ...f, plazo_entrega: e.target.value }))}
+            />
+            <textarea
+              className="w-full border rounded px-2 py-1 text-sm"
+              rows={2}
+              placeholder="Asistencia / garantía"
+              value={tplForm.asistencia_garantia}
+              onChange={(e) => setTplForm((f) => ({ ...f, asistencia_garantia: e.target.value }))}
+            />
+            <textarea
+              className="w-full border rounded px-2 py-1 text-sm"
+              rows={2}
+              placeholder="Responsabilidad del cliente"
+              value={tplForm.responsabilidad_cliente}
+              onChange={(e) => setTplForm((f) => ({ ...f, responsabilidad_cliente: e.target.value }))}
+            />
+            <textarea
+              className="w-full border rounded px-2 py-1 text-sm"
+              rows={2}
+              placeholder="Qué incluye"
+              value={tplForm.que_incluye}
+              onChange={(e) => setTplForm((f) => ({ ...f, que_incluye: e.target.value }))}
+            />
+            <textarea
+              className="w-full border rounded px-2 py-1 text-sm"
+              rows={2}
+              placeholder="Qué no incluye"
+              value={tplForm.que_no_incluye}
+              onChange={(e) => setTplForm((f) => ({ ...f, que_no_incluye: e.target.value }))}
+            />
+            <input
+              className="w-full border rounded px-2 py-1 text-sm"
+              placeholder="Condición de pago"
+              value={tplForm.condicion_pago}
+              onChange={(e) => setTplForm((f) => ({ ...f, condicion_pago: e.target.value }))}
+            />
+            <input
+              className="w-full border rounded px-2 py-1 text-sm"
+              placeholder="Tipo de instalación"
+              value={tplForm.tipo_instalacion}
+              onChange={(e) => setTplForm((f) => ({ ...f, tipo_instalacion: e.target.value }))}
+            />
+            <input
+              className="w-full border rounded px-2 py-1 text-sm"
+              placeholder="Garantía"
+              value={tplForm.garantia}
+              onChange={(e) => setTplForm((f) => ({ ...f, garantia: e.target.value }))}
+            />
+            <textarea
+              className="w-full border rounded px-2 py-1 text-sm"
+              rows={2}
+              placeholder="Observaciones de producto"
+              value={tplForm.observaciones_producto}
+              onChange={(e) => setTplForm((f) => ({ ...f, observaciones_producto: e.target.value }))}
+            />
+            <button
+              className="px-3 py-1.5 text-sm rounded bg-blue-600 text-white disabled:opacity-60"
+              onClick={() => {
+                if (!tplForm.name.trim()) return;
+                const payload = JSON.stringify({
+                  name: tplForm.name.trim(),
+                  ...tplForm,
+                });
+                onAdd(payload);
+                setTplForm({
+                  name: "",
+                  observaciones: "",
+                  plazo_entrega: "",
+                  asistencia_garantia: "",
+                  responsabilidad_cliente: "",
+                  que_incluye: "",
+                  que_no_incluye: "",
+                  condicion_pago: "",
+                  tipo_instalacion: "",
+                  garantia: "",
+                  observaciones_producto: "",
+                });
+              }}
+              disabled={saving}
+            >
+              Agregar plantilla
+            </button>
+          </div>
         ) : (
           <input
             className="flex-1 border rounded px-2 py-1 text-sm"
@@ -353,17 +462,19 @@ function ParamCard({
             onChange={(e) => setNewVal(e.target.value)}
           />
         )}
-        <button
-          className="px-3 py-1.5 text-sm rounded bg-blue-600 text-white disabled:opacity-60"
-          onClick={() => {
-            if (!newVal.trim()) return;
-            onAdd(newVal.trim());
-            setNewVal("");
-          }}
-          disabled={saving}
-        >
-          Agregar
-        </button>
+        {!isTemplate && (
+          <button
+            className="px-3 py-1.5 text-sm rounded bg-blue-600 text-white disabled:opacity-60"
+            onClick={() => {
+              if (!newVal.trim()) return;
+              onAdd(newVal.trim());
+              setNewVal("");
+            }}
+            disabled={saving}
+          >
+            Agregar
+          </button>
+        )}
       </div>
     </div>
   );

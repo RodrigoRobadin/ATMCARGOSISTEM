@@ -291,3 +291,153 @@ Cuando generas recibo, buscas por cliente y lo que debe bajo referencia,
     en el recibo tengo que generar con su punto de expedicion correspondiente a la factura a cobrar y debe de tener su correlativo correspondiente 
     ahi debe de estar relacionada la factura / nro de factura 
     en el formulario de registrar pago se debe de cargar la referencia de la transaccion 
+
+
+
+
+
+
+
+
+
+TABLAS DEL VPS 
+Database changed
+MariaDB [crmdb]> SHOW tables;
++---------------------------+
+| Tables_in_crmdb           |
++---------------------------+
+| activities                |
+| audit_events              |
+| audit_logs                |
+| business_units            |
+| catalog_items             |
+| contact_emails            |
+| contact_phones            |
+| contacts                  |
+| counters                  |
+| credit_note_items         |
+| credit_note_sequence      |
+| credit_notes              |
+| deal_cost_items           |
+| deal_cost_sheet_versions  |
+| deal_cost_sheets          |
+| deal_custom_fields        |
+| deal_documents            |
+| deal_files                |
+| deals                     |
+| followup_calls            |
+| followup_notes            |
+| followup_tasks            |
+| followup_visits           |
+| industrial_door_images    |
+| industrial_doors          |
+| industrial_quote_forms    |
+| industrial_quote_items    |
+| industrial_quotes         |
+| invoice_items             |
+| invoice_payments          |
+| invoice_sequence          |
+| invoices                  |
+| labels                    |
+| operation_air             |
+| operation_docs            |
+| operation_legs            |
+| operation_multimodal      |
+| operation_ocean           |
+| operation_purchases       |
+| operation_road            |
+| org_custom_fields         |
+| org_flete_routes          |
+| organizations             |
+| param_options             |
+| param_values              |
+| params                    |
+| person_custom_fields      |
+| pipelines                 |
+| purchase_invoice_items    |
+| purchase_invoice_payments |
+| purchase_invoices         |
+| purchase_order_items      |
+| purchase_order_sequence   |
+| purchase_orders           |
+| quote_items               |
+| quote_revisions           |
+| quotes                    |
+| route_stops               |
+| routes                    |
+| stages                    |
+| suppliers                 |
+| users                     |
+| visit_contacts            |
+| zones                     |
++---------------------------+
+64 rows in set (0.002 sec)
+
+TABLAS DEL LOCAL
++---------------------------+
+| Tables_in_crmdb           |
++---------------------------+
+| activities                |
+| audit_events              |
+| audit_logs                |
+| business_units            |
+| catalog_items             |
+| contact_emails            |
+| contact_phones            |
+| contacts                  |
+| counters                  |
+| credit_note_items         |
+| credit_note_sequence      |
+| credit_notes              |
+| deal_cost_items           |
+| deal_cost_sheet_versions  |
+| deal_cost_sheets          |
+| deal_custom_fields        |
+| deal_files                |
+| deals                     |
+| followup_calls            |
+| followup_notes            |
+| followup_tasks            |
+| followup_visits           |
+| industrial_door_images    |
+| industrial_doors          |
+| industrial_quote_forms    |
+| industrial_quotes         |
+| invoice_items             |
+| invoice_payments          |
+| invoice_sequence          |
+| invoices                  |
+| labels                    |
+| operation_air             |
+| operation_docs            |
+| operation_legs            |
+| operation_multimodal      |
+| operation_ocean           |
+| operation_purchases       |
+| operation_road            |
+| org_custom_fields         |
+| org_flete_routes          |
+| organizations             |
+| param_options             |
+| param_values              |
+| params                    |
+| person_custom_fields      |
+| pipelines                 |
+| purchase_invoice_items    |
+| purchase_invoice_payments |
+| purchase_invoices         |
+| purchase_order_items      |
+| purchase_order_sequence   |
+| purchase_orders           |
+| quote_revisions           |
+| quotes                    |
+| receipt_applications      |
+| receipts                  |
+| route_stops               |
+| routes                    |
+| stages                    |
+| users                     |
+| visit_contacts            |
+| zones                     |
++---------------------------+
+62 rows in set (0.27 sec)

@@ -70,18 +70,20 @@ export default function AccountStatement() {
       .map((row) => {
         // Totales base (prioriza saldo/pending si existe)
         const currency = (row?.currency || row?.moneda || 'USD').toUpperCase();
-        const total = Number(
-          row?.total_amount ??
-          row?.total ??
-          0
-        );
+        const subtotal = Number(row?.subtotal ?? row?.base_amount ?? 0);
+        const tax = Number(row?.tax_amount ?? 0);
+        const totalRaw = Number(row?.total_amount ?? row?.total ?? 0);
+        const total = totalRaw > 0 ? totalRaw : Math.max(0, subtotal + tax);
         // Pagos
         const paidBase = Number(row?.paid || row?.payments_total || row?.paid_amount || 0);
         const paidReceipts = receiptsByInvoice[row?.id] || 0;
         const paid = paidBase + paidReceipts;
         const credited = Number(row?.credited_total || 0);
         const netTotal = Math.max(0, total - credited);
-        const pending = Math.max(0, netTotal - paid);
+        let pending = Math.max(0, netTotal - paid);
+        if (pending <= 0 && total > 0 && paid < total) {
+          pending = Math.max(0, total - paid - credited);
+        }
         const credit = paidReceipts; // para mostrar en columna Haber
         return { ...row, currency, paid, credited, total, netTotal, pending, credit };
       })
@@ -119,18 +121,16 @@ export default function AccountStatement() {
       });
   }, [rows, filters]);
 
-  let running = 0;
   const ledger = filtered.map((row) => {
     const debit = Number(row?.pending || row?.netTotal || row?.total || row?.total_amount || 0);
-    const credit = Number(row?.credit || 0);
-    const balance = debit - credit; // saldo de esa factura
-    running += balance; // acumulado
+    const credit = Number(row?.credit || 0); // pagos aplicados (recibos)
+    const balance = Math.max(0, debit - credit); // saldo pendiente por factura
     return {
       ...row,
       debit,
       credit,
       balance,
-      running,
+      running: balance, // solo para compatibilidad, no se usa como acumulado
     };
   });
 
@@ -149,9 +149,9 @@ export default function AccountStatement() {
 
   const summary = ledger.reduce(
     (acc, r) => {
-      acc.saldo = r.running;
+      acc.saldo += r.balance;
       if ((r.status || '').toLowerCase() === 'vencido') {
-        acc.vencido += r.running > 0 ? r.running : 0;
+        acc.vencido += r.balance > 0 ? r.balance : 0;
       }
       return acc;
     },
@@ -368,68 +368,7 @@ export default function AccountStatement() {
         </div>
       )}
 
-      
       <div className="bg-white border rounded-lg overflow-auto">
-        <div className="px-4 py-3 border-b font-semibold">Pagos / Recibos</div>
-        <table className="min-w-full text-sm">
-          <thead className="bg-slate-100 text-slate-600">
-            <tr>
-              <th className="text-left px-3 py-2">Fecha</th>
-              <th className="text-left px-3 py-2">N? recibo</th>
-              <th className="text-left px-3 py-2">Factura</th>
-              <th className="text-left px-3 py-2">Cliente</th>
-              <th className="text-right px-3 py-2">Monto neto</th>
-              <th className="text-left px-3 py-2">M?todo</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loadingReceipts && (
-              <tr>
-                <td colSpan={6} className="px-3 py-4 text-center text-slate-500">
-                  Cargando...
-                </td>
-              </tr>
-            )}
-            {!loadingReceipts && receipts.length === 0 && (
-              <tr>
-                <td colSpan={6} className="px-3 py-4 text-center text-slate-500">
-                  Sin pagos registrados.
-                </td>
-              </tr>
-            )}
-            {!loadingReceipts &&
-              receipts.map((r) => (
-                <tr key={r.id} className="border-t">
-                  <td className="px-3 py-2">
-                    {r.issue_date ? new Date(r.issue_date).toLocaleDateString('es-PY') : '-'}
-                  </td>
-                  <td className="px-3 py-2">{r.receipt_number || '-'}</td>
-                  <td className="px-3 py-2">
-                    {r.invoice_number ? (
-                      <a
-                        className="text-blue-600 hover:underline"
-                        href={`/invoices/${r.invoice_id}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {r.invoice_number}
-                      </a>
-                    ) : (
-                      '-'
-                    )}
-                  </td>
-                  <td className="px-3 py-2">{r.organization_name || '-'}</td>
-                  <td className="px-3 py-2 text-right">
-                    {formatMoney(r.net_amount ?? r.amount)}
-                  </td>
-                  <td className="px-3 py-2 capitalize">{r.payment_method || '-'}</td>
-                </tr>
-              ))}
-          </tbody>
-        </table>
-      </div>
-
-<div className="bg-white border rounded-lg overflow-auto">
         <table className="min-w-full text-sm">
           <thead className="bg-slate-100 text-slate-600">
             <tr>
@@ -498,7 +437,7 @@ export default function AccountStatement() {
                   </td>
                   <td
                     className="px-3 py-2 text-right"
-                    title={`saldo factura: ${formatMoney(row.balance)} | acumulado: ${formatMoney(row.running)} | pendiente: ${formatMoney(row.pending)} | pagos: ${formatMoney(row.paid)} | nc: ${formatMoney(row.credited)}`}
+                    title={`saldo pendiente: ${formatMoney(row.balance)} | pendiente calc: ${formatMoney(row.pending)} | pagos: ${formatMoney(row.paid)} | nc: ${formatMoney(row.credited)}`}
                   >
                     {formatMoney(row.balance)}
                   </td>
