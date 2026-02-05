@@ -175,7 +175,7 @@ export default function AccountStatement() {
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-xl font-semibold">Estado de cuenta de clientes</h1>
+          <h1 className="text-xl font-semibold">Estado de cuenta de CLIENTES</h1>
           <p className="text-sm text-slate-500">
             Consulta rápida de saldos, facturas, notas de crédito y pagos aplicados.
           </p>
