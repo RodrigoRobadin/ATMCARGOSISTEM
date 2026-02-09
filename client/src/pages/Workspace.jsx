@@ -197,9 +197,9 @@ export default function Workspace() {
         const { data } = await api.get("/quotes");
         const map = {};
         for (const row of data || []) {
-          if (row?.deal_id == null || row?.total_sales_usd == null) continue;
+          if (row?.deal_id == null || row?.profit_total_usd == null) continue;
           if (map[row.deal_id] !== undefined) continue;
-          map[row.deal_id] = row.total_sales_usd;
+          map[row.deal_id] = row.profit_total_usd;
         }
         if (!cancelled) setQuoteTotals(map);
       } catch {}
@@ -369,9 +369,9 @@ export default function Workspace() {
                               </div>
 
                               <div className="flex items-center gap-2 flex-wrap mt-2">
-                                <span className="text-xs bg-slate-100 rounded px-2 py-0.5">
-                                  $ {Number(quoteTotals[deal.id] ?? (deal.value || 0)).toLocaleString()}
-                                </span>
+                                  <span className="text-xs bg-emerald-50 text-emerald-700 rounded px-2 py-0.5">
+                                    $ {Number(quoteTotals[deal.id] ?? (deal.value || 0)).toLocaleString()}
+                                  </span>
                                 {typeof createdDays === "number" && (
                                   <span className="text-xs bg-slate-100 rounded px-2 py-0.5">
                                     hace {createdDays} d

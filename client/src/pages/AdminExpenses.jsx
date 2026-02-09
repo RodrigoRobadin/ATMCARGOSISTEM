@@ -22,13 +22,33 @@ export default function AdminExpenses() {
   const [uploading, setUploading] = useState(false);
   const [expenses, setExpenses] = useState([]);
   const [error, setError] = useState('');
-  const [receiptFile, setReceiptFile] = useState(null);
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
+  const [newInvoiceOpen, setNewInvoiceOpen] = useState(false);
+  const [newInvoiceForm, setNewInvoiceForm] = useState({
+    amount: '',
+    currency_code: 'PYG',
+    receipt_type: 'Factura',
+    receipt_number: '',
+    timbrado_number: '',
+    invoice_date: today(),
+    supplier_ruc: '',
+    supplier_name: '',
+    iva_10: '',
+    iva_5: '',
+    iva_exempt: '',
+  });
+  const [newInvoiceFile, setNewInvoiceFile] = useState(null);
   const [invoiceExpense, setInvoiceExpense] = useState(null);
   const [invoiceForm, setInvoiceForm] = useState({
     receipt_type: 'Factura',
     receipt_number: '',
     timbrado_number: '',
+    invoice_date: today(),
+    supplier_ruc: '',
+    supplier_name: '',
+    iva_10: '',
+    iva_5: '',
+    iva_exempt: '',
   });
   const [invoiceFile, setInvoiceFile] = useState(null);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
@@ -219,9 +239,22 @@ export default function AdminExpenses() {
     }
   }
 
+  
   async function handleViewReceipt(expenseId) {
     try {
       const { data } = await api.get(`/admin-expenses/${expenseId}/attachments`);
+      if (!Array.isArray(data) || !data.length) {
+        alert('Sin comprobante adjunto.');
+        return;
+      }
+      const fileUrl = data[0].file_url;
+      const url = fileUrl.startsWith('http') ? fileUrl : `${backendBase}${fileUrl}`;
+      window.open(url, '_blank', 'noopener');
+    } catch (e) {
+      console.error('Error loading attachment', e);
+      alert('No se pudo abrir el comprobante.');
+    }
+  }
 
   function openInvoiceModal(expense) {
     setInvoiceExpense(expense);
@@ -229,6 +262,12 @@ export default function AdminExpenses() {
       receipt_type: expense?.receipt_type || 'Factura',
       receipt_number: expense?.receipt_number || '',
       timbrado_number: expense?.timbrado_number || '',
+      invoice_date: expense?.invoice_date || today(),
+      supplier_ruc: expense?.supplier_ruc || '',
+      supplier_name: expense?.supplier_name || '',
+      iva_10: expense?.iva_10 || '',
+      iva_5: expense?.iva_5 || '',
+      iva_exempt: expense?.iva_exempt || '',
     });
     setInvoiceFile(null);
     setInvoiceModalOpen(true);
@@ -241,6 +280,12 @@ export default function AdminExpenses() {
         receipt_type: invoiceForm.receipt_type || null,
         receipt_number: invoiceForm.receipt_number || null,
         timbrado_number: invoiceForm.timbrado_number || null,
+        invoice_date: invoiceForm.invoice_date || null,
+        supplier_ruc: invoiceForm.supplier_ruc || null,
+        supplier_name: invoiceForm.supplier_name || null,
+        iva_10: invoiceForm.iva_10 || null,
+        iva_5: invoiceForm.iva_5 || null,
+        iva_exempt: invoiceForm.iva_exempt || null,
       });
       if (invoiceFile) {
         await uploadExpenseAttachment(invoiceExpense.id, invoiceFile);
@@ -304,19 +349,6 @@ export default function AdminExpenses() {
     }
   }
 
-      if (!Array.isArray(data) || !data.length) {
-        alert('Sin comprobante adjunto.');
-        return;
-      }
-      const fileUrl = data[0].file_url;
-      const url = fileUrl.startsWith('http') ? fileUrl : `${backendBase}${fileUrl}`;
-      window.open(url, '_blank', 'noopener');
-    } catch (e) {
-      console.error('Error loading attachment', e);
-      alert('No se pudo abrir el comprobante.');
-    }
-  }
-
   useEffect(() => {
     (async () => {
       try {
@@ -357,17 +389,23 @@ export default function AdminExpenses() {
         subcategory_id: form.subcategory_id || null,
         cost_center_id: form.cost_center_id || null,
         description: form.description,
-        amount: Number(form.amount || 0),
-        currency_code: form.currency_code,
+        amount: Number(newInvoiceForm.amount || 0),
+        currency_code: newInvoiceForm.currency_code || 'PYG',
         tax_rate: form.tax_rate || null,
-        receipt_type: form.receipt_type || null,
-        receipt_number: form.receipt_number || null,
-        timbrado_number: form.timbrado_number || null,
+        receipt_type: newInvoiceForm.receipt_type || null,
+        receipt_number: newInvoiceForm.receipt_number || null,
+        timbrado_number: newInvoiceForm.timbrado_number || null,
+        invoice_date: newInvoiceForm.invoice_date || null,
+        supplier_ruc: newInvoiceForm.supplier_ruc || null,
+        supplier_name: newInvoiceForm.supplier_name || null,
+        iva_10: newInvoiceForm.iva_10 || null,
+        iva_5: newInvoiceForm.iva_5 || null,
+        iva_exempt: newInvoiceForm.iva_exempt || null,
         status: form.status || 'pendiente',
       };
 
       if (form.recurring) {
-        if (receiptFile) {
+        if (newInvoiceFile) {
           setError('Adjuntar comprobante no esta disponible para recurrentes.');
         }
         await api.post('/admin-expenses/recurrences', {
@@ -378,8 +416,8 @@ export default function AdminExpenses() {
         });
       } else {
         const { data } = await api.post('/admin-expenses', payload);
-        if (data?.id && receiptFile) {
-          await uploadExpenseAttachment(data.id, receiptFile);
+        if (data?.id && newInvoiceFile) {
+          await uploadExpenseAttachment(data.id, newInvoiceFile);
         }
       }
 
@@ -394,7 +432,21 @@ export default function AdminExpenses() {
         end_date: '',
       }));
       setProviderQuery('');
-      setReceiptFile(null);
+      setNewInvoiceForm({
+        amount: '',
+        currency_code: 'PYG',
+        receipt_type: 'Factura',
+        receipt_number: '',
+        timbrado_number: '',
+        invoice_date: today(),
+        supplier_ruc: '',
+        supplier_name: '',
+        iva_10: '',
+        iva_5: '',
+        iva_exempt: '',
+      });
+      setNewInvoiceFile(null);
+      setNewInvoiceOpen(false);
       await loadExpenses();
     } catch (e) {
       console.error('Error creating expense', e);
@@ -625,27 +677,6 @@ export default function AdminExpenses() {
             </select>
           </div>
           <div>
-            <label className="text-xs text-slate-500">Monto</label>
-            <input
-              type="number"
-              step="0.01"
-              className="mt-1 w-full border rounded px-2 py-1 text-sm"
-              value={form.amount}
-              onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="text-xs text-slate-500">Moneda</label>
-            <select
-              className="mt-1 w-full border rounded px-2 py-1 text-sm"
-              value={form.currency_code}
-              onChange={(e) => setForm((f) => ({ ...f, currency_code: e.target.value }))}
-            >
-              <option value="PYG">PYG</option>
-              <option value="USD">USD</option>
-            </select>
-          </div>
-          <div>
             <label className="text-xs text-slate-500">Estado</label>
             <select
               className="mt-1 w-full border rounded px-2 py-1 text-sm"
@@ -666,44 +697,18 @@ export default function AdminExpenses() {
             onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
           />
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div>
-            <label className="text-xs text-slate-500">Comprobante</label>
-            <input
-              className="mt-1 w-full border rounded px-2 py-1 text-sm"
-              value={form.receipt_type}
-              onChange={(e) => setForm((f) => ({ ...f, receipt_type: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="text-xs text-slate-500">Numero</label>
-            <input
-              className="mt-1 w-full border rounded px-2 py-1 text-sm"
-              value={form.receipt_number}
-              onChange={(e) => setForm((f) => ({ ...f, receipt_number: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="text-xs text-slate-500">Timbrado</label>
-            <input
-              className="mt-1 w-full border rounded px-2 py-1 text-sm"
-              value={form.timbrado_number}
-              onChange={(e) => setForm((f) => ({ ...f, timbrado_number: e.target.value }))}
-            />
-          </div>
-        </div>
-        <div>
-          <label className="text-xs text-slate-500">Adjuntar comprobante (PDF/imagen)</label>
-          <input
-            type="file"
-            className="mt-1 w-full border rounded px-2 py-1 text-sm"
-            accept="application/pdf,image/*"
-            disabled={form.recurring}
-            onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
-          />
-          {form.recurring && (
-            <div className="text-xs text-slate-500 mt-1">
-              Los comprobantes no se adjuntan a gastos recurrentes.
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="px-3 py-2 text-sm border rounded"
+            onClick={() => setNewInvoiceOpen(true)}
+          >
+            Cargar factura
+          </button>
+          {newInvoiceForm.amount && (
+            <div className="text-xs text-slate-500">
+              Monto: {fmtMoney(newInvoiceForm.amount)} {newInvoiceForm.currency_code}
             </div>
           )}
         </div>
@@ -858,12 +863,199 @@ export default function AdminExpenses() {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {newInvoiceOpen && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg w-full max-w-xl p-4 space-y-3">
+            <div className="text-sm font-semibold">Factura nueva</div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className="text-xs text-slate-500">Fecha emision</label>
+                <input
+                  type="date"
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={newInvoiceForm.invoice_date}
+                  onChange={(e) =>
+                    setNewInvoiceForm((f) => ({ ...f, invoice_date: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">RUC proveedor</label>
+                <input
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={newInvoiceForm.supplier_ruc}
+                  onChange={(e) =>
+                    setNewInvoiceForm((f) => ({ ...f, supplier_ruc: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Razon social</label>
+                <input
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={newInvoiceForm.supplier_name}
+                  onChange={(e) =>
+                    setNewInvoiceForm((f) => ({ ...f, supplier_name: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Monto total</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={newInvoiceForm.amount}
+                  onChange={(e) =>
+                    setNewInvoiceForm((f) => ({ ...f, amount: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Moneda</label>
+                <select
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={newInvoiceForm.currency_code}
+                  onChange={(e) =>
+                    setNewInvoiceForm((f) => ({ ...f, currency_code: e.target.value }))
+                  }
+                >
+                  <option value="PYG">PYG</option>
+                  <option value="USD">USD</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Comprobante</label>
+                <input
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={newInvoiceForm.receipt_type}
+                  onChange={(e) =>
+                    setNewInvoiceForm((f) => ({ ...f, receipt_type: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Numero</label>
+                <input
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={newInvoiceForm.receipt_number}
+                  onChange={(e) =>
+                    setNewInvoiceForm((f) => ({ ...f, receipt_number: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Timbrado</label>
+                <input
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={newInvoiceForm.timbrado_number}
+                  onChange={(e) =>
+                    setNewInvoiceForm((f) => ({ ...f, timbrado_number: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">IVA 10%</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={newInvoiceForm.iva_10}
+                  onChange={(e) =>
+                    setNewInvoiceForm((f) => ({ ...f, iva_10: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">IVA 5%</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={newInvoiceForm.iva_5}
+                  onChange={(e) =>
+                    setNewInvoiceForm((f) => ({ ...f, iva_5: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Exento</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={newInvoiceForm.iva_exempt}
+                  onChange={(e) =>
+                    setNewInvoiceForm((f) => ({ ...f, iva_exempt: e.target.value }))
+                  }
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs text-slate-500">Adjuntar factura (PDF/imagen)</label>
+              <input
+                type="file"
+                className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                accept="application/pdf,image/*"
+                onChange={(e) => setNewInvoiceFile(e.target.files?.[0] || null)}
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                className="px-3 py-2 text-sm border rounded"
+                onClick={() => setNewInvoiceOpen(false)}
+              >
+                Cancelar
+              </button>
+              <button
+                className="px-3 py-2 text-sm bg-black text-white rounded"
+                onClick={() => setNewInvoiceOpen(false)}
+              >
+                Guardar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {invoiceModalOpen && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg w-full max-w-lg p-4 space-y-3">
             <div className="text-sm font-semibold">Factura (gasto)</div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className="text-xs text-slate-500">Fecha emision</label>
+                <input
+                  type="date"
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={invoiceForm.invoice_date}
+                  onChange={(e) =>
+                    setInvoiceForm((f) => ({ ...f, invoice_date: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">RUC proveedor</label>
+                <input
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={invoiceForm.supplier_ruc}
+                  onChange={(e) =>
+                    setInvoiceForm((f) => ({ ...f, supplier_ruc: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Razon social</label>
+                <input
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={invoiceForm.supplier_name}
+                  onChange={(e) =>
+                    setInvoiceForm((f) => ({ ...f, supplier_name: e.target.value }))
+                  }
+                />
+              </div>
               <div>
                 <label className="text-xs text-slate-500">Tipo</label>
                 <input
@@ -891,6 +1083,42 @@ export default function AdminExpenses() {
                   value={invoiceForm.timbrado_number}
                   onChange={(e) =>
                     setInvoiceForm((f) => ({ ...f, timbrado_number: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">IVA 10%</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={invoiceForm.iva_10}
+                  onChange={(e) =>
+                    setInvoiceForm((f) => ({ ...f, iva_10: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">IVA 5%</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={invoiceForm.iva_5}
+                  onChange={(e) =>
+                    setInvoiceForm((f) => ({ ...f, iva_5: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500">Exento</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                  value={invoiceForm.iva_exempt}
+                  onChange={(e) =>
+                    setInvoiceForm((f) => ({ ...f, iva_exempt: e.target.value }))
                   }
                 />
               </div>
@@ -1047,7 +1275,6 @@ export default function AdminExpenses() {
           </div>
         </div>
       )}
-      </div>
     </div>
   );
 }

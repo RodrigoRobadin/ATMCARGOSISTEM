@@ -50,6 +50,7 @@ import operationsRouter from './routes/operations.js';
 import reportsRouter from './routes/reports.js';
 import adminRouter from './routes/admin.js';
 import catalogRouter from './routes/catalog.js';
+import salesGoalsRouter from './routes/salesGoals.js';
 
 // ⭐️ NUEVO: solicitudes de flete
 import freightRequestsRouter from './routes/freightRequests.js';
@@ -226,6 +227,7 @@ app.use('/api/search', searchRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api', catalogRouter);
+app.use('/api/sales-goals', salesGoalsRouter);
 
 // ⭐️ Operaciones (crear/leer y PUT por tipo: air/ocean/road/multimodal)
 app.use('/api/operations', operationsRouter);

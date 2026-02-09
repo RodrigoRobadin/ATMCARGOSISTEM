@@ -24,6 +24,25 @@ function toMySQLDateTime(d) {
   )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+function getDateRange(req) {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = new Date(now);
+  end.setHours(23, 59, 59, 999);
+
+  const parseDate = (raw, fallback) => {
+    if (!raw) return fallback;
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? fallback : d;
+  };
+
+  const from = parseDate(req.query.from, start);
+  const to = parseDate(req.query.to, end);
+  to.setHours(23, 59, 59, 999);
+
+  return { from, to };
+}
+
 const ALLOWED_OUTCOMES = [
   'no_contesta',
   'interesado',
@@ -297,6 +316,21 @@ router.get('/notes', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/followups/notes/count
+router.get('/notes/count', requireAuth, async (req, res) => {
+  try {
+    const userId = pickUserFilter(req);
+    const [[row]] = await pool.query(
+      `SELECT COUNT(*) AS total FROM followup_notes WHERE user_id = ?`,
+      [userId]
+    );
+    res.json({ total: Number(row?.total || 0) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'No se pudo contar notas' });
+  }
+});
+
 // POST /api/followups/notes
 router.post('/notes', requireAuth, async (req, res) => {
   try {
@@ -394,6 +428,28 @@ router.get('/tasks', requireAuth, async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'No se pudo listar tareas' });
+  }
+});
+
+// GET /api/followups/tasks/count
+router.get('/tasks/count', requireAuth, async (req, res) => {
+  try {
+    const userId = pickUserFilter(req);
+    const { status = 'pending' } = req.query;
+    const params = [userId];
+    let where = 'user_id = ?';
+    if (status) {
+      where += ' AND status = ?';
+      params.push(String(status));
+    }
+    const [[row]] = await pool.query(
+      `SELECT COUNT(*) AS total FROM followup_tasks WHERE ${where}`,
+      params
+    );
+    res.json({ total: Number(row?.total || 0) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'No se pudo contar tareas' });
   }
 });
 
@@ -528,6 +584,203 @@ router.patch('/tasks/:id', requireAuth, async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'No se pudo actualizar la tarea' });
+  }
+});
+
+/* =================== OVERVIEW =================== */
+// GET /api/followups/overview?from=YYYY-MM-DD&to=YYYY-MM-DD&user_id=#
+router.get('/overview', requireAuth, async (req, res) => {
+  try {
+    const { from, to } = getDateRange(req);
+    const fromSql = toMySQLDateTime(from);
+    const toSql = toMySQLDateTime(to);
+
+    const isAdmin = canAdmin(req);
+    const rawUserId = req.query.user_id;
+    const userId = isAdmin ? (rawUserId ? Number(rawUserId) : null) : Number(req.user?.id);
+
+    if (isAdmin && !rawUserId) {
+      const [rows] = await pool.query(
+        `
+        SELECT
+          o.created_by_user_id AS user_id,
+          u.name AS user_name,
+          COUNT(DISTINCT o.id) AS prospects,
+          SUM(CASE WHEN fc.org_id IS NULL THEN 1 ELSE 0 END) AS not_contacted,
+          SUM(CASE WHEN fc.org_id IS NULL THEN 0 ELSE 1 END) AS contacted
+        FROM organizations o
+        LEFT JOIN users u ON u.id = o.created_by_user_id
+        LEFT JOIN (
+          SELECT DISTINCT org_id, user_id
+          FROM followup_calls
+        ) fc ON fc.org_id = o.id AND fc.user_id = o.created_by_user_id
+        WHERE o.created_by_user_id IS NOT NULL
+          AND o.created_at BETWEEN ? AND ?
+        GROUP BY o.created_by_user_id, u.name
+        ORDER BY u.name ASC
+        `,
+        [fromSql, toSql]
+      );
+
+      return res.json({ range: { from: fromSql, to: toSql }, by_user: rows });
+    }
+
+    const [orgs] = await pool.query(
+      `
+      SELECT o.id
+      FROM organizations o
+      WHERE o.created_by_user_id = ?
+        AND o.created_at BETWEEN ? AND ?
+      `,
+      [userId, fromSql, toSql]
+    );
+
+    const orgIds = orgs.map((o) => o.id);
+    if (!orgIds.length) {
+      return res.json({
+        range: { from: fromSql, to: toSql },
+        prospects: 0,
+        contacted: 0,
+        not_contacted: 0,
+      });
+    }
+
+    const [calls] = await pool.query(
+      `
+      SELECT DISTINCT org_id
+      FROM followup_calls
+      WHERE user_id = ?
+        AND org_id IN (?)
+      `,
+      [userId, orgIds]
+    );
+
+    const contactedSet = new Set(calls.map((c) => c.org_id));
+    const contacted = orgIds.filter((id) => contactedSet.has(id)).length;
+    const not_contacted = orgIds.length - contacted;
+
+    res.json({
+      range: { from: fromSql, to: toSql },
+      prospects: orgIds.length,
+      contacted,
+      not_contacted,
+    });
+  } catch (e) {
+    console.error('[followups] overview error:', e?.message || e);
+    res.status(500).json({ error: 'No se pudo calcular el resumen' });
+  }
+});
+
+/* =================== PIPELINE WATCH =================== */
+// GET /api/followups/pipeline-watch?user_id=#&stages=A%20cotizar&stages=Cotizado%20a%20confirmar
+/* =================== PROSPECTS =================== */
+// GET /api/followups/prospects?contacted=0|1&from=YYYY-MM-DD&to=YYYY-MM-DD&user_id=#
+router.get('/prospects', requireAuth, async (req, res) => {
+  try {
+    const { from, to } = getDateRange(req);
+    const fromSql = toMySQLDateTime(from);
+    const toSql = toMySQLDateTime(to);
+
+    const isAdmin = canAdmin(req);
+    const rawUserId = req.query.user_id;
+    const userId = isAdmin ? (rawUserId ? Number(rawUserId) : null) : Number(req.user?.id);
+
+    const contactedFlag = String(req.query.contacted || '0');
+    const onlyContacted = contactedFlag === '1';
+
+    const params = [fromSql, toSql];
+    let userFilter = '';
+    if (userId) {
+      userFilter = 'AND o.created_by_user_id = ?';
+      params.push(userId);
+    }
+
+    const [rows] = await pool.query(
+      `
+      SELECT o.id, o.name, o.razon_social, o.created_at,
+             o.created_by_user_id,
+             u.name AS created_by_name,
+             fc.last_call_at
+      FROM organizations o
+      LEFT JOIN users u ON u.id = o.created_by_user_id
+      LEFT JOIN (
+        SELECT org_id, user_id, MAX(happened_at) AS last_call_at
+        FROM followup_calls
+        GROUP BY org_id, user_id
+      ) fc ON fc.org_id = o.id AND fc.user_id = o.created_by_user_id
+      WHERE o.created_by_user_id IS NOT NULL
+        AND o.created_at BETWEEN ? AND ?
+        ${userFilter}
+        AND ${onlyContacted ? 'fc.last_call_at IS NOT NULL' : 'fc.last_call_at IS NULL'}
+      ORDER BY o.created_at DESC
+      LIMIT 200
+      `,
+      params
+    );
+
+    res.json(rows);
+  } catch (e) {
+    console.error('[followups] prospects error:', e?.message || e);
+    res.status(500).json({ error: 'No se pudo listar prospectos' });
+  }
+});
+
+router.get('/pipeline-watch', requireAuth, async (req, res) => {
+  try {
+    const isAdmin = canAdmin(req);
+    const rawUserId = req.query.user_id;
+    const userId = isAdmin && rawUserId ? Number(rawUserId) : Number(req.user?.id);
+
+    const params = [];
+    let where = '1=1';
+    if (userId) {
+      where += ' AND d.advisor_user_id = ?';
+      params.push(userId);
+    }
+
+    const [rows] = await pool.query(
+      `
+      SELECT d.id, d.reference, d.title, d.value, d.created_at,
+             s.name AS stage_name,
+             o.name AS org_name,
+             COALESCE(
+               NULLIF(d.value, 0),
+               CASE
+                 WHEN vlatest.data IS NOT NULL AND JSON_VALID(vlatest.data)
+                   THEN CAST(JSON_UNQUOTE(JSON_EXTRACT(vlatest.data, '$.totals.profitGeneral')) AS DECIMAL(18,2))
+                 ELSE NULL
+               END,
+               CASE
+                 WHEN cs.data IS NOT NULL AND JSON_VALID(cs.data)
+                   THEN CAST(JSON_UNQUOTE(JSON_EXTRACT(cs.data, '$.totals.profitGeneral')) AS DECIMAL(18,2))
+                 ELSE NULL
+               END,
+               o.budget_profit
+             ) AS profit_value
+      FROM deals d
+      LEFT JOIN stages s ON s.id = d.stage_id
+      LEFT JOIN organizations o ON o.id = d.org_id
+      LEFT JOIN deal_cost_sheets cs ON cs.deal_id = d.id
+      LEFT JOIN (
+        SELECT v1.*
+        FROM deal_cost_sheet_versions v1
+        INNER JOIN (
+          SELECT deal_id, MAX(version_number) AS max_ver
+          FROM deal_cost_sheet_versions
+          GROUP BY deal_id
+        ) mv ON mv.deal_id = v1.deal_id AND mv.max_ver = v1.version_number
+      ) vlatest ON vlatest.deal_id = d.id
+      WHERE ${where}
+      ORDER BY d.created_at DESC
+      LIMIT 200
+      `,
+      params
+    );
+
+    res.json(rows);
+  } catch (e) {
+    console.error('[followups] pipeline-watch error:', e?.message || e);
+    res.status(500).json({ error: 'No se pudo listar operaciones' });
   }
 });
 

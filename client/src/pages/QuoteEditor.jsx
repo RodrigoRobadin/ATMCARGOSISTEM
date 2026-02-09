@@ -94,20 +94,22 @@ function TabButton({ active, onClick, children }) {
   );
 }
 
-export default function QuoteEditor() {
+export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = null, dealId: dealIdProp = null }) {
   const { id } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  const isNew = id === undefined || id === "new";
+  const isEmbedded = Boolean(embedded || quoteIdProp || dealIdProp);
+  const isNew = !isEmbedded && (id === undefined || id === "new");
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState("oferta");
 
   const dealIdFromQuery = Number(searchParams.get("dealId") || "");
-  const [dealId, setDealId] = useState(Number.isFinite(dealIdFromQuery) ? dealIdFromQuery : null);
+  const initialDealId = dealIdProp ?? (Number.isFinite(dealIdFromQuery) ? dealIdFromQuery : null);
+  const [dealId, setDealId] = useState(initialDealId);
 
   const [quoteId, setQuoteId] = useState(null);
 
@@ -251,7 +253,7 @@ export default function QuoteEditor() {
     }
     if (data?.id) fetchRevisions(data.id);
 
-    if (data?.id && String(id) !== String(data.id)) {
+    if (!isEmbedded && data?.id && String(id) !== String(data.id)) {
       navigate(`/quotes/${data.id}?dealId=${dealIdToLoad}`, { replace: true });
     }
     return data;
@@ -268,10 +270,19 @@ export default function QuoteEditor() {
         setLoading(false);
         return;
       }
+      if (isEmbedded && Number.isFinite(quoteIdProp) && quoteIdProp > 0) {
+        await loadQuoteById(quoteIdProp);
+        return;
+      }
+
+      if (isEmbedded && Number.isFinite(dealIdProp) && dealIdProp > 0) {
+        await loadOrCreateByDeal(dealIdProp);
+        return;
+      }
 
       const raw = Number(id);
       if (!Number.isFinite(raw) || raw <= 0) {
-        setError("ID inválido");
+        setError("ID inv?lido");
         setLoading(false);
         return;
       }
@@ -422,7 +433,7 @@ export default function QuoteEditor() {
   useEffect(() => {
     loadSmart();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, quoteIdProp, dealIdProp]);
 
   const ofertaTotals = computed?.oferta?.totals || null;
   const opTotals = computed?.operacion?.totals || null;

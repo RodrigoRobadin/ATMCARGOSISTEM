@@ -105,6 +105,12 @@ async function ensureAdminExpenseTables() {
       subcategory_id INT NULL,
       cost_center_id INT NULL,
       description TEXT NULL,
+      invoice_date DATE NULL,
+      supplier_ruc VARCHAR(32) NULL,
+      supplier_name VARCHAR(160) NULL,
+      iva_10 DECIMAL(15,2) NULL,
+      iva_5 DECIMAL(15,2) NULL,
+      iva_exempt DECIMAL(15,2) NULL,
       amount DECIMAL(15,2) NOT NULL,
       currency_code VARCHAR(8) NOT NULL DEFAULT 'PYG',
       tax_rate DECIMAL(5,2) NULL,
@@ -130,6 +136,12 @@ async function ensureAdminExpenseTables() {
       subcategory_id INT NULL,
       cost_center_id INT NULL,
       description TEXT NULL,
+      invoice_date DATE NULL,
+      supplier_ruc VARCHAR(32) NULL,
+      supplier_name VARCHAR(160) NULL,
+      iva_10 DECIMAL(15,2) NULL,
+      iva_5 DECIMAL(15,2) NULL,
+      iva_exempt DECIMAL(15,2) NULL,
       amount DECIMAL(15,2) NOT NULL,
       currency_code VARCHAR(8) NOT NULL DEFAULT 'PYG',
       tax_rate DECIMAL(5,2) NULL,
@@ -168,6 +180,8 @@ async function ensureAdminExpenseTables() {
   `);
 
   await ensurePaymentReceiptColumns();
+  await ensureExpenseInvoiceColumns();
+  await ensureRecurrenceInvoiceColumns();
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS admin_expense_attachments (
@@ -210,6 +224,52 @@ async function ensurePaymentReceiptColumns() {
     }
   } catch (e) {
     console.error('[admin-expenses] ensure payment columns error', e?.message || e);
+  }
+}
+
+async function ensureExpenseInvoiceColumns() {
+  try {
+    const [cols] = await pool.query(`
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_expenses'
+    `);
+    const have = new Set(cols.map((c) => c.COLUMN_NAME));
+    const add = [];
+    if (!have.has('invoice_date')) add.push('ADD COLUMN invoice_date DATE NULL');
+    if (!have.has('supplier_ruc')) add.push('ADD COLUMN supplier_ruc VARCHAR(32) NULL');
+    if (!have.has('supplier_name')) add.push('ADD COLUMN supplier_name VARCHAR(160) NULL');
+    if (!have.has('iva_10')) add.push('ADD COLUMN iva_10 DECIMAL(15,2) NULL');
+    if (!have.has('iva_5')) add.push('ADD COLUMN iva_5 DECIMAL(15,2) NULL');
+    if (!have.has('iva_exempt')) add.push('ADD COLUMN iva_exempt DECIMAL(15,2) NULL');
+    if (add.length) {
+      await pool.query(`ALTER TABLE admin_expenses ${add.join(', ')}`);
+    }
+  } catch (e) {
+    console.error('[admin-expenses] ensure expense columns error', e?.message || e);
+  }
+}
+
+async function ensureRecurrenceInvoiceColumns() {
+  try {
+    const [cols] = await pool.query(`
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_expense_recurrences'
+    `);
+    const have = new Set(cols.map((c) => c.COLUMN_NAME));
+    const add = [];
+    if (!have.has('invoice_date')) add.push('ADD COLUMN invoice_date DATE NULL');
+    if (!have.has('supplier_ruc')) add.push('ADD COLUMN supplier_ruc VARCHAR(32) NULL');
+    if (!have.has('supplier_name')) add.push('ADD COLUMN supplier_name VARCHAR(160) NULL');
+    if (!have.has('iva_10')) add.push('ADD COLUMN iva_10 DECIMAL(15,2) NULL');
+    if (!have.has('iva_5')) add.push('ADD COLUMN iva_5 DECIMAL(15,2) NULL');
+    if (!have.has('iva_exempt')) add.push('ADD COLUMN iva_exempt DECIMAL(15,2) NULL');
+    if (add.length) {
+      await pool.query(`ALTER TABLE admin_expense_recurrences ${add.join(', ')}`);
+    }
+  } catch (e) {
+    console.error('[admin-expenses] ensure recurrence columns error', e?.message || e);
   }
 }
 
@@ -335,9 +395,10 @@ async function generateRecurringExpenses(conn = pool) {
       await conn.query(
         `INSERT IGNORE INTO admin_expenses
          (expense_date, provider_id, category_id, subcategory_id, cost_center_id, description,
+          invoice_date, supplier_ruc, supplier_name, iva_10, iva_5, iva_exempt,
           amount, currency_code, tax_rate, receipt_type, receipt_number, timbrado_number, status,
           recurrence_id, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           expenseDate,
           rec.provider_id || null,
@@ -345,6 +406,12 @@ async function generateRecurringExpenses(conn = pool) {
           rec.subcategory_id || null,
           rec.cost_center_id || null,
           rec.description || '',
+          rec.invoice_date || null,
+          rec.supplier_ruc || null,
+          rec.supplier_name || null,
+          rec.iva_10 || null,
+          rec.iva_5 || null,
+          rec.iva_exempt || null,
           Number(rec.amount || 0),
           rec.currency_code || 'PYG',
           rec.tax_rate || null,
@@ -496,6 +563,12 @@ router.post('/', requireAuth, async (req, res) => {
       subcategory_id,
       cost_center_id,
       description,
+      invoice_date,
+      supplier_ruc,
+      supplier_name,
+      iva_10,
+      iva_5,
+      iva_exempt,
       amount,
       currency_code,
       tax_rate,
@@ -508,8 +581,9 @@ router.post('/', requireAuth, async (req, res) => {
     const [result] = await pool.query(
       `INSERT INTO admin_expenses
        (expense_date, provider_id, category_id, subcategory_id, cost_center_id, description,
+        invoice_date, supplier_ruc, supplier_name, iva_10, iva_5, iva_exempt,
         amount, currency_code, tax_rate, receipt_type, receipt_number, timbrado_number, status, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         expense_date,
         provider_id || null,
@@ -517,6 +591,12 @@ router.post('/', requireAuth, async (req, res) => {
         subcategory_id || null,
         cost_center_id || null,
         description || '',
+        invoice_date || null,
+        supplier_ruc || null,
+        supplier_name || null,
+        Number(iva_10 || 0) || null,
+        Number(iva_5 || 0) || null,
+        Number(iva_exempt || 0) || null,
         Number(amount || 0),
         currency_code || 'PYG',
         tax_rate || null,
@@ -627,6 +707,8 @@ router.get('/:id/payments', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('[admin-expenses] payments list error', e);
     res.status(500).json({ error: 'Error loading payments' });
+  }
+});
 
 router.get('/payments/:paymentId/attachments', requireAuth, async (req, res) => {
   try {
@@ -662,9 +744,6 @@ router.post('/payments/:paymentId/attachments', requireAuth, paymentUpload.singl
   } catch (e) {
     console.error('[admin-expenses] payment attachment upload error', e);
     res.status(500).json({ error: 'Error uploading payment attachment' });
-  }
-});
-
   }
 });
 
@@ -717,6 +796,12 @@ router.post('/recurrences', requireAuth, async (req, res) => {
       subcategory_id,
       cost_center_id,
       description,
+      invoice_date,
+      supplier_ruc,
+      supplier_name,
+      iva_10,
+      iva_5,
+      iva_exempt,
       amount,
       currency_code,
       tax_rate,
@@ -731,9 +816,9 @@ router.post('/recurrences', requireAuth, async (req, res) => {
     const [result] = await pool.query(
       `INSERT INTO admin_expense_recurrences
        (start_date, end_date, frequency, day_of_month, next_run_date, provider_id, category_id, subcategory_id,
-        cost_center_id, description, amount, currency_code, tax_rate, receipt_type, receipt_number,
-        timbrado_number, status, active, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+        cost_center_id, description, invoice_date, supplier_ruc, supplier_name, iva_10, iva_5, iva_exempt,
+        amount, currency_code, tax_rate, receipt_type, receipt_number, timbrado_number, status, active, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       [
         formatDate(start),
         end_date || null,
@@ -745,6 +830,12 @@ router.post('/recurrences', requireAuth, async (req, res) => {
         subcategory_id || null,
         cost_center_id || null,
         description || '',
+        invoice_date || null,
+        supplier_ruc || null,
+        supplier_name || null,
+        Number(iva_10 || 0) || null,
+        Number(iva_5 || 0) || null,
+        Number(iva_exempt || 0) || null,
         Number(amount || 0),
         currency_code || 'PYG',
         tax_rate || null,

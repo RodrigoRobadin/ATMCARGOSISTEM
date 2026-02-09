@@ -1,6 +1,7 @@
 // server/src/routes/activities.js
 import { Router } from 'express';
 import { pool } from '../services/db.js';
+import { requireAuth } from '../middlewares/auth.js';
 
 const router = Router();
 
@@ -13,6 +14,49 @@ function getUserId(req) {
   // Ajustá según tu middleware de auth si ya seteás req.user
   return req?.user?.id || req?.auth?.user?.id || req?.session?.user?.id || null;
 }
+
+/**
+ * GET /api/activities/mine
+ * Filtros: done, type
+ */
+router.get('/mine', requireAuth, async (req, res) => {
+  try {
+    const { done, type, limit = 5 } = req.query;
+    const userId = getUserId(req);
+    if (!userId) return res.json([]);
+
+    const where = ['a.created_by = ?'];
+    const params = [userId];
+
+    if (type) {
+      where.push('a.type = ?');
+      params.push(type);
+    }
+    if (typeof done !== 'undefined') {
+      where.push('a.done = ?');
+      params.push(toDoneFlag(done));
+    }
+
+    const safeLimit = Math.min(Number(limit) || 5, 50);
+    const whereSql = `WHERE ${where.join(' AND ')}`;
+
+    const [rows] = await pool.query(
+      `SELECT a.id, a.type, a.subject, a.due_date, a.done, a.created_at,
+              a.org_id, o.name AS org_name
+       FROM activities a
+       LEFT JOIN organizations o ON o.id = a.org_id
+       ${whereSql}
+       ORDER BY a.created_at DESC, a.id DESC
+       LIMIT ?`,
+      [...params, safeLimit]
+    );
+
+    res.json(rows);
+  } catch (err) {
+    console.error('GET /activities/mine error', err);
+    res.status(500).json({ error: 'Error al listar actividades' });
+  }
+});
 
 /**
  * GET /api/activities
@@ -73,11 +117,45 @@ router.get('/', async (req, res) => {
 });
 
 /**
+ * GET /api/activities/count
+ * Filtros: done, type
+ */
+router.get('/count', requireAuth, async (req, res) => {
+  try {
+    const { done, type } = req.query;
+    const userId = getUserId(req);
+    if (!userId) return res.json({ total: 0 });
+
+    const where = ['created_by = ?'];
+    const params = [userId];
+
+    if (type) {
+      where.push('type = ?');
+      params.push(type);
+    }
+    if (typeof done !== 'undefined') {
+      where.push('done = ?');
+      params.push(toDoneFlag(done));
+    }
+
+    const whereSql = `WHERE ${where.join(' AND ')}`;
+    const [[row]] = await pool.query(
+      `SELECT COUNT(*) AS total FROM activities ${whereSql}`,
+      params
+    );
+    res.json({ total: Number(row?.total || 0) });
+  } catch (err) {
+    console.error('GET /activities/count error', err);
+    res.status(500).json({ error: 'Error al contar actividades' });
+  }
+});
+
+/**
  * POST /api/activities
  * Campos: type, subject, due_date (YYYY-MM-DD), done (0/1),
  *         org_id, person_id, deal_id, notes, (opcional) created_at
  */
-router.post('/', async (req, res) => {
+router.post('/', requireAuth, async (req, res) => {
   try {
     const ALLOWED_TYPES = new Set(['task', 'call', 'meeting', 'email', 'note']);
     const rawType = String(req.body.type || '').trim().toLowerCase();
@@ -91,7 +169,7 @@ router.post('/', async (req, res) => {
     const deal_id    = toIntOrNull(req.body.deal_id);
     const notes      = toNullIfEmpty(req.body.notes);
     const created_at = toNullIfEmpty(req.body.created_at); // opcional
-    const created_by = getUserId(req); // puede venir null si no hay auth
+    const created_by = getUserId(req) || toIntOrNull(req.body.created_by);
 
     const cols = ['type','subject','due_date','done','org_id','person_id','deal_id','notes'];
     const vals = [ type,   subject,  due_date,  done,  org_id,  person_id,  deal_id,  notes ];

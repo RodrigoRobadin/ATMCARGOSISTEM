@@ -25,6 +25,14 @@ const toNull = (v) => (v === '' || typeof v === 'undefined' ? null : v);
       `);
       console.log('[organizations] Columna hoja_ruta agregada');
     }
+
+    if (!have.has('created_by_user_id')) {
+      await db.query(`
+        ALTER TABLE organizations
+        ADD COLUMN created_by_user_id BIGINT NULL AFTER owner_user_id
+      `);
+      console.log('[organizations] Columna created_by_user_id agregada');
+    }
   } catch (e) {
     console.error('[organizations] No se pudo asegurar columna hoja_ruta:', e?.message || e);
   }
@@ -51,22 +59,25 @@ router.get('/', requireAuth, async (req, res) => {
     const [rows] = await db.query(
       `
       SELECT
-        id,
-        razon_social,
-        name,
-        industry, phone, website, ruc, address, city, country,
-        label, owner_user_id, visibility, notes,
-        is_agent, modalities_supported,
-        email, rubro, tipo_org, operacion, hoja_ruta,
-        zone_id, department,
-        latitude, longitude,
-        created_at, updated_at,
-        budget_status,
-        budget_profit AS budget_profit_value,
+        o.id,
+        o.razon_social,
+        o.name,
+        o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.country,
+        o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
+        o.is_agent, o.modalities_supported,
+        o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta,
+        o.zone_id, o.department,
+        o.latitude, o.longitude,
+        o.created_at, o.updated_at,
+        o.budget_status,
+        o.budget_profit AS budget_profit_value,
+        u.name AS owner_user_name,
+        u.email AS owner_user_email,
         NULL AS advisor_name
-      FROM organizations
+      FROM organizations o
+      LEFT JOIN users u ON u.id = o.owner_user_id
       ${whereSql}
-      ORDER BY name ASC
+      ORDER BY o.name ASC
       LIMIT ? OFFSET ?
       `,
       [...params, limit, offset]
@@ -105,6 +116,7 @@ router.post('/', requireAuth, async (req, res) => {
       // legacy (compat)
       label = null,
       owner_user_id = null,
+      created_by_user_id = null,
       visibility = 'company',
       is_agent = 0,
       modalities_supported = null,
@@ -123,12 +135,12 @@ router.post('/', requireAuth, async (req, res) => {
       `
       INSERT INTO organizations
         (razon_social, name, industry, phone, website, ruc, address, city, country, notes,
-         label, owner_user_id, visibility, is_agent, modalities_supported,
+         label, owner_user_id, created_by_user_id, visibility, is_agent, modalities_supported,
          email, rubro, tipo_org, operacion, hoja_ruta,
          budget_status, budget_profit, created_at, updated_at)
       VALUES
         (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-         ?, ?, ?, ?, ?,
+         ?, ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?,
          'borrador', NULL, NOW(), NOW())
       `,
@@ -143,8 +155,9 @@ router.post('/', requireAuth, async (req, res) => {
         city,
         country,
         notes,
+        label,
         owner_user_id,
-        owner_user_id,
+        created_by_user_id ?? (req.user ? Number(req.user.id) : null),
         visibility,
         is_agent ? 1 : 0,
         modalities_supported,
@@ -159,17 +172,20 @@ router.post('/', requireAuth, async (req, res) => {
     const [[row]] = await db.query(
       `
       SELECT
-        id,
-        razon_social, name,
-        industry, phone, website, ruc, address, city, country,
-        label, owner_user_id, visibility, notes,
-        is_agent, modalities_supported,
-        email, rubro, tipo_org, operacion, hoja_ruta,
-        created_at, updated_at,
-        budget_status, budget_profit AS budget_profit_value,
+        o.id,
+        o.razon_social, o.name,
+        o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.country,
+        o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
+        o.is_agent, o.modalities_supported,
+        o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta,
+        o.created_at, o.updated_at,
+        o.budget_status, o.budget_profit AS budget_profit_value,
+        u.name AS owner_user_name,
+        u.email AS owner_user_email,
         NULL AS advisor_name
-      FROM organizations
-      WHERE id = ?
+      FROM organizations o
+      LEFT JOIN users u ON u.id = o.owner_user_id
+      WHERE o.id = ?
       `,
       [ins.insertId]
     );
@@ -424,19 +440,22 @@ router.get('/:id', requireAuth, async (req, res) => {
     const [[org]] = await db.query(
       `
       SELECT
-        id,
-        razon_social, name,
-        industry, phone, website, ruc, address, city, country,
-        label, owner_user_id, visibility, notes,
-        is_agent, modalities_supported,
-        email, rubro, tipo_org, operacion, hoja_ruta,
-        zone_id, department,
-        latitude, longitude,
-        created_at, updated_at,
-        budget_status, budget_profit AS budget_profit_value,
+        o.id,
+        o.razon_social, o.name,
+        o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.country,
+        o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
+        o.is_agent, o.modalities_supported,
+        o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta,
+        o.zone_id, o.department,
+        o.latitude, o.longitude,
+        o.created_at, o.updated_at,
+        o.budget_status, o.budget_profit AS budget_profit_value,
+        u.name AS owner_user_name,
+        u.email AS owner_user_email,
         NULL AS advisor_name
-      FROM organizations
-      WHERE id = ?
+      FROM organizations o
+      LEFT JOIN users u ON u.id = o.owner_user_id
+      WHERE o.id = ?
       LIMIT 1
       `,
       [id]
@@ -472,6 +491,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
       'country',
       'label',
       'owner_user_id',
+      'created_by_user_id',
       'visibility',
       'notes',
       'is_agent',
@@ -510,19 +530,22 @@ router.patch('/:id', requireAuth, async (req, res) => {
     const [[row]] = await db.query(
       `
       SELECT
-        id,
-        razon_social, name,
-        industry, phone, website, ruc, address, city, country,
-        label, owner_user_id, visibility, notes,
-        is_agent, modalities_supported,
-        email, rubro, tipo_org, operacion, hoja_ruta,
-        zone_id, department,
-        latitude, longitude,
-        created_at, updated_at,
-        budget_status, budget_profit AS budget_profit_value,
+        o.id,
+        o.razon_social, o.name,
+        o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.country,
+        o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
+        o.is_agent, o.modalities_supported,
+        o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta,
+        o.zone_id, o.department,
+        o.latitude, o.longitude,
+        o.created_at, o.updated_at,
+        o.budget_status, o.budget_profit AS budget_profit_value,
+        u.name AS owner_user_name,
+        u.email AS owner_user_email,
         NULL AS advisor_name
-      FROM organizations
-      WHERE id = ?
+      FROM organizations o
+      LEFT JOIN users u ON u.id = o.owner_user_id
+      WHERE o.id = ?
       `,
       [id]
     );

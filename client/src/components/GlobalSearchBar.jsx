@@ -7,8 +7,20 @@ export default function GlobalSearchBar() {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [res, setRes] = useState({ deals: [], organizations: [], contacts: [], notes: [] });
+  const [counts, setCounts] = useState({ activities: 0, tasks: 0, notes: 0 });
+  const [activitiesPreview, setActivitiesPreview] = useState([]);
+  const [showActivities, setShowActivities] = useState(false);
+  const [tasksPreview, setTasksPreview] = useState([]);
+  const [showTasks, setShowTasks] = useState(false);
   const timer = useRef();
+  const activitiesTimer = useRef();
+  const tasksTimer = useRef();
   const navigate = useNavigate();
+  const icons = {
+    activities: String.fromCodePoint(0x1F4C5),
+    tasks: String.fromCodePoint(0x1F514),
+    notes: String.fromCodePoint(0x1F4AC),
+  };
 
   useEffect(() => {
     clearTimeout(timer.current);
@@ -35,6 +47,47 @@ export default function GlobalSearchBar() {
     return () => clearTimeout(timer.current);
   }, [q]);
 
+  useEffect(() => {
+    let active = true;
+
+    const loadCounts = async () => {
+      try {
+        const [activitiesRes, tasksCountRes, notesRes, tasksListRes, activitiesListRes] = await Promise.all([
+          api.get("/activities/count"),
+          api.get("/followups/tasks/count", { params: { status: "pending" } }),
+          api.get("/followups/notes/count"),
+          api.get("/followups/tasks", { params: { status: "pending", limit: 5 } }),
+          api.get("/activities/mine", { params: { done: 0, limit: 5 } }),
+        ]);
+
+        if (!active) return;
+
+        setCounts({
+          activities: Number(activitiesRes?.data?.total || 0),
+          tasks: Number(tasksCountRes?.data?.total || 0),
+          notes: Number(notesRes?.data?.total || 0),
+        });
+        setTasksPreview(Array.isArray(tasksListRes?.data) ? tasksListRes.data : []);
+        setActivitiesPreview(
+          Array.isArray(activitiesListRes?.data) ? activitiesListRes.data : []
+        );
+      } catch (e) {
+        if (!active) return;
+        setCounts({ activities: 0, tasks: 0, notes: 0 });
+        setTasksPreview([]);
+        setActivitiesPreview([]);
+      }
+    };
+
+    loadCounts();
+    const intervalId = setInterval(loadCounts, 30000);
+
+    return () => {
+      active = false;
+      clearInterval(intervalId);
+    };
+  }, []);
+
   const go = (type, id, extra) => {
     setOpen(false);
     if (type === "deal") navigate(`/operations/${id}`);
@@ -47,26 +100,54 @@ export default function GlobalSearchBar() {
     }
   };
 
+  const formatDueDate = (value) => {
+    if (!value) return "";
+    const raw = String(value);
+    const d = new Date(raw.replace(" ", "T"));
+    if (Number.isNaN(d.getTime())) return raw;
+    return d.toLocaleDateString();
+  };
+
+  const openActivities = () => {
+    clearTimeout(activitiesTimer.current);
+    setShowActivities(true);
+  };
+
+  const closeActivities = () => {
+    clearTimeout(activitiesTimer.current);
+    activitiesTimer.current = setTimeout(() => setShowActivities(false), 120);
+  };
+
+  const openTasks = () => {
+    clearTimeout(tasksTimer.current);
+    setShowTasks(true);
+  };
+
+  const closeTasks = () => {
+    clearTimeout(tasksTimer.current);
+    tasksTimer.current = setTimeout(() => setShowTasks(false), 120);
+  };
+
   const hasResults =
     (res.deals?.length || 0) +
       (res.organizations?.length || 0) +
       (res.contacts?.length || 0) +
       (res.notes?.length || 0) >
     0;
-
   return (
-    <div className="relative">
-      <input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="Buscar por referencia, cliente, contacto, mercadería, modalidad, tipo de carga, origen, destino…"
-        className="w-full border rounded-lg px-3 py-2"
-        onFocus={() => q && setOpen(true)}
-      />
+    <div className="flex items-center gap-3">
+      <div className="relative flex-1 max-w-[720px]">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Buscar por referencia, cliente, contacto, mercadería, modalidad, tipo de carga, origen, destino…"
+          className="w-full border rounded-lg px-3 py-2"
+          onFocus={() => q && setOpen(true)}
+        />
 
-      {open && (
-        <div className="absolute mt-1 bg-white border rounded-lg shadow w-full max-h-72 overflow-auto z-50">
-          {/* Operaciones */}
+        {open && (
+          <div className="absolute mt-1 bg-white border rounded-lg shadow w-full max-h-72 overflow-auto z-50">
+{/* Operaciones */}
           {res.deals?.length > 0 && (
             <div>
               <div className="px-3 py-1 text-xs text-slate-500">Operaciones</div>
@@ -168,8 +249,149 @@ export default function GlobalSearchBar() {
           {!hasResults && (
             <div className="px-3 py-2 text-sm text-slate-500">Sin resultados</div>
           )}
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2 shrink-0">
+        <div
+          className="relative"
+          onMouseEnter={openActivities}
+          onMouseLeave={closeActivities}
+        >
+          <button
+            type="button"
+            className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg border bg-white text-lg hover:bg-slate-50"
+            onClick={() => navigate("/followup")}
+            title="Actividades"
+          >
+            <span aria-hidden>{icons.activities}</span>
+            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-blue-600 text-white text-[10px] leading-[18px] text-center">
+              {counts.activities}
+            </span>
+          </button>
+
+          {showActivities && (
+            <div
+              className="absolute right-0 top-full mt-2 w-72 rounded-lg border bg-white shadow-lg p-3 text-xs z-50"
+              onMouseEnter={openActivities}
+              onMouseLeave={closeActivities}
+            >
+              <div className="font-semibold text-slate-700 mb-2">Actividades</div>
+              {activitiesPreview.length ? (
+                <div className="space-y-2">
+                  {activitiesPreview.map((a) => (
+                    <div key={a.id} className="space-y-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="text-slate-700 line-clamp-2">
+                          {a.subject || "Sin asunto"}
+                        </div>
+                        <div className="text-[11px] text-slate-500 whitespace-nowrap">
+                          {formatDueDate(a.due_date || a.created_at)}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px] text-slate-500">
+                        {a.type && (
+                          <span className="uppercase tracking-wide">{a.type}</span>
+                        )}
+                        {a.org_id ? (
+                          <button
+                            type="button"
+                            className="text-blue-600 hover:underline"
+                            onClick={() => navigate(`/organizations/${a.org_id}`)}
+                          >
+                            {a.org_name || "Organización"}
+                          </button>
+                        ) : (
+                          <span>Sin organización</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-slate-500">No hay actividades pendientes.</div>
+              )}
+            </div>
+          )}
         </div>
-      )}
+        <div
+          className="relative"
+          onMouseEnter={openTasks}
+          onMouseLeave={closeTasks}
+        >
+          <button
+            type="button"
+            className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg border bg-white text-lg hover:bg-slate-50"
+            onClick={() => navigate("/followup")}
+            title="Tareas"
+          >
+            <span aria-hidden>{icons.tasks}</span>
+            {counts.tasks > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500 text-white text-[10px] leading-[18px] text-center">
+                {counts.tasks}
+              </span>
+            )}
+          </button>
+
+          {showTasks && (
+            <div
+              className="absolute right-0 top-full mt-2 w-72 rounded-lg border bg-white shadow-lg p-3 text-xs z-50"
+              onMouseEnter={openTasks}
+              onMouseLeave={closeTasks}
+            >
+              <div className="font-semibold text-slate-700 mb-2">Tareas pendientes</div>
+              {tasksPreview.length ? (
+                <div className="space-y-2">
+                  {tasksPreview.map((t) => (
+                    <div key={t.id} className="space-y-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="text-slate-700 line-clamp-2">
+                          {t.title || "Sin titulo"}
+                        </div>
+                        <div className="text-[11px] text-slate-500 whitespace-nowrap">
+                          {formatDueDate(t.due_at)}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px] text-slate-500">
+                        {t.org_id ? (
+                          <button
+                            type="button"
+                            className="text-blue-600 hover:underline"
+                            onClick={() => navigate(`/organizations/${t.org_id}`)}
+                          >
+                            {t.org_name || "Organización"}
+                          </button>
+                        ) : (
+                          <span>Sin organización</span>
+                        )}
+                        {t.priority && (
+                          <span className="uppercase tracking-wide">{t.priority}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-slate-500">No hay tareas pendientes.</div>
+              )}
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg border bg-white text-lg hover:bg-slate-50"
+          onClick={() => navigate("/followup")}
+          title="Mensajes"
+        >
+          <span aria-hidden>{icons.notes}</span>
+          {counts.notes > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-emerald-600 text-white text-[10px] leading-[18px] text-center">
+              {counts.notes}
+            </span>
+          )}
+        </button>
+      </div>
     </div>
   );
 }

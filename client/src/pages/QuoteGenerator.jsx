@@ -977,6 +977,7 @@ export default function QuoteGenerator(){
                   <th className="text-left px-2 py-2">Servicio</th>
                   <th className="text-left px-2 py-2">Observación</th>
                   <th className="text-left px-2 py-2">Moneda</th>
+                  <th className="text-right px-2 py-2">Precio unit</th>
                   <th className="text-right px-2 py-2">Valor</th>
                   <th className="text-left px-2 py-2">Impuesto</th>
                 </tr>
@@ -989,6 +990,9 @@ export default function QuoteGenerator(){
                     <td className="px-2 py-1">{it.observacion}</td>
                     <td className="px-2 py-1">{it.moneda}</td>
                     <td className="px-2 py-1 text-right">
+                      {money(num(it.precio), decimalsFrom(it.precio))}
+                    </td>
+                    <td className="px-2 py-1 text-right">
                       {money(
                         (num(it.cantidad) || 1) * num(it.precio),
                         Math.max(decimalsFrom(it.precio), decimalsFrom(it.cantidad))
@@ -1000,7 +1004,7 @@ export default function QuoteGenerator(){
               </tbody>
               <tfoot>
                 <tr className="border-t" style={{ borderColor: '#e5e7eb' }}>
-                  <td colSpan={4} className="px-2 py-2 font-semibold text-right">TOTAL</td>
+                  <td colSpan={5} className="px-2 py-2 font-semibold text-right">TOTAL</td>
                   <td className="px-2 py-2 font-extrabold text-right">{money(totalUSD, totalUsdDecimals)}</td>
                   <td className="px-2 py-2 font-semibold">USD</td>
                 </tr>

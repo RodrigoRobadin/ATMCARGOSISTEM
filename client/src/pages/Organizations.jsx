@@ -433,6 +433,7 @@ function NewOrganizationModal({
         account_executive_id: execId,
         owner_id: execId,
         assigned_user_id: execId,
+        owner_user_id: execId,
       });
       await onCreated?.();
       onClose?.();

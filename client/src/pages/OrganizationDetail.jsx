@@ -548,7 +548,12 @@ export default function OrganizationDetail() {
           : { id: null, name: null };
 
       const execId = fromOrg.id || fromCF.id || null;
-      const nameFallback = fromOrg.name || fromCF.name || null;
+      const nameFallback =
+        fromOrg.name ||
+        fromCF.name ||
+        org.owner_user_name ||
+        org.advisor_name ||
+        null;
 
       if (execId != null) setExecIdRaw(execId);
       if (nameFallback != null) setExecNameRaw(nameFallback);
@@ -621,11 +626,11 @@ export default function OrganizationDetail() {
       .sort((a, b) => new Date(b.date) - new Date(a.date));
   }, [acts, orgDeals]);
 
-  async function saveExecAssignment() {
+  async function saveExecAssignment(nextId = execSelection) {
     setSavingExec(true);
     try {
       await api.patch(`/organizations/${id}`, {
-        owner_user_id: execSelection ?? null,
+        owner_user_id: nextId ?? null,
       });
       await loadOrg();
       setEditExec(false);
@@ -1011,7 +1016,11 @@ export default function OrganizationDetail() {
                 <div className="space-y-2">
                   <AccountExecutiveSelect
                     value={execSelection ?? null}
-                    onChange={setExecSelection}
+                    onChange={(value) => {
+                      if (savingExec) return;
+                      setExecSelection(value);
+                      saveExecAssignment(value);
+                    }}
                     onlyActive={false}
                     label="Seleccionar"
                     placeholder="— Sin asignar —"

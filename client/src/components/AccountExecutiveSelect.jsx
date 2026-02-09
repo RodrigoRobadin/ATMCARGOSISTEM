@@ -22,7 +22,7 @@ export default function AccountExecutiveSelect({
       setErr("");
       try {
         const { data } = await api.get("/users/select", {
-          params: onlyActive ? { active: 1 } : { active: 0 },
+          params: onlyActive ? { active: 1 } : {},
         });
         if (!live) return;
         const list = Array.isArray(data) ? data : [];
