@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import api from '../api';
 
-const formatMoney = (n = 0) =>
+const formatMoney = (n = 0, currency = 'USD') =>
   new Intl.NumberFormat('es-PY', {
     style: 'currency',
-    currency: 'USD',
+    currency: (currency || 'USD').toUpperCase(),
     minimumFractionDigits: 2,
   }).format(Number(n) || 0);
 
@@ -18,6 +18,7 @@ export default function AccountStatement() {
   const [filters, setFilters] = useState({
     cliente: '',
     estado: 'pendiente', // por defecto solo pendientes
+    moneda: 'todas', // ✅ NUEVO: permitir PYG / USD / todas
   });
 
   useEffect(() => {
@@ -35,7 +36,8 @@ export default function AccountStatement() {
       }
     };
     load();
-  }, [])
+  }, []);
+
   useEffect(() => {
     const loadReceipts = async () => {
       try {
@@ -49,7 +51,6 @@ export default function AccountStatement() {
     };
     loadReceipts();
   }, []);
-;
 
   // Pagos aplicados (recibos) agrupados por factura
   const receiptsByInvoice = useMemo(() => {
@@ -64,41 +65,76 @@ export default function AccountStatement() {
     return map;
   }, [receipts]);
 
+  // ✅ Helper para detectar moneda real (en tu DB tenés currency='PYG' normalmente)
+  const normalizeCurrency = (row) =>
+    String(row?.currency || row?.currency_code || row?.moneda || 'PYG').toUpperCase();
+
+  const getClientLabel = (row) => {
+    const name =
+      row?.client_name ||
+      row?.client ||
+      row?.organization_name ||
+      row?.organization ||
+      '';
+    if (String(name || '').trim()) return name;
+    // fallback para no quedar todo "Sin cliente"
+    const orgId = row?.organization_id ?? row?.org_id ?? row?.organizationId ?? null;
+    return orgId ? `Cliente #${orgId}` : 'Sin cliente';
+  };
+
   const filtered = useMemo(() => {
-    const cliente = filters.cliente.toLowerCase();
+    const cliente = (filters.cliente || '').toLowerCase();
+    const monedaFiltro = (filters.moneda || 'todas').toLowerCase();
+
     return rows
       .map((row) => {
-        // Totales base (prioriza saldo/pending si existe)
-        const currency = (row?.currency || row?.moneda || 'USD').toUpperCase();
+        const currency = normalizeCurrency(row);
+
         const subtotal = Number(row?.subtotal ?? row?.base_amount ?? 0);
         const tax = Number(row?.tax_amount ?? 0);
+
+        // ✅ prioridad: total_amount (backend) → total (alias) → subtotal+tax
         const totalRaw = Number(row?.total_amount ?? row?.total ?? 0);
         const total = totalRaw > 0 ? totalRaw : Math.max(0, subtotal + tax);
-        // Pagos
+
+        // pagos
         const paidBase = Number(row?.paid || row?.payments_total || row?.paid_amount || 0);
         const paidReceipts = receiptsByInvoice[row?.id] || 0;
         const paid = paidBase + paidReceipts;
+
         const credited = Number(row?.credited_total || 0);
         const netTotal = Math.max(0, total - credited);
+
+        // ✅ si backend ya tiene balance/net_balance, úsalo como guía también
+        const balanceDb = Number(row?.net_balance ?? row?.balance ?? 0);
+
         let pending = Math.max(0, netTotal - paid);
         if (pending <= 0 && total > 0 && paid < total) {
           pending = Math.max(0, total - paid - credited);
         }
+
+        // Si DB trae un net_balance > 0, preferirlo cuando el cálculo de UI quede 0 por discrepancias
+        if (pending <= 0.0001 && balanceDb > 0.0001) {
+          pending = balanceDb;
+        }
+
         const credit = paidReceipts; // para mostrar en columna Haber
+
         return { ...row, currency, paid, credited, total, netTotal, pending, credit };
       })
       .filter((row) => {
-        // Solo USD para evitar mezclar monedas
-        if (row.currency && row.currency !== 'USD') return false;
-        const name =
-          row?.client_name ||
-          row?.client ||
-          row?.organization_name ||
-          row?.organization ||
-          '';
+        // ✅ ANTES: filtraba solo USD (te dejaba todo vacío en PYG)
+        // AHORA: permite filtrar por moneda si querés, o ver todas
+        if (monedaFiltro !== 'todas' && String(row.currency).toLowerCase() !== monedaFiltro) {
+          return false;
+        }
+
+        const name = getClientLabel(row);
         const matchCliente = name.toLowerCase().includes(cliente);
+
         const status = (row?.status || '').toLowerCase();
         let pass = matchCliente;
+
         switch (filters.estado) {
           case 'todos':
             break;
@@ -119,29 +155,26 @@ export default function AccountStatement() {
         }
         return pass;
       });
-  }, [rows, filters]);
+  }, [rows, filters, receiptsByInvoice]);
 
   const ledger = filtered.map((row) => {
     const debit = Number(row?.pending || row?.netTotal || row?.total || row?.total_amount || 0);
-    const credit = Number(row?.credit || 0); // pagos aplicados (recibos)
-    const balance = Math.max(0, debit - credit); // saldo pendiente por factura
+    const credit = Number(row?.credit || 0);
+    const balance = Math.max(0, debit - credit);
+
     return {
       ...row,
+      client_label: getClientLabel(row), // ✅ para usar consistente en UI
       debit,
       credit,
       balance,
-      running: balance, // solo para compatibilidad, no se usa como acumulado
+      running: balance,
     };
   });
 
   const clientTotals = useMemo(() => {
     return ledger.reduce((acc, row) => {
-      const key =
-        row?.client_name ||
-        row?.client ||
-        row?.organization_name ||
-        row?.organization ||
-        'Sin cliente';
+      const key = row?.client_label || 'Sin cliente';
       acc[key] = (acc[key] || 0) + row.debit - row.credit;
       return acc;
     }, {});
@@ -160,16 +193,17 @@ export default function AccountStatement() {
 
   const clientInvoices = useMemo(() => {
     if (!selectedClient) return [];
-    return ledger.filter((row) => {
-      const name =
-        row?.client_name ||
-        row?.client ||
-        row?.organization_name ||
-        row?.organization ||
-        'Sin cliente';
-      return name === selectedClient;
-    });
+    return ledger.filter((row) => (row?.client_label || 'Sin cliente') === selectedClient);
   }, [ledger, selectedClient]);
+
+  // ✅ moneda de resumen: si hay solo una moneda en los filtros, usar esa. Si hay varias, mostramos USD como fallback.
+  const summaryCurrency = useMemo(() => {
+    const mon = (filters.moneda || 'todas').toUpperCase();
+    if (mon !== 'TODAS') return mon;
+    // si todo lo filtrado es una sola moneda, usarla
+    const uniq = Array.from(new Set(ledger.map((r) => r.currency).filter(Boolean)));
+    return uniq.length === 1 ? uniq[0] : 'USD';
+  }, [filters.moneda, ledger]);
 
   return (
     <div className="space-y-6">
@@ -183,27 +217,28 @@ export default function AccountStatement() {
         <div className="flex gap-3 text-right">
           <div>
             <div className="text-xs text-slate-500">Saldo</div>
-            <div className="text-lg font-semibold">{formatMoney(summary.saldo)}</div>
+            <div className="text-lg font-semibold">{formatMoney(summary.saldo, summaryCurrency)}</div>
           </div>
           <div>
             <div className="text-xs text-slate-500">Total vencido</div>
             <div className="text-lg font-semibold text-red-600">
-              {formatMoney(summary.vencido)}
+              {formatMoney(summary.vencido, summaryCurrency)}
             </div>
           </div>
         </div>
       </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-white p-4 rounded-lg border">
-          <div>
-            <label className="text-xs text-slate-500">Cliente</label>
-            <input
-              className="mt-1 w-full border rounded px-2 py-1 text-sm"
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-3 bg-white p-4 rounded-lg border">
+        <div>
+          <label className="text-xs text-slate-500">Cliente</label>
+          <input
+            className="mt-1 w-full border rounded px-2 py-1 text-sm"
             placeholder="Nombre / RUC"
             value={filters.cliente}
             onChange={(e) => setFilters((f) => ({ ...f, cliente: e.target.value }))}
           />
         </div>
+
         <div>
           <label className="text-xs text-slate-500">Estado</label>
           <select
@@ -218,13 +253,28 @@ export default function AccountStatement() {
             <option value="vencido">Vencido</option>
           </select>
         </div>
-        <div className="flex items-end gap-2">
+
+        <div>
+          <label className="text-xs text-slate-500">Moneda</label>
+          <select
+            className="mt-1 w-full border rounded px-2 py-1 text-sm"
+            value={filters.moneda}
+            onChange={(e) => setFilters((f) => ({ ...f, moneda: e.target.value }))}
+          >
+            <option value="todas">Todas</option>
+            <option value="PYG">PYG</option>
+            <option value="USD">USD</option>
+          </select>
+        </div>
+
+        <div className="flex items-end gap-2 md:col-span-2">
           <button
             className="px-3 py-2 text-sm border rounded"
             onClick={() =>
               setFilters({
                 cliente: '',
                 estado: 'pendiente',
+                moneda: 'todas',
               })
             }
           >
@@ -253,12 +303,10 @@ export default function AccountStatement() {
                 className={`flex w-full justify-between py-1 text-sm text-left px-2 rounded ${
                   isSel ? 'bg-slate-100 font-semibold' : 'hover:bg-slate-50'
                 }`}
-                onClick={() =>
-                  setSelectedClient((prev) => (prev === client ? '' : client))
-                }
+                onClick={() => setSelectedClient((prev) => (prev === client ? '' : client))}
               >
                 <span>{client}</span>
-                <span className="font-semibold">{formatMoney(val)}</span>
+                <span className="font-semibold">{formatMoney(val, summaryCurrency)}</span>
               </button>
             );
           })}
@@ -271,10 +319,9 @@ export default function AccountStatement() {
             <div className="text-sm font-semibold">
               Pendientes de: <span className="text-slate-700">{selectedClient}</span>
             </div>
-            <div className="text-xs text-slate-500">
-              {clientInvoices.length} documento(s)
-            </div>
+            <div className="text-xs text-slate-500">{clientInvoices.length} documento(s)</div>
           </div>
+
           <div className="overflow-auto">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-100 text-slate-600">
@@ -290,9 +337,7 @@ export default function AccountStatement() {
               <tbody>
                 {clientInvoices.map((inv) => (
                   <tr key={`${inv.id || inv.number}`} className="border-t">
-                    <td className="px-3 py-2">
-                      {inv?.number || inv?.invoice_number || inv?.id || '-'}
-                    </td>
+                    <td className="px-3 py-2">{inv?.number || inv?.invoice_number || inv?.id || '-'}</td>
                     <td className="px-3 py-2">
                       {inv?.reference ||
                       inv?.deal_reference ||
@@ -320,18 +365,18 @@ export default function AccountStatement() {
                       )}
                     </td>
                     <td className="px-3 py-2">
-                      {inv?.issue_date?.slice(0, 10) ||
-                        inv?.created_at?.slice(0, 10) ||
-                        '-'}
+                      {inv?.issue_date?.slice(0, 10) || inv?.created_at?.slice(0, 10) || '-'}
                     </td>
-                    <td className="px-3 py-2 text-right">{formatMoney(inv?.pending || 0)}</td>
                     <td className="px-3 py-2 text-right">
-                      <div>Total: {formatMoney(inv?.total || inv?.total_amount || 0)}</div>
+                      {formatMoney(inv?.pending || 0, inv?.currency || summaryCurrency)}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <div>Total: {formatMoney(inv?.total || inv?.total_amount || 0, inv?.currency || summaryCurrency)}</div>
                       <div className="text-xs text-amber-700">
-                        NC: {formatMoney(inv?.credited || 0)}
+                        NC: {formatMoney(inv?.credited || 0, inv?.currency || summaryCurrency)}
                       </div>
                       <div className="text-xs text-slate-600">
-                        Neto: {formatMoney(inv?.netTotal || 0)}
+                        Neto: {formatMoney(inv?.netTotal || 0, inv?.currency || summaryCurrency)}
                       </div>
                     </td>
                     <td className="px-3 py-2 space-x-2 whitespace-nowrap">
@@ -422,24 +467,24 @@ export default function AccountStatement() {
                       {row?.number || row?.invoice_number || '-'}
                     </a>
                   </td>
-                  <td className="px-3 py-2">
-                    {row?.client_name ||
-                      row?.client ||
-                      row?.organization_name ||
-                      row?.organization ||
-                      '-'}
-                  </td>
-                  <td className="px-3 py-2 text-right" title={`total: ${formatMoney(row.total)} | pagado: ${formatMoney(row.paid)} | notas: ${formatMoney(row.credited)} | pendiente calc: ${formatMoney(row.pending)}`}>
-                    {formatMoney(row.debit)}
-                  </td>
-                  <td className="px-3 py-2 text-right" title={`recibos aplicados: ${formatMoney(row.credit)} | pagado base: ${formatMoney(row.paid)}`}>
-                    {formatMoney(row.credit)}
+                  <td className="px-3 py-2">{row?.client_label || '-'}</td>
+                  <td
+                    className="px-3 py-2 text-right"
+                    title={`total: ${formatMoney(row.total, row.currency)} | pagado: ${formatMoney(row.paid, row.currency)} | notas: ${formatMoney(row.credited, row.currency)} | pendiente calc: ${formatMoney(row.pending, row.currency)}`}
+                  >
+                    {formatMoney(row.debit, row.currency)}
                   </td>
                   <td
                     className="px-3 py-2 text-right"
-                    title={`saldo pendiente: ${formatMoney(row.balance)} | pendiente calc: ${formatMoney(row.pending)} | pagos: ${formatMoney(row.paid)} | nc: ${formatMoney(row.credited)}`}
+                    title={`recibos aplicados: ${formatMoney(row.credit, row.currency)} | pagado base: ${formatMoney(row.paid, row.currency)}`}
                   >
-                    {formatMoney(row.balance)}
+                    {formatMoney(row.credit, row.currency)}
+                  </td>
+                  <td
+                    className="px-3 py-2 text-right"
+                    title={`saldo pendiente: ${formatMoney(row.balance, row.currency)} | pendiente calc: ${formatMoney(row.pending, row.currency)} | pagos: ${formatMoney(row.paid, row.currency)} | nc: ${formatMoney(row.credited, row.currency)}`}
+                  >
+                    {formatMoney(row.balance, row.currency)}
                   </td>
                   <td className="px-3 py-2 capitalize">{row?.status || '-'}</td>
                 </tr>
