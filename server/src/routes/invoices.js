@@ -246,7 +246,7 @@ async function ensureCreditNoteTables() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
-  // Garantiza columnas nuevas si la tabla ya existía
+  // Garantiza columnas nuevas si la tabla ya existÃ­a
   const alters = [
     "ALTER TABLE credit_notes ADD COLUMN point_of_issue VARCHAR(8) NULL",
     "ALTER TABLE credit_notes ADD COLUMN establishment VARCHAR(8) NULL",
@@ -259,10 +259,7 @@ async function ensureCreditNoteTables() {
     try {
       await pool.query(sql);
     } catch (err) {
-      if (err?.code !== 'ER_DUP_FIELDNAME') {
-        // Si es otro error, lo propagamos
-        throw err;
-      }
+      if (err?.code !== 'ER_DUP_FIELDNAME') throw err;
     }
   }
 
@@ -297,7 +294,6 @@ async function ensureCreditNoteTables() {
      VALUES (1, 'NC', YEAR(CURDATE()), 0);`
   );
 }
-
 
 async function generateReceiptNumber(forcePoint, forceEst) {
   await ensureReceiptTables();
@@ -342,7 +338,7 @@ async function generateReceiptNumber(forcePoint, forceEst) {
 
 async function generateCreditNoteNumber(forcePoint, forceEst) {
   await ensureCreditNoteTables();
-  const defaultExp = '001-004'; // fallback general único
+  const defaultExp = '001-004';
   let expRaw = defaultExp;
   try {
     expRaw =
@@ -358,15 +354,12 @@ async function generateCreditNoteNumber(forcePoint, forceEst) {
     establishment: defaultExp.split('-')[1] || '004',
   });
 
-  // Forzar punto/establecimiento desde la factura si llega
   if (forcePoint && String(forcePoint).trim()) point = String(forcePoint).padStart(3, '0');
   if (forceEst && String(forceEst).trim()) establishment = String(forceEst).padStart(3, '0');
 
-  // último correlativo registrado
   const lastSeq =
     (await fetchLastSeq(point, establishment, pool, 'credit_note_number', 'credit_notes')) || 0;
 
-  // correlativo desde params
   let next = lastSeq + 1;
   try {
     const paramVal =
@@ -423,16 +416,15 @@ async function upsertParam(key, value, conn = pool) {
     );
     return res.insertId;
   } catch (err) {
-    if (err?.code === 'ER_NO_SUCH_TABLE') {
-      // Si no existe la tabla params, simplemente no persiste
-      return null;
-    }
+    if (err?.code === 'ER_NO_SUCH_TABLE') return null;
     throw err;
   }
 }
 
+// âœ… FIX regex (antes estaba mal: ^d{3}...)
+// Ahora sÃ­ matchea 001-004-0000007
 function extractSeqFromNumber(num = '') {
-  const m = String(num).match(/^d{3}-d{3}-(d{1,7})$/);
+  const m = String(num).match(/^\d{3}-\d{3}-(\d{1,7})$/);
   if (!m) return null;
   const n = parseInt(m[1], 10);
   return Number.isFinite(n) ? n : null;
@@ -456,7 +448,8 @@ async function fetchLastSeq(point, establishment, conn = pool, numberField = 'in
 }
 
 function parseExpedition(raw = '', fallback = { point: '001', establishment: '000' }) {
-  const matches = String(raw).match(/d+/g) || [];
+  // âœ… FIX: antes /d+/g (mal). Debe ser /\d+/g
+  const matches = String(raw).match(/\d+/g) || [];
   const point = (matches[0] || fallback.point || '001').padStart(3, '0');
   const establishment = (matches[1] || fallback.establishment || '000').padStart(3, '0');
   return { point, establishment };
@@ -549,7 +542,6 @@ async function nextInvoiceNumber(buKey = '', conn) {
 
   return { invoice_number, point_of_issue: point, establishment };
 }
-
 
 async function recomputeInvoicePayments(invoiceId) {
   const [[inv]] = await pool.query('SELECT id, net_total_amount FROM invoices WHERE id = ?', [invoiceId]);
@@ -687,18 +679,8 @@ function formatDateLong(date) {
   if (!date) return '';
   const d = new Date(date);
   const months = [
-    'Enero',
-    'Febrero',
-    'Marzo',
-    'Abril',
-    'Mayo',
-    'Junio',
-    'Julio',
-    'Agosto',
-    'Septiembre',
-    'Octubre',
-    'Noviembre',
-    'Diciembre',
+    'Enero','Febrero','Marzo','Abril','Mayo','Junio',
+    'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre',
   ];
   const day = d.getDate();
   const month = months[d.getMonth()] || '';
@@ -961,43 +943,71 @@ router.post('/', requireAuth, async (req, res) => {
     const tax_amount = 0;
     const total_amount = subtotal;
 
+    // âœ… Moneda: si hoy trabajÃ¡s solo USD, dejalo siempre en USD.
+    // Aun asÃ­ respetamos si te mandan currency_code/currency en el body.
+    const curr = String(currency_code || req.body?.currency || 'USD').toUpperCase();
+    const exRate = Number(exchange_rate || 1) || 1;
+
+    const credited_total = 0;
+    const net_total_amount = Number((total_amount - credited_total).toFixed(2));
+    const net_balance = Number((total_amount - credited_total).toFixed(2));
+
     const [result] = await conn.query(
-      `INSERT INTO invoices (
-        deal_id, organization_id, invoice_number, issue_date, due_date, payment_terms, notes,
-        payment_condition, timbrado_number, timbrado_start_date, timbrado_expires_at,
-        point_of_issue, establishment, customer_doc_type, customer_doc, customer_email, customer_address,
-        currency_code, exchange_rate, sales_rep, purchase_order_ref,
-        percentage, base_amount, subtotal, tax_amount, total_amount, balance, status, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'borrador', ?)`,
-      [
-        deal.id,
-        deal.organization_id,
-        invoice_number,
-        issueDate,
-        dueDate,
-        payment_terms || null,
-        notes || '',
-        payment_condition || 'credito',
-        timbrado_number || null,
-        timbrado_start_date || null,
-        timbrado_expires_at || null,
-        point_of_issue || poi,
-        establishment || est,
-        customer_doc_type || 'RUC',
-        customer_doc || null,
-        customer_email || null,
-        customer_address || null,
-        currency_code || 'USD',
-        Number(exchange_rate || 1) || 1,
-        sales_rep || null,
-        purchase_order_ref || null,
-        perc, baseAmount, subtotal,
-        tax_amount,
-        total_amount,
-        total_amount,
-        req.user.id,
-      ]
-    );
+  `INSERT INTO invoices (
+    deal_id, organization_id, invoice_number, issue_date, due_date, payment_terms, notes,
+    payment_condition, timbrado_number, timbrado_start_date, timbrado_expires_at,
+    point_of_issue, establishment, customer_doc_type, customer_doc, customer_email, customer_address,
+    currency_code, exchange_rate, sales_rep, purchase_order_ref,
+    percentage, base_amount, subtotal, tax_amount, total_amount,
+    paid_amount, balance,
+    credited_total, net_total_amount, net_balance,
+    status, created_by
+  ) VALUES (
+    ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?,
+    ?, ?, ?, ?, ?,
+    ?, ?,
+    ?, ?, ?,
+    ?, ?
+  )`,
+  [
+    deal.id,
+    deal.organization_id,
+    invoice_number,
+    issueDate,
+    dueDate,
+    payment_terms || null,
+    notes || '',
+    payment_condition || 'credito',
+    timbrado_number || null,
+    timbrado_start_date || null,
+    timbrado_expires_at || null,
+    point_of_issue || poi,
+    establishment || est,
+    customer_doc_type || 'RUC',
+    customer_doc || null,
+    customer_email || null,
+    customer_address || null,
+    currency_code || 'USD',
+    Number(exchange_rate || 1) || 1,
+    sales_rep || null,
+    purchase_order_ref || null,
+    perc,
+    baseAmount,
+    subtotal,
+    tax_amount,
+    total_amount,
+    0,              // paid_amount
+    total_amount,   // balance (si arranca sin pagos)
+    0,              // credited_total
+    total_amount,   // net_total_amount
+    total_amount,   // net_balance
+    'borrador',     // status
+    req.user.id,    // created_by
+  ]
+);
 
     const newId = result.insertId;
 
@@ -1053,7 +1063,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
     }
     if (invoice.status === 'anulada') {
       conn.release();
-      return res.status(400).json({ error: 'La factura ya est? anulada' });
+      return res.status(400).json({ error: 'La factura ya estÃ¡ anulada' });
     }
 
     await conn.beginTransaction();
@@ -1062,7 +1072,8 @@ router.delete('/:id', requireAuth, async (req, res) => {
          SET status = 'anulada',
              cancellation_reason = ?,
              canceled_by_credit_note_id = NULL,
-             balance = 0
+             balance = 0,
+             net_balance = 0
        WHERE id = ?`,
       ['Eliminada manualmente', id]
     );
@@ -1084,8 +1095,6 @@ router.delete('/:id', requireAuth, async (req, res) => {
     conn.release();
   }
 });
-
-
 
 // GET /api/invoices/receipts - Lista de recibos
 router.get('/receipts', requireAuth, async (req, res) => {
@@ -1167,7 +1176,7 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
     const issuePlaceDate = `${cityShort} ${formatDateLong(issueDate)}`;
 
     const amount = Number(receipt.net_amount ?? receipt.amount ?? 0);
-    const currency = receipt.currency_code || receipt.invoice_currency_code || 'GS';
+    const currency = receipt.currency_code || receipt.invoice_currency_code || 'USD';
     const paymentType = String(receipt.payment_method || 'PAGO').toUpperCase();
 
     const fallbackInvoice = {
@@ -1227,7 +1236,8 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
       conn.release();
       return res.status(403).json({ error: 'Sin permiso' });
     }
-        // Recalcular saldo pendiente por si net_balance/balance están en 0
+
+    // Recalcular saldo pendiente por si net_balance/balance estÃ¡n en 0
     const [invItems] = await conn.query("SELECT subtotal, tax_rate FROM invoice_items WHERE invoice_id = ?", [id]);
     const totalsCalc = calculateTotals(invItems || []);
     const creditedInv = Number(invoice.credited_total || 0);
@@ -1245,13 +1255,15 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
     );
     const paidInv = Number(paidRow?.paid || 0);
     const effBalance = Math.max(0, netTotalInv - paidInv);
+
     const amt = parseFloat(amount || 0);
     const retPct = parseFloat(retention_pct || 0);
     const retAmt = Math.max(0, amt * retPct / 100);
     const netAmt = net_amount ? parseFloat(net_amount) : Math.max(0, amt - retAmt);
+
     if (amt <= 0 || netAmt <= 0) {
       conn.release();
-      return res.status(400).json({ error: 'Monto inv?lido' });
+      return res.status(400).json({ error: 'Monto invÃ¡lido' });
     }
     if (netAmt - effBalance > 0.01) {
       conn.release();
@@ -1271,7 +1283,7 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
         receiptNumber,
         invoice.id,
         payment_date || null,
-        currency || invoice.currency_code || 'USD',
+        String(currency || invoice.currency_code || invoice.currency || 'USD').toUpperCase(),
         payment_method || 'transferencia',
         bank_account || null,
         reference_number || null,
@@ -1285,7 +1297,6 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
         req.user.id,
       ]
     );
-    // Aplicaci?n directa a la factura
     await conn.query(
       `INSERT INTO receipt_applications (receipt_id, invoice_id, amount_applied) VALUES (?, ?, ?)`,
       [ins.insertId, invoice.id, netAmt]
@@ -1477,7 +1488,7 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
       },
       facturaAfectada: '',
       condicionVenta: invoice.payment_condition || 'credito',
-      moneda: invoice.currency_code || 'USD',
+      moneda: (invoice.currency_code || invoice.currency || 'USD').toUpperCase(),
       refNumero: invoice.deal_reference || invoice.deal_id || '',
       refDetalle: invoice.deal_title || '' ,
       items: items.map((it) => ({
@@ -1496,6 +1507,7 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Error al generar PDF' });
   }
 });
+
 // =================== CREDIT NOTES ===================
 async function loadInvoiceWithPerms(req, invoiceId) {
   const [[invoice]] = await pool.query('SELECT * FROM invoices WHERE id = ?', [invoiceId]);
@@ -1526,7 +1538,7 @@ router.get('/:id/credit-notes', requireAuth, async (req, res) => {
     res.json(notes);
   } catch (e) {
     console.error('[credit-notes] Error listing:', e);
-    res.status(500).json({ error: 'Error al listar notas de crédito' });
+    res.status(500).json({ error: 'Error al listar notas de crÃ©dito' });
   }
 });
 
@@ -1536,7 +1548,7 @@ router.get('/credit-notes/:id', requireAuth, async (req, res) => {
     await ensureCreditNoteTables();
     await ensureInvoiceCreditColumns();
     const [[note]] = await pool.query('SELECT * FROM credit_notes WHERE id = ?', [id]);
-    if (!note) return res.status(404).json({ error: 'Nota de crédito no encontrada' });
+    if (!note) return res.status(404).json({ error: 'Nota de crÃ©dito no encontrada' });
 
     const { invoice, error } = await loadInvoiceWithPerms(req, note.invoice_id);
     if (error) return res.status(error.code).json({ error: error.msg });
@@ -1548,7 +1560,7 @@ router.get('/credit-notes/:id', requireAuth, async (req, res) => {
     res.json({ ...note, items, invoice });
   } catch (e) {
     console.error('[credit-notes] Error getting detail:', e);
-    res.status(500).json({ error: 'Error al obtener nota de crédito' });
+    res.status(500).json({ error: 'Error al obtener nota de crÃ©dito' });
   }
 });
 
@@ -1573,7 +1585,7 @@ router.post('/credit-notes', requireAuth, async (req, res) => {
     const { invoice, error } = await loadInvoiceWithPerms(req, invoice_id);
     if (error) return res.status(error.code).json({ error: error.msg });
     if (['borrador', 'anulada'].includes(invoice.status)) {
-      return res.status(400).json({ error: 'Solo se puede crear nota de crédito sobre facturas emitidas' });
+      return res.status(400).json({ error: 'Solo se puede crear nota de crÃ©dito sobre facturas emitidas' });
     }
 
     const items = Array.isArray(payloadItems) ? payloadItems : null;
@@ -1632,26 +1644,20 @@ router.post('/credit-notes', requireAuth, async (req, res) => {
     }
 
     if (creditItems.length === 0) {
-      return res.status(400).json({ error: 'La nota de crédito debe tener al menos un ítem' });
+      return res.status(400).json({ error: 'La nota de crÃ©dito debe tener al menos un Ã­tem' });
     }
 
     const totals = calculateTotals(creditItems);
     const breakdown = breakdownByRate(creditItems);
     const availability = await creditAvailability(invoice.id);
     if (breakdown.base10 > availability.disponible.base10 + 0.01) {
-      return res
-        .status(400)
-        .json({ error: `Excede lo disponible en 10% (disp: ${availability.disponible.base10})` });
+      return res.status(400).json({ error: `Excede lo disponible en 10% (disp: ${availability.disponible.base10})` });
     }
     if (breakdown.base5 > availability.disponible.base5 + 0.01) {
-      return res
-        .status(400)
-        .json({ error: `Excede lo disponible en 5% (disp: ${availability.disponible.base5})` });
+      return res.status(400).json({ error: `Excede lo disponible en 5% (disp: ${availability.disponible.base5})` });
     }
     if (breakdown.base0 > availability.disponible.base0 + 0.01) {
-      return res
-        .status(400)
-        .json({ error: `Excede lo disponible exentas (disp: ${availability.disponible.base0})` });
+      return res.status(400).json({ error: `Excede lo disponible exentas (disp: ${availability.disponible.base0})` });
     }
 
     const { creditNoteNumber, point, establishment } = await generateCreditNoteNumber(
@@ -1693,7 +1699,7 @@ router.post('/credit-notes', requireAuth, async (req, res) => {
     res.status(201).json({ id: creditId, credit_note_number: creditNoteNumber, status: 'borrador' });
   } catch (e) {
     console.error('[credit-notes] Error creating:', e);
-    res.status(500).json({ error: 'Error al crear nota de crédito' });
+    res.status(500).json({ error: 'Error al crear nota de crÃ©dito' });
   }
 });
 
@@ -1703,7 +1709,7 @@ router.post('/credit-notes/:id/issue', requireAuth, async (req, res) => {
     await ensureCreditNoteTables();
     await ensureInvoiceCreditColumns();
     const [[note]] = await pool.query('SELECT * FROM credit_notes WHERE id = ?', [id]);
-    if (!note) return res.status(404).json({ error: 'Nota de crédito no encontrada' });
+    if (!note) return res.status(404).json({ error: 'Nota de crÃ©dito no encontrada' });
     if (note.status !== 'borrador') return res.status(400).json({ error: 'Solo se puede emitir desde borrador' });
 
     const { invoice, error } = await loadInvoiceWithPerms(req, note.invoice_id);
@@ -1716,9 +1722,11 @@ router.post('/credit-notes/:id/issue', requireAuth, async (req, res) => {
       [req.user.id, id]
     );
 
-    // Recalcular crédito aplicado y estado de la factura (ajustada/anulada)
-    
     await recomputeInvoiceCredits(invoice.id);
+
+    // âœ… MODIFICACIÃ“N: recalcular pagos luego de recalcular crÃ©ditos
+    await recomputeInvoicePayments(invoice.id);
+
     const [[invAfter]] = await pool.query(
       'SELECT id, status, total_amount, credited_total, net_total_amount, paid_amount, net_balance FROM invoices WHERE id = ?',
       [invoice.id]
@@ -1753,12 +1761,17 @@ router.post('/credit-notes/:id/issue', requireAuth, async (req, res) => {
         [newStatus, invoice.id]
       );
     }
+
     await recomputeInvoiceCredits(invoice.id);
+
+    // âœ… MODIFICACIÃ“N: asegurar pagos/status al final tambiÃ©n
+    await recomputeInvoicePayments(invoice.id);
+
     const [[updated]] = await pool.query('SELECT * FROM credit_notes WHERE id = ?', [id]);
     res.json(updated);
   } catch (e) {
     console.error('[credit-notes] Error issuing:', e);
-    res.status(500).json({ error: 'Error al emitir nota de crédito' });
+    res.status(500).json({ error: 'Error al emitir nota de crÃ©dito' });
   }
 });
 
@@ -1768,66 +1781,23 @@ router.post('/credit-notes/:id/cancel', requireAuth, async (req, res) => {
     await ensureCreditNoteTables();
     await ensureInvoiceCreditColumns();
     const [[note]] = await pool.query('SELECT * FROM credit_notes WHERE id = ?', [id]);
-    if (!note) return res.status(404).json({ error: 'Nota de crédito no encontrada' });
-    if (note.status === 'anulada') return res.status(400).json({ error: 'Ya está anulada' });
+    if (!note) return res.status(404).json({ error: 'Nota de crÃ©dito no encontrada' });
+    if (note.status === 'anulada') return res.status(400).json({ error: 'Ya estÃ¡ anulada' });
 
     const { invoice, error } = await loadInvoiceWithPerms(req, note.invoice_id);
     if (error) return res.status(error.code).json({ error: error.msg });
 
     await pool.query(`UPDATE credit_notes SET status = 'anulada' WHERE id = ?`, [id]);
     await recomputeInvoiceCredits(invoice.id);
+
+    // âœ… MODIFICACIÃ“N: recalcular pagos luego de revertir crÃ©ditos
+    await recomputeInvoicePayments(invoice.id);
+
     const [[updated]] = await pool.query('SELECT * FROM credit_notes WHERE id = ?', [id]);
     res.json(updated);
   } catch (e) {
     console.error('[credit-notes] Error canceling:', e);
-    res.status(500).json({ error: 'Error al anular nota de crédito' });
-  }
-});
-
-// POST /api/invoices/:id/issue - Emitir factura
-router.post('/:id/issue', requireAuth, async (req, res) => {
-  const conn = await pool.getConnection();
-  try {
-    const { id } = req.params;
-    const [[invoice]] = await conn.query('SELECT * FROM invoices WHERE id = ?', [id]);
-    if (!invoice) {
-      conn.release();
-      return res.status(404).json({ error: 'Factura no encontrada' });
-    }
-    if (!canManageInvoice(req.user, invoice)) {
-      conn.release();
-      return res.status(403).json({ error: 'No tienes permiso para emitir esta factura' });
-    }
-    if (invoice.status != 'borrador') {
-      conn.release();
-      return res.status(400).json({ error: 'Solo se puede emitir desde borrador' });
-    }
-
-    await conn.beginTransaction();
-    await conn.query(
-      `UPDATE invoices 
-         SET status = 'emitida',
-             issue_date = CURDATE(),
-             issued_by = ?
-       WHERE id = ?`,
-      [req.user.id, id]
-    );
-    await conn.commit();
-
-    const [[updated]] = await pool.query(
-      `SELECT i.*, o.name as organization_name
-         FROM invoices i
-         LEFT JOIN organizations o ON o.id = i.organization_id
-        WHERE i.id = ?`,
-      [id]
-    );
-    res.json(updated);
-  } catch (e) {
-    await conn.rollback();
-    console.error('[invoices] Error issuing invoice:', e);
-    res.status(500).json({ error: 'Error al emitir factura' });
-  } finally {
-    conn.release();
+    res.status(500).json({ error: 'Error al anular nota de crÃ©dito' });
   }
 });
 
@@ -1901,7 +1871,7 @@ router.get('/credit-notes/:id/pdf', requireAuth, async (req, res) => {
       },
       facturaAfectada: note.invoice_number || invoice.invoice_number || '',
       condicionVenta: note.payment_condition || invoice.payment_condition || 'credito',
-      moneda: note.currency_code || invoice.currency_code || 'USD',
+      moneda: (note.currency_code || invoice.currency_code || invoice.currency || 'USD').toUpperCase(),
       refNumero: note.invoice_number || invoice.invoice_number || '',
       refDetalle: 'Factura afectada',
       items: items.map((it) => ({
@@ -1922,14 +1892,3 @@ router.get('/credit-notes/:id/pdf', requireAuth, async (req, res) => {
 });
 
 export default router;
-
-
-
-
-
-
-
-
-
-
-
