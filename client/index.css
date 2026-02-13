@@ -6,3 +6,20 @@
 /* opcional: helpers */
 html, body, #root { height: 100%; }
 :root { color-scheme: light; }
+
+.deal-alert {
+  animation: deal-alert-pulse 1.6s ease-in-out infinite;
+  box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.0);
+}
+
+@keyframes deal-alert-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.0);
+  }
+  45% {
+    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0.18);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.0);
+  }
+}

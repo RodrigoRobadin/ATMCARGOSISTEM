@@ -46,6 +46,12 @@ function getOperationUrl(id) {
   return `${window.location.origin}${normalized}operations/${id}`;
 }
 
+function getOrganizationUrl(id) {
+  const base = import.meta.env.BASE_URL || "/";
+  const normalized = base.endsWith("/") ? base : `${base}/`;
+  return `${window.location.origin}${normalized}organizations/${id}`;
+}
+
 function openInNewTab(url) {
   const link = document.createElement("a");
   link.href = url;
@@ -318,9 +324,13 @@ export default function Workspace() {
 
                   <div className="space-y-2">
                     {(grouped[stage.id] || []).map((deal, idx) => {
+                      const stageText = String(stageLabel(stage) || stage.name || "").toLowerCase();
+                      const isProspectStage = stageText === "prospecto";
                       const createdDays = diffDays(deal.created_at);
                       const fCotiz = dealCFMap[deal.id]?.f_cotiz || "";
                       const cotizDays = fCotiz ? diffDays(fCotiz) : null;
+                      const isAged =
+                        typeof createdDays === "number" && createdDays >= 3;
 
                       let warnText = null;
                       let warnClass =
@@ -337,6 +347,19 @@ export default function Workspace() {
                         }
                       }
 
+                      const titleText = isProspectStage
+                        ? deal.org_name || deal.title || "Prospecto"
+                        : deal.reference || deal.title;
+                      const secondaryRight = isProspectStage
+                        ? deal.created_by_name || deal.contact_name || "—"
+                        : deal.contact_name || "—";
+                      const detailUrl =
+                        isProspectStage && deal.org_id
+                          ? getOrganizationUrl(deal.org_id)
+                          : getOperationUrl(deal.id);
+
+                      const hasActivity = Number(deal.org_has_activity || 0) === 1;
+
                       return (
                         <Draggable
                           draggableId={String(deal.id)}
@@ -348,24 +371,35 @@ export default function Workspace() {
                               ref={provided.innerRef}
                               {...provided.draggableProps}
                               {...provided.dragHandleProps}
-                              href={getOperationUrl(deal.id)}
+                              href={detailUrl}
                               target="_blank"
                               rel="noreferrer"
                               onClick={(event) => event.preventDefault()}
                               onDoubleClickCapture={(event) => {
                                 event.preventDefault();
                                 event.stopPropagation();
-                                openInNewTab(getOperationUrl(deal.id));
+                                openInNewTab(detailUrl);
                               }}
-                              className="block w-full border rounded-xl p-3 hover:shadow transition bg-white cursor-pointer"
+                              className={`relative block w-full border rounded-xl p-3 hover:shadow transition bg-white cursor-pointer${
+                                isAged ? " deal-alert" : ""
+                              }`}
                               title="Doble clic para abrir"
                             >
+                              {isProspectStage && (
+                                <span
+                                  className={`absolute top-2 right-2 h-2.5 w-2.5 rounded-full ${
+                                    hasActivity ? "bg-emerald-500" : "bg-red-500"
+                                  }`}
+                                  title={hasActivity ? "Con actividad" : "Sin actividad"}
+                                />
+                              )}
                               <div className="text-sm font-semibold truncate">
-                                {deal.reference || deal.title}
+                                {titleText}
                               </div>
                               <div className="text-xs text-slate-600 truncate">
-                                {deal.org_name || "—"} •{" "}
-                                {deal.contact_name || "—"}
+                                {isProspectStage
+                                  ? `Agregado por ${secondaryRight}`
+                                  : `${deal.org_name || "—"} • ${secondaryRight}`}
                               </div>
 
                               <div className="flex items-center gap-2 flex-wrap mt-2">

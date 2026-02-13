@@ -1275,6 +1275,7 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
       invoice.point_of_issue,
       invoice.establishment
     );
+    const issueDate = payment_date || new Date().toISOString().slice(0, 10);
     const [ins] = await conn.query(
       `INSERT INTO receipts 
        (receipt_number, invoice_id, issue_date, status, currency_code, payment_method, bank_account, reference_number, amount, retention_pct, retention_amount, net_amount, point_of_issue, establishment, created_by, issued_by)
@@ -1282,7 +1283,7 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
       [
         receiptNumber,
         invoice.id,
-        payment_date || null,
+        issueDate,
         String(currency || invoice.currency_code || invoice.currency || 'USD').toUpperCase(),
         payment_method || 'transferencia',
         bank_account || null,

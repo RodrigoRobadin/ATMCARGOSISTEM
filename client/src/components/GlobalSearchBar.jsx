@@ -2,12 +2,16 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api";
+import Chatbox from "./Chatbox.jsx";
 
 export default function GlobalSearchBar() {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [res, setRes] = useState({ deals: [], organizations: [], contacts: [], notes: [] });
   const [counts, setCounts] = useState({ activities: 0, tasks: 0, notes: 0 });
+  const [notifCount, setNotifCount] = useState(0);
+  const [notifList, setNotifList] = useState([]);
+  const [showNotif, setShowNotif] = useState(false);
   const [activitiesPreview, setActivitiesPreview] = useState([]);
   const [showActivities, setShowActivities] = useState(false);
   const [tasksPreview, setTasksPreview] = useState([]);
@@ -15,6 +19,7 @@ export default function GlobalSearchBar() {
   const timer = useRef();
   const activitiesTimer = useRef();
   const tasksTimer = useRef();
+  const notifTimer = useRef();
   const navigate = useNavigate();
   const icons = {
     activities: String.fromCodePoint(0x1F4C5),
@@ -52,12 +57,22 @@ export default function GlobalSearchBar() {
 
     const loadCounts = async () => {
       try {
-        const [activitiesRes, tasksCountRes, notesRes, tasksListRes, activitiesListRes] = await Promise.all([
+        const [
+          activitiesRes,
+          tasksCountRes,
+          notesRes,
+          tasksListRes,
+          activitiesListRes,
+          notifCountRes,
+          notifListRes,
+        ] = await Promise.all([
           api.get("/activities/count"),
           api.get("/followups/tasks/count", { params: { status: "pending" } }),
           api.get("/followups/notes/count"),
           api.get("/followups/tasks", { params: { status: "pending", limit: 5 } }),
           api.get("/activities/mine", { params: { done: 0, limit: 5 } }),
+          api.get("/notifications/count", { params: { status: "unread" } }),
+          api.get("/notifications", { params: { status: "unread", limit: 5 } }),
         ]);
 
         if (!active) return;
@@ -71,11 +86,15 @@ export default function GlobalSearchBar() {
         setActivitiesPreview(
           Array.isArray(activitiesListRes?.data) ? activitiesListRes.data : []
         );
+        setNotifCount(Number(notifCountRes?.data?.total || 0));
+        setNotifList(Array.isArray(notifListRes?.data) ? notifListRes.data : []);
       } catch (e) {
         if (!active) return;
         setCounts({ activities: 0, tasks: 0, notes: 0 });
         setTasksPreview([]);
         setActivitiesPreview([]);
+        setNotifCount(0);
+        setNotifList([]);
       }
     };
 
@@ -128,6 +147,38 @@ export default function GlobalSearchBar() {
     tasksTimer.current = setTimeout(() => setShowTasks(false), 120);
   };
 
+  const openNotif = () => {
+    clearTimeout(notifTimer.current);
+    setShowNotif(true);
+  };
+
+  const closeNotif = () => {
+    clearTimeout(notifTimer.current);
+    notifTimer.current = setTimeout(() => setShowNotif(false), 120);
+  };
+
+  const markNotifRead = async (id, orgId) => {
+    try {
+      await api.patch(`/notifications/${id}/read`);
+      setNotifList((prev) => prev.filter((n) => n.id !== id));
+      setNotifCount((c) => Math.max(0, c - 1));
+      if (orgId) navigate(`/organizations/${orgId}`);
+    } catch (e) {
+      console.error("No se pudo marcar notificacion", e);
+      if (orgId) navigate(`/organizations/${orgId}`);
+    }
+  };
+
+  const markAllRead = async () => {
+    try {
+      await api.patch("/notifications/read-all");
+      setNotifList([]);
+      setNotifCount(0);
+    } catch (e) {
+      console.error("No se pudo marcar todas", e);
+    }
+  };
+
   const hasResults =
     (res.deals?.length || 0) +
       (res.organizations?.length || 0) +
@@ -136,6 +187,70 @@ export default function GlobalSearchBar() {
     0;
   return (
     <div className="flex items-center gap-3">
+      <Chatbox />
+      <div
+        className="relative"
+        onMouseEnter={openNotif}
+        onMouseLeave={closeNotif}
+      >
+        <button
+          type="button"
+          className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg border bg-white text-sm font-semibold hover:bg-slate-50"
+          title="Recordatorios"
+        >
+          R
+          {notifCount > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-emerald-600 text-white text-[10px] leading-[18px] text-center">
+              {notifCount}
+            </span>
+          )}
+        </button>
+
+        {showNotif && (
+          <div
+            className="absolute left-0 top-full mt-2 w-80 rounded-lg border bg-white shadow-lg p-3 text-xs z-50"
+            onMouseEnter={openNotif}
+            onMouseLeave={closeNotif}
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="font-semibold text-slate-700">Recordatorios</div>
+              {notifList.length > 0 && (
+                <button
+                  type="button"
+                  className="text-[11px] text-blue-600 hover:underline"
+                  onClick={markAllRead}
+                >
+                  Marcar todas
+                </button>
+              )}
+            </div>
+            {notifList.length ? (
+              <div className="space-y-2">
+                {notifList.map((n) => (
+                  <button
+                    key={n.id}
+                    type="button"
+                    className="block w-full text-left rounded-md border px-2 py-2 hover:bg-slate-50"
+                    onClick={() => markNotifRead(n.id, n.org_id)}
+                  >
+                    <div className="text-[12px] font-semibold text-slate-800">
+                      {n.title}
+                    </div>
+                    {n.body && (
+                      <div className="text-[11px] text-slate-500 mt-1">
+                        {n.body}
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="text-slate-500">No hay recordatorios.</div>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="relative flex-1 max-w-[720px]">
         <input
           value={q}

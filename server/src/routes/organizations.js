@@ -190,6 +190,69 @@ router.post('/', requireAuth, async (req, res) => {
       [ins.insertId]
     );
 
+    // Crear tarjeta de Prospecto en ATM INDUSTRIAL (pipeline 1) al crear organización
+    try {
+      const pipelineId = 1;
+      const stageName = 'Prospecto';
+      const buKey = 'atm-industrial';
+
+      const [[stage]] = await db.query(
+        'SELECT id FROM stages WHERE pipeline_id = ? AND name = ? LIMIT 1',
+        [pipelineId, stageName]
+      );
+      const [[bu]] = await db.query(
+        'SELECT id FROM business_units WHERE key_slug = ? LIMIT 1',
+        [buKey]
+      );
+
+      if (stage?.id && bu?.id) {
+        const [[existing]] = await db.query(
+          'SELECT id FROM deals WHERE org_id = ? AND pipeline_id = ? AND stage_id = ? LIMIT 1',
+          [row.id, pipelineId, stage.id]
+        );
+        if (!existing) {
+          const createdById = row.created_by_user_id ?? (req.user ? Number(req.user.id) : null);
+          const title = row.name || row.razon_social || 'Prospecto';
+          const tmpRef = `PROS-${row.id}-${Date.now().toString(36)}-${Math.random()
+            .toString(36)
+            .slice(2, 6)}`.slice(0, 32);
+          const [dealIns] = await db.query(
+            `INSERT INTO deals(
+               reference, title, value, status,
+               pipeline_id, business_unit_id, stage_id,
+               contact_id, org_id,
+               advisor_user_id, created_by_user_id
+             )
+             VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+            [
+              tmpRef,
+              title,
+              0,
+              'open',
+              pipelineId,
+              bu.id,
+              stage.id,
+              null,
+              row.id,
+              createdById,
+              createdById,
+            ]
+          );
+
+          await logAudit({
+            req,
+            action: 'create',
+            entity: 'deal',
+            entityId: dealIns.insertId,
+            description: `Creó prospecto para organización ${row.name}`,
+            meta: { org_id: row.id, pipeline_id: pipelineId, stage_id: stage.id },
+          });
+        }
+      }
+    } catch (e) {
+      console.error('[organizations:post] No se pudo crear prospecto en pipeline:', e?.message || e);
+    }
+
     await logAudit({
       req,
       action: 'create',

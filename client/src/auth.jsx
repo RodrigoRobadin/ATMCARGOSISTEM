@@ -14,9 +14,21 @@ export function AuthProvider({ children }) {
     const { token: savedToken, user: savedUser } = loadSavedAuth();
 
     if (!savedToken) {
-      setUser(null);
-      setToken(null);
-      setLoading(false);
+      // Intentar sesiÃ³n de cookie si no hay token
+      api
+        .get("/auth/me")
+        .then((res) => {
+          const me = res.data;
+          setUser(me);
+          setToken("SESSION");
+          saveAuth({ token: "SESSION", user: me });
+        })
+        .catch(() => {
+          saveAuth({ token: null, user: null });
+          setUser(null);
+          setToken(null);
+        })
+        .finally(() => setLoading(false));
       return;
     }
 
@@ -30,27 +42,48 @@ export function AuthProvider({ children }) {
         setUser(me);
         saveAuth({ token: savedToken, user: me });
       })
-      .catch(() => {
-        saveAuth({ token: null, user: null });
-        setUser(null);
-        setToken(null);
+      .catch(async () => {
+        try {
+          const { data: me } = await api.get("/auth/me");
+          setUser(me);
+          setToken("SESSION");
+          saveAuth({ token: "SESSION", user: me });
+        } catch {
+          saveAuth({ token: null, user: null });
+          setUser(null);
+          setToken(null);
+        }
       })
       .finally(() => setLoading(false));
   }, []);
 
   const login = async ({ email, password }) => {
-    const res = await api.post("/users/login", { email, password });
-    const { token: t, user: u } = res.data || {};
+    // 1) Intentar login con JWT
+    try {
+      const res = await api.post("/users/login", { email, password });
+      const { token: t, user: u } = res.data || {};
+      if (t) {
+        setUser(u || null);
+        setToken(t);
+        saveAuth({ token: t, user: u });
+        return u;
+      }
+    } catch (_) {
+      // fallback a sesiÃ³n
+    }
 
-    if (!t) throw new Error("Respuesta de login sin token");
-
-    setUser(u || null);
-    setToken(t);
-    saveAuth({ token: t, user: u });
-    return u;
+    // 2) Fallback: login por sesiÃ³n
+    const res2 = await api.post("/auth/login", { email, password });
+    const { user: u2 } = res2.data || {};
+    if (!u2) throw new Error("Respuesta de login sin usuario");
+    setUser(u2);
+    setToken("SESSION");
+    saveAuth({ token: "SESSION", user: u2 });
+    return u2;
   };
 
   const logout = () => {
+    api.post("/auth/logout").catch(() => {});
     saveAuth({ token: null, user: null });
     setUser(null);
     setToken(null);

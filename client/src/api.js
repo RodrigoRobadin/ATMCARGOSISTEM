@@ -35,6 +35,8 @@ export const api = axios.create({
   withCredentials: true,
 });
 
+export const API_BASE = BASE;
+
 // Interceptor de request
 api.interceptors.request.use((cfg) => {
   try {

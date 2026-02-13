@@ -150,7 +150,7 @@ router.get('/next-reference', async (_req, res) => {
   res.json({ preview: formatReference(nextId) });
 });
 
-router.get('/', async (req, res) => {
+router.get('/', requireAuth, async (req, res) => {
   const {
     org_id,
     contact_id,
@@ -186,6 +186,12 @@ router.get('/', async (req, res) => {
   if (deal_advisor_user_id) { where.push('d.advisor_user_id = ?');    params.push(deal_advisor_user_id); }
   if (created_by_user_id)   { where.push('d.created_by_user_id = ?'); params.push(created_by_user_id); }
 
+  // Restriccion: en el pipeline 1 cada usuario ve solo lo que creo
+  if (pipeline_id && Number(pipeline_id) === 1 && req.user?.id) {
+    where.push('d.created_by_user_id = ?');
+    params.push(Number(req.user.id));
+  }
+
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
   const sortCol = ['created_at','value','title'].includes(String(sort)) ? sort : 'created_at';
@@ -204,6 +210,7 @@ router.get('/', async (req, res) => {
 
        c.name  AS contact_name, c.email AS contact_email,
        o.name  AS org_name,
+       COALESCE(oa.has_activity, 0) AS org_has_activity,
 
        bu.name AS business_unit_name, bu.key_slug AS business_unit_key,
 
@@ -214,6 +221,12 @@ router.get('/', async (req, res) => {
      FROM deals d
      LEFT JOIN contacts       c  ON c.id  = d.contact_id
      LEFT JOIN organizations  o  ON o.id  = d.org_id
+     LEFT JOIN (
+       SELECT org_id, 1 AS has_activity
+       FROM activities
+       WHERE org_id IS NOT NULL
+       GROUP BY org_id
+     ) oa ON oa.org_id = d.org_id
      LEFT JOIN users          u  ON u.id  = o.advisor_user_id
      LEFT JOIN users          du ON du.id = d.advisor_user_id
      LEFT JOIN users          cu ON cu.id = d.created_by_user_id

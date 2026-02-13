@@ -1,5 +1,6 @@
 // server/src/app.js
 import express from 'express';
+import http from 'node:http';
 import cors from 'cors';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
@@ -51,6 +52,9 @@ import reportsRouter from './routes/reports.js';
 import adminRouter from './routes/admin.js';
 import catalogRouter from './routes/catalog.js';
 import salesGoalsRouter from './routes/salesGoals.js';
+import notificationsRouter from './routes/notifications.js';
+import messagesRouter from './routes/messages.js';
+import adminFinanceRouter from './routes/adminFinance.js';
 
 // ⭐️ NUEVO: solicitudes de flete
 import freightRequestsRouter from './routes/freightRequests.js';
@@ -60,6 +64,8 @@ import emailRoutes from './routes/emailRoutes.js';
 import industrialDoorsRouter from "./routes/industrialDoors.js";
 import industrialQuotesRouter from "./routes/industrialQuotes.js";
 import quotesRouter from "./routes/quotes.js";
+import { initSocket } from './socket.js';
+import { setIO } from './services/socket.js';
 
 
 
@@ -129,7 +135,7 @@ if (!['none', 'lax', 'strict'].includes(sameSite)) sameSite = 'none';
 const sessionDomain = (process.env.SESSION_DOMAIN || '').trim() || undefined;
 
 
-app.use(session({
+const sessionMiddleware = session({
   name: SESSION_NAME,
   secret: SESSION_SECRET,
   resave: false,
@@ -143,7 +149,8 @@ app.use(session({
     path: '/',
     maxAge: 1000 * 60 * 60 * 8,     // 8h
   },
-}));
+});
+app.use(sessionMiddleware);
 
 console.log('[auth] TRUST_PROXY:', TRUST_PROXY ? 'ON' : 'OFF');
 console.log('[auth] SESSION cookie:', {
@@ -228,6 +235,9 @@ app.use('/api/reports', reportsRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api', catalogRouter);
 app.use('/api/sales-goals', salesGoalsRouter);
+app.use('/api/notifications', notificationsRouter);
+app.use('/api/messages', messagesRouter);
+app.use('/api/admin/finance', adminFinanceRouter);
 
 // ⭐️ Operaciones (crear/leer y PUT por tipo: air/ocean/road/multimodal)
 app.use('/api/operations', operationsRouter);
@@ -258,7 +268,11 @@ app.use("/api", quotesRouter);
 
 /* ================ Arranque ================ */
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
+const server = http.createServer(app);
+const io = initSocket(server, { sessionMiddleware, allowedOrigins });
+setIO(io);
+
+server.listen(PORT, () => {
   console.log(`API running on http://localhost:${PORT}`);
   console.log(`CORS allowed origins: ${allowedOrigins.join(', ') || '(none)'}`);
 });

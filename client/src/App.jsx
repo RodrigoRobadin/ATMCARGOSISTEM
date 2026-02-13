@@ -27,6 +27,7 @@ import AdminActivity from './pages/AdminActivity.jsx';
 import AccountStatement from './pages/AccountStatement.jsx';
 import Payments from './pages/Payments.jsx';
 import AdminExpenses from './pages/AdminExpenses.jsx';
+import AdminFinance from './pages/AdminFinance.jsx';
 
 // ?? NUEVO: Workspace de Administración (Ops)
 import AdminWorkspace from './pages/admin/AdminWorkspace.jsx';
@@ -65,6 +66,7 @@ const sidebarIcons = {
   user: String.fromCodePoint(0x1F464),
   params: String.fromCodePoint(0x2699),
   adminOps: String.fromCodePoint(0x1F4C1),
+  finance: String.fromCodePoint(0x1F4CA),
   account: String.fromCodePoint(0x1F4C4),
   payments: String.fromCodePoint(0x1F9FE),
   expenses: String.fromCodePoint(0x1F4B3),
@@ -137,6 +139,7 @@ function Layout({ children }) {
               <SideLink to="/admin" icon={sidebarIcons.admin} label="Administraci\u00f3n" />
               <SideLink to="/admin/users" icon={sidebarIcons.user} label="Usuarios" />
               <SideLink to="/admin/params" icon={sidebarIcons.params} label="Par\u00e1metros" />
+              <SideLink to="/admin/finance" icon={sidebarIcons.finance} label="Gerencia" />
               <div className="relative group/admin-ops">
                 <SideLink to="/admin-ops" icon={sidebarIcons.adminOps} label="Administraci\u00f3n (Ops)" />
                 <div className="hidden group-hover/admin-ops:block ml-8 mt-1 space-y-1">
@@ -268,6 +271,14 @@ export default function App() {
                   element={
                     <RequireRole allow={['admin', 'manager']}>
                       <AdminParams />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/admin/finance"
+                  element={
+                    <RequireRole allow={['admin']}>
+                      <AdminFinance />
                     </RequireRole>
                   }
                 />
