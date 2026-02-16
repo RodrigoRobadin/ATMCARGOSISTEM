@@ -1310,11 +1310,27 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
                     </tr>
                   ))}
                 </tbody>
-              </table>
-              <div className="p-3 text-sm border-t bg-slate-50">
-                <div>Venta USD: <b>{fmt2(computed.instalacion.totals.installation_total_sale_usd)}</b></div>
-                <div>Profit USD: <b>{fmt2(computed.instalacion.totals.installation_total_profit_usd)}</b></div>
-              </div>
+                  <tfoot className="bg-slate-50">
+                    <tr className="border-t">
+                      <td className="px-3 py-2 font-semibold">Total</td>
+                      <td className="px-3 py-2 text-right font-semibold">
+                        {Number(computed.instalacion.totals.installation_total_cost_gs || 0).toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold">
+                        {Number(computed.instalacion.totals.installation_total_sale_gs || 0).toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold">
+                        {Number(computed.instalacion.totals.installation_total_profit_gs || 0).toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold">
+                        {fmt2(computed.instalacion.totals.installation_total_sale_usd)}
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold">
+                        {fmt2(computed.instalacion.totals.installation_total_profit_usd)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
             </div>
           )}
         </div>

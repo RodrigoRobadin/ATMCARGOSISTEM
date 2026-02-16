@@ -5,6 +5,7 @@ import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { api } from "../api";
 import NewOperationModal from "../components/NewOperationModal";
 import NewIndustrialOperationModal from "../components/NewIndustrialOperationModal";
+import { useAuth } from "../auth.jsx";
 
 /* helpers */
 const msPerDay = 24 * 60 * 60 * 1e3;
@@ -69,6 +70,7 @@ export default function Workspace() {
   const { key } = useParams(); // ej: "atm-cargo", "atm-industrial"
   const nav = useNavigate();
   const location = useLocation();
+  const { user } = useAuth();
 
   const [bu, setBu] = useState(null);
   const [pipelineId, setPipelineId] = useState(null);

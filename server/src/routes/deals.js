@@ -186,11 +186,6 @@ router.get('/', requireAuth, async (req, res) => {
   if (deal_advisor_user_id) { where.push('d.advisor_user_id = ?');    params.push(deal_advisor_user_id); }
   if (created_by_user_id)   { where.push('d.created_by_user_id = ?'); params.push(created_by_user_id); }
 
-  // Restriccion: en el pipeline 1 cada usuario ve solo lo que creo
-  if (pipeline_id && Number(pipeline_id) === 1 && req.user?.id) {
-    where.push('d.created_by_user_id = ?');
-    params.push(Number(req.user.id));
-  }
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -216,7 +211,8 @@ router.get('/', requireAuth, async (req, res) => {
 
        o.budget_status  AS org_budget_status,
        o.budget_profit  AS org_budget_profit_value,
-       u.name           AS org_advisor_name
+       u.name           AS org_advisor_name,
+       o.advisor_user_id AS org_advisor_user_id
 
      FROM deals d
      LEFT JOIN contacts       c  ON c.id  = d.contact_id
