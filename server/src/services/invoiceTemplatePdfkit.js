@@ -23,6 +23,75 @@ function fmtGs(n, { decimals = false } = {}) {
   return num.toLocaleString('es-PY', opts);
 }
 
+function normalizeCurrencyLabel(code = '') {
+  const c = String(code || '').trim().toUpperCase();
+  if (!c) return 'GS';
+  if (c === 'PYG' || c === 'GS' || c === '₲') return 'GS';
+  if (c === 'USD' || c === 'US$' || c === '$') return 'USD';
+  return c;
+}
+
+function numberToWordsEs(n) {
+  const num = Math.floor(Number(n || 0));
+  if (!Number.isFinite(num)) return '';
+  if (num === 0) return 'CERO';
+  const units = ['', 'UNO', 'DOS', 'TRES', 'CUATRO', 'CINCO', 'SEIS', 'SIETE', 'OCHO', 'NUEVE'];
+  const teens = ['DIEZ', 'ONCE', 'DOCE', 'TRECE', 'CATORCE', 'QUINCE'];
+  const tens = ['', '', 'VEINTE', 'TREINTA', 'CUARENTA', 'CINCUENTA', 'SESENTA', 'SETENTA', 'OCHENTA', 'NOVENTA'];
+  const hundreds = ['', 'CIENTO', 'DOSCIENTOS', 'TRESCIENTOS', 'CUATROCIENTOS', 'QUINIENTOS', 'SEISCIENTOS', 'SETECIENTOS', 'OCHOCIENTOS', 'NOVECIENTOS'];
+
+  const toWordsBelow100 = (n2) => {
+    if (n2 < 10) return units[n2];
+    if (n2 >= 10 && n2 < 16) return teens[n2 - 10];
+    if (n2 < 20) return `DIECI${units[n2 - 10]}`;
+    if (n2 === 20) return 'VEINTE';
+    if (n2 < 30) return `VEINTI${units[n2 - 20]}`;
+    const t = Math.floor(n2 / 10);
+    const u = n2 % 10;
+    return u ? `${tens[t]} Y ${units[u]}` : tens[t];
+  };
+
+  const toWordsBelow1000 = (n3) => {
+    if (n3 === 0) return '';
+    if (n3 === 100) return 'CIEN';
+    const h = Math.floor(n3 / 100);
+    const r = n3 % 100;
+    const hText = h ? hundreds[h] : '';
+    const rText = r ? toWordsBelow100(r) : '';
+    return [hText, rText].filter(Boolean).join(' ');
+  };
+
+  const parts = [];
+  const millions = Math.floor(num / 1000000);
+  const thousands = Math.floor((num % 1000000) / 1000);
+  const rest = num % 1000;
+
+  if (millions) {
+    if (millions === 1) parts.push('UN MILLON');
+    else parts.push(`${toWordsBelow1000(millions)} MILLONES`);
+  }
+  if (thousands) {
+    if (thousands === 1) parts.push('MIL');
+    else parts.push(`${toWordsBelow1000(thousands)} MIL`);
+  }
+  if (rest) parts.push(toWordsBelow1000(rest));
+
+  return parts.join(' ');
+}
+
+function amountToWords(amount, currencyLabel) {
+  const total = Number(amount || 0);
+  const whole = Math.floor(total);
+  const cents = Math.round((total - whole) * 100);
+  const words = numberToWordsEs(whole);
+  const curr =
+    currencyLabel === 'USD' ? 'DOLARES' :
+    currencyLabel === 'GS' ? 'GUARANIES' :
+    currencyLabel;
+  const centsWords = cents ? numberToWordsEs(cents) : 'CERO';
+  return `${words} CON ${centsWords} CENTAVOS ${curr}`;
+}
+
 function drawBox(doc, { x, y, w, h }) {
   doc.lineWidth(1).strokeColor(COLORS.border).rect(x, y, w, h).stroke();
 }
@@ -179,7 +248,7 @@ function drawTableHeader(doc, y, colX, colW) {
   return headerH1 + headerH2;
 }
 
-function drawItems(doc, items, yStart, colX, colW) {
+function drawItems(doc, items, yStart, colX, colW, currencyLabel) {
   let y = yStart;
   const rowH = 22;
   items.forEach((it) => {
@@ -190,7 +259,7 @@ function drawItems(doc, items, yStart, colX, colW) {
     doc.font('Helvetica').fontSize(9).fillColor(COLORS.gray);
     doc.text(it.qty, colX.qty, textY, { width: colW.qty, align: 'center' });
     doc.text(it.description || 'Item', colX.desc, textY, { width: colW.desc });
-    doc.text(`USD ${fmtGs(it.unitPrice, { decimals: true })}`, colX.pu, textY, {
+    doc.text(`${currencyLabel} ${fmtGs(it.unitPrice, { decimals: true })}`, colX.pu, textY, {
       width: colW.pu,
       align: 'right',
     });
@@ -216,13 +285,15 @@ function drawTotalsBox(doc, data, colX, colW) {
 
   y += 18;
   doc.font('Helvetica-Bold').fillColor(COLORS.gray).text('TOTAL:', box.x + 6, y);
-  doc.font('Helvetica').fillColor(COLORS.grayLight).text(`GS ${data.totalEnLetras || ''}`, box.x + 60, y, {
-    width: 250,
+  const currencyLabel = normalizeCurrencyLabel(data.moneda);
+  const totalWords = data.totalEnLetras || amountToWords(data.totalGeneral, currencyLabel);
+  doc.font('Helvetica').fillColor(COLORS.grayLight).text(`${currencyLabel} ${totalWords}`, box.x + 60, y, {
+    width: box.w - 220,
   });
   doc
     .font('Helvetica-Bold')
     .fillColor(COLORS.gray)
-    .text(`USD ${fmtGs(data.totalGeneral, { decimals: true })}`, box.x + box.w - 140, y, {
+    .text(`${currencyLabel} ${fmtGs(data.totalGeneral, { decimals: true })}`, box.x + box.w - 140, y, {
       width: 130,
       align: 'right',
     });
@@ -230,18 +301,22 @@ function drawTotalsBox(doc, data, colX, colW) {
   y += 22;
   doc.font('Helvetica-Bold').fillColor(COLORS.gray).text('LIQUIDACION DEL IVA', box.x + 6, y);
   doc.font('Helvetica').fillColor(COLORS.grayLight);
-  doc.text(`5 %: USD ${fmtGs(data.iva5, { decimals: true })}`, colX.five, y, {
-    width: colW.five + 20,
-    align: 'left',
+  const ivaRightW = 180;
+  const ivaColW = 150;
+  const iva10X = box.x + box.w - ivaRightW - ivaColW;
+  const iva5X = iva10X - ivaColW;
+  doc.text(`5 %: ${currencyLabel} ${fmtGs(data.iva5, { decimals: true })}`, iva5X, y, {
+    width: ivaColW,
+    align: 'right',
   });
-  doc.text(`10 %: USD ${fmtGs(data.iva10, { decimals: true })}`, colX.ten - 20, y, {
-    width: colW.ten + 60,
-    align: 'left',
+  doc.text(`10 %: ${currencyLabel} ${fmtGs(data.iva10, { decimals: true })}`, iva10X, y, {
+    width: ivaColW,
+    align: 'right',
   });
   doc
     .font('Helvetica-Bold')
     .fillColor(COLORS.gray)
-    .text(`TOTAL IVA: USD ${fmtGs(data.ivaTotal, { decimals: true })}`, box.x + box.w - 200, y, {
+    .text(`TOTAL IVA: ${currencyLabel} ${fmtGs(data.ivaTotal, { decimals: true })}`, box.x + box.w - 200, y, {
       width: 190,
       align: 'right',
     });
@@ -378,7 +453,9 @@ export async function generateInvoicePDF(data, outputStream) {
 
       // Table
       const tableY = refY + 18;
-      const colW = { qty: 70, desc: 205, pu: 100, ex: 60, five: 56, ten: 56 };
+      const baseCols = { qty: 60, pu: 110, ex: 80, five: 70, ten: 70 };
+      const descW = W - (baseCols.qty + baseCols.pu + baseCols.ex + baseCols.five + baseCols.ten);
+      const colW = { qty: baseCols.qty, desc: descW, pu: baseCols.pu, ex: baseCols.ex, five: baseCols.five, ten: baseCols.ten };
       const colX = {
         qty: M,
         desc: M + colW.qty,
@@ -388,7 +465,8 @@ export async function generateInvoicePDF(data, outputStream) {
         ten: M + colW.qty + colW.desc + colW.pu + colW.ex + colW.five,
       };
       const headerHeight = drawTableHeader(doc, tableY, colX, colW);
-      const afterItemsY = drawItems(doc, mappedItems, tableY + headerHeight, colX, colW);
+      const currencyLabel = normalizeCurrencyLabel(data.moneda || 'GS');
+      const afterItemsY = drawItems(doc, mappedItems, tableY + headerHeight, colX, colW, currencyLabel);
 
       // Totals
       drawTotalsBox(
@@ -400,6 +478,7 @@ export async function generateInvoicePDF(data, outputStream) {
           iva5: totalsCalc.iva5,
           iva10: totalsCalc.iva10,
           ivaTotal: totalsCalc.ivaTotal,
+          moneda: currencyLabel,
         },
         colX,
         colW
