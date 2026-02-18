@@ -459,7 +459,7 @@ async function peekInvoiceDefaults({ buKey = '', pipelineName = '' } = {}, conn 
   const isIndustrial = isIndustrialContext({ buKey, pipelineName });
   const expKey = isIndustrial ? 'invoice_exp_industrial' : 'invoice_exp_cargo';
   const sharedNumKey = 'invoice_next_number';
-  const legacyNumKey = isIndustrial
+  const unitNumKey = isIndustrial
     ? 'invoice_next_number_industrial'
     : 'invoice_next_number_cargo';
 
@@ -481,12 +481,12 @@ async function peekInvoiceDefaults({ buKey = '', pipelineName = '' } = {}, conn 
   const lastSeq = (await fetchLastSeq(point, establishment, conn)) || 0;
   let next = lastSeq + 1;
   try {
-    const paramVal =
+    const unitVal =
+      parseInt((await getParamValue(unitNumKey, conn))?.value || 'NaN', 10);
+    const sharedVal =
       parseInt((await getParamValue(sharedNumKey, conn))?.value || 'NaN', 10);
-    const legacyVal =
-      parseInt((await getParamValue(legacyNumKey, conn))?.value || 'NaN', 10);
     const chosen =
-      Number.isFinite(paramVal) ? paramVal : Number.isFinite(legacyVal) ? legacyVal : NaN;
+      Number.isFinite(unitVal) ? unitVal : Number.isFinite(sharedVal) ? sharedVal : NaN;
     if (Number.isFinite(chosen)) next = Math.max(next, chosen);
   } catch (_) {
     next = lastSeq + 1;
@@ -509,7 +509,7 @@ async function nextInvoiceNumber(buKey = '', conn) {
   const isIndustrial = isIndustrialContext({ buKey });
   const expKey = isIndustrial ? 'invoice_exp_industrial' : 'invoice_exp_cargo';
   const sharedNumKey = 'invoice_next_number';
-  const legacyNumKey = isIndustrial
+  const unitNumKey = isIndustrial
     ? 'invoice_next_number_industrial'
     : 'invoice_next_number_cargo';
 
@@ -523,12 +523,12 @@ async function nextInvoiceNumber(buKey = '', conn) {
   const lastSeq = (await fetchLastSeq(point, establishment, conn)) || 0;
   let next = lastSeq + 1;
   try {
-    const paramVal =
+    const unitVal =
+      parseInt((await getParamValue(unitNumKey, conn))?.value || 'NaN', 10);
+    const sharedVal =
       parseInt((await getParamValue(sharedNumKey, conn))?.value || 'NaN', 10);
-    const legacyVal =
-      parseInt((await getParamValue(legacyNumKey, conn))?.value || 'NaN', 10);
     const chosen =
-      Number.isFinite(paramVal) ? paramVal : Number.isFinite(legacyVal) ? legacyVal : NaN;
+      Number.isFinite(unitVal) ? unitVal : Number.isFinite(sharedVal) ? sharedVal : NaN;
     if (Number.isFinite(chosen)) next = Math.max(next, chosen);
   } catch (_) {
     next = lastSeq + 1;
@@ -537,7 +537,7 @@ async function nextInvoiceNumber(buKey = '', conn) {
 
   const invoice_number = `${point}-${establishment}-${String(next).padStart(7, '0')}`;
   try {
-    await upsertParam(sharedNumKey, String(next + 1), conn);
+    await upsertParam(unitNumKey, String(next + 1), conn);
   } catch (_) {}
 
   return { invoice_number, point_of_issue: point, establishment };
