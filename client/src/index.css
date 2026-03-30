@@ -3,3 +3,12 @@
 @tailwind utilities;
 
 html, body, #root { height: 100%; }
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition;
+  }
+  .btn-primary {
+    @apply border-transparent bg-blue-600 text-white hover:bg-blue-700;
+  }
+}

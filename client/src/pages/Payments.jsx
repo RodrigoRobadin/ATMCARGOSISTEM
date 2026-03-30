@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import api from '../api';
 
-const fmtMoney = (v) =>
-  new Intl.NumberFormat('es-PY', { style: 'currency', currency: 'USD' }).format(
+const fmtMoney = (v, currency = 'USD') =>
+  new Intl.NumberFormat('es-PY', { style: 'currency', currency }).format(
     Number(v || 0)
   );
 
@@ -58,6 +58,15 @@ export default function Payments() {
     });
   }, [receipts, filters]);
 
+  const totalsByCurrency = useMemo(() => {
+    return filtered.reduce((acc, r) => {
+      const curr = String(r.currency_code || r.currency || 'USD').toUpperCase();
+      const val = Number(r.net_amount ?? r.amount ?? 0);
+      acc[curr] = (acc[curr] || 0) + (Number.isFinite(val) ? val : 0);
+      return acc;
+    }, {});
+  }, [filtered]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -70,13 +79,13 @@ export default function Payments() {
         <div className="flex gap-4">
           <div>
             <div className="text-xs text-slate-500">Total recibos</div>
-            <div className="text-lg font-semibold">
-              {fmtMoney(
-                filtered.reduce((s, r) => {
-                  const val = r.net_amount ?? r.amount ?? 0;
-                  return s + Number(val);
-                }, 0)
+            <div className="text-lg font-semibold space-y-0.5">
+              {Object.keys(totalsByCurrency).length === 0 && (
+                <div>{fmtMoney(0, 'USD')}</div>
               )}
+              {Object.entries(totalsByCurrency).map(([curr, total]) => (
+                <div key={curr}>{fmtMoney(total, curr)}</div>
+              ))}
             </div>
           </div>
           <div>
@@ -200,9 +209,9 @@ export default function Payments() {
                     )}
                   </td>
                   <td className="px-3 py-2">{r.organization_name || '-'}</td>
-                  <td className="px-3 py-2">{r.currency_code || '-'}</td>
+                  <td className="px-3 py-2">{String(r.currency_code || r.currency || '-').toUpperCase()}</td>
                   <td className="px-3 py-2 text-right">
-                    {fmtMoney(r.net_amount ?? r.amount)}
+                    {fmtMoney(r.net_amount ?? r.amount, String(r.currency_code || r.currency || 'USD').toUpperCase())}
                   </td>
                   <td className="px-3 py-2 capitalize">{r.payment_method || '-'}</td>
                   <td className="px-3 py-2">{fmtBank(r.bank_account)}</td>

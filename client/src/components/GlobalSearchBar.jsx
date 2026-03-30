@@ -7,7 +7,7 @@ import Chatbox from "./Chatbox.jsx";
 export default function GlobalSearchBar() {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
-  const [res, setRes] = useState({ deals: [], organizations: [], contacts: [], notes: [] });
+  const [res, setRes] = useState({ deals: [], organizations: [], contacts: [], notes: [], services: [] });
   const [counts, setCounts] = useState({ activities: 0, tasks: 0, notes: 0 });
   const [notifCount, setNotifCount] = useState(0);
   const [notifList, setNotifList] = useState([]);
@@ -31,7 +31,7 @@ export default function GlobalSearchBar() {
     clearTimeout(timer.current);
 
     if (!q) {
-      setRes({ deals: [], organizations: [], contacts: [], notes: [] });
+      setRes({ deals: [], organizations: [], contacts: [], notes: [], services: [] });
       setOpen(false);
       return;
     }
@@ -40,11 +40,11 @@ export default function GlobalSearchBar() {
       try {
         const { data } = await api.get("/search", { params: { q } });
         // data = { deals, organizations, contacts }
-        setRes(data || { deals: [], organizations: [], contacts: [], notes: [] });
+        setRes(data || { deals: [], organizations: [], contacts: [], notes: [], services: [] });
         setOpen(true);
       } catch (e) {
         console.error("search failed", e);
-        setRes({ deals: [], organizations: [], contacts: [], notes: [] });
+        setRes({ deals: [], organizations: [], contacts: [], notes: [], services: [] });
         setOpen(true);
       }
     }, 300);
@@ -112,6 +112,7 @@ export default function GlobalSearchBar() {
     if (type === "deal") navigate(`/operations/${id}`);
     if (type === "org") navigate(`/organizations/${id}`);
     if (type === "contact") navigate(`/contacts/${id}`);
+    if (type === "service") navigate(`/service/cases/${id}`);
     if (type === "note") {
       if (extra?.deal_id) return navigate(`/operations/${extra.deal_id}`);
       if (extra?.org_id) return navigate(`/organizations/${extra.org_id}`);
@@ -183,7 +184,8 @@ export default function GlobalSearchBar() {
     (res.deals?.length || 0) +
       (res.organizations?.length || 0) +
       (res.contacts?.length || 0) +
-      (res.notes?.length || 0) >
+      (res.notes?.length || 0) +
+      (res.services?.length || 0) >
     0;
   return (
     <div className="flex items-center gap-3">
@@ -327,6 +329,33 @@ export default function GlobalSearchBar() {
                   <div className="text-sm font-medium">{c.name}</div>
                   <div className="text-xs text-slate-500">
                     {c.email || c.phone || "Sin datos de contacto"}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Servicios */}
+          {res.services?.length > 0 && (
+            <div>
+              <div className="px-3 py-1 text-xs text-slate-500">Servicios / Mantenimiento</div>
+              {res.services.map((s) => (
+                <button
+                  key={`s-${s.id}`}
+                  onClick={() => go("service", s.id)}
+                  className="block w-full text-left px-3 py-2 hover:bg-slate-50"
+                >
+                  <div className="text-sm font-medium flex items-center gap-2">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] bg-emerald-100 text-emerald-700 border border-emerald-200">
+                      Service
+                    </span>
+                    <span>
+                      {s.reference} {s.placa_id ? `— ${s.placa_id}` : ""}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    {s.org_name || "Sin cliente"}
+                    {s.modelo ? ` • ${s.modelo}` : ""}
                   </div>
                 </button>
               ))}

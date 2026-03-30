@@ -5,6 +5,7 @@ import path from 'path';
 import multer from 'multer';
 import { pool } from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
+import ExcelJS from 'exceljs';
 
 const router = Router();
 
@@ -49,6 +50,7 @@ async function ensureAdminExpenseTables() {
     CREATE TABLE IF NOT EXISTS admin_expense_categories (
       id INT AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(120) NOT NULL,
+      ord INT NULL DEFAULT 0,
       active TINYINT(1) NOT NULL DEFAULT 1,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -60,6 +62,7 @@ async function ensureAdminExpenseTables() {
       id INT AUTO_INCREMENT PRIMARY KEY,
       category_id INT NOT NULL,
       name VARCHAR(120) NOT NULL,
+      ord INT NULL DEFAULT 0,
       active TINYINT(1) NOT NULL DEFAULT 1,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -71,6 +74,17 @@ async function ensureAdminExpenseTables() {
     CREATE TABLE IF NOT EXISTS admin_expense_cost_centers (
       id INT AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(120) NOT NULL,
+      active TINYINT(1) NOT NULL DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_expense_accounts (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      code VARCHAR(40) NULL,
+      name VARCHAR(160) NOT NULL,
       active TINYINT(1) NOT NULL DEFAULT 1,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -182,6 +196,12 @@ async function ensureAdminExpenseTables() {
   await ensurePaymentReceiptColumns();
   await ensureExpenseInvoiceColumns();
   await ensureRecurrenceInvoiceColumns();
+  await ensureExpenseAccountColumns();
+  await ensureExpensePurchaseColumns();
+  await ensureRecurrencePurchaseColumns();
+  await ensureExpenseItemsTable();
+  await ensureCategoryOrderColumns();
+  await ensureSubcategoryOrderColumns();
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS admin_expense_attachments (
@@ -205,6 +225,7 @@ async function ensureAdminExpenseTables() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
+  await seedAdminExpenseMasters();
 }
 
 async function ensurePaymentReceiptColumns() {
@@ -270,6 +291,205 @@ async function ensureRecurrenceInvoiceColumns() {
     }
   } catch (e) {
     console.error('[admin-expenses] ensure recurrence columns error', e?.message || e);
+  }
+}
+
+async function ensureExpenseAccountColumns() {
+  try {
+    const [cols] = await pool.query(`
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_expenses'
+    `);
+    const have = new Set(cols.map((c) => c.COLUMN_NAME));
+    const add = [];
+    if (!have.has('account_id')) add.push('ADD COLUMN account_id INT NULL');
+    if (add.length) {
+      await pool.query(`ALTER TABLE admin_expenses ${add.join(', ')}`);
+    }
+  } catch (e) {
+    console.error('[admin-expenses] ensure account columns error', e?.message || e);
+  }
+}
+
+async function ensureExpensePurchaseColumns() {
+  try {
+    const [cols] = await pool.query(`
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_expenses'
+    `);
+    const have = new Set(cols.map((c) => c.COLUMN_NAME));
+    const add = [];
+    if (!have.has('condition_type')) add.push('ADD COLUMN condition_type VARCHAR(20) NULL');
+    if (!have.has('due_date')) add.push('ADD COLUMN due_date DATE NULL');
+    if (!have.has('buyer_ruc')) add.push('ADD COLUMN buyer_ruc VARCHAR(32) NULL');
+    if (!have.has('buyer_name')) add.push('ADD COLUMN buyer_name VARCHAR(160) NULL');
+    if (!have.has('tax_mode')) add.push('ADD COLUMN tax_mode VARCHAR(16) NULL');
+    if (!have.has('gravado_10')) add.push('ADD COLUMN gravado_10 DECIMAL(15,2) NULL');
+    if (!have.has('gravado_5')) add.push('ADD COLUMN gravado_5 DECIMAL(15,2) NULL');
+    if (!have.has('iva_no_taxed')) add.push('ADD COLUMN iva_no_taxed DECIMAL(15,2) NULL');
+    if (!have.has('exchange_rate')) add.push('ADD COLUMN exchange_rate DECIMAL(15,2) NULL');
+    if (add.length) {
+      await pool.query(`ALTER TABLE admin_expenses ${add.join(', ')}`);
+    }
+  } catch (e) {
+    console.error('[admin-expenses] ensure purchase columns error', e?.message || e);
+  }
+}
+
+async function ensureRecurrencePurchaseColumns() {
+  try {
+    const [cols] = await pool.query(`
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_expense_recurrences'
+    `);
+    const have = new Set(cols.map((c) => c.COLUMN_NAME));
+    const add = [];
+    if (!have.has('condition_type')) add.push('ADD COLUMN condition_type VARCHAR(20) NULL');
+    if (!have.has('due_date')) add.push('ADD COLUMN due_date DATE NULL');
+    if (!have.has('buyer_ruc')) add.push('ADD COLUMN buyer_ruc VARCHAR(32) NULL');
+    if (!have.has('buyer_name')) add.push('ADD COLUMN buyer_name VARCHAR(160) NULL');
+    if (!have.has('tax_mode')) add.push('ADD COLUMN tax_mode VARCHAR(16) NULL');
+    if (!have.has('gravado_10')) add.push('ADD COLUMN gravado_10 DECIMAL(15,2) NULL');
+    if (!have.has('gravado_5')) add.push('ADD COLUMN gravado_5 DECIMAL(15,2) NULL');
+    if (!have.has('iva_no_taxed')) add.push('ADD COLUMN iva_no_taxed DECIMAL(15,2) NULL');
+    if (!have.has('exchange_rate')) add.push('ADD COLUMN exchange_rate DECIMAL(15,2) NULL');
+    if (add.length) {
+      await pool.query(`ALTER TABLE admin_expense_recurrences ${add.join(', ')}`);
+    }
+  } catch (e) {
+    console.error('[admin-expenses] ensure recurrence purchase columns error', e?.message || e);
+  }
+}
+
+async function ensureExpenseItemsTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS admin_expense_items (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        expense_id INT NOT NULL,
+        description VARCHAR(255) NOT NULL,
+        quantity DECIMAL(15,2) NOT NULL DEFAULT 1,
+        unit_price DECIMAL(15,2) NOT NULL DEFAULT 0,
+        tax_rate DECIMAL(5,2) NOT NULL DEFAULT 10,
+        subtotal DECIMAL(15,2) NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_expense (expense_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+  } catch (e) {
+    console.error('[admin-expenses] ensure items table error', e?.message || e);
+  }
+}
+
+async function ensureCategoryOrderColumns() {
+  try {
+    const [cols] = await pool.query(`
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_expense_categories'
+    `);
+    const have = new Set(cols.map((c) => c.COLUMN_NAME));
+    if (!have.has('ord')) {
+      await pool.query(`ALTER TABLE admin_expense_categories ADD COLUMN ord INT NULL DEFAULT 0`);
+    }
+  } catch (e) {
+    console.error('[admin-expenses] ensure category ord error', e?.message || e);
+  }
+}
+
+async function ensureSubcategoryOrderColumns() {
+  try {
+    const [cols] = await pool.query(`
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_expense_subcategories'
+    `);
+    const have = new Set(cols.map((c) => c.COLUMN_NAME));
+    if (!have.has('ord')) {
+      await pool.query(
+        `ALTER TABLE admin_expense_subcategories ADD COLUMN ord INT NULL DEFAULT 0`
+      );
+    }
+  } catch (e) {
+    console.error('[admin-expenses] ensure subcategory ord error', e?.message || e);
+  }
+}
+
+async function seedAdminExpenseMasters() {
+  try {
+    const categories = {
+      'Servicios básicos': ['ANDE', 'ESSAP'],
+      'Telefonía e internet': ['CLARO', 'PERSONAL', 'COPACO LINEAS TELEFONICAS'],
+      'Alquileres': ['ALQUILER OFICINA'],
+      'Viáticos y viajes': ['VIATICO / HOTEL VIAJES'],
+      'Impuestos y tasas': ['PATENTE', 'IPS', 'SET'],
+      'Caja chica': ['CAJA CHICA RAYFLEX'],
+      'Combustible y flota': [
+        'COMBUSTIBLE / FLOTA BR',
+        'COMBUSTIBLE / FLOTA PETROBRAS',
+        'MANTENIMIENTO CAMIONETAS / GSTO CAMIONETA',
+        'SEGURO SAVEIRO ROJO DEBITO',
+        'SEGURO NOAH DEBITO',
+        'SEGURO GOLCITO DEBITO',
+        'SEGURO SAVEIRO GRIS',
+        'SEGURO AMAROK DEBITO',
+      ],
+      'Gastos financieros': [
+        'GASTOS FINANCIEROS CTA USD Y GS',
+        'TARJETA DE CREDITO ITAU',
+        'PRESTAMO ITAU / CAPITAL OPERATIVO',
+        'PRESTAMO ITAU',
+      ],
+      'Administración general': ['GASTOS VARIOS', 'GESTIONES / MOTO TAXI', 'TRAMITES JUDICIALES'],
+      'Regalos y eventos': ['REGALOS NAVIDEÑOS', 'EXPO LOGISTICA / PUBLICIDAD', 'CLUB DE EJECUTIVO'],
+      'Oficina y suministros': ['UTILES DE OFICINA', 'IMPRENTA'],
+      'Sistemas y software': ['SISTEMA', 'EQUIFAX', 'HOSTIN', 'MONITAL'],
+      'Mantenimiento y equipamientos': ['MANTENIMIENTO Y EQUIPAMIENTOS', 'TUPI', 'MODICA'],
+      'Nómina': ['SUELDOS Y EXTRAS RAYFLEX', 'SUELDOS ATM', 'VACACIONES- AGUINALDOS - LIQUIDACION'],
+      'Activos fijos': ['COMPRA NOAH', 'COMPRA AMAROK', 'COMPRA SAVEIRO', 'COMPRA GOLCITO'],
+      'Otros': ['ATOLPAR'],
+    };
+
+    for (const [catName, subs] of Object.entries(categories)) {
+      const [[cat]] = await pool.query(
+        `SELECT id FROM admin_expense_categories WHERE name = ? LIMIT 1`,
+        [catName]
+      );
+      let catId = cat?.id;
+      if (!catId) {
+        const [ins] = await pool.query(
+          `INSERT INTO admin_expense_categories (name, active) VALUES (?, 1)`,
+          [catName]
+        );
+        catId = ins.insertId;
+      }
+      for (const subName of subs) {
+        const [[sub]] = await pool.query(
+          `SELECT id FROM admin_expense_subcategories WHERE name = ? AND category_id = ? LIMIT 1`,
+          [subName, catId]
+        );
+        if (!sub?.id) {
+          await pool.query(
+            `INSERT INTO admin_expense_subcategories (name, category_id, active) VALUES (?, ?, 1)`,
+            [subName, catId]
+          );
+        }
+      }
+    }
+
+    const [[cc]] = await pool.query(
+      `SELECT id FROM admin_expense_cost_centers WHERE name = 'IPS' LIMIT 1`
+    );
+    if (!cc?.id) {
+      await pool.query(
+        `INSERT INTO admin_expense_cost_centers (name, active) VALUES ('IPS', 1)`
+      );
+    }
+  } catch (e) {
+    console.error('[admin-expenses] seed masters error', e?.message || e);
   }
 }
 
@@ -433,6 +653,38 @@ async function generateRecurringExpenses(conn = pool) {
   }
 }
 
+async function getUpcomingRecurrenceDates(rec, count = 6) {
+  const dates = [];
+  const start = toDateOnly(rec.next_run_date || rec.start_date);
+  if (!start) return dates;
+  const endDate = toDateOnly(rec.end_date);
+  const dom = rec.day_of_month || new Date(rec.start_date).getDate();
+  let cursor = start;
+  while (dates.length < count) {
+    if (!endDate || cursor <= endDate) {
+      dates.push(formatDate(cursor));
+    } else {
+      break;
+    }
+    cursor = addMonths(cursor, 1, dom);
+  }
+  return dates;
+}
+
+function computeNextRunDate(rec) {
+  const explicit = toDateOnly(rec.next_run_date);
+  if (explicit) return explicit;
+  const start = toDateOnly(rec.start_date);
+  if (!start) return null;
+  const dom = rec.day_of_month || new Date(rec.start_date).getDate();
+  const today = toDateOnly(new Date());
+  let cursor = start;
+  while (cursor < today) {
+    cursor = addMonths(cursor, 1, dom);
+  }
+  return cursor;
+}
+
 router.get('/exchange-rate', requireAuth, async (_req, res) => {
   try {
     const row = await getParamValue('admin_expense_exchange_rate', pool);
@@ -458,10 +710,10 @@ router.get('/meta', requireAuth, async (_req, res) => {
   try {
     await ensureAdminExpenseTables();
     const [categories] = await pool.query(
-      `SELECT * FROM admin_expense_categories WHERE active = 1 ORDER BY name`
+      `SELECT * FROM admin_expense_categories ORDER BY ord, name`
     );
     const [subcategories] = await pool.query(
-      `SELECT * FROM admin_expense_subcategories WHERE active = 1 ORDER BY name`
+      `SELECT * FROM admin_expense_subcategories ORDER BY ord, name`
     );
     const [costCenters] = await pool.query(
       `SELECT * FROM admin_expense_cost_centers WHERE active = 1 ORDER BY name`
@@ -489,7 +741,7 @@ router.get('/meta', requireAuth, async (_req, res) => {
 router.get('/', requireAuth, async (req, res) => {
   try {
     await generateRecurringExpenses(pool);
-    const { from_date, to_date, status, category_id, cost_center_id, provider_id, currency_code } =
+    const { from_date, to_date, status, category_id, cost_center_id, provider_id, currency_code, recurrence_id } =
       req.query || {};
 
     const where = [];
@@ -521,6 +773,10 @@ router.get('/', requireAuth, async (req, res) => {
     if (currency_code) {
       where.push('e.currency_code = ?');
       params.push(currency_code);
+    }
+    if (recurrence_id) {
+      where.push('e.recurrence_id = ?');
+      params.push(recurrence_id);
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -569,6 +825,15 @@ router.post('/', requireAuth, async (req, res) => {
       iva_10,
       iva_5,
       iva_exempt,
+      condition_type,
+      due_date,
+      buyer_ruc,
+      buyer_name,
+      tax_mode,
+      gravado_10,
+      gravado_5,
+      iva_no_taxed,
+      exchange_rate,
       amount,
       currency_code,
       tax_rate,
@@ -576,14 +841,17 @@ router.post('/', requireAuth, async (req, res) => {
       receipt_number,
       timbrado_number,
       status,
+      items,
     } = req.body || {};
 
     const [result] = await pool.query(
       `INSERT INTO admin_expenses
        (expense_date, provider_id, category_id, subcategory_id, cost_center_id, description,
         invoice_date, supplier_ruc, supplier_name, iva_10, iva_5, iva_exempt,
+        condition_type, due_date, buyer_ruc, buyer_name, tax_mode,
+        gravado_10, gravado_5, iva_no_taxed, exchange_rate,
         amount, currency_code, tax_rate, receipt_type, receipt_number, timbrado_number, status, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         expense_date,
         provider_id || null,
@@ -597,6 +865,15 @@ router.post('/', requireAuth, async (req, res) => {
         Number(iva_10 || 0) || null,
         Number(iva_5 || 0) || null,
         Number(iva_exempt || 0) || null,
+        condition_type || null,
+        due_date || null,
+        buyer_ruc || null,
+        buyer_name || null,
+        tax_mode || null,
+        Number(gravado_10 || 0) || null,
+        Number(gravado_5 || 0) || null,
+        Number(iva_no_taxed || 0) || null,
+        Number(exchange_rate || 0) || null,
         Number(amount || 0),
         currency_code || 'PYG',
         tax_rate || null,
@@ -607,6 +884,22 @@ router.post('/', requireAuth, async (req, res) => {
         req.user?.id || null,
       ]
     );
+    if (Array.isArray(items) && items.length) {
+      const rows = items.map((it) => [
+        result.insertId,
+        String(it.description || ''),
+        Number(it.quantity || 0) || 0,
+        Number(it.unit_price || 0) || 0,
+        Number(it.tax_rate ?? 10),
+        Number(it.subtotal || 0) || 0,
+      ]);
+      await pool.query(
+        `INSERT INTO admin_expense_items
+         (expense_id, description, quantity, unit_price, tax_rate, subtotal)
+         VALUES ?`,
+        [rows]
+      );
+    }
     const [[row]] = await pool.query('SELECT * FROM admin_expenses WHERE id = ?', [
       result.insertId,
     ]);
@@ -635,6 +928,15 @@ router.patch('/:id', requireAuth, async (req, res) => {
       'receipt_number',
       'timbrado_number',
       'status',
+      'condition_type',
+      'due_date',
+      'buyer_ruc',
+      'buyer_name',
+      'tax_mode',
+      'gravado_10',
+      'gravado_5',
+      'iva_no_taxed',
+      'exchange_rate',
     ];
     const sets = [];
     const params = [];
@@ -762,6 +1064,50 @@ router.get('/:id/attachments', requireAuth, async (req, res) => {
   }
 });
 
+router.get('/:id/items', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await ensureAdminExpenseTables();
+    const [rows] = await pool.query(
+      `SELECT * FROM admin_expense_items WHERE expense_id = ? ORDER BY id ASC`,
+      [id]
+    );
+    res.json(rows);
+  } catch (e) {
+    console.error('[admin-expenses] items list error', e);
+    res.status(500).json({ error: 'Error loading items' });
+  }
+});
+
+router.put('/:id/items', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    await ensureAdminExpenseTables();
+    await pool.query(`DELETE FROM admin_expense_items WHERE expense_id = ?`, [id]);
+    if (items.length) {
+      const rows = items.map((it) => [
+        id,
+        String(it.description || ''),
+        Number(it.quantity || 0) || 0,
+        Number(it.unit_price || 0) || 0,
+        Number(it.tax_rate ?? 10),
+        Number(it.subtotal || 0) || 0,
+      ]);
+      await pool.query(
+        `INSERT INTO admin_expense_items
+         (expense_id, description, quantity, unit_price, tax_rate, subtotal)
+         VALUES ?`,
+        [rows]
+      );
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[admin-expenses] items update error', e);
+    res.status(500).json({ error: 'Error saving items' });
+  }
+});
+
 router.post('/:id/attachments', requireAuth, upload.single('file'), async (req, res) => {
   try {
     const { id } = req.params;
@@ -802,6 +1148,15 @@ router.post('/recurrences', requireAuth, async (req, res) => {
       iva_10,
       iva_5,
       iva_exempt,
+      condition_type,
+      due_date,
+      buyer_ruc,
+      buyer_name,
+      tax_mode,
+      gravado_10,
+      gravado_5,
+      iva_no_taxed,
+      exchange_rate,
       amount,
       currency_code,
       tax_rate,
@@ -817,8 +1172,9 @@ router.post('/recurrences', requireAuth, async (req, res) => {
       `INSERT INTO admin_expense_recurrences
        (start_date, end_date, frequency, day_of_month, next_run_date, provider_id, category_id, subcategory_id,
         cost_center_id, description, invoice_date, supplier_ruc, supplier_name, iva_10, iva_5, iva_exempt,
+        condition_type, due_date, buyer_ruc, buyer_name, tax_mode, gravado_10, gravado_5, iva_no_taxed, exchange_rate,
         amount, currency_code, tax_rate, receipt_type, receipt_number, timbrado_number, status, active, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         formatDate(start),
         end_date || null,
@@ -836,6 +1192,15 @@ router.post('/recurrences', requireAuth, async (req, res) => {
         Number(iva_10 || 0) || null,
         Number(iva_5 || 0) || null,
         Number(iva_exempt || 0) || null,
+        condition_type || null,
+        due_date || null,
+        buyer_ruc || null,
+        buyer_name || null,
+        tax_mode || null,
+        Number(gravado_10 || 0) || null,
+        Number(gravado_5 || 0) || null,
+        Number(iva_no_taxed || 0) || null,
+        Number(exchange_rate || 0) || null,
         Number(amount || 0),
         currency_code || 'PYG',
         tax_rate || null,
@@ -843,6 +1208,7 @@ router.post('/recurrences', requireAuth, async (req, res) => {
         receipt_number || null,
         timbrado_number || null,
         status || 'pendiente',
+        1,
         req.user?.id || null,
       ]
     );
@@ -912,8 +1278,58 @@ router.patch('/recurrences/:id', requireAuth, async (req, res) => {
 });
 
 router.get('/categories', requireAuth, async (_req, res) => {
-  const [rows] = await pool.query('SELECT * FROM admin_expense_categories ORDER BY name');
+  const [rows] = await pool.query(
+    'SELECT * FROM admin_expense_categories ORDER BY ord, name'
+  );
   res.json(rows);
+});
+
+router.get('/recurrences/upcoming', requireAuth, async (req, res) => {
+  try {
+    const count = Number(req.query?.count || 6) || 6;
+    await generateRecurringExpenses(pool);
+    const [rows] = await pool.query(
+      `SELECT r.*, c.name AS category_name, sc.name AS subcategory_name,
+              cc.name AS cost_center_name, org.name AS provider_name, org.razon_social AS provider_razon
+         FROM admin_expense_recurrences r
+         LEFT JOIN admin_expense_categories c ON c.id = r.category_id
+         LEFT JOIN admin_expense_subcategories sc ON sc.id = r.subcategory_id
+         LEFT JOIN admin_expense_cost_centers cc ON cc.id = r.cost_center_id
+         LEFT JOIN organizations org ON org.id = r.provider_id
+        WHERE r.active = 1
+        ORDER BY r.next_run_date ASC, r.id DESC`
+    );
+    const out = await Promise.all(
+      rows.map(async (r) => ({
+        id: r.id,
+        description: r.description || '',
+        category_name: r.category_name || '',
+        subcategory_name: r.subcategory_name || '',
+        cost_center_name: r.cost_center_name || '',
+        provider_name: r.provider_razon || r.provider_name || '',
+        currency_code: r.currency_code || 'PYG',
+        amount: r.amount,
+        next_dates: await getUpcomingRecurrenceDates(
+          { ...r, next_run_date: r.next_run_date || computeNextRunDate(r) },
+          count
+        ),
+      }))
+    );
+    res.json(out);
+  } catch (e) {
+    console.error('[admin-expenses] upcoming recurrences error', e);
+    res.status(500).json({ error: 'Error loading upcoming recurrences' });
+  }
+});
+
+router.post('/recurrences/run', requireAuth, async (_req, res) => {
+  try {
+    await generateRecurringExpenses(pool);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[admin-expenses] recurrences run error', e);
+    res.status(500).json({ error: 'Error running recurrences' });
+  }
 });
 
 router.post('/categories', requireAuth, async (req, res) => {
@@ -930,8 +1346,37 @@ router.post('/categories', requireAuth, async (req, res) => {
   res.status(201).json(row);
 });
 
+router.patch('/categories/:id', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const patch = req.body || {};
+    const fields = ['name', 'active', 'ord'];
+    const sets = [];
+    const params = [];
+    fields.forEach((f) => {
+      if (patch[f] !== undefined) {
+        sets.push(`${f} = ?`);
+        params.push(patch[f]);
+      }
+    });
+    if (!sets.length) return res.json({ ok: true });
+    params.push(id);
+    await pool.query(`UPDATE admin_expense_categories SET ${sets.join(', ')} WHERE id = ?`, params);
+    const [[row]] = await pool.query(
+      'SELECT * FROM admin_expense_categories WHERE id = ?',
+      [id]
+    );
+    res.json(row);
+  } catch (e) {
+    console.error('[admin-expenses] category update error', e);
+    res.status(500).json({ error: 'Error updating category' });
+  }
+});
+
 router.get('/subcategories', requireAuth, async (_req, res) => {
-  const [rows] = await pool.query('SELECT * FROM admin_expense_subcategories ORDER BY name');
+  const [rows] = await pool.query(
+    'SELECT * FROM admin_expense_subcategories ORDER BY ord, name'
+  );
   res.json(rows);
 });
 
@@ -952,6 +1397,36 @@ router.post('/subcategories', requireAuth, async (req, res) => {
   res.status(201).json(row);
 });
 
+router.patch('/subcategories/:id', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const patch = req.body || {};
+    const fields = ['name', 'active', 'ord', 'category_id'];
+    const sets = [];
+    const params = [];
+    fields.forEach((f) => {
+      if (patch[f] !== undefined) {
+        sets.push(`${f} = ?`);
+        params.push(patch[f]);
+      }
+    });
+    if (!sets.length) return res.json({ ok: true });
+    params.push(id);
+    await pool.query(
+      `UPDATE admin_expense_subcategories SET ${sets.join(', ')} WHERE id = ?`,
+      params
+    );
+    const [[row]] = await pool.query(
+      'SELECT * FROM admin_expense_subcategories WHERE id = ?',
+      [id]
+    );
+    res.json(row);
+  } catch (e) {
+    console.error('[admin-expenses] subcategory update error', e);
+    res.status(500).json({ error: 'Error updating subcategory' });
+  }
+});
+
 router.get('/cost-centers', requireAuth, async (_req, res) => {
   const [rows] = await pool.query('SELECT * FROM admin_expense_cost_centers ORDER BY name');
   res.json(rows);
@@ -969,6 +1444,218 @@ router.post('/cost-centers', requireAuth, async (req, res) => {
     [result.insertId]
   );
   res.status(201).json(row);
+});
+
+router.get('/export', requireAuth, async (req, res) => {
+  try {
+    const { from_date, to_date, status, category_id, cost_center_id, provider_id, currency_code } =
+      req.query || {};
+
+    const where = [];
+    const params = [];
+    if (from_date) {
+      where.push('e.expense_date >= ?');
+      params.push(from_date);
+    }
+    if (to_date) {
+      where.push('e.expense_date <= ?');
+      params.push(to_date);
+    }
+    if (status) {
+      where.push('e.status = ?');
+      params.push(status);
+    }
+    if (category_id) {
+      where.push('e.category_id = ?');
+      params.push(category_id);
+    }
+    if (cost_center_id) {
+      where.push('e.cost_center_id = ?');
+      params.push(cost_center_id);
+    }
+    if (provider_id) {
+      where.push('e.provider_id = ?');
+      params.push(provider_id);
+    }
+    if (currency_code) {
+      where.push('e.currency_code = ?');
+      params.push(currency_code);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const [rows] = await pool.query(
+      `
+      SELECT e.expense_date, e.invoice_date, e.receipt_type, e.receipt_number, e.timbrado_number,
+             e.supplier_ruc, e.supplier_name, e.iva_10, e.iva_5, e.iva_exempt, e.amount,
+             e.currency_code, e.tax_rate, e.condition_type, e.due_date, e.buyer_ruc, e.buyer_name,
+             e.tax_mode, e.gravado_10, e.gravado_5, e.iva_no_taxed, e.exchange_rate,
+             c.name AS category_name, sc.name AS subcategory_name,
+             cc.name AS cost_center_name
+        FROM admin_expenses e
+        LEFT JOIN admin_expense_categories c ON c.id = e.category_id
+        LEFT JOIN admin_expense_subcategories sc ON sc.id = e.subcategory_id
+        LEFT JOIN admin_expense_cost_centers cc ON cc.id = e.cost_center_id
+        ${whereSql}
+        ORDER BY e.expense_date DESC, e.id DESC
+      `,
+      params
+    );
+
+    const [payments] = await pool.query(
+      `
+      SELECT p.payment_date, p.amount, p.currency_code, p.method, p.account, p.reference_number, p.status,
+             e.id AS expense_id, e.expense_date, e.description,
+             COALESCE(org.razon_social, org.name) AS provider_name
+        FROM admin_expense_payments p
+        JOIN admin_expenses e ON e.id = p.expense_id
+        LEFT JOIN organizations org ON org.id = e.provider_id
+      `
+    );
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'CRM';
+    wb.created = new Date();
+    const sheet = wb.addWorksheet('Libro de compras');
+    sheet.addRow([
+      'Fecha gasto',
+      'Fecha factura',
+      'Tipo',
+      'Comprobante',
+      'Timbrado',
+      'RUC proveedor',
+      'Proveedor',
+      'IVA 10',
+      'IVA 5',
+      'Exento',
+      'Total',
+      'Moneda',
+      'TC',
+      'Condicion',
+      'Vencimiento',
+      'RUC comprador',
+      'Comprador',
+      'Tipo IVA',
+      'Gravado 10',
+      'Gravado 5',
+      'No gravado',
+      'Tipo de cambio',
+      'Categoría',
+      'Subcategoría',
+      'Centro de costo',
+    ]);
+    rows.forEach((r) => {
+      sheet.addRow([
+        r.expense_date,
+        r.invoice_date,
+        r.receipt_type,
+        r.receipt_number,
+        r.timbrado_number,
+        r.supplier_ruc,
+        r.supplier_name,
+        r.iva_10,
+        r.iva_5,
+        r.iva_exempt,
+        r.amount,
+        r.currency_code,
+        r.tax_rate,
+        r.condition_type,
+        r.due_date,
+        r.buyer_ruc,
+        r.buyer_name,
+        r.tax_mode,
+        r.gravado_10,
+        r.gravado_5,
+        r.iva_no_taxed,
+        r.exchange_rate,
+        r.category_name,
+        r.subcategory_name,
+        r.cost_center_name,
+      ]);
+    });
+
+    const paySheet = wb.addWorksheet('Pagos');
+    paySheet.addRow([
+      'Fecha pago',
+      'Gasto ID',
+      'Fecha gasto',
+      'Proveedor',
+      'Descripción',
+      'Monto',
+      'Moneda',
+      'Método',
+      'Cuenta',
+      'Referencia',
+      'Estado',
+    ]);
+    payments.forEach((p) => {
+      paySheet.addRow([
+        p.payment_date,
+        p.expense_id,
+        p.expense_date,
+        p.provider_name,
+        p.description,
+        p.amount,
+        p.currency_code,
+        p.method,
+        p.account,
+        p.reference_number,
+        p.status,
+      ]);
+    });
+
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="libro-compras-administrativo.xlsx"`
+    );
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    await wb.xlsx.write(res);
+    res.end();
+  } catch (e) {
+    console.error('[admin-expenses] export error', e);
+    res.status(500).json({ error: 'No se pudo exportar' });
+  }
+});
+
+router.get('/report', requireAuth, async (req, res) => {
+  try {
+    const { from_date, to_date, status, currency_code } = req.query || {};
+    const where = [];
+    const params = [];
+    if (from_date) {
+      where.push('e.expense_date >= ?');
+      params.push(from_date);
+    }
+    if (to_date) {
+      where.push('e.expense_date <= ?');
+      params.push(to_date);
+    }
+    if (status) {
+      where.push('e.status = ?');
+      params.push(status);
+    }
+    if (currency_code) {
+      where.push('e.currency_code = ?');
+      params.push(currency_code);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const [byCostCenter] = await pool.query(
+      `
+      SELECT cc.name AS cost_center_name, e.currency_code, SUM(e.amount) AS total
+        FROM admin_expenses e
+        LEFT JOIN admin_expense_cost_centers cc ON cc.id = e.cost_center_id
+        ${whereSql}
+       GROUP BY cc.name, e.currency_code
+       ORDER BY total DESC
+      `,
+      params
+    );
+
+    res.json({ byCostCenter });
+  } catch (e) {
+    console.error('[admin-expenses] report error', e);
+    res.status(500).json({ error: 'No se pudo cargar el reporte' });
+  }
 });
 
 router.get('/providers', requireAuth, async (_req, res) => {
@@ -1016,3 +1703,5 @@ router.post('/providers', requireAuth, async (req, res) => {
 });
 
 export default router;
+
+

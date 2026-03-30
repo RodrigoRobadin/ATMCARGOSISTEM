@@ -384,6 +384,7 @@ function NewOrganizationModal({
   const [tipoOrg, setTipoOrg] = useState('');
   const [operacion, setOperacion] = useState('');
   const [notes, setNotes] = useState('');
+  const [branches, setBranches] = useState([]);
 
   // Hoja de ruta para flete
   const [hojaRuta, setHojaRuta] = useState('');
@@ -428,6 +429,7 @@ function NewOrganizationModal({
         operacion: operacion || null,
         notes: notes || null,
         hoja_ruta: hojaRuta || null,
+        branches: (branches || []).filter((b) => b?.name || b?.address),
 
         // Asignación comercial tolerante
         account_executive_id: execId,
@@ -534,6 +536,99 @@ function NewOrganizationModal({
               onChange={(e) => setPhone(e.target.value)}
             />
           </label>
+        </div>
+
+        {/* Sucursales */}
+        <div className="border rounded-xl p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-sm font-medium">Sucursales</div>
+            <button
+              type="button"
+              className="px-2 py-1 text-xs rounded-lg border bg-white hover:bg-slate-50"
+              onClick={() =>
+                setBranches((prev) => [
+                  ...prev,
+                  { name: '', address: '', city: '', country: '', is_default: 0 },
+                ])
+              }
+            >
+              Agregar sucursal
+            </button>
+          </div>
+          {branches.length === 0 && (
+            <div className="text-xs text-slate-500">
+              No hay sucursales cargadas.
+            </div>
+          )}
+          {branches.map((b, idx) => (
+            <div key={idx} className="grid grid-cols-1 md:grid-cols-6 gap-2 mb-2">
+              <input
+                className="border rounded-lg px-2 py-1 text-sm md:col-span-1"
+                placeholder="Nombre"
+                value={b.name || ''}
+                onChange={(e) =>
+                  setBranches((prev) =>
+                    prev.map((x, i) => (i === idx ? { ...x, name: e.target.value } : x))
+                  )
+                }
+              />
+              <input
+                className="border rounded-lg px-2 py-1 text-sm md:col-span-2"
+                placeholder="Dirección"
+                value={b.address || ''}
+                onChange={(e) =>
+                  setBranches((prev) =>
+                    prev.map((x, i) => (i === idx ? { ...x, address: e.target.value } : x))
+                  )
+                }
+              />
+              <input
+                className="border rounded-lg px-2 py-1 text-sm md:col-span-1"
+                placeholder="Ciudad"
+                value={b.city || ''}
+                onChange={(e) =>
+                  setBranches((prev) =>
+                    prev.map((x, i) => (i === idx ? { ...x, city: e.target.value } : x))
+                  )
+                }
+              />
+              <input
+                className="border rounded-lg px-2 py-1 text-sm md:col-span-1"
+                placeholder="País"
+                value={b.country || ''}
+                onChange={(e) =>
+                  setBranches((prev) =>
+                    prev.map((x, i) => (i === idx ? { ...x, country: e.target.value } : x))
+                  )
+                }
+              />
+              <div className="flex items-center gap-2 md:col-span-1">
+                <label className="text-xs flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={!!b.is_default}
+                    onChange={(e) =>
+                      setBranches((prev) =>
+                        prev.map((x, i) =>
+                          i === idx ? { ...x, is_default: e.target.checked ? 1 : 0 } : x
+                        )
+                      )
+                    }
+                  />
+                  Principal
+                </label>
+                <button
+                  type="button"
+                  className="text-xs text-red-600 hover:underline"
+                  onClick={() =>
+                    setBranches((prev) => prev.filter((_, i) => i !== idx))
+                  }
+                >
+                  Quitar
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
 
         {/* Fila 4: Rubro - Tipo org */}

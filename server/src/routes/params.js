@@ -118,6 +118,30 @@ try {
     } catch (e) {
       console.error('[params] no se pudo seedear plantilla:', e?.message || e);
     }
+
+    // Seed: datos por defecto del comprador (ATM CARGO SRL)
+    try {
+      const [[buyerName]] = await pool.query(
+        `SELECT id FROM param_values WHERE \`key\` = 'buyer_name_default' LIMIT 1`
+      );
+      if (!buyerName?.id) {
+        await pool.query(
+          `INSERT INTO param_values (\`key\`, \`value\`, \`ord\`, \`active\`) VALUES ('buyer_name_default', ?, 0, 1)`,
+          ['ATM CARGO SRL']
+        );
+      }
+      const [[buyerRuc]] = await pool.query(
+        `SELECT id FROM param_values WHERE \`key\` = 'buyer_ruc_default' LIMIT 1`
+      );
+      if (!buyerRuc?.id) {
+        await pool.query(
+          `INSERT INTO param_values (\`key\`, \`value\`, \`ord\`, \`active\`) VALUES ('buyer_ruc_default', ?, 0, 1)`,
+          ['80056641-6']
+        );
+      }
+    } catch (e) {
+      console.error('[params] no se pudo seedear buyer defaults:', e?.message || e);
+    }
   } catch (e) {
     console.error('[params] no se pudo asegurar tabla param_values:', e?.message || e);
   }

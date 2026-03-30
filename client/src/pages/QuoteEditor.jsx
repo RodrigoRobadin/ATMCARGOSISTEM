@@ -1,6 +1,6 @@
 ﻿// client/src/pages/QuoteEditor.jsx
 import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams, useLocation } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth.jsx";
 
@@ -79,6 +79,60 @@ function fmt2(v) {
   return x.toFixed(2);
 }
 
+function formatLocaleNumber(value, decimals = 2) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "";
+  return num.toLocaleString("es-ES", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+}
+
+function parseLocaleNumber(raw) {
+  if (raw == null) return 0;
+  const s = String(raw).trim();
+  if (!s) return 0;
+  const normalized = s.replace(/\./g, "").replace(",", ".");
+  const num = Number(normalized);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function NumericInput({ value, onChange, decimals = 2, className = "", placeholder = "" }) {
+  const [text, setText] = useState(() =>
+    value === null || value === undefined ? "" : formatLocaleNumber(value, decimals)
+  );
+  const [editing, setEditing] = useState(false);
+
+  useEffect(() => {
+    if (editing) return;
+    setText(value === null || value === undefined ? "" : formatLocaleNumber(value, decimals));
+  }, [value, decimals, editing]);
+
+  return (
+    <input
+      className={className}
+      inputMode="decimal"
+      placeholder={placeholder}
+      value={text}
+      onFocus={() => {
+        setEditing(true);
+        setText(value === null || value === undefined ? "" : String(value));
+      }}
+      onBlur={(e) => {
+        const num = parseLocaleNumber(e.target.value);
+        setEditing(false);
+        onChange(num);
+        setText(formatLocaleNumber(num, decimals));
+      }}
+      onChange={(e) => {
+        const raw = e.target.value;
+        setText(raw);
+        onChange(parseLocaleNumber(raw));
+      }}
+    />
+  );
+}
+
 function TabButton({ active, onClick, children }) {
   return (
     <button
@@ -94,14 +148,25 @@ function TabButton({ active, onClick, children }) {
   );
 }
 
-export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = null, dealId: dealIdProp = null }) {
-  const { id } = useParams();
+export default function QuoteEditor({
+  embedded = false,
+  quoteId: quoteIdProp = null,
+  dealId: dealIdProp = null,
+  serviceCaseId: serviceCaseIdProp = null,
+  quoteBaseOverride = null,
+  caseQuoteEndpointOverride = null,
+  ignoreInvoiceLock = false,
+  enableRevisions = true,
+}) {
+  const params = useParams();
+  const location = useLocation();
+  const id = params.id;
+  const caseIdParam = params.caseId || params.serviceCaseId;
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { user } = useAuth();
 
   const isEmbedded = Boolean(embedded || quoteIdProp || dealIdProp);
-  const isNew = !isEmbedded && (id === undefined || id === "new");
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -110,6 +175,16 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
   const dealIdFromQuery = Number(searchParams.get("dealId") || "");
   const initialDealId = dealIdProp ?? (Number.isFinite(dealIdFromQuery) ? dealIdFromQuery : null);
   const [dealId, setDealId] = useState(initialDealId);
+
+  const serviceCaseIdFromQuery = Number(searchParams.get("serviceCaseId") || searchParams.get("caseId") || "");
+  const initialServiceCaseId =
+    serviceCaseIdProp ??
+    (Number.isFinite(Number(caseIdParam)) ? Number(caseIdParam) : Number.isFinite(serviceCaseIdFromQuery) ? serviceCaseIdFromQuery : null);
+  const [serviceCaseId, setServiceCaseId] = useState(initialServiceCaseId);
+  const isServicePath = location.pathname.startsWith("/service/");
+  const isService = (Number.isFinite(serviceCaseId) && serviceCaseId > 0) || isServicePath;
+  const isNew = !isEmbedded && !isService && (id === undefined || id === "new");
+  const quoteBase = quoteBaseOverride || (isService ? "/service/quotes" : "/quotes");
 
   const [quoteId, setQuoteId] = useState(null);
 
@@ -133,6 +208,8 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
     insurance_buy_rate: 0,
     insurance_profit_mode: "CORRECTED",
 
+    org_branch_id: null,
+    operation_currency: "USD",
     exchange_rate_customs_gs_per_usd: 0,
     exchange_rate_customs_internal_gs_per_usd: 7000,
     exchange_rate_install_gs_per_usd: 1,
@@ -155,9 +232,49 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
   const [revisions, setRevisions] = useState([]); // [{id,name,created_at}]
   const [selectedRevisionId, setSelectedRevisionId] = useState(null);
   const [orgId, setOrgId] = useState(null);
+  const [branches, setBranches] = useState([]);
+  const [branchLoading, setBranchLoading] = useState(false);
+  const [branchFormOpen, setBranchFormOpen] = useState(false);
+  const [newBranch, setNewBranch] = useState({
+    name: "",
+    address: "",
+    city: "",
+    country: "",
+  });
   const [budgetStatus, setBudgetStatus] = useState("borrador"); // borrador | confirmado
   const isAdmin = user?.role === "admin" || (Array.isArray(user?.roles) && user.roles.includes("admin"));
-  const isLocked = budgetStatus === "confirmado";
+  const [invoiceLock, setInvoiceLock] = useState({ locked: false, count: 0 });
+  const [invoiceLockLoading, setInvoiceLockLoading] = useState(false);
+  const invoiceLocked = Boolean(invoiceLock?.locked);
+  const isLocked = (!isService && budgetStatus === "confirmado") || (invoiceLocked && !ignoreInvoiceLock);
+  const lockReason = invoiceLocked ? "facturada" : (!isService && budgetStatus === "confirmado" ? "confirmado" : null);
+
+  const opCurrency = String(inputs.operation_currency || "USD").toUpperCase();
+  const opRate = Number(inputs.exchange_rate_operation_sell_usd || 1) || 1;
+  const isPyg = opCurrency === "PYG" || opCurrency === "GS";
+  const currencyLabel = isPyg ? "Gs" : "USD";
+  const installRate = Number(inputs.exchange_rate_install_gs_per_usd || 1) || 1;
+  const toOp = (usd) => (isPyg ? Number(usd || 0) * opRate : Number(usd || 0));
+  const toInstal = (usd) => (isPyg ? Number(usd || 0) * installRate : Number(usd || 0));
+  const fmtOp = (usd) => {
+    const val = toOp(usd);
+    if (!Number.isFinite(val)) return "-";
+    return isPyg ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 0 }) : fmt2(val);
+  };
+  const fmtInstal = (usd) => {
+    const val = toInstal(usd);
+    if (!Number.isFinite(val)) return "-";
+    return isPyg ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 0 }) : fmt2(val);
+  };
+  const fmtTotalSales = (totalUsd, instalUsd) => {
+    const total = Number(totalUsd || 0);
+    const inst = Number(instalUsd || 0);
+    if (!Number.isFinite(total)) return "-";
+    if (!isPyg) return fmt2(total);
+    const baseUsd = total - inst;
+    const valGs = baseUsd * opRate + inst * installRate;
+    return Number(valGs).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  };
 
   async function refreshBudgetStatus(orgIdToUse) {
     const oid = orgIdToUse || orgId;
@@ -170,10 +287,82 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
     }
   }
 
+  async function refreshInvoiceLock() {
+    const idToUse = isService ? serviceCaseId : dealId;
+    if (!idToUse) {
+      setInvoiceLock({ locked: false, count: 0 });
+      return;
+    }
+    setInvoiceLockLoading(true);
+    try {
+      const { data } = await api.get("/invoices/lock-status", {
+        params: isService ? { service_case_id: idToUse } : { deal_id: idToUse },
+      });
+      setInvoiceLock({ locked: Boolean(data?.locked), count: Number(data?.count || 0) });
+    } catch (_) {
+      setInvoiceLock({ locked: false, count: 0 });
+    } finally {
+      setInvoiceLockLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    let live = true;
+    if (!orgId) {
+      setBranches([]);
+      return undefined;
+    }
+    (async () => {
+      setBranchLoading(true);
+      try {
+        const { data } = await api.get(`/organizations/${orgId}/branches`);
+        if (live) setBranches(Array.isArray(data) ? data : []);
+      } catch (_) {
+        if (live) setBranches([]);
+      } finally {
+        if (live) setBranchLoading(false);
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [orgId]);
+
+  useEffect(() => {
+    refreshInvoiceLock();
+  }, [isService, dealId, serviceCaseId]);
+
+  async function createBranch() {
+    if (!orgId) return;
+    const payload = {
+      name: newBranch.name?.trim() || null,
+      address: newBranch.address?.trim() || null,
+      city: newBranch.city?.trim() || null,
+      country: newBranch.country?.trim() || null,
+    };
+    if (!payload.name && !payload.address) return;
+    try {
+      const { data } = await api.post(`/organizations/${orgId}/branches`, payload);
+      const branch = data || null;
+      if (branch) {
+        setBranches((prev) => [...prev, branch]);
+        setField("org_branch_id", branch.id);
+      }
+      setBranchFormOpen(false);
+      setNewBranch({ name: "", address: "", city: "", country: "" });
+    } catch (e) {
+      console.error("No se pudo crear sucursal", e);
+    }
+  }
+
   const fetchRevisions = async (qid) => {
+    if (!enableRevisions) {
+      setRevisions([]);
+      return;
+    }
     if (!qid) return;
     try {
-      const { data } = await api.get(`/quotes/${qid}/revisions`);
+      const { data } = await api.get(`${quoteBase}/${qid}/revisions`);
       setRevisions(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error("No se pudieron cargar revisiones", e);
@@ -181,22 +370,31 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
     }
   };
 
-  function applyLoadedData(data, dealData = null) {
+  function applyLoadedData(data, dealData = null, serviceCaseData = null) {
     setQuoteId(data?.id ?? null);
     if (data?.deal_id != null) setDealId(data.deal_id);
-    if (dealData?.org_id) setOrgId(dealData.org_id);
-    if (dealData?.org_budget_status) setBudgetStatus(dealData.org_budget_status);
+    if (data?.service_case_id != null) setServiceCaseId(data.service_case_id);
+
+    const ctx = serviceCaseData || dealData || null;
+    if (ctx?.org_id) setOrgId(ctx.org_id);
+    if (ctx?.org_budget_status) setBudgetStatus(ctx.org_budget_status);
+    const branchIdFromCtx = ctx?.org_branch_id ?? null;
 
     setInputs((prev) => ({
       ...prev,
       ...(data?.inputs || {}),
+      org_branch_id:
+        data?.inputs?.org_branch_id ??
+        branchIdFromCtx ??
+        prev.org_branch_id ??
+        null,
       client_name:
         (data?.inputs?.client_name || "").trim() ||
-        (dealData?.org_name || "").trim() ||
+        (serviceCaseData?.org_name || dealData?.org_name || "").trim() ||
         prev.client_name,
       ref_code:
         (data?.inputs?.ref_code || "").trim() ||
-        (dealData?.reference || "").trim() ||
+        (serviceCaseData?.reference || dealData?.reference || "").trim() ||
         prev.ref_code,
       items:
         Array.isArray(data?.inputs?.items) && data.inputs.items.length
@@ -217,12 +415,23 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
   }
 
   async function loadQuoteById(quoteIdToLoad, revisionId = null) {
-    const { data } = await api.get(`/quotes/${quoteIdToLoad}`, {
+    const { data } = await api.get(`${quoteBase}/${quoteIdToLoad}`, {
       params: revisionId ? { revision_id: revisionId } : {},
     });
 
     let dealData = null;
-    if (data?.deal_id) {
+    let serviceCaseData = null;
+    if (isService) {
+      const caseId = data?.service_case_id;
+      if (caseId) {
+        try {
+          const { data: caseRes } = await api.get(`/service/cases/${caseId}`);
+          serviceCaseData = caseRes?.case || caseRes?.data || caseRes || null;
+        } catch (_) {
+          serviceCaseData = null;
+        }
+      }
+    } else if (data?.deal_id) {
       try {
         const { data: dealRes } = await api.get(`/deals/${data.deal_id}`);
         dealData = dealRes?.deal || null;
@@ -231,9 +440,10 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
       }
     }
 
-    applyLoadedData(data, dealData);
-    if (dealData?.org_id) {
-      refreshBudgetStatus(dealData.org_id);
+    applyLoadedData(data, dealData, serviceCaseData);
+    const orgSource = serviceCaseData || dealData;
+    if (orgSource?.org_id) {
+      refreshBudgetStatus(orgSource.org_id);
     }
     if (data?.id) fetchRevisions(data.id);
     return data;
@@ -264,6 +474,31 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
     setError("");
 
     try {
+      if (isService) {
+        if (isEmbedded && Number.isFinite(quoteIdProp) && quoteIdProp > 0) {
+          await loadQuoteById(quoteIdProp);
+          return;
+        }
+        if (isEmbedded && Number.isFinite(serviceCaseIdProp) && serviceCaseIdProp > 0) {
+          await loadOrCreateByCase(serviceCaseIdProp);
+          return;
+        }
+
+        const rawQuoteId = Number(id);
+        if (Number.isFinite(rawQuoteId) && rawQuoteId > 0) {
+          await loadQuoteById(rawQuoteId);
+          return;
+        }
+        if (Number.isFinite(serviceCaseId) && serviceCaseId > 0) {
+          await loadOrCreateByCase(serviceCaseId);
+          return;
+        }
+
+        setError("CaseId invalido");
+        setLoading(false);
+        return;
+      }
+
       if (isNew) {
         setQuoteId(null);
         setComputed(null);
@@ -309,16 +544,49 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
     } finally {
       setLoading(false);
     }
+  
+  async function loadOrCreateByCase(caseIdToLoad) {
+    const [quoteRes, caseRes] = await Promise.all([
+      api.get(caseQuoteEndpointOverride || `/service/cases/${caseIdToLoad}/quote`),
+      api.get(`/service/cases/${caseIdToLoad}`).catch(() => ({ data: null })),
+    ]);
+    const data = quoteRes.data;
+    const caseData = caseRes?.data?.case || caseRes?.data || caseRes || null;
+
+    applyLoadedData(data, null, caseData);
+    if (caseData?.org_id) {
+      refreshBudgetStatus(caseData.org_id);
+    }
+    if (data?.id) fetchRevisions(data.id);
+
+    if (!isEmbedded && data?.id && String(id) !== String(data.id)) {
+      navigate(`/service/quotes/${data.id}?caseId=${caseIdToLoad}`, { replace: true });
+    }
+    return data;
   }
+}
 
   async function createNewQuote() {
     setSaving(true);
     setError("");
     try {
       const payloadInputs = { ...inputs };
+      if (Array.isArray(payloadInputs.items)) {
+        payloadInputs.items = payloadInputs.items.map((it) => ({
+          ...it,
+          tax_rate: Number(it.tax_rate ?? 10),
+        }));
+      }
+      if (Array.isArray(payloadInputs.items)) {
+        payloadInputs.items = payloadInputs.items.map((it) => ({
+          ...it,
+          tax_rate: Number(it.tax_rate ?? 10),
+        }));
+      }
       if (dealId) payloadInputs.deal_id = dealId;
+      if (isService && serviceCaseId) payloadInputs.service_case_id = serviceCaseId;
 
-      const { data } = await api.post("/quotes", { inputs: payloadInputs });
+      const { data } = await api.post(quoteBase, { inputs: payloadInputs });
       const newId = data?.id;
       if (!newId) throw new Error("No se recibió id");
 
@@ -326,8 +594,9 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
       setComputed(data?.computed || null);
       fetchRevisions(newId);
 
-      const qs = dealId ? `?dealId=${dealId}` : "";
-      navigate(`/quotes/${newId}${qs}`, { replace: true });
+      const qs = isService ? `?caseId=${serviceCaseId}` : dealId ? `?dealId=${dealId}` : "";
+      const basePath = isService ? "/service/quotes" : "/quotes";
+      navigate(`${basePath}/${newId}${qs}`, { replace: true });
     } catch (e) {
       console.error(e);
       setError(e?.response?.data?.error || "No se pudo crear la cotización");
@@ -337,21 +606,27 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
   }
 
   async function createRevision() {
+    if (!enableRevisions) return;
+    if (isLocked) return;
     if (!quoteId) return;
     const name = window.prompt("Nombre de la revisión:", "Rev " + new Date().toLocaleDateString());
     if (!name) return;
     try {
-      const { data } = await api.post(`/quotes/${quoteId}/revisions`, { name });
+      const { data } = await api.post(`${quoteBase}/${quoteId}/revisions`, { name });
       const list = data?.revisions || [];
       setRevisions(Array.isArray(list) ? list : []);
       setSelectedRevisionId(data?.id || null);
       await loadQuoteById(quoteId, data?.id || null);
+      try {
+        window.dispatchEvent(new CustomEvent("quote-revision-created", { detail: { quoteId } }));
+      } catch (_) {}
     } catch (e) {
       alert("No se pudo crear la revisión.");
     }
   }
 
   async function confirmBudget() {
+    if (invoiceLocked) return;
     if (!orgId) return alert("Sin organización vinculada.");
     try {
       await api.post(`/organizations/${orgId}/budget/confirm`);
@@ -376,14 +651,18 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
   }
 
   async function saveQuote() {
+    if (isLocked) return;
     if (!quoteId) return createNewQuote();
     setSaving(true);
     setError("");
     try {
       const payloadInputs = { ...inputs };
       if (dealId) payloadInputs.deal_id = dealId;
+      if (isService && serviceCaseId) payloadInputs.service_case_id = serviceCaseId;
 
-      const { data } = await api.put(`/quotes/${quoteId}`, { inputs: payloadInputs });
+      const { data } = selectedRevisionId
+        ? await api.put(`${quoteBase}/${quoteId}/revisions/${selectedRevisionId}`, { inputs: payloadInputs })
+        : await api.put(`${quoteBase}/${quoteId}`, { inputs: payloadInputs });
       setComputed(data?.computed || null);
     } catch (e) {
       console.error(e);
@@ -394,12 +673,17 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
   }
 
   async function recalcQuote() {
+    if (isLocked) return;
     if (!quoteId) return;
     setSaving(true);
     setError("");
     try {
-      const { data } = await api.post(`/quotes/${quoteId}/recalculate`);
-      setComputed(data?.computed || null);
+      if (selectedRevisionId) {
+        await saveQuote();
+      } else {
+        const { data } = await api.post(`${quoteBase}/${quoteId}/recalculate`);
+        setComputed(data?.computed || null);
+      }
     } catch (e) {
       console.error(e);
       setError(e?.response?.data?.error || "No se pudo recalcular");
@@ -409,14 +693,15 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
   }
 
   async function duplicateQuote() {
+    if (isLocked) return;
     if (!quoteId) return;
     setSaving(true);
     setError("");
     try {
-      const { data } = await api.post(`/quotes/${quoteId}/duplicate`);
+      const { data } = await api.post(`${quoteBase}/${quoteId}/duplicate`);
       const newId = data?.id;
       if (!newId) throw new Error("No se recibió id");
-      navigate(`/quotes/${newId}`);
+      navigate(`${isService ? "/service/quotes" : "/quotes"}/${newId}`);
     } catch (e) {
       console.error(e);
       setError(e?.response?.data?.error || "No se pudo duplicar");
@@ -427,13 +712,13 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
 
   function exportXlsx() {
     if (!quoteId) return;
-    window.open(`${api.defaults.baseURL}/quotes/${quoteId}/export-xlsx`, "_blank");
+    window.open(`${api.defaults.baseURL}${quoteBase}/${quoteId}/export-xlsx`, "_blank");
   }
 
   useEffect(() => {
     loadSmart();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, quoteIdProp, dealIdProp]);
+  }, [id, quoteIdProp, dealIdProp, serviceCaseId, serviceCaseIdProp]);
 
   const ofertaTotals = computed?.oferta?.totals || null;
   const opTotals = computed?.operacion?.totals || null;
@@ -545,8 +830,8 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
             {quoteId ? `Cotización #${quoteId}` : "Nueva cotización"}
           </div>
           <div className="text-xs text-slate-500">
-            Total ventas: <b>{summaryCards.totalSales != null ? fmt2(summaryCards.totalSales) : "-"}</b>{" "}
-            | Profit total: <b>{summaryCards.profitTotal != null ? fmt2(summaryCards.profitTotal) : "-"}</b>
+          Total ventas {currencyLabel}: <b>{summaryCards.totalSales != null ? fmtOp(summaryCards.totalSales) : "-"}</b>{" "}
+          | Profit total {currencyLabel}: <b>{summaryCards.profitTotal != null ? fmtOp(summaryCards.profitTotal) : "-"}</b>
             {dealId ? (
               <>
                 {" "} | Deal: <b>#{dealId}</b>
@@ -556,7 +841,7 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
         </div>
 
         <div className="flex gap-2 flex-wrap items-center">
-          {quoteId && (
+          {quoteId && enableRevisions && (
             <>
               <select
                 className="px-3 py-2 rounded-lg border bg-white text-sm"
@@ -578,10 +863,16 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
                 className="px-3 py-2 rounded-lg border bg-white hover:bg-slate-50 text-sm"
                 type="button"
                 onClick={createRevision}
+                disabled={isLocked}
               >
                 + Nueva revisión
               </button>
             </>
+          )}
+          {selectedRevisionId && (
+            <span className="text-xs text-slate-600">
+              Estás editando la revisión seleccionada.
+            </span>
           )}
           {dealId && (
             <button
@@ -614,7 +905,7 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
           <button
             className="px-3 py-2 rounded-lg border bg-white hover:bg-slate-50 text-sm"
             onClick={recalcQuote}
-            disabled={!quoteId || saving}
+            disabled={!quoteId || saving || isLocked}
             type="button"
           >
             Recalcular
@@ -626,14 +917,14 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
             disabled={saving || isLocked}
             type="button"
           >
-            {quoteId ? "Guardar" : "Crear"}
+            {quoteId ? (selectedRevisionId ? "Guardar revisión" : "Guardar") : "Crear"}
           </button>
         </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <span className="text-xs uppercase text-slate-600">Estado: {budgetStatus}</span>
-        {!isLocked && (
+        {!isLocked && !invoiceLocked && (
           <button
             className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-sm"
             type="button"
@@ -642,7 +933,7 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
             Confirmar presupuesto
           </button>
         )}
-        {isLocked && isAdmin && (
+        {isLocked && !invoiceLocked && isAdmin && (
           <button
             className="px-3 py-2 rounded bg-red-600 hover:bg-red-700 text-white text-sm"
             type="button"
@@ -651,8 +942,16 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
             Reabrir presupuesto
           </button>
         )}
-        {isLocked && !isAdmin && (
+        {isLocked && !invoiceLocked && !isAdmin && (
           <span className="text-xs text-amber-600">Solo admin puede reabrir.</span>
+        )}
+        {invoiceLocked && (
+          <span className="text-xs text-amber-700">
+            Bloqueado por factura emitida ({invoiceLock?.count || 0}).
+          </span>
+        )}
+        {invoiceLockLoading && (
+          <span className="text-xs text-slate-500">Verificando facturas...</span>
         )}
       </div>
 
@@ -741,46 +1040,51 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
         <div className={`space-y-3 ${lockClass}`}>
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
             <div>
-              <label className="text-xs text-slate-500">Flete Intl (Venta USD)</label>
-              <input
-                type="number"
-                step="0.01"
+              <label className="text-xs text-slate-500">Flete Intl (Venta {currencyLabel})</label>
+              <NumericInput
                 className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
                 value={inputs.freight_international_total_usd ?? 0}
-                onChange={(e) => setField("freight_international_total_usd", n2(e.target.value))}
+                onChange={(v) => setField("freight_international_total_usd", v)}
               />
             </div>
 
             <div>
-              <label className="text-xs text-slate-500">Flete compra USD</label>
-              <input
-                type="number"
-                step="0.01"
+              <label className="text-xs text-slate-500">Flete compra {currencyLabel}</label>
+              <NumericInput
                 className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
                 value={inputs.freight_buy_usd ?? 0}
-                onChange={(e) => setField("freight_buy_usd", n2(e.target.value))}
+                onChange={(v) => setField("freight_buy_usd", v)}
               />
             </div>
 
             <div>
-              <label className="text-xs text-slate-500">Seguro (Venta USD)</label>
-              <input
-                type="number"
-                step="0.01"
+              <label className="text-xs text-slate-500">Seguro (Venta {currencyLabel})</label>
+              <NumericInput
                 className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
                 value={inputs.insurance_sale_total_usd ?? 0}
-                onChange={(e) => setField("insurance_sale_total_usd", n2(e.target.value))}
+                onChange={(v) => setField("insurance_sale_total_usd", v)}
               />
+            </div>
+
+            <div>
+              <label className="text-xs text-slate-500">Moneda de operación</label>
+              <select
+                className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
+                value={opCurrency}
+                onChange={(e) => setField("operation_currency", e.target.value)}
+              >
+                <option value="USD">USD</option>
+                <option value="PYG">PYG</option>
+              </select>
             </div>
 
             <div>
               <label className="text-xs text-slate-500">Seguro compra rate</label>
-              <input
-                type="number"
-                step="0.0001"
+              <NumericInput
                 className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
                 value={inputs.insurance_buy_rate ?? 0}
-                onChange={(e) => setField("insurance_buy_rate", n2(e.target.value))}
+                onChange={(v) => setField("insurance_buy_rate", v)}
+                decimals={4}
               />
             </div>
 
@@ -797,6 +1101,97 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
             </div>
           </div>
 
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="md:col-span-2">
+              <label className="text-xs text-slate-500">Sucursal de facturación</label>
+              <select
+                className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
+                value={inputs.org_branch_id || ""}
+                onChange={(e) =>
+                  setField("org_branch_id", e.target.value ? Number(e.target.value) : null)
+                }
+              >
+                <option value="">— Dirección principal —</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name || b.address || `Sucursal ${b.id}`}
+                  </option>
+                ))}
+              </select>
+              {!!inputs.org_branch_id && (
+                <div className="text-xs text-slate-500 mt-1">
+                  {branches.find((b) => b.id === Number(inputs.org_branch_id))?.address || ""}
+                </div>
+              )}
+            </div>
+            <div className="flex items-end">
+              <button
+                type="button"
+                className="w-full px-3 py-2 rounded-lg border bg-white hover:bg-slate-50 text-sm"
+                onClick={() => setBranchFormOpen((v) => !v)}
+                disabled={!orgId}
+              >
+                {branchFormOpen ? "Cerrar" : "Agregar sucursal"}
+              </button>
+            </div>
+          </div>
+
+          {branchFormOpen && (
+            <div className="bg-slate-50 border rounded-xl p-3">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <div>
+                  <label className="text-xs text-slate-500">Nombre</label>
+                  <input
+                    className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
+                    value={newBranch.name}
+                    onChange={(e) => setNewBranch((prev) => ({ ...prev, name: e.target.value }))}
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="text-xs text-slate-500">Dirección</label>
+                  <input
+                    className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
+                    value={newBranch.address}
+                    onChange={(e) => setNewBranch((prev) => ({ ...prev, address: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Ciudad</label>
+                  <input
+                    className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
+                    value={newBranch.city}
+                    onChange={(e) => setNewBranch((prev) => ({ ...prev, city: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">País</label>
+                  <input
+                    className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
+                    value={newBranch.country}
+                    onChange={(e) => setNewBranch((prev) => ({ ...prev, country: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="flex gap-2 mt-3">
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg bg-black text-white text-sm"
+                  onClick={createBranch}
+                  disabled={branchLoading}
+                >
+                  Guardar sucursal
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg border bg-white text-sm"
+                  onClick={() => setBranchFormOpen(false)}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+
 <div className="overflow-auto rounded-xl border bg-white">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-100 text-left">
@@ -805,8 +1200,9 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
                   <th className="px-3 py-2">Descripción</th>
                   <th className="px-3 py-2">Observación</th>
                   <th className="px-3 py-2 text-right">Cant</th>
-                  <th className="px-3 py-2 text-right">V. Puerta USD</th>
-                  <th className="px-3 py-2 text-right">Adicional USD</th>
+                  <th className="px-3 py-2 text-right">IVA</th>
+                  <th className="px-3 py-2 text-right">Costo item ({currencyLabel})</th>
+                  <th className="px-3 py-2 text-right">Adicional ({currencyLabel})</th>
                   <th className="px-3 py-2 text-right">Acciones</th>
                 </tr>
               </thead>
@@ -814,11 +1210,11 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
                 {(inputs.items || []).map((it, idx) => (
                   <tr key={idx} className="border-t">
                     <td className="px-3 py-2 w-20">
-                      <input
+                      <NumericInput
                         className="w-full border rounded-lg px-2 py-1"
-                        type="number"
                         value={it.line_no ?? idx + 1}
-                        onChange={(e) => setItem(idx, "line_no", n2(e.target.value))}
+                        onChange={(v) => setItem(idx, "line_no", v)}
+                        decimals={0}
                       />
                     </td>
                     <td className="px-3 py-2">
@@ -837,30 +1233,36 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
                       />
                     </td>
                     <td className="px-3 py-2 w-28">
-                      <input
+                      <NumericInput
                         className="w-full border rounded-lg px-2 py-1 text-right"
-                        type="number"
-                        step="0.01"
                         value={it.qty ?? 0}
-                        onChange={(e) => setItem(idx, "qty", n2(e.target.value))}
+                        onChange={(v) => setItem(idx, "qty", v)}
+                        decimals={2}
                       />
                     </td>
+                    <td className="px-3 py-2 w-28">
+                      <select
+                        className="w-full border rounded-lg px-2 py-1"
+                        value={it.tax_rate ?? 10}
+                        onChange={(e) => setItem(idx, "tax_rate", n2(e.target.value))}
+                      >
+                        <option value={0}>Exenta</option>
+                        <option value={5}>5%</option>
+                        <option value={10}>10%</option>
+                      </select>
+                    </td>
                     <td className="px-3 py-2 w-40">
-                      <input
+                      <NumericInput
                         className="w-full border rounded-lg px-2 py-1 text-right"
-                        type="number"
-                        step="0.01"
                         value={it.door_value_usd ?? 0}
-                        onChange={(e) => setItem(idx, "door_value_usd", n2(e.target.value))}
+                        onChange={(v) => setItem(idx, "door_value_usd", v)}
                       />
                     </td>
                     <td className="px-3 py-2 w-40">
-                      <input
+                      <NumericInput
                         className="w-full border rounded-lg px-2 py-1 text-right"
-                        type="number"
-                        step="0.01"
                         value={it.additional_usd ?? 0}
-                        onChange={(e) => setItem(idx, "additional_usd", n2(e.target.value))}
+                        onChange={(v) => setItem(idx, "additional_usd", v)}
                       />
                     </td>
                     <td className="px-3 py-2 w-28">
@@ -910,24 +1312,27 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
                       <td className="px-3 py-2">{r.line_no}</td>
                       <td className="px-3 py-2">{r.description}</td>
                       <td className="px-3 py-2 text-right">{fmt2((r.participation || 0) * 100)}%</td>
-                      <td className="px-3 py-2 text-right">{fmt2(r.flete)}</td>
-                      <td className="px-3 py-2 text-right">{fmt2(r.seguro)}</td>
-                      <td className="px-3 py-2 text-right">{fmt2(r.valor_imp)}</td>
-                      <td className="px-3 py-2 text-right">{fmt2(r.despacho)}</td>
-                      <td className="px-3 py-2 text-right">{fmt2(r.finan)}</td>
-                      <td className="px-3 py-2 text-right">{fmt2(r.instal)}</td>
-                      <td className="px-3 py-2 text-right">{fmt2(r.rent)}</td>
-                      <td className="px-3 py-2 text-right">{fmt2(r.adicional)}</td>
-                      <td className="px-3 py-2 text-right">{fmt2(r.total_sales)}</td>
-                      <td className="px-3 py-2 text-right">{r.unit_price != null ? fmt2(r.unit_price) : "-"}</td>
+                      <td className="px-3 py-2 text-right">{fmtOp(r.flete)}</td>
+                      <td className="px-3 py-2 text-right">{fmtOp(r.seguro)}</td>
+                      <td className="px-3 py-2 text-right">{fmtOp(r.valor_imp)}</td>
+                      <td className="px-3 py-2 text-right">{fmtOp(r.despacho)}</td>
+                      <td className="px-3 py-2 text-right">{fmtOp(r.finan)}</td>
+                      <td className="px-3 py-2 text-right">{fmtInstal(r.instal)}</td>
+                      <td className="px-3 py-2 text-right">{fmtOp(r.rent)}</td>
+                      <td className="px-3 py-2 text-right">{fmtOp(r.adicional)}</td>
+                      <td className="px-3 py-2 text-right">{fmtTotalSales(r.total_sales, r.instal)}</td>
+                      <td className="px-3 py-2 text-right">{r.unit_price != null ? fmtOp(r.unit_price) : "-"}</td>
                     </tr>
                   ))}
                 </tbody>
                 
               </table>
               <div className="p-3 text-sm border-t bg-slate-50">
-                <div>CIF total (Valor Imponible): <b>{cifUsd != null ? fmt2(cifUsd) : "-"}</b></div>
-                <div>Total ventas USD: <b>{fmt2(computed.oferta.totals.total_sales_usd)}</b></div>
+                <div>CIF total (Valor Imponible): <b>{cifUsd != null ? fmtOp(cifUsd) : "-"}</b></div>
+                <div>
+                  Total ventas {currencyLabel}:{" "}
+                  <b>{fmtTotalSales(computed.oferta.totals.total_sales_usd, computed.oferta.totals.total_instal_usd)}</b>
+                </div>
               </div>
             </div>
           )}
@@ -1157,32 +1562,29 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
             <div>
               <label className="text-xs text-slate-500">TC Instalación (Gs/USD)</label>
-              <input
-                type="number"
-                step="1"
+              <NumericInput
                 className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
                 value={inputs.exchange_rate_install_gs_per_usd ?? 1}
-                onChange={(e) => setField("exchange_rate_install_gs_per_usd", n2(e.target.value) || 1)}
+                onChange={(v) => setField("exchange_rate_install_gs_per_usd", v || 1)}
+                decimals={0}
               />
             </div>
             <div>
-              <label className="text-xs text-slate-500">TC Operación compra</label>
-              <input
-                type="number"
-                step="1"
+              <label className="text-xs text-slate-500">TC Operación compra (Gs/USD)</label>
+              <NumericInput
                 className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
                 value={inputs.exchange_rate_operation_buy_usd ?? 1}
-                onChange={(e) => setField("exchange_rate_operation_buy_usd", n2(e.target.value) || 1)}
+                onChange={(v) => setField("exchange_rate_operation_buy_usd", v || 1)}
+                decimals={0}
               />
             </div>
             <div>
-              <label className="text-xs text-slate-500">TC Operación venta</label>
-              <input
-                type="number"
-                step="1"
+              <label className="text-xs text-slate-500">TC Operación venta (Gs/USD)</label>
+              <NumericInput
                 className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
-              value={inputs.exchange_rate_operation_sell_usd ?? 1}
-              onChange={(e) => setField("exchange_rate_operation_sell_usd", n2(e.target.value) || 1)}
+                value={inputs.exchange_rate_operation_sell_usd ?? 1}
+                onChange={(v) => setField("exchange_rate_operation_sell_usd", v || 1)}
+                decimals={0}
               />
             </div>
           </div>
@@ -1225,11 +1627,11 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
                 {(inputs.install_items || []).map((it, idx) => (
                   <tr key={idx} className="border-t">
                     <td className="px-3 py-2 w-20">
-                      <input
+                      <NumericInput
                         className="w-full border rounded-lg px-2 py-1"
-                        type="number"
                         value={it.line_no ?? idx + 1}
-                        onChange={(e) => setInstall(idx, "line_no", n2(e.target.value))}
+                        onChange={(v) => setInstall(idx, "line_no", v)}
+                        decimals={0}
                       />
                     </td>
                     <td className="px-3 py-2">
@@ -1240,30 +1642,27 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
                       />
                     </td>
                     <td className="px-3 py-2 w-28">
-                      <input
+                      <NumericInput
                         className="w-full border rounded-lg px-2 py-1 text-right"
-                        type="number"
-                        step="0.01"
                         value={it.qty ?? 0}
-                        onChange={(e) => setInstall(idx, "qty", n2(e.target.value))}
+                        onChange={(v) => setInstall(idx, "qty", v)}
+                        decimals={2}
                       />
                     </td>
                     <td className="px-3 py-2 w-40">
-                      <input
+                      <NumericInput
                         className="w-full border rounded-lg px-2 py-1 text-right"
-                        type="number"
-                        step="1"
                         value={it.unit_cost_gs ?? 0}
-                        onChange={(e) => setInstall(idx, "unit_cost_gs", n2(e.target.value))}
+                        onChange={(v) => setInstall(idx, "unit_cost_gs", v)}
+                        decimals={0}
                       />
                     </td>
                     <td className="px-3 py-2 w-40">
-                      <input
+                      <NumericInput
                         className="w-full border rounded-lg px-2 py-1 text-right"
-                        type="number"
-                        step="1"
                         value={it.unit_price_gs ?? 0}
-                        onChange={(e) => setInstall(idx, "unit_price_gs", n2(e.target.value))}
+                        onChange={(v) => setInstall(idx, "unit_price_gs", v)}
+                        decimals={0}
                       />
                     </td>
                     <td className="px-3 py-2 w-28">
@@ -1346,9 +1745,9 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
                 <thead className="bg-slate-100 text-left">
                   <tr>
                     <th className="px-3 py-2">Rubro</th>
-                    <th className="px-3 py-2 text-right">Compra (USD)</th>
-                    <th className="px-3 py-2 text-right">Venta (USD)</th>
-                    <th className="px-3 py-2 text-right">Profit (USD)</th>
+                    <th className="px-3 py-2 text-right">Compra ({currencyLabel})</th>
+                    <th className="px-3 py-2 text-right">Venta ({currencyLabel})</th>
+                    <th className="px-3 py-2 text-right">Profit ({currencyLabel})</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1361,9 +1760,9 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
                     return (
                       <tr key={k} className="border-t">
                         <td className="px-3 py-2">{label}</td>
-                        <td className="px-3 py-2 text-right">{fmt2(v.compra)}</td>
-                        <td className="px-3 py-2 text-right">{fmt2(v.venta)}</td>
-                        <td className="px-3 py-2 text-right">{fmt2(v.profit)}</td>
+                        <td className="px-3 py-2 text-right">{fmtOp(v.compra)}</td>
+                        <td className="px-3 py-2 text-right">{fmtOp(v.venta)}</td>
+                        <td className="px-3 py-2 text-right">{fmtOp(v.profit)}</td>
                       </tr>
                     );
                   })}
@@ -1374,26 +1773,29 @@ export default function QuoteEditor({ embedded = false, quoteId: quoteIdProp = n
                   <label className="text-xs uppercase tracking-wide text-slate-600">
                     Profit vendedor (%)
                   </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0"
-                    className="border rounded px-2 py-1 w-24 text-right"
-                    value={((inputs.vendor_profit_pct ?? 0) * 100).toFixed(2)}
+                  <select
+                    className="border rounded px-2 py-1 w-28"
+                    value={String(((inputs.vendor_profit_pct ?? 0) * 100).toFixed(0))}
                     onChange={(e) =>
                       setInputs((prev) => ({
                         ...prev,
                         vendor_profit_pct: Number(e.target.value || 0) / 100,
                       }))
                     }
-                  />
+                  >
+                    <option value="30">30%</option>
+                    <option value="25">25%</option>
+                    <option value="20">20%</option>
+                    <option value="15">15%</option>
+                    <option value="10">10%</option>
+                  </select>
                 </div>
-                <div>Total compra: <b>{fmt2(computed.operacion.totals.total_buy_usd)}</b></div>
-                <div>Total venta: <b>{fmt2(computed.operacion.totals.total_sell_usd)}</b></div>
-                <div>Profit total: <b>{fmt2(computed.operacion.totals.profit_total_usd)}</b></div>
+                <div>Total compra {currencyLabel}: <b>{fmtOp(computed.operacion.totals.total_buy_usd)}</b></div>
+                <div>Total venta {currencyLabel}: <b>{fmtOp(computed.operacion.totals.total_sell_usd)}</b></div>
+                <div>Profit total {currencyLabel}: <b>{fmtOp(computed.operacion.totals.profit_total_usd)}</b></div>
                 <div className="mt-2">
-                  Profit vendedor ({((inputs.vendor_profit_pct ?? 0) * 100).toFixed(2)}%): <b>{fmt2(computed.operacion.distribution.vendor_profit_usd)}</b>{" "}
-                  | Profit final: <b>{fmt2(computed.operacion.distribution.final_profit_usd)}</b>
+                  Profit vendedor ({((inputs.vendor_profit_pct ?? 0) * 100).toFixed(2)}%): <b>{fmtOp(computed.operacion.distribution.vendor_profit_usd)}</b>{" "}
+                  | Profit final: <b>{fmtOp(computed.operacion.distribution.final_profit_usd)}</b>
                 </div>
               </div>
             </div>

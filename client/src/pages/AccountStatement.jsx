@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import api from '../api';
+import { useRef } from 'react';
 
 const formatMoney = (n = 0, currency = 'USD') =>
   new Intl.NumberFormat('es-PY', {
@@ -15,10 +16,14 @@ export default function AccountStatement() {
   const [loadingReceipts, setLoadingReceipts] = useState(true);
   const [error, setError] = useState('');
   const [selectedClient, setSelectedClient] = useState('');
+  const [htmlPreview, setHtmlPreview] = useState('');
+  const [htmlTitle, setHtmlTitle] = useState('');
+  const htmlRef = useRef(null);
   const [filters, setFilters] = useState({
     cliente: '',
     estado: 'pendiente', // por defecto solo pendientes
     moneda: 'todas', // ✅ NUEVO: permitir PYG / USD / todas
+    search: '',
   });
 
   useEffect(() => {
@@ -66,8 +71,24 @@ export default function AccountStatement() {
   }, [receipts]);
 
   // ✅ Helper para detectar moneda real (en tu DB tenés currency='PYG' normalmente)
-  const normalizeCurrency = (row) =>
-    String(row?.currency || row?.currency_code || row?.moneda || 'PYG').toUpperCase();
+  const normalizeCurrency = (row) => {
+    const raw = String(
+      row?.currency_code ||
+        row?.currency_resolved ||
+        row?.moneda ||
+        row?.currency ||
+        ''
+    ).toUpperCase();
+    if (raw) return raw;
+    const ex = Number(
+      row?.exchange_rate ||
+        row?.exchange_rate_resolved ||
+        row?.exchangeRate ||
+        0
+    );
+    if (Number.isFinite(ex) && ex > 1.5) return 'PYG';
+    return 'USD';
+  };
 
   const getClientLabel = (row) => {
     const name =
@@ -85,6 +106,7 @@ export default function AccountStatement() {
   const filtered = useMemo(() => {
     const cliente = (filters.cliente || '').toLowerCase();
     const monedaFiltro = (filters.moneda || 'todas').toLowerCase();
+    const q = (filters.search || '').toLowerCase();
 
     return rows
       .map((row) => {
@@ -97,13 +119,17 @@ export default function AccountStatement() {
         const totalRaw = Number(row?.total_amount ?? row?.total ?? 0);
         const total = totalRaw > 0 ? totalRaw : Math.max(0, subtotal + tax);
 
+        const statusRaw = (row?.status || "").toLowerCase();
+        const isCanceled = statusRaw === "anulada";
+
         // pagos
         const paidBase = Number(row?.paid || row?.payments_total || row?.paid_amount || 0);
         const paidReceipts = receiptsByInvoice[row?.id] || 0;
         const paid = paidBase + paidReceipts;
 
         const credited = Number(row?.credited_total || 0);
-        const netTotal = Math.max(0, total - credited);
+        const netTotalDb = Number(row?.net_total_amount ?? 0);
+        const netTotal = netTotalDb > 0 ? netTotalDb : Math.max(0, total - credited);
 
         // ✅ si backend ya tiene balance/net_balance, úsalo como guía también
         const balanceDb = Number(row?.net_balance ?? row?.balance ?? 0);
@@ -119,8 +145,26 @@ export default function AccountStatement() {
         }
 
         const credit = paidReceipts; // para mostrar en columna Haber
+        const displayStatus = isCanceled
+          ? "anulada por nc"
+          : statusRaw || row?.status || "";
 
-        return { ...row, currency, paid, credited, total, netTotal, pending, credit };
+        if (isCanceled) {
+          return {
+            ...row,
+            currency,
+            paid,
+            credited,
+            total,
+            netTotal,
+            pending: 0,
+            credit: 0,
+            display_status: displayStatus,
+            is_canceled: true,
+          };
+        }
+
+        return { ...row, currency, paid, credited, total, netTotal, pending, credit, display_status: displayStatus, is_canceled: false };
       })
       .filter((row) => {
         // ✅ ANTES: filtraba solo USD (te dejaba todo vacío en PYG)
@@ -131,9 +175,26 @@ export default function AccountStatement() {
 
         const name = getClientLabel(row);
         const matchCliente = name.toLowerCase().includes(cliente);
+        const haystack = [
+          name,
+          row?.reference,
+          row?.deal_reference,
+          row?.operation_reference,
+          row?.deal_ref,
+          row?.operation_ref,
+          row?.number,
+          row?.invoice_number,
+          row?.status,
+          row?.type,
+          row?.kind,
+        ]
+          .filter(Boolean)
+          .map((v) => String(v).toLowerCase())
+          .join(' ');
+        const matchSearch = q ? haystack.includes(q) : true;
 
         const status = (row?.status || '').toLowerCase();
-        let pass = matchCliente;
+        let pass = matchCliente && matchSearch;
 
         switch (filters.estado) {
           case 'todos':
@@ -158,8 +219,10 @@ export default function AccountStatement() {
   }, [rows, filters, receiptsByInvoice]);
 
   const ledger = filtered.map((row) => {
-    const debit = Number(row?.pending || row?.netTotal || row?.total || row?.total_amount || 0);
-    const credit = Number(row?.credit || 0);
+    const debit = row?.is_canceled
+      ? 0
+      : Number(row?.pending || row?.netTotal || row?.total || row?.total_amount || 0);
+    const credit = row?.is_canceled ? 0 : Number(row?.credit || 0);
     const balance = Math.max(0, debit - credit);
 
     return {
@@ -175,20 +238,29 @@ export default function AccountStatement() {
   const clientTotals = useMemo(() => {
     return ledger.reduce((acc, row) => {
       const key = row?.client_label || 'Sin cliente';
-      acc[key] = (acc[key] || 0) + row.debit - row.credit;
+      const curr = (row.currency || 'USD').toUpperCase();
+      if (!acc[key]) acc[key] = {};
+      if (!row.is_canceled) {
+        acc[key][curr] = (acc[key][curr] || 0) + row.debit - row.credit;
+      }
       return acc;
     }, {});
   }, [ledger]);
 
   const summary = ledger.reduce(
     (acc, r) => {
-      acc.saldo += r.balance;
-      if ((r.status || '').toLowerCase() === 'vencido') {
-        acc.vencido += r.balance > 0 ? r.balance : 0;
+      const curr = (r.currency || 'USD').toUpperCase();
+      if (!acc.saldo[curr]) acc.saldo[curr] = 0;
+      if (!acc.vencido[curr]) acc.vencido[curr] = 0;
+      if (!r.is_canceled) {
+        acc.saldo[curr] += r.balance;
+      }
+      if ((r.status || '').toLowerCase() === 'vencido' && !r.is_canceled) {
+        acc.vencido[curr] += r.balance > 0 ? r.balance : 0;
       }
       return acc;
     },
-    { saldo: 0, vencido: 0 }
+    { saldo: {}, vencido: {} }
   );
 
   const clientInvoices = useMemo(() => {
@@ -196,13 +268,160 @@ export default function AccountStatement() {
     return ledger.filter((row) => (row?.client_label || 'Sin cliente') === selectedClient);
   }, [ledger, selectedClient]);
 
+  const getInvoiceReference = (row) =>
+    row?.reference ||
+    row?.deal_reference ||
+    row?.operation_reference ||
+    row?.deal_ref ||
+    row?.operation_ref ||
+    '';
+
+  const getInvoiceDescription = (row) =>
+    row?.first_item_desc ||
+    row?.description ||
+    '';
+
+  const getInvoiceDate = (row) => row?.issue_date?.slice(0, 10) || row?.created_at?.slice(0, 10) || '';
+
+  const getDaysElapsed = (dateStr) => {
+    if (!dateStr) return '';
+    const base = new Date(dateStr);
+    if (Number.isNaN(base.getTime())) return '';
+    const diff = Date.now() - base.getTime();
+    return Math.max(0, Math.floor(diff / 86400000));
+  };
+
+  const formatExportAmount = (amount, currency) => {
+    const curr = String(currency || '').toUpperCase();
+    const isPyg = curr === 'PYG' || curr === 'GS';
+    return new Intl.NumberFormat('es-PY', {
+      minimumFractionDigits: isPyg ? 0 : 2,
+      maximumFractionDigits: isPyg ? 0 : 2,
+    }).format(Number(amount || 0));
+  };
+
+  const buildExportRows = (list) =>
+    list
+      .filter((r) => !r.is_canceled && Number(r.pending || 0) > 0.0001)
+      .map((r) => {
+        const dateStr = getInvoiceDate(r);
+        const moneda = (r?.currency || '').toUpperCase() || normalizeCurrency(r);
+        const monto = Number(r?.pending || r?.netTotal || r?.total || r?.total_amount || 0);
+        return {
+          factura: r?.number || r?.invoice_number || r?.id || '',
+          fecha: dateStr,
+          referencia: getInvoiceReference(r),
+          descripcion: getInvoiceDescription(r),
+          monto,
+          monto_fmt: formatExportAmount(monto, moneda),
+          moneda,
+          dias: getDaysElapsed(dateStr),
+        };
+      });
+
+  const exportCsv = (rowsToExport, filename) => {
+    const headers = ['Factura', 'Fecha', 'Referencia', 'Descripcion', 'Monto', 'Moneda', 'Dias transcurridos'];
+    const sep = ';';
+    const lines = [headers.join(sep)];
+    rowsToExport.forEach((r) => {
+      const line = [
+        String(r.factura || '').replace(/"/g, '""'),
+        String(r.fecha || '').replace(/"/g, '""'),
+        String(r.referencia || '').replace(/"/g, '""'),
+        String(r.descripcion || '').replace(/"/g, '""'),
+        String(r.monto_fmt ?? r.monto ?? '').replace(/"/g, '""'),
+        String(r.moneda ?? '').replace(/"/g, '""'),
+        String(r.dias ?? '').replace(/"/g, '""'),
+      ]
+        .map((v) => `"${v}"`)
+        .join(sep);
+      lines.push(line);
+    });
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const buildHtmlTable = (rowsToExport, title) => {
+    const header = `
+      <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:12px;">
+        <thead style="background:#f1f5f9;">
+          <tr>
+            <th align="left">Factura</th>
+            <th align="left">Fecha</th>
+            <th align="left">Referencia</th>
+            <th align="left">Descripcion</th>
+            <th align="right">Monto</th>
+            <th align="left">Moneda</th>
+            <th align="right">Dias transcurridos</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
+    const body = rowsToExport
+      .map(
+        (r) => `
+          <tr>
+            <td>${r.factura || ''}</td>
+            <td>${r.fecha || ''}</td>
+            <td>${r.referencia || ''}</td>
+            <td>${r.descripcion || ''}</td>
+            <td align="right">${r.monto_fmt ?? r.monto ?? ''}</td>
+            <td>${r.moneda ?? ''}</td>
+            <td align="right">${r.dias ?? ''}</td>
+          </tr>
+        `
+      )
+      .join('');
+    const footer = `
+        </tbody>
+      </table>
+    `;
+    const titleHtml = title ? `<div style="font-family:Arial,sans-serif;font-size:14px;font-weight:bold;margin-bottom:6px;">${title}</div>` : '';
+    return `${titleHtml}${header}${body}${footer}`;
+  };
+
+  const openHtmlPreview = (rowsToExport, title) => {
+    const html = buildHtmlTable(rowsToExport, title);
+    setHtmlTitle(title || 'Tabla de estado de cuenta');
+    setHtmlPreview(html);
+  };
+
+  const copyHtml = async () => {
+    if (!htmlPreview) return;
+    try {
+      const plain = htmlRef.current?.innerText || '';
+      if (window.ClipboardItem) {
+        const htmlBlob = new Blob([htmlPreview], { type: 'text/html' });
+        const textBlob = new Blob([plain], { type: 'text/plain' });
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'text/html': htmlBlob,
+            'text/plain': textBlob,
+          }),
+        ]);
+        alert('Tabla copiada.');
+        return;
+      }
+      await navigator.clipboard.writeText(plain || htmlPreview);
+      alert('Tabla copiada.');
+    } catch (_) {
+      alert('No se pudo copiar. Selecciona y copia manualmente.');
+    }
+  };
+
   // ✅ moneda de resumen: si hay solo una moneda en los filtros, usar esa. Si hay varias, mostramos USD como fallback.
-  const summaryCurrency = useMemo(() => {
+  const summaryCurrencies = useMemo(() => {
     const mon = (filters.moneda || 'todas').toUpperCase();
-    if (mon !== 'TODAS') return mon;
-    // si todo lo filtrado es una sola moneda, usarla
+    if (mon !== 'TODAS') return [mon];
     const uniq = Array.from(new Set(ledger.map((r) => r.currency).filter(Boolean)));
-    return uniq.length === 1 ? uniq[0] : 'USD';
+    return uniq.length ? uniq : ['USD'];
   }, [filters.moneda, ledger]);
 
   return (
@@ -214,21 +433,43 @@ export default function AccountStatement() {
             Consulta rápida de saldos, facturas, notas de crédito y pagos aplicados.
           </p>
         </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            className="px-3 py-2 text-sm border rounded"
+            onClick={() => exportCsv(buildExportRows(ledger), 'estado-cuenta-general.csv')}
+            disabled={ledger.length === 0}
+          >
+            Exportar Excel (General)
+          </button>
+          <button
+            className="px-3 py-2 text-sm border rounded"
+            onClick={() => openHtmlPreview(buildExportRows(ledger), 'Estado de cuenta (General)')}
+            disabled={ledger.length === 0}
+          >
+            Generar tabla HTML (General)
+          </button>
+        </div>
         <div className="flex gap-3 text-right">
           <div>
             <div className="text-xs text-slate-500">Saldo</div>
-            <div className="text-lg font-semibold">{formatMoney(summary.saldo, summaryCurrency)}</div>
+            <div className="text-lg font-semibold space-y-0.5">
+              {summaryCurrencies.map((c) => (
+                <div key={c}>{formatMoney(summary.saldo[c] || 0, c)}</div>
+              ))}
+            </div>
           </div>
           <div>
             <div className="text-xs text-slate-500">Total vencido</div>
-            <div className="text-lg font-semibold text-red-600">
-              {formatMoney(summary.vencido, summaryCurrency)}
+            <div className="text-lg font-semibold text-red-600 space-y-0.5">
+              {summaryCurrencies.map((c) => (
+                <div key={c}>{formatMoney(summary.vencido[c] || 0, c)}</div>
+              ))}
             </div>
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-3 bg-white p-4 rounded-lg border">
+      <div className="grid grid-cols-1 md:grid-cols-6 gap-3 bg-white p-4 rounded-lg border">
         <div>
           <label className="text-xs text-slate-500">Cliente</label>
           <input
@@ -236,6 +477,16 @@ export default function AccountStatement() {
             placeholder="Nombre / RUC"
             value={filters.cliente}
             onChange={(e) => setFilters((f) => ({ ...f, cliente: e.target.value }))}
+          />
+        </div>
+
+        <div>
+          <label className="text-xs text-slate-500">Buscar</label>
+          <input
+            className="mt-1 w-full border rounded px-2 py-1 text-sm"
+            placeholder="Operación, factura, referencia, estado..."
+            value={filters.search}
+            onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
           />
         </div>
 
@@ -275,6 +526,7 @@ export default function AccountStatement() {
                 cliente: '',
                 estado: 'pendiente',
                 moneda: 'todas',
+                search: '',
               })
             }
           >
@@ -297,6 +549,7 @@ export default function AccountStatement() {
           )}
           {Object.entries(clientTotals).map(([client, val]) => {
             const isSel = selectedClient === client;
+            const currencies = Object.keys(val || {});
             return (
               <button
                 key={client}
@@ -306,7 +559,12 @@ export default function AccountStatement() {
                 onClick={() => setSelectedClient((prev) => (prev === client ? '' : client))}
               >
                 <span>{client}</span>
-                <span className="font-semibold">{formatMoney(val, summaryCurrency)}</span>
+                <span className="font-semibold text-right">
+                  {currencies.length === 0 && formatMoney(0, 'USD')}
+                  {currencies.map((c) => (
+                    <div key={c}>{formatMoney(val[c] || 0, c)}</div>
+                  ))}
+                </span>
               </button>
             );
           })}
@@ -321,6 +579,27 @@ export default function AccountStatement() {
             </div>
             <div className="text-xs text-slate-500">{clientInvoices.length} documento(s)</div>
           </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              className="px-3 py-2 text-sm border rounded"
+              onClick={() =>
+                exportCsv(buildExportRows(clientInvoices), `estado-cuenta-${selectedClient}.csv`)
+              }
+            >
+              Exportar Excel (Cliente)
+            </button>
+            <button
+              className="px-3 py-2 text-sm border rounded"
+              onClick={() =>
+                openHtmlPreview(
+                  buildExportRows(clientInvoices),
+                  `Estado de cuenta - ${selectedClient}`
+                )
+              }
+            >
+              Generar tabla HTML (Cliente)
+            </button>
+          </div>
 
           <div className="overflow-auto">
             <table className="min-w-full text-sm">
@@ -328,6 +607,7 @@ export default function AccountStatement() {
                 <tr>
                   <th className="text-left px-3 py-2">Documento</th>
                   <th className="text-left px-3 py-2">Referencia</th>
+                  <th className="text-left px-3 py-2">Descripcion</th>
                   <th className="text-left px-3 py-2">Fecha</th>
                   <th className="text-right px-3 py-2">Pendiente</th>
                   <th className="text-right px-3 py-2">Total</th>
@@ -363,6 +643,9 @@ export default function AccountStatement() {
                       ) : (
                         '-'
                       )}
+                    </td>
+                    <td className="px-3 py-2">
+                      {inv?.first_item_desc || inv?.description || '-'}
                     </td>
                     <td className="px-3 py-2">
                       {inv?.issue_date?.slice(0, 10) || inv?.created_at?.slice(0, 10) || '-'}
@@ -420,6 +703,8 @@ export default function AccountStatement() {
               <th className="text-left px-3 py-2">Fecha</th>
               <th className="text-left px-3 py-2">Tipo</th>
               <th className="text-left px-3 py-2">Documento</th>
+              <th className="text-left px-3 py-2">Referencia</th>
+              <th className="text-left px-3 py-2">Descripcion</th>
               <th className="text-left px-3 py-2">Cliente</th>
               <th className="text-right px-3 py-2">Debe</th>
               <th className="text-right px-3 py-2">Haber</th>
@@ -430,21 +715,21 @@ export default function AccountStatement() {
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={8} className="px-3 py-4 text-center text-slate-500">
+                <td colSpan={9} className="px-3 py-4 text-center text-slate-500">
                   Cargando...
                 </td>
               </tr>
             )}
             {!loading && error && (
               <tr>
-                <td colSpan={8} className="px-3 py-4 text-center text-red-600">
+                <td colSpan={9} className="px-3 py-4 text-center text-red-600">
                   {error}
                 </td>
               </tr>
             )}
             {!loading && !error && ledger.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-3 py-4 text-center text-slate-500">
+                <td colSpan={9} className="px-3 py-4 text-center text-slate-500">
                   Sin movimientos para los filtros seleccionados.
                 </td>
               </tr>
@@ -467,6 +752,29 @@ export default function AccountStatement() {
                       {row?.number || row?.invoice_number || '-'}
                     </a>
                   </td>
+                  <td className="px-3 py-2">
+                    {row?.reference ||
+                    row?.deal_reference ||
+                    row?.operation_reference ||
+                    row?.deal_ref ||
+                    row?.operation_ref ? (
+                      <a
+                        className="text-blue-600 hover:underline"
+                        href={`/operations/${row.deal_id || row.operation_id || ''}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {row?.reference ||
+                          row?.deal_reference ||
+                          row?.operation_reference ||
+                          row?.deal_ref ||
+                          row?.operation_ref}
+                      </a>
+                    ) : (
+                      '-'
+                    )}
+                  </td>
+                  <td className="px-3 py-2">{row?.first_item_desc || row?.description || '-'}</td>
                   <td className="px-3 py-2">{row?.client_label || '-'}</td>
                   <td
                     className="px-3 py-2 text-right"
@@ -486,12 +794,40 @@ export default function AccountStatement() {
                   >
                     {formatMoney(row.balance, row.currency)}
                   </td>
-                  <td className="px-3 py-2 capitalize">{row?.status || '-'}</td>
-                </tr>
-              ))}
+                    <td className="px-3 py-2 capitalize">
+                      {row?.display_status || row?.status || '-'}
+                    </td>
+                  </tr>
+                ))}
           </tbody>
         </table>
       </div>
+
+      {htmlPreview && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-4xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold">{htmlTitle || 'Tabla HTML'}</div>
+              <button className="text-sm px-3 py-1.5 border rounded" onClick={() => setHtmlPreview('')}>
+                Cerrar
+              </button>
+            </div>
+            <div className="text-xs text-slate-500">
+              Vista previa para copiar y pegar en el correo.
+            </div>
+            <div
+              ref={htmlRef}
+              className="border rounded p-3 bg-white overflow-auto max-h-[60vh]"
+              dangerouslySetInnerHTML={{ __html: htmlPreview }}
+            />
+            <div className="flex justify-end">
+              <button className="px-3 py-2 text-sm bg-slate-900 text-white rounded" onClick={copyHtml}>
+                Copiar HTML
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

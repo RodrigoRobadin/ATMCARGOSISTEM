@@ -38,7 +38,7 @@ function sumNum(arr) {
 // helpers despacho
 function lineByName(customs_lines, name) {
   const arr = Array.isArray(customs_lines) ? customs_lines : [];
-  return arr.find((x) => (x?.name || "").trim().toLowerCase() === name.trim().toLowerCase()) || null;
+  return arr.find((x) => (x?.enabled !== false) && (x?.name || "").trim().toLowerCase() === name.trim().toLowerCase()) || null;
 }
 function rateOf(customs_lines, name, fallbackRate = 0) {
   const l = lineByName(customs_lines, name);
@@ -53,6 +53,7 @@ function amountUsdOf(customs_lines, name, fallbackAmount = 0) {
 
 export function computeQuote(inputs = {}) {
   const {
+    operation_currency = 'USD',
     // negocio
     rent_rate = 0.3, // 30% default
     freight_international_total_usd = 0,
@@ -76,6 +77,7 @@ export function computeQuote(inputs = {}) {
     items = [],
     install_items = [],
     customs_lines = [],
+    include_customs = true,
 
     // financiación
     financing_buy_annual_rate = 0,
@@ -86,6 +88,15 @@ export function computeQuote(inputs = {}) {
     // flete compra (operación)
     freight_buy_usd = 0,
   } = inputs;
+
+  const opCurrency = String(operation_currency || 'USD').toUpperCase();
+  const opRate = Number(exchange_rate_operation_sell_usd || 1) || 1;
+  const isPyg = opCurrency === 'PYG' || opCurrency === 'GS';
+  const toUsdOp = (v) => {
+    const num = Number(v || 0);
+    if (!Number.isFinite(num)) return 0;
+    return isPyg ? num / opRate : num;
+  };
 
   const rentRate = Number(rent_rate || 0);
 
@@ -120,14 +131,14 @@ export function computeQuote(inputs = {}) {
 
   /* ================= OFERTA (prorrateo por puerta) ================= */
   const itemsArr = Array.isArray(items) ? items : [];
-  const total_door_usd = sumNum(itemsArr.map((r) => r.door_value_usd));
+  const total_door_usd = sumNum(itemsArr.map((r) => toUsdOp(r.door_value_usd)));
   const hasDoors = total_door_usd > 0;
 
-  const total_flete_usd = Number(freight_international_total_usd || 0);
-  const total_seguro_usd = Number(insurance_sale_total_usd || 0);
+  const total_flete_usd = toUsdOp(freight_international_total_usd);
+  const total_seguro_usd = toUsdOp(insurance_sale_total_usd);
 
   const ofertaBase = itemsArr.map((it, idx) => {
-    const doorVal = Number(it.door_value_usd || 0);
+    const doorVal = toUsdOp(it.door_value_usd);
     const participation = hasDoors ? doorVal / total_door_usd : 0;
     const flete_i = total_flete_usd * participation;
     const seguro_i = total_seguro_usd * participation;
@@ -141,7 +152,7 @@ export function computeQuote(inputs = {}) {
       flete_base: flete_i,
       seguro_base: seguro_i,
       valor_imp_base: valor_imp_i, // CIF por item
-      adicional_input: Number(it.additional_usd ?? additional_global_usd ?? 0), // adicional por item
+      adicional_input: toUsdOp(it.additional_usd ?? additional_global_usd ?? 0), // adicional por item
     };
   });
 
@@ -154,29 +165,32 @@ export function computeQuote(inputs = {}) {
   const tcAduana = Number(exchange_rate_customs_gs_per_usd || 0);
   const tcInterno = Number(exchange_rate_customs_internal_gs_per_usd || 1);
 
+  let customsLines = Array.isArray(customs_lines) ? customs_lines : [];
+  if (!include_customs) customsLines = [];
+
   // Rates (editable desde customs_lines)
-  const rDerecho = rateOf(customs_lines, "Derecho Aduanero", 0);
-  const rServVal = rateOf(customs_lines, "Servicio de Valoración", 0.005);
-  const aArancel = amountUsdOf(customs_lines, "Arancel Consular", 55);
+  const rDerecho = rateOf(customsLines, "Derecho Aduanero", 0);
+  const rServVal = rateOf(customsLines, "Servicio de Valoración", 0.005);
+  const aArancel = amountUsdOf(customsLines, "Arancel Consular", 55);
 
-  const rINDI = rateOf(customs_lines, "I.N.D.I.", 0.07);
-  const rISC = rateOf(customs_lines, "Impuesto Selectivo al Consumo", 0);
-  const rIVA = rateOf(customs_lines, "I.V.A.", 0.1);
-  const rIVACasual = rateOf(customs_lines, "I.V.A. Casual", 0);
-  const rDINAC = rateOf(customs_lines, "Tasa Portuaria DINAC (1er periodo)", 0.02);
+  const rINDI = rateOf(customsLines, "I.N.D.I.", 0.07);
+  const rISC = rateOf(customsLines, "Impuesto Selectivo al Consumo", 0);
+  const rIVA = rateOf(customsLines, "I.V.A.", 0.1);
+  const rIVACasual = rateOf(customsLines, "I.V.A. Casual", 0);
+  const rDINAC = rateOf(customsLines, "Tasa Portuaria DINAC (1er periodo)", 0.02);
 
-  const aDecreto13087 = amountUsdOf(customs_lines, "Decreto 13087", 0);
-  const aGastosTerminales = amountUsdOf(customs_lines, "Gastos Terminales ATM", 0);
-  const aFotocopias = amountUsdOf(customs_lines, "Fotocopias AEDA", 10);
-  const rAnticipoIRE = rateOf(customs_lines, "Anticipo IRE", 0.004);
-  const aCanonSofia = amountUsdOf(customs_lines, "Canon Informático SOFIA", 30);
+  const aDecreto13087 = amountUsdOf(customsLines, "Decreto 13087", 0);
+  const aGastosTerminales = amountUsdOf(customsLines, "Gastos Terminales ATM", 0);
+  const aFotocopias = amountUsdOf(customsLines, "Fotocopias AEDA", 10);
+  const rAnticipoIRE = rateOf(customsLines, "Anticipo IRE", 0.004);
+  const aCanonSofia = amountUsdOf(customsLines, "Canon Informático SOFIA", 30);
 
-  const aFleteDeposito = amountUsdOf(customs_lines, "Flete hasta depósito Importador", 0);
-  const aPersonalVerif = amountUsdOf(customs_lines, "Personal p/ Verificación, Estiba", 0);
-  const aGastosTramite = amountUsdOf(customs_lines, "Gastos de Trámite Despacho", 100);
+  const aFleteDeposito = amountUsdOf(customsLines, "Flete hasta depósito Importador", 0);
+  const aPersonalVerif = amountUsdOf(customsLines, "Personal p/ Verificación, Estiba", 0);
+  const aGastosTramite = amountUsdOf(customsLines, "Gastos de Trámite Despacho", 100);
 
-  const rHonorarios = rateOf(customs_lines, "Honorarios Profesionales", 0.02);
-  const rIVASHonor = rateOf(customs_lines, "I.V.A. S/ Honorarios", 0.1);
+  const rHonorarios = rateOf(customsLines, "Honorarios Profesionales", 0.02);
+  const rIVASHonor = rateOf(customsLines, "I.V.A. S/ Honorarios", 0.1);
 
   const imponible = fromBig(imponibleBig);
 
@@ -345,7 +359,7 @@ export function computeQuote(inputs = {}) {
   const venta_puertas = total_door_usd + total_rent_usd;
   const profit_puertas = venta_puertas - compra_puertas;
 
-  const compra_flete = Number(freight_buy_usd || 0);
+  const compra_flete = toUsdOp(freight_buy_usd);
   const venta_flete = total_flete_usd;
   const profit_flete = venta_flete - compra_flete;
 
@@ -385,6 +399,10 @@ export function computeQuote(inputs = {}) {
   const final_profit_usd = profit_total_usd - vendor_profit_usd;
 
   return {
+    meta: {
+      operation_currency: opCurrency,
+      exchange_rate_operation_sell_usd: opRate,
+    },
     oferta: {
       items: ofertaItemsFull,
       totals: {

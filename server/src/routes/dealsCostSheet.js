@@ -48,6 +48,204 @@ function safeParseJSON(v) {
   try { return JSON.parse(v); } catch { return null; }
 }
 
+function toNum(v) {
+  if (v === '' || v === null || v === undefined) return 0;
+  const s = String(v).replace(/\./g, '').replace(',', '.');
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function buildQuoteSyncFromCostSheet(costSheet) {
+  const d = costSheet || {};
+  const h = d.header || {};
+  const gsRate = toNum(h.gsRate) || 0;
+  const opCurrency = String(h.operationCurrency || h.currency || "USD").toUpperCase();
+  const isPyg = opCurrency === "PYG" || opCurrency === "GS";
+  const pesoKg = toNum(h.pesoKg || 0);
+  const allInEnabled = !!h.allInEnabled;
+  const allInName = String(h.allInServiceName || '').trim();
+
+  const ventaRows = Array.isArray(d.ventaRows) ? d.ventaRows : [];
+  const locCliRows = Array.isArray(d.locCliRows) ? d.locCliRows : [];
+  const segVentaRows = Array.isArray(d.segVentaRows) ? d.segVentaRows : [];
+
+  const ventaBaseTotal = ventaRows.reduce((acc, v) => {
+    const manualInt =
+      v?.ventaInt !== '' && v?.ventaInt !== undefined && v?.ventaInt !== null
+        ? toNum(v.ventaInt)
+        : null;
+    let line = 0;
+    if (allInEnabled) {
+      if (manualInt !== null) line = manualInt;
+      else if (v?.total !== '' && !v?.lockPerKg) line = toNum(v.total);
+      else line = toNum(v?.usdXKg) * pesoKg;
+    } else {
+      if (v?.total !== '' && !v?.lockPerKg) line = toNum(v.total);
+      else line = toNum(v?.usdXKg) * pesoKg;
+    }
+    return acc + (Number.isFinite(line) ? line : 0);
+  }, 0);
+
+  let ventaItems = [];
+  if (allInEnabled && allInName) {
+    const target = allInName.toLowerCase();
+    const hasTarget = ventaRows.some(
+      (v) => String(v?.concepto || '').trim().toLowerCase() === target
+    );
+    const baseZeroed = ventaRows.map((v) => ({
+      descripcion: v?.concepto || 'Servicio',
+      precio: 0,
+      tax_rate: Number(v?.tax_rate ?? 0),
+    }));
+    if (hasTarget) {
+      ventaItems = baseZeroed.map((it) =>
+        String(it.descripcion || '').trim().toLowerCase() === target
+          ? { ...it, precio: ventaBaseTotal }
+          : it
+      );
+    } else {
+      ventaItems = [
+        ...baseZeroed,
+        { descripcion: allInName, precio: ventaBaseTotal, tax_rate: 10 },
+      ];
+    }
+  } else {
+    ventaItems = ventaRows.map((v) => {
+      let valor = 0;
+      if (v?.total !== '' && !v?.lockPerKg) valor = toNum(v.total);
+      else valor = toNum(v?.usdXKg) * pesoKg;
+      return {
+        descripcion: v?.concepto || 'Servicio',
+        precio: valor,
+        tax_rate: Number(v?.tax_rate ?? 0),
+      };
+    });
+  }
+
+  const locItems = locCliRows.map((v) => ({
+    descripcion: v?.concepto || 'Gasto local',
+    precio: gsRate ? toNum(v?.gs) / gsRate : 0,
+    tax_rate: Number(v?.tax_rate ?? 0),
+  }));
+
+  const segItems = segVentaRows.map((v) => ({
+    descripcion: v?.concepto || 'Seguro',
+    precio: toNum(v?.usd ?? v?.monto ?? 0),
+    tax_rate: Number(v?.tax_rate ?? 10),
+  }));
+
+  const allItems = [...ventaItems, ...locItems, ...segItems]
+    .filter((it) => String(it.descripcion || '').trim() !== '');
+
+  const toUsd = (val) => {
+    if (!isPyg) return Number(val || 0);
+    if (!gsRate) return Number(val || 0);
+    return Number(val || 0) / gsRate;
+  };
+
+  const inputsItems = allItems.map((it, idx) => ({
+    line_no: idx + 1,
+    description: it.descripcion,
+    qty: 1,
+    unit_price: toUsd(it.precio),
+    tax_rate: Number(it.tax_rate || 0),
+  }));
+
+  const computedItems = allItems.map((it, idx) => ({
+    line_no: idx + 1,
+    description: it.descripcion,
+    qty: 1,
+    unit_price: toUsd(it.precio),
+    total_sales: toUsd(it.precio),
+    item_order: idx + 1,
+  }));
+
+  const totalSalesUsd = computedItems.reduce((acc, it) => acc + Number(it.total_sales || 0), 0);
+
+  return {
+    inputsItems,
+    computed: {
+      oferta: {
+        items: computedItems,
+        totals: { total_sales_usd: Number(totalSalesUsd.toFixed(2)) },
+      },
+      operacion: {
+        totals: { total_sell_usd: Number(totalSalesUsd.toFixed(2)) },
+      },
+      meta: {
+        operation_currency: opCurrency || 'USD',
+        exchange_rate_operation_sell_usd: isPyg ? (gsRate || 1) : 1,
+      },
+    },
+  };
+}
+
+async function syncQuoteFromCostSheet(dealId, costSheetData) {
+  const { inputsItems, computed } = buildQuoteSyncFromCostSheet(costSheetData);
+  if (!inputsItems.length) return;
+
+  const [[dealRow]] = await pool.query(
+    `SELECT d.org_branch_id, bu.key_slug AS business_unit_key
+       FROM deals d
+       LEFT JOIN business_units bu ON bu.id = d.business_unit_id
+      WHERE d.id = ? LIMIT 1`,
+    [dealId]
+  );
+  const buKey = String(dealRow?.business_unit_key || '').toLowerCase();
+  // No tocar ATM INDUSTRIAL. Si no hay buKey, asumimos no-industrial.
+  if (buKey && buKey.includes('industrial')) return;
+
+  const [[existing]] = await pool.query(
+    'SELECT id, inputs_json, computed_json FROM quotes WHERE deal_id = ? LIMIT 1',
+    [dealId]
+  );
+
+  const prevInputs = safeParseJSON(existing?.inputs_json) || {};
+  const prevComputed = safeParseJSON(existing?.computed_json) || {};
+  const nextInputs = {
+    ...prevInputs,
+    items: inputsItems,
+    operation_currency: prevInputs.operation_currency || computed?.meta?.operation_currency || 'USD',
+    exchange_rate_operation_sell_usd:
+      prevInputs.exchange_rate_operation_sell_usd || computed?.meta?.exchange_rate_operation_sell_usd || 1,
+    org_branch_id: prevInputs.org_branch_id ?? dealRow?.org_branch_id ?? null,
+  };
+  const nextComputed = {
+    ...prevComputed,
+    oferta: computed?.oferta || prevComputed?.oferta,
+    operacion: computed?.operacion || prevComputed?.operacion,
+    meta: {
+      ...(prevComputed?.meta || {}),
+      ...(computed?.meta || {}),
+    },
+  };
+
+  if (existing?.id) {
+    await pool.query(
+      `UPDATE quotes
+         SET inputs_json = ?, computed_json = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [JSON.stringify(nextInputs), JSON.stringify(nextComputed), existing.id]
+    );
+    return;
+  }
+
+  await pool.query(
+    `INSERT INTO quotes (deal_id, ref_code, revision, client_name, status, created_by, inputs_json, computed_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      dealId,
+      null,
+      null,
+      null,
+      'draft',
+      null,
+      JSON.stringify(nextInputs),
+      JSON.stringify(nextComputed),
+    ]
+  );
+}
+
 // ============== GET: devuelve datos de la versión actual ==============
 router.get('/:id/cost-sheet', requireAuth, async (req, res) => {
   const { id } = req.params;
@@ -283,6 +481,13 @@ router.post('/:id/cost-sheet/versions', requireAuth, async (req, res) => {
       [id, result.insertId, req.user.id]
     );
 
+    // Sync a quotes solo para ATM CARGO (no afecta ATM INDUSTRIAL)
+    try {
+      await syncQuoteFromCostSheet(Number(id), data);
+    } catch (syncErr) {
+      console.error('[cost-sheet][sync-quote] error', syncErr);
+    }
+
     res.json({ ok: true, version_id: result.insertId, version_number: nextVersion });
   } catch (err) {
     console.error('[cost-sheet][version][POST] error', err);
@@ -312,6 +517,13 @@ router.put('/:id/cost-sheet/versions/:versionId', requireAuth, async (req, res) 
       'UPDATE deal_cost_sheet_versions SET data = ? WHERE id = ?',
       [JSON.stringify(data), versionId]
     );
+
+    // Sync a quotes solo para ATM CARGO (no afecta ATM INDUSTRIAL)
+    try {
+      await syncQuoteFromCostSheet(Number(id), data);
+    } catch (syncErr) {
+      console.error('[cost-sheet][sync-quote] error', syncErr);
+    }
 
     res.json({ ok: true });
   } catch (err) {

@@ -4,6 +4,7 @@ import { api } from "../../api";
 import PipelineView from "./sections/PipelineView.jsx";
 import TableView from "./sections/TableView.jsx";
 import DocsDrawer from "./sections/DocsDrawer.jsx";
+import InvoiceCreateModal from "../../components/InvoiceCreateModal.jsx";
 
 const STAGE_ANCHOR_NAME = "Conf a Coord";
 
@@ -16,9 +17,13 @@ export default function AdminWorkspace() {
 
   const [ops, setOps] = useState([]);
   const [stages, setStages] = useState([]);
+  const [search, setSearch] = useState("");
 
   const [selectedOp, setSelectedOp] = useState(null);
   const [showDocs, setShowDocs] = useState(false);
+  const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+  const [selectedDealId, setSelectedDealId] = useState(null);
+  const [selectedServiceCaseId, setSelectedServiceCaseId] = useState(null);
 
   // --------- loaders ---------
   async function loadStages(pid) {
@@ -72,6 +77,27 @@ export default function AdminWorkspace() {
     return { stagesFromAnchor: sliced, anchorStageId: anchor?.id || null };
   }, [stages]);
 
+  const filteredOps = useMemo(() => {
+    const q = String(search || "").trim().toLowerCase();
+    if (!q) return ops;
+    return ops.filter((op) => {
+      const haystack = [
+        op.reference,
+        op.org_name,
+        op.contact_name,
+        op.stage_name,
+        op.status_ops,
+        op.transport_type,
+        op.invoice_numbers,
+        op.invoice_statuses,
+      ]
+        .filter(Boolean)
+        .map((v) => String(v).toLowerCase())
+        .join(" ");
+      return haystack.includes(q);
+    });
+  }, [ops, search]);
+
   // --------- actions ----------
   const openDocs = (op) => {
     setSelectedOp(op);
@@ -82,11 +108,23 @@ export default function AdminWorkspace() {
     setSelectedOp(null);
   };
 
-  async function changeStage(opId, newStageId) {
+  const openInvoice = (op) => {
+    if (String(op?.op_type || "") === "service") {
+      setSelectedServiceCaseId(op.id);
+      setSelectedDealId(null);
+    } else {
+      setSelectedDealId(op.id);
+      setSelectedServiceCaseId(null);
+    }
+    setShowInvoiceModal(true);
+  };
+
+  async function changeStage(opId, newStageId, opType) {
     try {
       // OJO: sin /api al inicio
       const { data } = await api.patch(`/admin/ops/${opId}/stage`, {
         stage_id: Number(newStageId),
+        op_type: opType,
       });
       // Reflejar al instante
       setOps((prev) => prev.map((x) => (x.id === opId ? { ...x, ...data } : x)));
@@ -106,6 +144,12 @@ export default function AdminWorkspace() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <input
+            className="border rounded-lg px-3 py-1 w-64"
+            placeholder="Buscar operación, cliente, referencia, estado, factura..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
           <select
             className="border rounded-lg px-2 py-1"
             value={pipelineId}
@@ -142,16 +186,16 @@ export default function AdminWorkspace() {
         </div>
       )}
 
-      {!loading && !err && ops.length === 0 && (
+      {!loading && !err && filteredOps.length === 0 && (
         <div className="text-slate-500 text-sm">
           No se encontraron operaciones desde <b>{STAGE_ANCHOR_NAME}</b> en adelante.
         </div>
       )}
 
-      {!loading && !err && ops.length > 0 && view === "pipeline" && (
+      {!loading && !err && filteredOps.length > 0 && view === "pipeline" && (
         <PipelineView
           stages={stagesFromAnchor}
-          items={ops}
+          items={filteredOps}
           anchorStageId={anchorStageId}
           stageOptions={stages.map((s) => ({ value: s.id, label: s.name }))}
           onChangeStage={changeStage}
@@ -159,17 +203,36 @@ export default function AdminWorkspace() {
         />
       )}
 
-      {!loading && !err && ops.length > 0 && view === "table" && (
+      {!loading && !err && filteredOps.length > 0 && view === "table" && (
         <TableView
-          items={ops}
+          items={filteredOps}
           stageOptions={stages.map((s) => ({ value: s.id, label: s.name }))}
           onChangeStage={changeStage}
           onOpenDocs={openDocs}
+          onInvoice={openInvoice}
           showInTransit
         />
       )}
 
       <DocsDrawer open={showDocs} onClose={closeDocs} op={selectedOp} />
+
+      {showInvoiceModal && (
+        <InvoiceCreateModal
+          defaultDealId={selectedDealId}
+          defaultServiceCaseId={selectedServiceCaseId}
+          onClose={() => {
+            setShowInvoiceModal(false);
+            setSelectedDealId(null);
+            setSelectedServiceCaseId(null);
+          }}
+          onSuccess={(invoiceId) => {
+            setShowInvoiceModal(false);
+            setSelectedDealId(null);
+            setSelectedServiceCaseId(null);
+            if (invoiceId) window.open(`/invoices/${invoiceId}`, "_blank");
+          }}
+        />
+      )}
     </div>
   );
 }

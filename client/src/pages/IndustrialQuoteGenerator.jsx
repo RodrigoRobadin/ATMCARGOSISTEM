@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams, useLocation } from 'react-router-dom';
 
 import { api } from '../api';
 
@@ -18,13 +18,13 @@ const HEADER_SRC = `${import.meta.env.BASE_URL}quote-header.png`;
 
 
 
-// ====== Constantes PDF (tamaño industrial 320 x 541 mm) ======
+// ====== Constantes PDF (tamaño industrial 340 x 541 mm) ======
 
-const PDF_PAGE_W_MM = 320;
+const PDF_PAGE_W_MM = 340;
 
 const PDF_PAGE_H_MM = 541;
 
-const PDF_MARGIN = { top: 10, right: 8, bottom: 12, left: 8 };
+const PDF_MARGIN = { top: 0, right: 0, bottom: 0, left: 0 };
 
 const CONTENT_W_MM = PDF_PAGE_W_MM - PDF_MARGIN.left - PDF_MARGIN.right - 0.2;
 
@@ -60,19 +60,13 @@ const money = (n, decimalsHint) => {
 
 
 
-  const hasFraction = Math.abs(numeric - Math.trunc(numeric)) > 0;
+  return new Intl.NumberFormat('es-PY', {
 
-  if (!hasFraction) {
+    minimumFractionDigits: decs,
 
-    return String(Math.trunc(numeric));
+    maximumFractionDigits: decs,
 
-  }
-
-
-
-  const out = decs > 0 ? numeric.toFixed(decs) : String(numeric);
-
-  return out.replace('.', ','); // usa coma si hay decimales
+  }).format(numeric);
 
 };
 
@@ -596,11 +590,20 @@ function parseTemplateValue(raw) {
 
 export default function QuoteGenerator(){
 
-  const { id } = useParams();
+  const params = useParams();
+  const location = useLocation();
+  const id = params.id;
+  const serviceCaseIdParam = params.serviceCaseId || params.caseId || params.id;
 
   const [searchParams] = useSearchParams();
 
   const revisionId = searchParams.get('revision_id');
+  const isEmbed = searchParams.get('embed') === '1';
+  const serviceCaseIdFromQuery = Number(searchParams.get('serviceCaseId') || searchParams.get('caseId') || '');
+  const serviceCaseId = Number.isFinite(serviceCaseIdFromQuery) ? serviceCaseIdFromQuery : Number(serviceCaseIdParam || 0);
+  const isServicePath = location.pathname.startsWith('/service/');
+  const isService = isServicePath || (Number.isFinite(serviceCaseId) && serviceCaseId > 0);
+  const baseId = isService ? serviceCaseId : id;
 
   const { user } = useAuth();
 
@@ -611,6 +614,9 @@ export default function QuoteGenerator(){
   const [deal, setDeal] = useState(null);
 
   const [cf, setCf] = useState({});
+  const [opCurrency, setOpCurrency] = useState('USD');
+  const [opRate, setOpRate] = useState(1);
+  const currencyLabel = (opCurrency === 'PYG' || opCurrency === 'GS') ? 'Gs' : 'USD';
 
 
 
@@ -888,15 +894,31 @@ CORDIALES SALUDOS`,
 
         const [{ data: detail }, cfRes, quoteRes] = await Promise.all([
 
-          api.get(`/deals/${id}`),
+          api.get(isService ? `/service/cases/${baseId}` : `/deals/${baseId}`),
 
-          api.get(`/deals/${id}/custom-fields`).catch(() => ({ data: [] })),
+          api.get(isService ? `/service/cases/${baseId}/custom-fields` : `/deals/${baseId}/custom-fields`).catch(() => ({ data: [] })),
 
-          api.get(`/deals/${id}/quote`, { params: revisionId ? { revision_id: revisionId } : {} }).catch(() => ({ data: null })),
+          api.get(isService ? `/service/cases/${baseId}/quote` : `/deals/${baseId}/quote`, { params: revisionId ? { revision_id: revisionId } : {} }).catch(() => ({ data: null })),
 
         ]);
 
-        setDeal(detail.deal);
+        if (isService) {
+          const caseData = detail?.case || detail?.data || detail;
+          setDeal({
+            id: caseData?.id,
+            reference: caseData?.reference,
+            org_name: caseData?.org_name,
+            contact_name: caseData?.contact_name || "",
+          });
+        } else {
+          setDeal(detail.deal);
+        }
+
+        const qInputs = quoteRes?.data?.quote?.inputs || quoteRes?.data?.inputs || {};
+        const cur = String(qInputs.operation_currency || 'USD').toUpperCase();
+        const rate = Number(qInputs.exchange_rate_operation_sell_usd || 1) || 1;
+        setOpCurrency(cur);
+        setOpRate(rate);
 
 
 
@@ -923,12 +945,16 @@ CORDIALES SALUDOS`,
 
 
         // Cabecera simple
-
-        setCliente(detail.deal?.org_name || '');
-
-        setContacto(detail.deal?.contact_name || '');
-
-        setRef(detail.deal?.reference || '');
+        if (isService) {
+          const caseData = detail?.case || detail?.data || detail;
+          setCliente(caseData?.org_name || '');
+          setContacto(caseData?.contact_name || '');
+          setRef(caseData?.reference || '');
+        } else {
+          setCliente(detail.deal?.org_name || '');
+          setContacto(detail.deal?.contact_name || '');
+          setRef(detail.deal?.reference || '');
+        }
 
 
 
@@ -1232,7 +1258,7 @@ CORDIALES SALUDOS`,
 
                 observacion: it.observacion || it.Observacion || '',
 
-                moneda: it.moneda || 'USD',
+                moneda: cur || it.moneda || 'USD',
 
                 precio: it.precio ?? it.unit_price ?? 0,
 
@@ -1265,7 +1291,12 @@ CORDIALES SALUDOS`,
           const sourceItems = ofertaItems.length
             ? ofertaItems
             : (resultadoItems.length ? resultadoItems : rawItems);
-
+          const sourceType = rawItems.length
+            ? 'raw'
+            : (ofertaItems.length || resultadoItems.length ? 'computed' : 'raw');
+          const isPyg = cur === 'PYG' || cur === 'GS';
+          const rateValue = Number(rate || 1) || 1;
+          const conv = (v) => (isPyg && sourceType === 'computed' ? Number(v || 0) * rateValue : Number(v || 0));
 
 
           mapped = sourceItems
@@ -1283,13 +1314,14 @@ CORDIALES SALUDOS`,
               );
               const door = Number(it.door_value_usd || 0);
               const extra = Number(it.additional_usd || 0);
-              const unit =
+              const unitBase =
                 pvUnit ||
                 it.unit_price ||
                 (totalSales && qty ? totalSales / qty : 0) ||
                 it.precio ||
                 (door + extra) ||
                 (qty ? Number(it.total_sales || 0) / qty : Number(it.total_sales || 0));
+              const unit = conv(unitBase);
 
               return {
 
@@ -1299,7 +1331,7 @@ CORDIALES SALUDOS`,
 
                 observacion: it.observacion || it.observation || "",
 
-                moneda: it.moneda || "USD",
+                moneda: cur || it.moneda || "USD",
 
                 precio: unit,
 
@@ -1323,7 +1355,7 @@ CORDIALES SALUDOS`,
 
     })();
 
-  }, [id]);
+  }, [baseId, isService, revisionId]);
 
 
 
@@ -1335,7 +1367,7 @@ CORDIALES SALUDOS`,
 
   );
 
-  const totalUSD = useMemo(
+  const totalCurrency = useMemo(
 
     () =>
 
@@ -1349,7 +1381,7 @@ CORDIALES SALUDOS`,
 
             : acc +
 
-              (it.moneda === 'USD' ? num(it.precio) * (num(it.cantidad) || 1) : 0),
+              (num(it.precio) * (num(it.cantidad) || 1)),
 
         0
 
@@ -1359,7 +1391,7 @@ CORDIALES SALUDOS`,
 
   );
 
-  const totalUsdDecimals = useMemo(
+  const totalCurrencyDecimals = useMemo(
 
     () =>
 
@@ -1481,7 +1513,7 @@ CORDIALES SALUDOS`,
 
         const def = CF_SCHEMA[key] || { label: key, type: 'text' };
 
-        await api.post(`/deals/${id}/custom-fields`, {
+        await api.post(isService ? `/service/cases/${baseId}/custom-fields` : `/deals/${baseId}/custom-fields`, {
 
           key,
 
@@ -1497,7 +1529,7 @@ CORDIALES SALUDOS`,
 
 
 
-      const { data: cfs } = await api.get(`/deals/${id}/custom-fields`).catch(() => ({ data: [] }));
+      const { data: cfs } = await api.get(isService ? `/service/cases/${baseId}/custom-fields` : `/deals/${baseId}/custom-fields`).catch(() => ({ data: [] }));
 
       const map = {};
 
@@ -1621,7 +1653,7 @@ CORDIALES SALUDOS`,
 
         image: { type: 'jpeg', quality: 0.98 },
 
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+        html2canvas: { scale: 2.5, useCORS: true, backgroundColor: '#ffffff' },
 
         jsPDF: { unit: 'mm', format: [PDF_PAGE_W_MM, PDF_PAGE_H_MM], orientation: 'portrait' },
 
@@ -1677,7 +1709,7 @@ CORDIALES SALUDOS`,
 
           display: grid;
 
-          grid-template-columns: 210px 1fr; /* 👈 valores alineados */
+          grid-template-columns: 230px 1fr; /* 👈 valores alineados (más ancho para tipografía grande) */
 
           column-gap: 8px;
 
@@ -1705,9 +1737,10 @@ CORDIALES SALUDOS`,
 
           justify-content: space-between;
 
-          padding: 10px 12px 8px 12px;
+          padding: 10px 8px 8px 8px;
 
           column-gap: 16px;
+          flex-wrap: nowrap;
 
         }
 
@@ -1730,6 +1763,7 @@ CORDIALES SALUDOS`,
           line-height: 1.05;
 
           font-weight: 600;
+          flex: 0 0 auto;
 
         }
 
@@ -1827,7 +1861,9 @@ CORDIALES SALUDOS`,
 
           height: 48px;
 
-          width: 420px;
+          width: 520px;
+          max-width: none;
+          flex: 0 0 auto;
 
         }
 
@@ -1841,7 +1877,7 @@ CORDIALES SALUDOS`,
 
           height: 48px;
 
-          width: 140px;
+          width: 160px;
 
           background: #c62828;
 
@@ -1861,7 +1897,7 @@ CORDIALES SALUDOS`,
 
           height: 48px;
 
-          width: 320px;
+          width: 360px;
 
           background: #b71c1c;
 
@@ -1885,51 +1921,29 @@ CORDIALES SALUDOS`,
 
       `}</style>
 
-
-
       {/* Header actions */}
-
-      <div className="flex items-center justify-between">
-
-        <h1 className="text-xl font-semibold">Generar Presupuesto — REF {deal.reference}</h1>
-
+      <div className={"flex items-center justify-between " + (isEmbed ? "hidden" : "")}>
+        <h1 className="text-xl font-semibold">Generar Presupuesto - REF {deal.reference}</h1>
         <div className="space-x-2 flex items-center">
-
           <button
-
             onClick={saveToCustomFields}
-
             disabled={saving}
-
             className="px-3 py-2 rounded bg-blue-600 text-white disabled:opacity-60"
-
           >
-
-            {saving ? 'Guardando…' : 'Guardar en Operación'}
-
+            {saving ? 'Guardando...' : 'Guardar en Operacion'}
           </button>
-
           <button onClick={downloadPdf} className="px-3 py-2 rounded bg-black text-white">
-
             Descargar PDF
-
           </button>
-
           <Link to={`/operations/${id}`} className="px-3 py-2 rounded bg-slate-200 hover:bg-slate-300">
-
-            ← Volver a la operación
-
+            ← Volver a la operacion
           </Link>
-
         </div>
-
       </div>
 
-
-
       {/* Panel editable */}
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className={"grid grid-cols-1 lg:grid-cols-2 gap-4 " + (isEmbed ? "hidden" : "")}>
+      <div className={"grid grid-cols-1 lg:grid-cols-2 gap-4 " + (isEmbed ? "hidden" : "")}>
 
         {/* Cabecera */}
 
@@ -2117,7 +2131,14 @@ CORDIALES SALUDOS`,
 
           <div className="text-sm font-semibold">Ítems del presupuesto</div>
 
-          <ItemsTable items={items} setItems={setItems} totalUSD={totalUSD} totalDecimals={totalUsdDecimals} />
+          <ItemsTable
+            items={items}
+            setItems={setItems}
+            totalCurrency={totalCurrency}
+            totalDecimals={totalCurrencyDecimals}
+            currencyCode={opCurrency}
+            currencyLabel={currencyLabel}
+          />
 
         </div>
 
@@ -2256,9 +2277,7 @@ CORDIALES SALUDOS`,
           </label>
 
           {selectedTemplate?.name && (
-
             <div className="text-xs text-slate-500">Origen: Parametros</div>
-
           )}
 
         </div>
@@ -2302,10 +2321,6 @@ CORDIALES SALUDOS`,
           />
 
         </div>
-
-      </div>
-
-
 
               {/* Condiciones industriales */}
 
@@ -2396,15 +2411,14 @@ CORDIALES SALUDOS`,
 
         </div>
 
+        </div>
 
-
-
-
+      </div>
       {/* ================= PREVIEW / PDF (A4) ================= */}
 
-      <div id="quote-print" className="bg-white border rounded-xl p-0">
+      <div id="quote-print" className="bg-white p-0">
 
-        <div className="mx-auto text-[12px] leading-5" style={{ width: `${CONTENT_W_MM}mm` }}>
+        <div className="mx-auto text-[14px] leading-6" style={{ width: `${CONTENT_W_MM}mm`, paddingRight: '3mm', boxSizing: 'border-box' }}>
 
           <div className="quote-header">
 
@@ -2434,9 +2448,9 @@ CORDIALES SALUDOS`,
 
 
 
-          <div className="flex justify-between items-start px-4 mt-3 avoid-break">
+          <div className="flex justify-between items-start px-1 mt-3 avoid-break">
 
-            <div className="text-[14px]">
+            <div className="text-[16px]">
 
               <div className="font-semibold">{cliente || deal.org_name}</div>
 
@@ -2444,7 +2458,7 @@ CORDIALES SALUDOS`,
 
             </div>
 
-            <div className="text-right text-[12px] text-slate-700">
+            <div className="text-right text-[13px] text-slate-700">
 
               <div>Asunción {fecha}</div>
 
@@ -2458,7 +2472,7 @@ CORDIALES SALUDOS`,
 
           {/* COTIZACION */}
 
-          <div className="px-4 mt-3 avoid-break">
+          <div className="px-1 mt-3 avoid-break">
 
             <div className="text-center font-bold underline">COTIZACION</div>
 
@@ -2548,7 +2562,7 @@ CORDIALES SALUDOS`,
 
           {/* DETALLE DE COSTOS */}
 
-          <div className="px-4 mt-4 avoid-break">
+          <div className="px-1 mt-4 avoid-break">
 
             <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
 
@@ -2620,9 +2634,9 @@ CORDIALES SALUDOS`,
 
                 <tr className="border-t" style={{ borderColor: '#e5e7eb' }}>
 
-                  <td colSpan={5} className="px-2 py-2 font-semibold text-right">TOTAL USD</td>
+                  <td colSpan={5} className="px-2 py-2 font-semibold text-right">TOTAL {currencyLabel}</td>
 
-                  <td className="px-2 py-2 font-extrabold text-right">{money(totalUSD, totalUsdDecimals)}</td>
+                  <td className="px-2 py-2 font-extrabold text-right">{money(totalCurrency, totalCurrencyDecimals)}</td>
 
                 </tr>
 
@@ -2970,7 +2984,7 @@ function Row({ label, value, className = '' }){
 
 /** Tabla de ítems separada (para mantener limpio el componente) */
 
-function ItemsTable({ items, setItems, totalUSD, totalDecimals }) {
+function ItemsTable({ items, setItems, totalCurrency, totalDecimals, currencyCode = 'USD', currencyLabel = 'USD' }) {
 
   const included = items.filter((it) => it.include !== false);
 
@@ -3008,7 +3022,7 @@ function ItemsTable({ items, setItems, totalUSD, totalDecimals }) {
 
         Observacion: '',
 
-        moneda: 'USD',
+        moneda: currencyCode,
 
         precio: '',
 
@@ -3078,9 +3092,10 @@ function ItemsTable({ items, setItems, totalUSD, totalDecimals }) {
 
               <td>
 
-                <select className="border rounded px-1" value={it.moneda} onChange={e=>updateItem(idx, { moneda: e.target.value })}>
+                <select className="border rounded px-1" value={currencyCode} disabled>
 
-                  <option>USD</option>
+                  <option value="USD">USD</option>
+                  <option value="PYG">PYG</option>
 
                 </select>
 
@@ -3110,7 +3125,7 @@ function ItemsTable({ items, setItems, totalUSD, totalDecimals }) {
 
         <button className="px-3 py-1 rounded bg-blue-600 text-white" onClick={addItem}>+ Agregar ítem</button>
 
-        <div className="text-sm font-bold">TOTAL USD {money(totalUSD, decimalsForTotal)}</div>
+        <div className="text-sm font-bold">TOTAL {currencyLabel} {money(totalCurrency, decimalsForTotal)}</div>
 
       </div>
 

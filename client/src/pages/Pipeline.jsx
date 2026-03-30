@@ -68,6 +68,7 @@ export default function Pipeline() {
   const [deals, setDeals] = useState([]);
   const [dealCFMap, setDealCFMap] = useState({});
   const [quoteTotals, setQuoteTotals] = useState({});
+  const [quoteProfitTotals, setQuoteProfitTotals] = useState({});
   const [openModal, setOpenModal] = useState(false);
 
   const [stageAliasMap, setStageAliasMap] = useState({});
@@ -132,12 +133,15 @@ export default function Pipeline() {
       try {
         const { data } = await api.get("/quotes");
         const map = {};
+        const profitMap = {};
         for (const row of data || []) {
           if (row?.deal_id == null || row?.total_sales_usd == null) continue;
           if (map[row.deal_id] !== undefined) continue;
           map[row.deal_id] = row.total_sales_usd;
+          if (row?.profit_total_usd != null) profitMap[row.deal_id] = row.profit_total_usd;
         }
         if (!cancelled) setQuoteTotals(map);
+        if (!cancelled) setQuoteProfitTotals(profitMap);
       } catch {}
     })();
     return () => {
@@ -156,6 +160,14 @@ export default function Pipeline() {
 
   function stageLabel(stage) {
     return stageAliasMap[String(stage.id)] || stage.name;
+  }
+
+  function stageProfit(stageId) {
+    const list = grouped[stageId] || [];
+    return list.reduce((sum, deal) => {
+      const v = Number(quoteProfitTotals[deal.id] ?? 0);
+      return sum + (Number.isFinite(v) ? v : 0);
+    }, 0);
   }
 
   async function onDragEnd(result) {
@@ -185,14 +197,14 @@ export default function Pipeline() {
             onClick={() =>
               nav(`/pipelines/${pipelineId || ""}/edit?back=${encodeURIComponent(location.pathname)}`)
             }
-            className="px-3 py-2 text-sm rounded-lg border hover:bg-slate-50"
+            className="px-3 py-2 text-sm rounded-lg border hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
             title="Editar columnas del pipeline"
           >
             ✏️ Editar pipeline
           </button>
           <button
             onClick={() => setOpenModal(true)}
-            className="px-3 py-2 text-sm rounded-lg bg-black text-white"
+            className="px-3 py-2 text-sm rounded-lg bg-black text-white dark:bg-white dark:text-black"
           >
             Nueva operación
           </button>
@@ -207,16 +219,21 @@ export default function Pipeline() {
                 <div
                   ref={provided.innerRef}
                   {...provided.droppableProps}
-                  className="bg-white rounded-2xl shadow p-3 min-h-[200px]"
+                  className="bg-white dark:bg-slate-950 dark:border dark:border-slate-800 rounded-2xl shadow p-3 min-h-[200px]"
                 >
                   <div className="mb-2">
                     <div className="font-medium flex items-center justify-between">
-                      <span>{stageLabel(stage)}</span>
-                      <span className="text-xs bg-slate-100 rounded px-2 py-0.5">
+                      <div className="flex items-center gap-2">
+                        <span>{stageLabel(stage)}</span>
+                        <span className="text-xs bg-emerald-50 text-emerald-700 rounded px-2 py-0.5">
+                          Profit $ {stageProfit(stage.id).toLocaleString()}
+                        </span>
+                      </div>
+                      <span className="text-xs bg-slate-100 dark:bg-slate-800 rounded px-2 py-0.5">
                         {grouped[stage.id]?.length || 0}
                       </span>
                     </div>
-                    <div className="text-xs text-slate-500 mt-0.5">
+                    <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                       {(grouped[stage.id]?.length || 0)} abiertos
                     </div>
                   </div>
@@ -228,7 +245,7 @@ export default function Pipeline() {
                       const cotizDays = fCotiz ? diffDays(fCotiz) : null;
 
                       let warnText = null;
-                      let warnClass = "text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800";
+                      let warnClass = "text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200";
                       if (cotizDays != null) {
                         if (cotizDays > 10 && cotizDays <= 15) {
                           const left = 15 - cotizDays;
@@ -236,7 +253,7 @@ export default function Pipeline() {
                         } else if (cotizDays > 15) {
                           const late = cotizDays - 15;
                           warnText = `Atrasado ${late} d`;
-                          warnClass = "text-xs px-2 py-0.5 rounded bg-red-100 text-red-700";
+                          warnClass = "text-xs px-2 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-200";
                         }
                       }
 
@@ -256,22 +273,22 @@ export default function Pipeline() {
                                 event.stopPropagation();
                                 openInNewTab(getOperationUrl(deal.id));
                               }}
-                              className="block w-full border rounded-xl p-3 hover:shadow transition bg-white cursor-pointer"
+                              className="block w-full border rounded-xl p-3 hover:shadow transition bg-white dark:bg-slate-900 dark:border-slate-800 cursor-pointer"
                               title="Doble clic para abrir"
                             >
                               <div className="text-sm font-semibold truncate">
                                 {deal.reference || deal.title}
                               </div>
-                              <div className="text-xs text-slate-600 truncate">
+                              <div className="text-xs text-slate-600 dark:text-slate-400 truncate">
                                 {deal.org_name || "—"} • {deal.contact_name || "—"}
                               </div>
 
                               <div className="flex items-center gap-2 flex-wrap mt-2">
-                                <span className="text-xs bg-slate-100 rounded px-2 py-0.5">
+                                <span className="text-xs bg-slate-100 dark:bg-slate-800 rounded px-2 py-0.5">
                                   $ {Number(quoteTotals[deal.id] ?? (deal.value || 0)).toLocaleString()}
                                 </span>
                                 {typeof createdDays === "number" && (
-                                  <span className="text-xs bg-slate-100 rounded px-2 py-0.5">
+                                  <span className="text-xs bg-slate-100 dark:bg-slate-800 rounded px-2 py-0.5">
                                     hace {createdDays} d
                                   </span>
                                 )}
@@ -279,7 +296,7 @@ export default function Pipeline() {
                               </div>
 
                               {fCotiz && (
-                                <div className="text-[11px] text-slate-500 mt-1">
+                                <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
                                   Cotizado: {fCotiz}
                                   {cotizDays != null ? ` • ${cotizDays} d` : ""}
                                 </div>

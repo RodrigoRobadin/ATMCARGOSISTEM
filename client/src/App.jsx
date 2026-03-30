@@ -1,5 +1,5 @@
 // client/src/App.jsx
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavLink, Routes, Route } from 'react-router-dom';
 
 import Pipeline from './pages/Pipeline';
@@ -28,6 +28,8 @@ import AccountStatement from './pages/AccountStatement.jsx';
 import Payments from './pages/Payments.jsx';
 import AdminExpenses from './pages/AdminExpenses.jsx';
 import AdminFinance from './pages/AdminFinance.jsx';
+import OperationalPurchases from './pages/admin/OperationalPurchases.jsx';
+import PaymentOrders from './pages/admin/PaymentOrders.jsx';
 
 // ?? NUEVO: Workspace de Administración (Ops)
 import AdminWorkspace from './pages/admin/AdminWorkspace.jsx';
@@ -38,6 +40,10 @@ import { RequireAuth, RequireRole, useAuth } from './auth.jsx';
 // (opcional) generator dedicado:
 import QuoteGenerator from './pages/QuoteGenerator.jsx';
 import IndustrialQuoteGenerator from './pages/IndustrialQuoteGenerator.jsx';
+import ServiceModule from './pages/service/ServiceModule.jsx';
+import ServiceDoorDetail from './pages/service/ServiceDoorDetail.jsx';
+import ServiceCaseDetail from './pages/service/ServiceCaseDetail.jsx';
+import ServiceAdditionalQuoteEditor from './pages/service/ServiceAdditionalQuoteEditor.jsx';
 
 // Seguimiento
 import Invoices from './pages/Invoices.jsx';
@@ -58,10 +64,13 @@ import RequestFreight from './pages/RequestFreight.jsx';
 // ---------------- UI helpers ----------------
 const sidebarIcons = {
   header: String.fromCodePoint(0x1F9ED),
+  themeOn: String.fromCodePoint(0x2600),
+  themeOff: String.fromCodePoint(0x1F319),
   general: String.fromCodePoint(0x1F4CB),
   kanban: String.fromCodePoint(0x1F9E9),
   cargo: String.fromCodePoint(0x1F69A),
   industrial: String.fromCodePoint(0x1F3ED),
+  service: String.fromCodePoint(0x1F527),
   admin: String.fromCodePoint(0x1F4C4),
   user: String.fromCodePoint(0x1F464),
   params: String.fromCodePoint(0x2699),
@@ -84,7 +93,7 @@ const linkCls = ({ isActive }) =>
   `flex items-center rounded-lg text-sm px-3 py-2 transition-all
    justify-center group-hover:justify-start
    gap-0 group-hover:gap-2
-   ${isActive ? 'bg-black text-white' : 'hover:bg-slate-100'}`;
+   ${isActive ? 'bg-black text-white dark:bg-white dark:text-black' : 'hover:bg-slate-100 dark:hover:bg-slate-800 dark:text-slate-200'}`;
 
 function SideLink({ to, icon, label }) {
   return (
@@ -98,24 +107,39 @@ function SideLink({ to, icon, label }) {
 function Layout({ children }) {
   const { logout, user } = useAuth();
   const role = user?.role || '';
+  const [darkMode, setDarkMode] = useState(false);
+
+  useEffect(() => {
+    const stored = localStorage.getItem('theme');
+    const isDark = stored === 'dark';
+    setDarkMode(isDark);
+    document.documentElement.classList.toggle('dark', isDark);
+  }, []);
+
+  function toggleTheme() {
+    const next = !darkMode;
+    setDarkMode(next);
+    document.documentElement.classList.toggle('dark', next);
+    localStorage.setItem('theme', next ? 'dark' : 'light');
+  }
 
   return (
-    <div className="min-h-screen flex">
+    <div className="min-h-screen flex bg-gray-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100">
       {/* Lateral colapsable por hover */}
       <aside
         className="
-          group bg-white border-r
+          group bg-white border-r dark:bg-slate-950 dark:border-slate-800
           w-[64px] hover:w-[220px]
           transition-[width] duration-300 ease-in-out
           overflow-hidden
         "
       >
         {/* Header: compacto (icono) / expandido (título) */}
-        <div className="border-b">
+        <div className="border-b dark:border-slate-800">
           <div className="h-14 flex items-center justify-center text-xl group-hover:hidden select-none">{sidebarIcons.header}</div>
           <div className="hidden group-hover:block p-4">
             <div className="text-lg font-semibold">CRM MVP</div>
-            <div className="text-xs text-slate-500">GRUPO ATM</div>
+            <div className="text-xs text-slate-500 dark:text-slate-400">GRUPO ATM</div>
           </div>
         </div>
 
@@ -124,18 +148,21 @@ function Layout({ children }) {
           <SideLink to="/general" icon={sidebarIcons.general} label="Vista general" />
           <SideLink to="/" icon={sidebarIcons.kanban} label="Kanban" />
 
-          <hr className="my-2" />
-          <div className="hidden group-hover:block text-xs text-slate-500 px-1 pb-1">
+          <hr className="my-2 dark:border-slate-800" />
+          <div className="hidden group-hover:block text-xs text-slate-500 dark:text-slate-400 px-1 pb-1">
             Workspaces
           </div>
           <SideLink to="/workspace/atm-cargo" icon={sidebarIcons.cargo} label="ATM CARGO" />
           {/* Workspace industrial unico */}
           <SideLink to="/workspace/atm-industrial" icon={sidebarIcons.industrial} label="ATM INDUSTRIAL" />
+          {(role === 'admin' || role === 'service') && (
+            <SideLink to="/service" icon={sidebarIcons.service} label="Reparación y mantenimiento" />
+          )}
 
           {/* Bloque administrativo visible SOLO si NO es "venta" */}
           {role !== 'venta' && (
             <>
-              <hr className="my-2" />
+              <hr className="my-2 dark:border-slate-800" />
               <SideLink to="/admin" icon={sidebarIcons.admin} label="Administraci\u00f3n" />
               <SideLink to="/admin/users" icon={sidebarIcons.user} label="Usuarios" />
               <SideLink to="/admin/params" icon={sidebarIcons.params} label="Par\u00e1metros" />
@@ -149,6 +176,21 @@ function Layout({ children }) {
                     label="Estado de cuenta de clientes"
                   />
                   <SideLink
+                    to="/invoices"
+                    icon={sidebarIcons.invoices}
+                    label="Facturas"
+                  />
+                  <SideLink
+                    to="/admin-ops/purchases"
+                    icon={sidebarIcons.expenses}
+                    label="Compras operativas"
+                  />
+                  <SideLink
+                    to="/admin-ops/payment-orders"
+                    icon={sidebarIcons.payments}
+                    label="Ordenes de pago"
+                  />
+                  <SideLink
                     to="/payments"
                     icon={sidebarIcons.payments}
                     label="Pagos / Recibos"
@@ -160,22 +202,38 @@ function Layout({ children }) {
                   />
                 </div>
               </div>
-              <hr className="my-2" />
+              <hr className="my-2 dark:border-slate-800" />
               <SideLink to="/catalog" icon={sidebarIcons.catalog} label="Productos y servicios" />
             </>
           )}
 
-          <hr className="my-2" />
+          <hr className="my-2 dark:border-slate-800" />
           <SideLink to="/contacts" icon={sidebarIcons.contacts} label="Contactos" />
           <SideLink to="/organizations" icon={sidebarIcons.orgs} label="Organizaciones" />
 
-          <hr className="my-2" />
-          <SideLink to="/invoices" icon={sidebarIcons.invoices} label="Facturas" />
+          <hr className="my-2 dark:border-slate-800" />
           <SideLink to="/purchase-orders" icon={sidebarIcons.orders} label="\u00d3rdenes de compra" />
           <SideLink to="/followup" icon={sidebarIcons.followup} label="Seguimiento" />
           <SideLink to="/quotes" icon={sidebarIcons.quotes} label="Cotizaciones" />
 
-          <hr className="my-3" />
+          <hr className="my-3 dark:border-slate-800" />
+          <div className="px-3">
+            <button
+              onClick={toggleTheme}
+              className="w-full flex items-center rounded-lg text-sm px-3 py-2 transition-all
+                         justify-center group-hover:justify-start
+                         gap-0 group-hover:gap-2
+                         hover:bg-slate-100 dark:hover:bg-slate-800"
+              title="Modo oscuro"
+              type="button"
+            >
+              <span className="text-base w-6 text-center">
+                {darkMode ? sidebarIcons.themeOn : sidebarIcons.themeOff}
+              </span>
+              <span className="hidden group-hover:inline">{darkMode ? 'Modo claro' : 'Modo oscuro'}</span>
+            </button>
+          </div>
+          <hr className="my-3 dark:border-slate-800" />
           {/* Sesi\u00f3n */}
           <div className="px-3">
             <button
@@ -192,8 +250,8 @@ function Layout({ children }) {
       </aside>
 
       {/* Contenido principal */}
-      <main className="bg-gray-50 flex-1 min-w-0">
-        <div className="p-4 border-b bg-white sticky top-0 z-40">
+      <main className="bg-gray-50 dark:bg-slate-900 flex-1 min-w-0">
+        <div className="p-4 border-b bg-white dark:bg-slate-950 dark:border-slate-800 sticky top-0 z-40">
           <GlobalSearchBar />
         </div>
         <div className="p-4">{children}</div>
@@ -223,6 +281,22 @@ export default function App() {
         element={
           <RequireAuth>
             <PipelineEditorPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/operations/:id/industrial-quote-embed"
+        element={
+          <RequireAuth>
+            <IndustrialQuoteGenerator />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/service/cases/:serviceCaseId/industrial-quote-embed"
+        element={
+          <RequireAuth>
+            <IndustrialQuoteGenerator />
           </RequireAuth>
         }
       />
@@ -291,6 +365,22 @@ export default function App() {
                   }
                 />
                 <Route
+                  path="/admin-ops/purchases"
+                  element={
+                    <RequireRole allow={['admin', 'manager']}>
+                      <OperationalPurchases />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/admin-ops/payment-orders"
+                  element={
+                    <RequireRole allow={['admin', 'manager']}>
+                      <PaymentOrders />
+                    </RequireRole>
+                  }
+                />
+                <Route
                   path="/payments"
                   element={
                     <RequireRole allow={['admin', 'manager']}>
@@ -336,6 +426,64 @@ export default function App() {
                 <Route
                   path="/operations/:id/request-freight"
                   element={<RequestFreight />}
+                />
+
+                {/* Service */}
+                <Route
+                  path="/service"
+                  element={
+                    <RequireRole allow={['admin', 'service']}>
+                      <ServiceModule />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/service/doors/:id"
+                  element={
+                    <RequireRole allow={['admin', 'service']}>
+                      <ServiceDoorDetail />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/service/cases/:id"
+                  element={
+                    <RequireRole allow={['admin', 'service']}>
+                      <ServiceCaseDetail />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/service/cases/:caseId/quote"
+                  element={
+                    <RequireRole allow={['admin', 'service']}>
+                      <QuoteEditor />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/service/quotes/:id"
+                  element={
+                    <RequireRole allow={['admin', 'service']}>
+                      <QuoteEditor />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/service/additional-quotes/:id"
+                  element={
+                    <RequireRole allow={['admin', 'service']}>
+                      <ServiceAdditionalQuoteEditor />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/service/cases/:serviceCaseId/industrial-quote"
+                  element={
+                    <RequireRole allow={['admin', 'service']}>
+                      <IndustrialQuoteGenerator />
+                    </RequireRole>
+                  }
                 />
 
                 {/* Cotizaciones */}

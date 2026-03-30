@@ -9,18 +9,39 @@ const notAllowedCls = "cursor-not-allowed select-none";
 const titleLock = "🚫 Presupuesto bloqueado";
 
 /* ===================== helpers ===================== */
-const money = (n) => {
-  if (n === null || n === undefined) return "0";
+const formatMoney = (n, currency = "USD") => {
+  if (n === null || n === undefined || n === "") return "0";
   const numVal = Number(n);
-  if (Number.isNaN(numVal)) return String(n);
-  return String(n); // no forzar decimales
+  if (!Number.isFinite(numVal)) return String(n);
+  const curr = String(currency || "USD").toUpperCase();
+  const isPyg = curr === "PYG" || curr === "GS";
+  return numVal.toLocaleString(isPyg ? "es-PY" : "en-US", {
+    minimumFractionDigits: isPyg ? 0 : 2,
+    maximumFractionDigits: isPyg ? 0 : 2,
+  });
 };
 
 const num = (v) => {
   if (v === "" || v === null || v === undefined) return 0;
-  const s = String(v).replace(/\./g, "").replace(",", ".");
-  const n = Number(s);
-  return isNaN(n) ? 0 : n;
+  const s = String(v).trim();
+  if (!s) return 0;
+  const hasComma = s.includes(",");
+  const hasDot = s.includes(".");
+  let normalized = s;
+  if (hasComma && hasDot) {
+    const lastComma = s.lastIndexOf(",");
+    const lastDot = s.lastIndexOf(".");
+    const decPos = Math.max(lastComma, lastDot);
+    const intPart = s.slice(0, decPos).replace(/[.,\s]/g, "");
+    const decPart = s.slice(decPos + 1).replace(/[.,\s]/g, "");
+    normalized = intPart + "." + decPart;
+  } else if (hasComma) {
+    normalized = s.replace(/\./g, "").replace(",", ".");
+  } else if (hasDot) {
+    normalized = s.replace(/,/g, "");
+  }
+  const n = Number(normalized);
+  return Number.isFinite(n) ? n : 0;
 };
 
 /* ===================== UI tipo "excel" ===================== */
@@ -47,10 +68,18 @@ const Input = (props) => (
 );
 const NumInput = (props) => <Input inputMode="decimal" placeholder="0,00" {...props} />;
 
+const TAX_OPTIONS = [
+  { value: 10, label: 'IVA 10%' },
+  { value: 5, label: 'IVA 5%' },
+  { value: 0, label: 'Exento' },
+];
+
 /* ===================== tablas ===================== */
 function CargoTable({
   title,
+  currency = "USD",
   showProfit,
+  showTaxRate = false,
   isVenta = false,           // 👈 saber si es la tabla de venta
   allInEnabled = false,     // 👈 para mostrar la columna “Venta (interno)”
   rows,
@@ -61,6 +90,7 @@ function CargoTable({
   presets = [],
 }) {
   const ignoredLinksRef = useRef(new Set());
+  const currencyLabel = String(currency || "USD").toUpperCase();
 
   const addRow = (presetName) => {
     if (disabled) return;
@@ -72,6 +102,7 @@ function CargoTable({
         usdXKg: "",
         total: "",
         lockPerKg: false,
+        tax_rate: 10,
         ventaInt: "",     // 👈 NUEVO: “venta interno”, solo aplica a VENTA
       },
     ]);
@@ -103,6 +134,7 @@ function CargoTable({
             usdXKg: "",
             total: "",
             lockPerKg: false,
+            tax_rate: Number(cr.tax_rate ?? 10),
             ventaInt: "",
           });
         }
@@ -134,8 +166,12 @@ function CargoTable({
 
   // Definición de columnas (si es venta+allIn, agregamos 1)
   const gridCols = isVenta && allInEnabled
-    ? "grid auto-rows-min grid-cols-[minmax(220px,1fr)_120px_140px_140px_140px]"
-    : "grid auto-rows-min grid-cols-[minmax(220px,1fr)_120px_140px_140px]";
+    ? (showTaxRate
+        ? "grid auto-rows-min grid-cols-[minmax(220px,1fr)_120px_140px_110px_140px_140px]"
+        : "grid auto-rows-min grid-cols-[minmax(220px,1fr)_120px_140px_140px_140px]")
+    : (showTaxRate
+        ? "grid auto-rows-min grid-cols-[minmax(220px,1fr)_120px_110px_140px_140px]"
+        : "grid auto-rows-min grid-cols-[minmax(220px,1fr)_120px_140px_140px]");
 
   return (
     <div className="overflow-x-auto">
@@ -147,11 +183,15 @@ function CargoTable({
 
           <div className={gridCols}>
             <HeadCell className="bg-blue-100">CARGOS</HeadCell>
-            <HeadCell className="bg-blue-100 text-right">USD X KG</HeadCell>
+            <HeadCell className="bg-blue-100 text-right">{currencyLabel} X KG</HeadCell>
 
             {/* Cuando es venta + all-in: aparece columna de “VENTA (interno)” */}
             {isVenta && allInEnabled && (
               <HeadCell className="bg-blue-100 text-right">VENTA (interno)</HeadCell>
+            )}
+
+            {showTaxRate && (
+              <HeadCell className="bg-blue-100 text-right">IVA</HeadCell>
             )}
 
             <HeadCell className="bg-blue-100 text-right">TOTAL</HeadCell>
@@ -243,6 +283,23 @@ function CargoTable({
                     </Cell>
                   )}
 
+                  {showTaxRate && (
+                    <Cell className="bg-white text-right">
+                      <select
+                        disabled={disabled}
+                        className={`border border-gray-300 rounded px-2 py-1 text-sm text-right ${disabled ? notAllowedCls : ""}`}
+                        value={String(r.tax_rate ?? 10)}
+                        onChange={(e) =>
+                          setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, tax_rate: Number(e.target.value) } : x)))
+                        }
+                      >
+                        {TAX_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                      </select>
+                    </Cell>
+                  )}
+
                   <Cell className="bg-white">
                     <div className="flex items-center justify-end gap-2">
                       <NumInput
@@ -267,14 +324,18 @@ function CargoTable({
                         Auto
                       </label>
                     </div>
-                    {r.lockPerKg && <div className="text-[11px] text-right text-gray-500 mt-0.5">= {money(computed)}</div>}
+                    {r.lockPerKg && (
+                      <div className="text-[11px] text-right text-gray-500 mt-0.5">
+                        = {formatMoney(computed, currencyLabel)}
+                      </div>
+                    )}
                   </Cell>
 
                   <Cell className="bg-white">
                     <div className="flex items-center justify-end gap-2">
                       {showProfit ? (
                         <span className={profit >= 0 ? "text-green-600" : "text-red-600"}>
-                          {profit === null ? "—" : money(profit)}
+                          {profit === null ? "—" : formatMoney(profit, currencyLabel)}
                         </span>
                       ) : null}
                       <button
@@ -322,7 +383,7 @@ function CargoTable({
               </div>
               <div className="text-sm">
                 <span className="font-bold">TOTAL:</span>
-                <span className="ml-2 font-black">$ {money(tableTotal)}</span>
+                <span className="ml-2 font-black">{currencyLabel} {formatMoney(tableTotal, currencyLabel)}</span>
               </div>
             </div>
           </div>
@@ -334,7 +395,7 @@ function CargoTable({
 
 function LocalesTable({ title, rows, setRows, gsToUsd, showProfit = false, costosRows = null, disabled = false }) {
   const ignoredLinksRef = useRef(new Set());
-  const addRow = () => { if (!disabled) setRows((prev) => [...prev, { id: crypto.randomUUID(), concepto: "", gs: "" }]); };
+  const addRow = () => { if (!disabled) setRows((prev) => [...prev, { id: crypto.randomUUID(), concepto: "", gs: "", tax_rate: 10 }]); };
   const removeRow = (row) => {
     if (disabled) return;
     if (row?.sourceId) ignoredLinksRef.current.add(row.sourceId);
@@ -352,7 +413,7 @@ function LocalesTable({ title, rows, setRows, gsToUsd, showProfit = false, costo
         const linked = prevBySource.get(cr.id);
         if (linked) next.push({ ...linked, concepto: cr.concepto || "" });
         else if ((cr.concepto || "").trim() !== "") {
-          next.push({ id: crypto.randomUUID(), sourceId: cr.id, concepto: cr.concepto || "", gs: "" });
+          next.push({ id: crypto.randomUUID(), sourceId: cr.id, concepto: cr.concepto || "", gs: "", tax_rate: Number(cr.tax_rate ?? 10) });
         }
       });
       prev.forEach((r) => !r.sourceId && next.push(r));
@@ -368,9 +429,10 @@ function LocalesTable({ title, rows, setRows, gsToUsd, showProfit = false, costo
       <div className="min-w-[720px]">
         <Box>
           <div className={`py-2 text-center font-bold text-base ${title.includes("COSTOS") ? "bg-blue-100" : "bg-green-100"}`}>{title}</div>
-          <div className="grid auto-rows-min grid-cols-[minmax(220px,1fr)_160px_140px]">
+          <div className="grid auto-rows-min grid-cols-[minmax(220px,1fr)_120px_120px_140px]">
             <HeadCell className="bg-blue-100">Concepto</HeadCell>
             <HeadCell className="bg-blue-100 text-right">Gs</HeadCell>
+            <HeadCell className="bg-blue-100 text-right">IVA</HeadCell>
             <HeadCell className="bg-blue-100 text-right">{showProfit ? "PROFIT / ACCIÓN" : "ACCIÓN"}</HeadCell>
 
             {rows.length === 0 && <div className="col-span-full px-3 py-2 text-xs text-gray-500 border-b">Sin ítems aún.</div>}
@@ -404,11 +466,23 @@ function LocalesTable({ title, rows, setRows, gsToUsd, showProfit = false, costo
                       className="text-right bg-yellow-50"
                     />
                   </Cell>
+                  <Cell className="bg-white text-right">
+                    <select
+                      disabled={disabled}
+                      className={`border border-gray-300 rounded px-2 py-1 text-sm text-right ${disabled ? notAllowedCls : ""}`}
+                      value={String(r.tax_rate ?? 10)}
+                      onChange={(e) => setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, tax_rate: Number(e.target.value) } : x)))}
+                    >
+                      {TAX_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </Cell>
                   <Cell className="bg-white">
                     <div className="flex items-center justify-end gap-2">
                       {showProfit ? (
                         <span className={profit >= 0 ? "text-green-600" : "text-red-600"}>
-                          {profit === null ? "—" : money(profit)}
+                          {profit === null ? "—" : formatMoney(profit, "USD")}
                         </span>
                       ) : null}
                       <button
@@ -438,7 +512,7 @@ function LocalesTable({ title, rows, setRows, gsToUsd, showProfit = false, costo
               <div className="text-sm">
                 <span className="font-bold">TOTAL:</span>{" "}
                 <span className="font-black">Gs {String(totalGs)}</span>
-                <span className="ml-2 text-gray-500">= USD {money(totalUsd)}</span>
+                <span className="ml-2 text-gray-500">= USD {formatMoney(totalUsd, "USD")}</span>
               </div>
             </div>
           </div>
@@ -450,7 +524,7 @@ function LocalesTable({ title, rows, setRows, gsToUsd, showProfit = false, costo
 
 function SeguroTable({ title, rows, setRows, showProfit = false, costosRows = null, disabled = false }) {
   const ignoredLinksRef = useRef(new Set());
-  const addRow = () => { if (!disabled) setRows((prev) => [...prev, { id: crypto.randomUUID(), concepto: "", usd: "" }]); };
+  const addRow = () => { if (!disabled) setRows((prev) => [...prev, { id: crypto.randomUUID(), concepto: "", usd: "", tax_rate: 10 }]); };
   const removeRow = (row) => {
     if (disabled) return;
     if (row?.sourceId) ignoredLinksRef.current.add(row.sourceId);
@@ -468,7 +542,7 @@ function SeguroTable({ title, rows, setRows, showProfit = false, costosRows = nu
         const linked = prevBySource.get(cr.id);
         if (linked) next.push({ ...linked, concepto: cr.concepto || "" });
         else if ((cr.concepto || "").trim() !== "") {
-          next.push({ id: crypto.randomUUID(), sourceId: cr.id, concepto: cr.concepto || "", usd: "" });
+          next.push({ id: crypto.randomUUID(), sourceId: cr.id, concepto: cr.concepto || "", usd: "", tax_rate: Number(cr.tax_rate ?? 10) });
         }
       });
       prev.forEach((r) => !r.sourceId && next.push(r));
@@ -485,9 +559,10 @@ function SeguroTable({ title, rows, setRows, showProfit = false, costosRows = nu
           <div className={`py-2 text-center font-bold text-base ${title.includes("COSTOS") ? "bg-blue-800 text-white" : "bg-green-100"}`}>
             {title}
           </div>
-          <div className="grid auto-rows-min grid-cols-[minmax(220px,1fr)_140px_140px]">
+          <div className="grid auto-rows-min grid-cols-[minmax(220px,1fr)_120px_120px_140px]">
             <HeadCell className="bg-blue-100">Concepto</HeadCell>
             <HeadCell className="bg-blue-100 text-right">USD</HeadCell>
+            <HeadCell className="bg-blue-100 text-right">IVA</HeadCell>
             <HeadCell className="bg-blue-100 text-right">{showProfit ? "PROFIT / ACCIÓN" : "ACCIÓN"}</HeadCell>
 
             {rows.length === 0 && <div className="col-span-full px-3 py-2 text-xs text-gray-500 border-b">Sin ítems aún.</div>}
@@ -521,11 +596,23 @@ function SeguroTable({ title, rows, setRows, showProfit = false, costosRows = nu
                       className="text-right bg-yellow-50"
                     />
                   </Cell>
+                  <Cell className="bg-white text-right">
+                    <select
+                      disabled={disabled}
+                      className={`border border-gray-300 rounded px-2 py-1 text-sm text-right ${disabled ? notAllowedCls : ""}`}
+                      value={String(r.tax_rate ?? 10)}
+                      onChange={(e) => setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, tax_rate: Number(e.target.value) } : x)))}
+                    >
+                      {TAX_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </Cell>
                   <Cell className="bg-white">
                     <div className="flex items-center justify-end gap-2">
                       {showProfit ? (
                         <span className={profit >= 0 ? "text-green-600" : "text-red-600"}>
-                          {profit === null ? "—" : money(profit)}
+                          {profit === null ? "—" : formatMoney(profit, "USD")}
                         </span>
                       ) : null}
                       <button
@@ -553,7 +640,7 @@ function SeguroTable({ title, rows, setRows, showProfit = false, costosRows = nu
                 + Agregar
               </button>
               <div className="font-bold">
-                TOTAL: <span className="font-black">$ {money(totalUsd)}</span>
+                TOTAL: <span className="font-black">USD {formatMoney(totalUsd, "USD")}</span>
               </div>
             </div>
           </div>
@@ -587,6 +674,7 @@ export default function DetCosSheet() {
   const [hbl, setHbl] = useState("");
   const [mercaderia, setMercaderia] = useState("");
   const [gsRate, setGsRate] = useState("5860");
+  const [operationCurrency, setOperationCurrency] = useState("USD");
 
   // presets desde catálogo
   const [catalogServices, setCatalogServices] = useState([]);
@@ -617,6 +705,10 @@ export default function DetCosSheet() {
 
   const isLocked = budgetStatus === "bloqueado" || budgetStatus === "confirmado";
   const canEdit = !(isLocked && !isAdmin); // admin puede editar siempre
+
+  const opCurrency = String(operationCurrency || "USD").toUpperCase();
+  const isPyg = opCurrency === "PYG" || opCurrency === "GS";
+  const currencyLabel = isPyg ? "PYG" : "USD";
 
   // cargar deal + CF + planilla guardada + estado presupuesto + catálogo + versiones
   useEffect(() => {
@@ -653,6 +745,7 @@ export default function DetCosSheet() {
           setHbl(h.hbl ?? "");
           setMercaderia(h.mercaderia ?? "");
           setGsRate(h.gsRate ?? "5860");
+          setOperationCurrency((h.operationCurrency || h.currency || "USD").toUpperCase());
 
           setAllInEnabled(!!h.allInEnabled);
           setAllInServiceName(h.allInServiceName || "");
@@ -815,7 +908,7 @@ export default function DetCosSheet() {
 
     return [
       ...baseZeroed,
-      { id: crypto.randomUUID(), concepto: allInServiceName, usdXKg: "", total: String(total), lockPerKg: false },
+      { id: crypto.randomUUID(), concepto: allInServiceName, usdXKg: "", total: String(total), lockPerKg: false, tax_rate: 10 },
     ];
   }, [allInEnabled, allInServiceName, ventaRows, ventaRowsBaseTotal, catalogServices]);
 
@@ -833,13 +926,19 @@ export default function DetCosSheet() {
   // Locales y seguro
   const gsToUsd = useMemo(() => num(gsRate) || 0, [gsRate]);
   const totalLocalesGs = useMemo(() => locRows.reduce((a, r) => a + num(r.gs), 0), [locRows]);
-  const totalLocalesUsd = useMemo(() => (gsToUsd ? totalLocalesGs / gsToUsd : 0), [totalLocalesGs, gsToUsd]);
+  const totalLocales = useMemo(
+    () => (isPyg ? totalLocalesGs : (gsToUsd ? totalLocalesGs / gsToUsd : 0)),
+    [totalLocalesGs, gsToUsd, isPyg]
+  );
   const totalLocalesClienteGs = useMemo(() => locCliRows.reduce((a, r) => a + num(r.gs), 0), [locCliRows]);
-  const totalLocalesClienteUsd = useMemo(() => (gsToUsd ? totalLocalesClienteGs / gsToUsd : 0), [totalLocalesClienteGs, gsToUsd]);
-  const segCostoUsd = useMemo(() => segCostoRows.reduce((a, r) => a + num(r.usd || r.monto || 0), 0), [segCostoRows]);
-  const segVentaUsd = useMemo(() => segVentaRows.reduce((a, r) => a + num(r.usd || r.monto || 0), 0), [segVentaRows]);
-  const totalCostos = useMemo(() => totalCompra + totalLocalesUsd + segCostoUsd, [totalCompra, totalLocalesUsd, segCostoUsd]);
-  const totalVentas = useMemo(() => totalVenta + totalLocalesClienteUsd + segVentaUsd, [totalVenta, totalLocalesClienteUsd, segVentaUsd]);
+  const totalLocalesCliente = useMemo(
+    () => (isPyg ? totalLocalesClienteGs : (gsToUsd ? totalLocalesClienteGs / gsToUsd : 0)),
+    [totalLocalesClienteGs, gsToUsd, isPyg]
+  );
+  const segCostoTotal = useMemo(() => segCostoRows.reduce((a, r) => a + num(r.usd || r.monto || 0), 0), [segCostoRows]);
+  const segVentaTotal = useMemo(() => segVentaRows.reduce((a, r) => a + num(r.usd || r.monto || 0), 0), [segVentaRows]);
+  const totalCostos = useMemo(() => totalCompra + totalLocales + segCostoTotal, [totalCompra, totalLocales, segCostoTotal]);
+  const totalVentas = useMemo(() => totalVenta + totalLocalesCliente + segVentaTotal, [totalVenta, totalLocalesCliente, segVentaTotal]);
   const profitGeneral = useMemo(() => totalVentas - totalCostos, [totalVentas, totalCostos]);
 
   // === actualiza deal.value con el profit calculado
@@ -851,6 +950,15 @@ export default function DetCosSheet() {
       console.warn("No se pudo actualizar deal.value con el profit:", e);
     }
   }
+
+  const convertValue = (v, factor, mode) => {
+    if (v === "" || v === null || v === undefined) return "";
+    const n = num(v);
+    if (!Number.isFinite(n)) return "";
+    if (mode === "toUSD") return (n / factor).toFixed(2);
+    if (mode === "toPYG") return String(Math.round(n * factor));
+    return String(n);
+  };
 
   // === NUEVO: Cargar versiones ===
   async function loadVersions() {
@@ -888,6 +996,7 @@ export default function DetCosSheet() {
       setHbl(h.hbl ?? "");
       setMercaderia(h.mercaderia ?? "");
       setGsRate(h.gsRate ?? "5860");
+      setOperationCurrency((h.operationCurrency || h.currency || "USD").toUpperCase());
       setAllInEnabled(!!h.allInEnabled);
       setAllInServiceName(h.allInServiceName || "");
       setCompraRows(Array.isArray(d.compraRows) ? d.compraRows : []);
@@ -919,6 +1028,7 @@ export default function DetCosSheet() {
         gsRate,
         allInEnabled,
         allInServiceName,
+        operationCurrency,
       },
       compraRows,
       ventaRows,
@@ -958,6 +1068,7 @@ export default function DetCosSheet() {
         gsRate,
         allInEnabled,
         allInServiceName,
+        operationCurrency,
       },
       compraRows,
       ventaRows, // guardamos “crudo” (incluye ventaInt)
@@ -1115,11 +1226,96 @@ export default function DetCosSheet() {
           <div className="min-w-[980px] grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-6">
             <Box>
               <div className="py-2 text-center font-bold text-lg bg-blue-100">REF: {deal.reference}</div>
-              <div className="grid grid-cols-[1fr_120px_1fr_100px] bg-blue-50">
-                <HeadCell className="text-center">CARGA {modo || "—"}</HeadCell>
-                <HeadCell className="text-center">{clase || "—"}</HeadCell>
-                <HeadCell className="text-right">MONEDA:</HeadCell>
-                <HeadCell className="text-left">USD</HeadCell>
+                            <div className="flex items-center justify-between gap-3 px-3 py-2 bg-blue-50 border-b-2 border-gray-300">
+                <div className="text-sm font-bold">MONEDA</div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className={`px-2 py-0.5 text-[11px] rounded border ${opCurrency === "USD" ? "bg-black text-white border-black" : "bg-white"}`}
+                    onClick={() => {
+                      if (opCurrency === "USD") return;
+                      if (!gsToUsd) return alert("Defin? primero el tipo de cambio Gs/USD.");
+                      setCompraRows((prev) =>
+                        prev.map((r) => ({
+                          ...r,
+                          usdXKg: convertValue(r.usdXKg, gsToUsd, "toUSD"),
+                          total: convertValue(r.total, gsToUsd, "toUSD"),
+                          ventaInt: convertValue(r.ventaInt, gsToUsd, "toUSD"),
+                        }))
+                      );
+                      setVentaRows((prev) =>
+                        prev.map((r) => ({
+                          ...r,
+                          usdXKg: convertValue(r.usdXKg, gsToUsd, "toUSD"),
+                          total: convertValue(r.total, gsToUsd, "toUSD"),
+                          ventaInt: convertValue(r.ventaInt, gsToUsd, "toUSD"),
+                        }))
+                      );
+                      setSegCostoRows((prev) =>
+                        prev.map((r) => ({
+                          ...r,
+                          usd: convertValue(r.usd ?? r.monto, gsToUsd, "toUSD"),
+                          monto: convertValue(r.monto, gsToUsd, "toUSD"),
+                        }))
+                      );
+                      setSegVentaRows((prev) =>
+                        prev.map((r) => ({
+                          ...r,
+                          usd: convertValue(r.usd ?? r.monto, gsToUsd, "toUSD"),
+                          monto: convertValue(r.monto, gsToUsd, "toUSD"),
+                        }))
+                      );
+                      setOperationCurrency("USD");
+                    }}
+                  >
+                    USD
+                  </button>
+                  <button
+                    type="button"
+                    className={`px-2 py-0.5 text-[11px] rounded border ${opCurrency === "PYG" ? "bg-black text-white border-black" : "bg-white"}`}
+                    onClick={() => {
+                      if (opCurrency === "PYG") return;
+                      if (!gsToUsd) return alert("Defin? primero el tipo de cambio Gs/USD.");
+                      setCompraRows((prev) =>
+                        prev.map((r) => ({
+                          ...r,
+                          usdXKg: convertValue(r.usdXKg, gsToUsd, "toPYG"),
+                          total: convertValue(r.total, gsToUsd, "toPYG"),
+                          ventaInt: convertValue(r.ventaInt, gsToUsd, "toPYG"),
+                        }))
+                      );
+                      setVentaRows((prev) =>
+                        prev.map((r) => ({
+                          ...r,
+                          usdXKg: convertValue(r.usdXKg, gsToUsd, "toPYG"),
+                          total: convertValue(r.total, gsToUsd, "toPYG"),
+                          ventaInt: convertValue(r.ventaInt, gsToUsd, "toPYG"),
+                        }))
+                      );
+                      setSegCostoRows((prev) =>
+                        prev.map((r) => ({
+                          ...r,
+                          usd: convertValue(r.usd ?? r.monto, gsToUsd, "toPYG"),
+                          monto: convertValue(r.monto, gsToUsd, "toPYG"),
+                        }))
+                      );
+                      setSegVentaRows((prev) =>
+                        prev.map((r) => ({
+                          ...r,
+                          usd: convertValue(r.usd ?? r.monto, gsToUsd, "toPYG"),
+                          monto: convertValue(r.monto, gsToUsd, "toPYG"),
+                        }))
+                      );
+                      setOperationCurrency("PYG");
+                    }}
+                  >
+                    PYG
+                  </button>
+                </div>
+              </div>
+              <div className="grid grid-cols-[1fr_120px] bg-blue-50">
+                <HeadCell className="text-center">CARGA {modo || "???"}</HeadCell>
+                <HeadCell className="text-center">{clase || "???"}</HeadCell>
               </div>
 
               <div className="grid grid-cols-2">
@@ -1221,16 +1417,16 @@ export default function DetCosSheet() {
               <div className="p-4 space-y-3">
                 <div className="grid grid-cols-[1fr_160px] items-center">
                   <div className="font-semibold">COMPRA</div>
-                  <div className="text-right font-bold text-lg">$ {money(totalCostos)}</div>
+                  <div className="text-right font-bold text-lg">{currencyLabel} {formatMoney(totalCostos, currencyLabel)}</div>
                 </div>
                 <div className="grid grid-cols-[1fr_160px] items-center">
                   <div className="font-semibold">VENTA</div>
-                  <div className="text-right font-bold text-lg">$ {money(totalVentas)}</div>
+                  <div className="text-right font-bold text-lg">{currencyLabel} {formatMoney(totalVentas, currencyLabel)}</div>
                 </div>
                 <div className="grid grid-cols-[1fr_160px] items-center">
                   <div className="font-semibold">PROFIT GENERAL</div>
                   <div className={`text-right font-bold text-xl ${profitGeneral >= 0 ? "text-green-700" : "text-red-700"}`}>
-                    $ {money(profitGeneral)}
+                    {currencyLabel} {formatMoney(profitGeneral, currencyLabel)}
                   </div>
                 </div>
               </div>
@@ -1245,6 +1441,7 @@ export default function DetCosSheet() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <CargoTable
             title="COMPRA DEL AGENTE"
+            currency={currencyLabel}
             showProfit={false}
             rows={compraRows}
             setRows={setCompraRows}
@@ -1254,7 +1451,9 @@ export default function DetCosSheet() {
           />
           <CargoTable
             title="VENTA AL CLIENTE"
+            currency={currencyLabel}
             showProfit
+            showTaxRate
             isVenta
             allInEnabled={allInEnabled}
             rows={ventaRowsView}     // vista (concentrada si all-in)
@@ -1324,14 +1523,14 @@ export default function DetCosSheet() {
             <div className="text-right">
               <div className="mb-1.5">
                 <span className="text-gray-500 mr-2">Compra total:</span>
-                <span className="font-bold text-lg">$ {money(totalCostos)}</span>
+                <span className="font-bold text-lg">{currencyLabel} {formatMoney(totalCostos, currencyLabel)}</span>
               </div>
               <div className="mb-1.5">
                 <span className="text-gray-500 mr-2">Venta total:</span>
-                <span className="font-bold text-lg">$ {money(totalVentas)}</span>
+                <span className="font-bold text-lg">{currencyLabel} {formatMoney(totalVentas, currencyLabel)}</span>
               </div>
               <div className={`text-xl font-black ${totalVentas - totalCostos >= 0 ? "text-green-700" : "text-red-700"}`}>
-                PROFIT GENERAL: $ {money(totalVentas - totalCostos)}
+                PROFIT GENERAL: {currencyLabel} {formatMoney(totalVentas - totalCostos, currencyLabel)}
               </div>
             </div>
           </div>

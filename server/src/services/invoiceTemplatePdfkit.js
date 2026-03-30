@@ -363,9 +363,17 @@ function mapItem(it) {
   const qty = Number(it.quantity || it.qty || 0);
   const unitPrice = Number(it.unit_price || it.unitPrice || 0);
   const rate = Number(it.tax_rate ?? it.taxRate ?? 0);
-  const base = qty * unitPrice;
-  const iva = (rate / 100) * base;
-  const total = base + iva;
+  const gross = qty * unitPrice;
+  let iva = 0;
+  let base = gross;
+  if (rate >= 9) {
+    iva = gross / 11;
+    base = gross - iva;
+  } else if (rate >= 4) {
+    iva = gross / 21;
+    base = gross - iva;
+  }
+  const total = gross;
   let taxType = 'EXENTA';
   if (rate >= 9) taxType = 'IVA10';
   else if (rate >= 4) taxType = 'IVA5';
@@ -375,6 +383,7 @@ function mapItem(it) {
     unitPrice,
     taxType,
     total,
+    iva,
     base,
     rate,
   };
@@ -384,7 +393,7 @@ function computeTotals(items) {
   const totals = { exentas: 0, vat5: 0, vat10: 0, iva5: 0, iva10: 0 };
   items.forEach((it) => {
     const base = it.base;
-    const iva = (it.rate / 100) * base;
+    const iva = it.iva || 0;
     if (it.taxType === 'IVA10') {
       totals.vat10 += base + iva;
       totals.iva10 += iva;

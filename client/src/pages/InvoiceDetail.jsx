@@ -12,11 +12,11 @@ const statusStyles = {
   vencida: { label: 'Vencida', cls: 'bg-orange-100 text-orange-700' },
 };
 
-const fmtMoney = (v) =>
-  new Intl.NumberFormat('es-PY', { style: 'currency', currency: 'USD' }).format(
+const fmtMoney = (v, currency = 'USD') =>
+  new Intl.NumberFormat('es-PY', { style: 'currency', currency }).format(
     Number(v || 0),
   );
-const fmtDate = (v) => (v ? new Date(v).toLocaleDateString('es-PY') : '�?"');
+const fmtDate = (v) => (v ? new Date(v).toLocaleDateString('es-PY') : '?"');
 const openReceiptPdf = async (id) => {
   try {
     const res = await api.get(`/invoices/receipts/${id}/pdf`, { responseType: 'blob' });
@@ -171,6 +171,7 @@ export default function InvoiceDetail() {
   const availableCredit = Math.max(0, totalCalc - Number(invoice?.credited_total || 0));
   const creditedCalc = Number(invoice?.creditedCalc ?? invoice?.credited_total ?? 0);
   const paidCalc = Number(invoice?.paidCalc ?? invoice?.paid_amount ?? invoice?.paid ?? 0);
+  const hasReceipts = (invoice?.receipts || []).length > 0 || paidCalc > 0;
   const netTotalDisplay = Number(
     invoice?.calcNetTotal ??
     invoice?.net_total_amount ??
@@ -181,17 +182,26 @@ export default function InvoiceDetail() {
     invoice?.net_balance ??
     invoice?.balance ??
     Math.max(0, netTotalDisplay - paidCalc)
-  );
+  );  const currencyCode = invoice?.currency_code || 'USD';
+  const money = (v) => fmtMoney(v, currencyCode);
+
+
 
 
   if (loading) return <div className="p-6">Cargando factura...</div>;
   if (!invoice) return <div className="p-6">No se encontró la factura</div>;
 
+  const isCreditCanceled =
+    invoice.status === 'anulada' &&
+    (invoice.canceled_by_credit_note_id ||
+      String(invoice.cancellation_reason || '').toLowerCase().includes('nota de credito'));
+
   return (
     <div className="p-6 space-y-6">
-      {invoice.canceled_by_credit_note_id && (
+      {isCreditCanceled && (
         <div className="p-3 border border-amber-300 bg-amber-50 text-amber-800 rounded">
-          Factura anulada por nota de crédito {invoice.cancellation_reason || ''} (NC ID: {invoice.canceled_by_credit_note_id})
+          Factura anulada por nota de crédito{invoice.cancellation_reason ? `: ${invoice.cancellation_reason}` : ''}
+          {invoice.canceled_by_credit_note_id ? ` (NC ID: ${invoice.canceled_by_credit_note_id})` : ''}
         </div>
       )}
       <div className="flex items-start justify-between gap-4">
@@ -238,8 +248,16 @@ export default function InvoiceDetail() {
                 Anular
               </button>
               <button
-                onClick={() => setShowCreditModal(true)}
-                className="btn bg-amber-600 text-white hover:bg-amber-700"
+                onClick={() => {
+                  if (hasReceipts) {
+                    alert('No se puede crear nota de crédito: la factura ya tiene recibos.');
+                    return;
+                  }
+                  setShowCreditModal(true);
+                }}
+                className="btn bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-60"
+                disabled={hasReceipts}
+                title={hasReceipts ? 'Bloqueado: ya hay recibos registrados' : 'Crear nota de crédito'}
               >
                 Nota de crédito
               </button>
@@ -272,34 +290,34 @@ export default function InvoiceDetail() {
         <h3 className="font-semibold">Totales</h3>
           <div className="flex justify-between text-sm">
             <span>Subtotal</span>
-            <span className="font-medium">{fmtMoney(subtotalCalc)}</span>
+            <span className="font-medium">{money(subtotalCalc)}</span>
             </div>
             <div className="flex justify-between text-sm">
               <span>Impuesto</span>
-              <span className="font-medium">{fmtMoney(taxCalc)}</span>
+              <span className="font-medium">{money(taxCalc)}</span>
           </div>
           <div className="flex justify-between text-base font-semibold text-slate-800">
             <span>Total</span>
-            <span>{fmtMoney(totalCalc)}</span>
+            <span>{money(totalCalc)}</span>
           </div>
           <div className="flex justify-between text-sm">
             <span>Notas de crédito</span>
             <span className="font-medium text-amber-700">
-              {fmtMoney(creditedCalc)}
+              {money(creditedCalc)}
             </span>
           </div>
           <div className="flex justify-between text-sm font-semibold text-slate-800">
             <span>Total neto</span>
-            <span>{fmtMoney(netTotalDisplay)}</span>
+            <span>{money(netTotalDisplay)}</span>
           </div>
           <div className="flex justify-between text-sm text-slate-600">
             <span>Pagado</span>
-            <span>{fmtMoney(paidCalc)}</span>
+            <span>{money(paidCalc)}</span>
           </div>
           <div className="flex justify-between text-sm text-orange-600">
             <span>Saldo</span>
             <span className="font-semibold">
-              {fmtMoney(pendingCalc)}
+              {money(pendingCalc)}
             </span>
           </div>
       </div>
@@ -321,8 +339,8 @@ export default function InvoiceDetail() {
               <tr key={it.id} className="border-t">
                 <td className="px-4 py-2">{it.description || '—'}</td>
                 <td className="px-4 py-2">{it.quantity}</td>
-                <td className="px-4 py-2">{fmtMoney(it.unit_price)}</td>
-                <td className="px-4 py-2 font-medium">{fmtMoney(it.subtotal)}</td>
+                <td className="px-4 py-2">{money(it.unit_price)}</td>
+                <td className="px-4 py-2 font-medium">{money(it.subtotal)}</td>
               </tr>
             ))}
             {(!invoice.items || invoice.items.length === 0) && (
@@ -370,15 +388,15 @@ export default function InvoiceDetail() {
       className="text-blue-600 hover:underline"
       onClick={() => openReceiptPdf(p.id)}
     >
-      {p.receipt_number || '�?"'}
+      {p.receipt_number || '?"'}
     </button>
   ) : (
-    p.receipt_number || '�?"'
+    p.receipt_number || '?"'
   )}
 </td>
                 <td className="px-4 py-2 capitalize">{p.payment_method}</td>
                 <td className="px-4 py-2">{p.reference_number || '—'}</td>
-                <td className="px-4 py-2 font-medium">{fmtMoney(p.net_amount ?? p.amount)}</td>
+                <td className="px-4 py-2 font-medium">{money(p.net_amount ?? p.amount)}</td>
                 <td className="px-4 py-2">{p.issued_by_name || '—'}</td>
               </tr>
             ))}
@@ -421,7 +439,7 @@ export default function InvoiceDetail() {
                 <td className="px-4 py-2">{cn.credit_note_number}</td>
                 <td className="px-4 py-2 capitalize">{cn.status}</td>
                 <td className="px-4 py-2">{fmtDate(cn.issue_date)}</td>
-                <td className="px-4 py-2 text-right font-medium">{fmtMoney(cn.total_amount)}</td>
+                <td className="px-4 py-2 text-right font-medium">{money(cn.total_amount)}</td>
                 <td className="px-4 py-2 text-center">
                   <button
                     className="text-xs px-2 py-1 bg-slate-600 text-white rounded hover:bg-slate-700"
@@ -480,6 +498,7 @@ export default function InvoiceDetail() {
 }
 
   function PaymentModal({ invoice, onClose, onSuccess }) {
+  const money = (v) => fmtMoney(v, invoice?.currency_code || 'USD');
   // saldo pendiente con fallback (igual que en la tarjeta de totales)
     const subtotalP = Number(invoice?.calcSubtotal ?? invoice?.subtotal ?? 0);
     const taxP = Number(invoice?.calcTax ?? invoice?.tax_amount ?? 0);
@@ -559,7 +578,7 @@ export default function InvoiceDetail() {
             <div className="mt-2 flex justify-between">
               <span>Saldo pendiente:</span>
               <span className="font-bold text-orange-600">
-                {fmtMoney(effectiveBalance)}
+                {money(effectiveBalance)}
               </span>
             </div>
           {receiptPoint && (
@@ -653,8 +672,8 @@ export default function InvoiceDetail() {
               <option value="100">100%</option>
             </select>
             <div className="text-xs text-slate-600 mt-1 space-y-0.5">
-              <div>Retención: {fmtMoney(retentionAmount)}</div>
-              <div>Monto neto recibo (neto): {fmtMoney(netAmount)}</div>
+              <div>Retención: {money(retentionAmount)}</div>
+              <div>Monto neto recibo (neto): {money(netAmount)}</div>
             </div>
           </div>
           <div>
@@ -691,6 +710,7 @@ export default function InvoiceDetail() {
 }
 
 function CreditNoteModal({ invoice, availableCredit, onClose, onSuccess }) {
+  const money = (v) => fmtMoney(v, invoice?.currency_code || 'USD');
   const [form, setForm] = useState({
     reason: '',
     mode: 'percentage',
@@ -772,7 +792,7 @@ function CreditNoteModal({ invoice, availableCredit, onClose, onSuccess }) {
           <div className="text-slate-600">{invoice.organization_name}</div>
           <div className="mt-2 flex justify-between">
             <span>Disponible para acreditar:</span>
-            <span className="font-bold text-amber-700">{fmtMoney(availableCredit)}</span>
+            <span className="font-bold text-amber-700">{money(availableCredit)}</span>
           </div>
         </div>
 
@@ -800,7 +820,7 @@ function CreditNoteModal({ invoice, availableCredit, onClose, onSuccess }) {
               disabled={form.mode !== 'percentage'}
             />
             <p className="text-xs text-slate-500 mt-1">
-              Se prorratea sobre los ítems de la factura. Valor estimado: {fmtMoney(totals.total)}.
+              Se prorratea sobre los ítems de la factura. Valor estimado: {money(totals.total)}.
             </p>
           </div>
 
@@ -856,6 +876,7 @@ function CreditNoteViewModal({ creditNoteId, onClose, onRefresh }) {
   const [issuing, setIssuing] = useState(false);
   const [canceling, setCanceling] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const money = (v) => fmtMoney(v, data?.invoice?.currency_code || 'USD');
 
   useEffect(() => {
     loadDetail();
@@ -994,15 +1015,15 @@ function CreditNoteViewModal({ creditNoteId, onClose, onRefresh }) {
           <div className="bg-slate-50 rounded p-3 text-sm space-y-1">
             <div className="flex justify-between">
               <span>Subtotal</span>
-              <span className="font-medium">{fmtMoney(data.subtotal)}</span>
+              <span className="font-medium">{money(data.subtotal)}</span>
             </div>
             <div className="flex justify-between">
               <span>Impuesto</span>
-              <span className="font-medium">{fmtMoney(data.tax_amount)}</span>
+              <span className="font-medium">{money(data.tax_amount)}</span>
             </div>
             <div className="flex justify-between font-semibold text-slate-800">
               <span>Total</span>
-              <span>{fmtMoney(data.total_amount)}</span>
+              <span>{money(data.total_amount)}</span>
             </div>
             <div className="flex justify-between">
               <span>Motivo</span>
@@ -1027,8 +1048,8 @@ function CreditNoteViewModal({ creditNoteId, onClose, onRefresh }) {
                 <tr key={it.id} className="border-t">
                   <td className="px-4 py-2">{it.description || 'N/D'}</td>
                   <td className="px-4 py-2">{it.quantity}</td>
-                  <td className="px-4 py-2">{fmtMoney(it.unit_price)}</td>
-                  <td className="px-4 py-2 font-medium">{fmtMoney(it.subtotal)}</td>
+                  <td className="px-4 py-2">{money(it.unit_price)}</td>
+                  <td className="px-4 py-2 font-medium">{money(it.subtotal)}</td>
                 </tr>
               ))}
               {(!data.items || data.items.length === 0) && (

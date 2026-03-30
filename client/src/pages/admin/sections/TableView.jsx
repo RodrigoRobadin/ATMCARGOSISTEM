@@ -17,6 +17,7 @@ export default function TableView({
   stageOptions,
   onChangeStage,
   onOpenDocs,
+  onInvoice,
   showInTransit = false,
 }) {
   return (
@@ -40,7 +41,10 @@ export default function TableView({
             {items.map((r) => (
               <tr key={r.id} className="border-t">
                 <Td>
-                  <Link to={`/operations/${r.id}`} className="font-medium hover:underline">
+                  <Link
+                    to={r.op_type === "service" ? `/service/cases/${r.id}` : `/operations/${r.id}`}
+                    className="font-medium hover:underline"
+                  >
                     {r.reference}
                   </Link>
                 </Td>
@@ -50,7 +54,7 @@ export default function TableView({
                   <select
                     className="border rounded px-2 py-1"
                     value={r.stage_id}
-                    onChange={(e) => onChangeStage(r.id, e.target.value)}
+                    onChange={(e) => onChangeStage(r.id, e.target.value, r.op_type)}
                   >
                     {stageOptions.map((opt) => (
                       <option key={opt.value} value={opt.value}>
@@ -73,13 +77,23 @@ export default function TableView({
                 <Td>{r.value != null ? Number(r.value).toLocaleString() : "—"}</Td>
                 <Td>{fmtDateTime(r.updated_at)}</Td>
                 <Td className="space-x-2">
-                  <Link className="btn" to={`/api/reports/status/view/${r.id}`} target="_blank">
+                  <Link
+                    className="btn"
+                    to={
+                      r.op_type === "service"
+                        ? `/api/service/cases/${r.id}/report`
+                        : `/api/reports/status/view/${r.id}`
+                    }
+                    target="_blank"
+                  >
                     Informe
                   </Link>
-                  <button className="btn" onClick={() => onOpenDocs(r)}>
-                    Docs
-                  </button>
-                  <button className="btn" onClick={() => alert("Emitir factura (pendiente)")}>
+                  {r.op_type !== "service" && (
+                    <button className="btn" onClick={() => onOpenDocs(r)}>
+                      Docs
+                    </button>
+                  )}
+                  <button className="btn" onClick={() => onInvoice && onInvoice(r)}>
                     Facturar
                   </button>
                 </Td>

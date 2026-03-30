@@ -38,6 +38,33 @@ const toNull = (v) => (v === '' || typeof v === 'undefined' ? null : v);
   }
 })();
 
+/* ========= Auto-migración: asegurar tabla org_branches ========= */
+(async () => {
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS org_branches (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        org_id INT NOT NULL,
+        name VARCHAR(120) NULL,
+        address VARCHAR(255) NULL,
+        city VARCHAR(120) NULL,
+        country VARCHAR(120) NULL,
+        phone VARCHAR(120) NULL,
+        email VARCHAR(180) NULL,
+        is_default TINYINT(1) NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_org_branches_org (org_id),
+        CONSTRAINT fk_org_branches_org
+          FOREIGN KEY (org_id) REFERENCES organizations(id)
+          ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+  } catch (e) {
+    console.error('[organizations] No se pudo asegurar tabla org_branches:', e?.message || e);
+  }
+})();
+
 /* ===================== LISTAR ===================== */
 router.get('/', requireAuth, async (req, res) => {
   try {
@@ -126,6 +153,7 @@ router.post('/', requireAuth, async (req, res) => {
       tipo_org = null,
       operacion = null,
       hoja_ruta = null,
+      branches = null,
     } = req.body || {};
 
     const rs = String(razon_social || '').trim() || String(name || '').trim();
@@ -189,6 +217,32 @@ router.post('/', requireAuth, async (req, res) => {
       `,
       [ins.insertId]
     );
+
+    try {
+      const list = Array.isArray(branches) ? branches.filter(Boolean) : [];
+      if (list.length) {
+        const values = list.map((b) => [
+          row.id,
+          toNull(b?.name),
+          toNull(b?.address),
+          toNull(b?.city),
+          toNull(b?.country),
+          toNull(b?.phone),
+          toNull(b?.email),
+          b?.is_default ? 1 : 0,
+        ]);
+        await db.query(
+          `
+          INSERT INTO org_branches
+            (org_id, name, address, city, country, phone, email, is_default)
+          VALUES ?
+          `,
+          [values]
+        );
+      }
+    } catch (e) {
+      console.error('[organizations:post] No se pudieron guardar sucursales:', e?.message || e);
+    }
 
     // Crear tarjeta de Prospecto en ATM INDUSTRIAL (pipeline 1) al crear organización
     try {
@@ -266,6 +320,125 @@ router.post('/', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('[organizations:post]', e);
     res.status(400).json({ error: 'Create failed' });
+  }
+});
+
+/* ===================== SUCURSALES ===================== */
+router.get('/:id/branches', requireAuth, async (req, res) => {
+  const id = Number(req.params.id || 0);
+  if (!id) return res.status(400).json({ error: 'id invalido' });
+  try {
+    const [rows] = await db.query(
+      `
+      SELECT id, org_id, name, address, city, country, phone, email, is_default, created_at, updated_at
+      FROM org_branches
+      WHERE org_id = ?
+      ORDER BY is_default DESC, name ASC, id ASC
+      `,
+      [id]
+    );
+    res.json(rows);
+  } catch (e) {
+    console.error('[organizations:branches:list]', e);
+    res.status(500).json({ error: 'No se pudieron listar sucursales' });
+  }
+});
+
+router.post('/:id/branches', requireAuth, async (req, res) => {
+  const id = Number(req.params.id || 0);
+  if (!id) return res.status(400).json({ error: 'id invalido' });
+  const {
+    name = null,
+    address = null,
+    city = null,
+    country = null,
+    phone = null,
+    email = null,
+    is_default = 0,
+  } = req.body || {};
+  if (!address && !name) {
+    return res.status(400).json({ error: 'name o address requerido' });
+  }
+  try {
+    const [ins] = await db.query(
+      `
+      INSERT INTO org_branches
+        (org_id, name, address, city, country, phone, email, is_default)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        id,
+        name,
+        address,
+        city,
+        country,
+        phone,
+        email,
+        is_default ? 1 : 0,
+      ]
+    );
+    const [[row]] = await db.query(
+      'SELECT id, org_id, name, address, city, country, phone, email, is_default, created_at, updated_at FROM org_branches WHERE id = ?',
+      [ins.insertId]
+    );
+    res.status(201).json(row);
+  } catch (e) {
+    console.error('[organizations:branches:create]', e);
+    res.status(500).json({ error: 'No se pudo crear sucursal' });
+  }
+});
+
+router.put('/:id/branches/:branchId', requireAuth, async (req, res) => {
+  const id = Number(req.params.id || 0);
+  const branchId = Number(req.params.branchId || 0);
+  if (!id || !branchId) return res.status(400).json({ error: 'id invalido' });
+  const {
+    name = undefined,
+    address = undefined,
+    city = undefined,
+    country = undefined,
+    phone = undefined,
+    email = undefined,
+    is_default = undefined,
+  } = req.body || {};
+  try {
+    const sets = [];
+    const params = [];
+    if (name !== undefined) { sets.push('name = ?'); params.push(name); }
+    if (address !== undefined) { sets.push('address = ?'); params.push(address); }
+    if (city !== undefined) { sets.push('city = ?'); params.push(city); }
+    if (country !== undefined) { sets.push('country = ?'); params.push(country); }
+    if (phone !== undefined) { sets.push('phone = ?'); params.push(phone); }
+    if (email !== undefined) { sets.push('email = ?'); params.push(email); }
+    if (is_default !== undefined) { sets.push('is_default = ?'); params.push(is_default ? 1 : 0); }
+    if (!sets.length) return res.status(400).json({ error: 'Sin cambios' });
+
+    params.push(branchId, id);
+    await db.query(
+      `UPDATE org_branches SET ${sets.join(', ')} WHERE id = ? AND org_id = ?`,
+      params
+    );
+    const [[row]] = await db.query(
+      'SELECT id, org_id, name, address, city, country, phone, email, is_default, created_at, updated_at FROM org_branches WHERE id = ?',
+      [branchId]
+    );
+    res.json(row || null);
+  } catch (e) {
+    console.error('[organizations:branches:update]', e);
+    res.status(500).json({ error: 'No se pudo actualizar sucursal' });
+  }
+});
+
+router.delete('/:id/branches/:branchId', requireAuth, async (req, res) => {
+  const id = Number(req.params.id || 0);
+  const branchId = Number(req.params.branchId || 0);
+  if (!id || !branchId) return res.status(400).json({ error: 'id invalido' });
+  try {
+    await db.query('DELETE FROM org_branches WHERE id = ? AND org_id = ?', [branchId, id]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[organizations:branches:delete]', e);
+    res.status(500).json({ error: 'No se pudo eliminar sucursal' });
   }
 });
 

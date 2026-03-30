@@ -45,6 +45,8 @@ import purchaseOrdersRouter from './routes/purchaseOrders.js';
 import purchaseInvoicesRouter from './routes/purchaseInvoices.js';
 import suppliersRouter from './routes/suppliers.js';
 import adminExpensesRouter from './routes/adminExpenses.js';
+import operationExpenseInvoicesRouter from './routes/operationExpenseInvoices.js';
+import adminOpsPurchasesRouter from './routes/adminOpsPurchases.js';
 
 // ⭐️ Operaciones (nuestro router nuevo)
 import operationsRouter from './routes/operations.js';
@@ -55,6 +57,7 @@ import salesGoalsRouter from './routes/salesGoals.js';
 import notificationsRouter from './routes/notifications.js';
 import messagesRouter from './routes/messages.js';
 import adminFinanceRouter from './routes/adminFinance.js';
+import serviceRouter from './routes/service.js';
 
 // ⭐️ NUEVO: solicitudes de flete
 import freightRequestsRouter from './routes/freightRequests.js';
@@ -229,6 +232,7 @@ app.use('/api/purchase-orders', purchaseOrdersRouter);
 app.use('/api/purchase-invoices', purchaseInvoicesRouter);
 app.use('/api/suppliers', suppliersRouter);
 app.use('/api/admin-expenses', adminExpensesRouter);
+app.use('/api/admin/ops', adminOpsPurchasesRouter);
 
 app.use('/api/search', searchRouter);
 app.use('/api/reports', reportsRouter);
@@ -238,9 +242,11 @@ app.use('/api/sales-goals', salesGoalsRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/messages', messagesRouter);
 app.use('/api/admin/finance', adminFinanceRouter);
+app.use('/api/service', serviceRouter);
 
 // ⭐️ Operaciones (crear/leer y PUT por tipo: air/ocean/road/multimodal)
 app.use('/api/operations', operationsRouter);
+app.use('/api/operations', operationExpenseInvoicesRouter);
 
 // ⭐️ NUEVO: solicitudes de flete (envío de emails “pedido de tarifa”)
 app.use('/api/freight-requests', freightRequestsRouter);

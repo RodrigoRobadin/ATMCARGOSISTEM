@@ -2,9 +2,11 @@
 import React, { useEffect, useState } from 'react';
 import { api, fetchUsersByRole } from '../api';
 
-export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }) {
+export default function InvoiceCreateModal({ defaultDealId, defaultServiceCaseId, defaultServiceQuoteAdditionId, onClose, onSuccess }) {
   const [form, setForm] = useState({
     deal_id: defaultDealId ? String(defaultDealId) : '',
+    service_case_id: defaultServiceCaseId ? String(defaultServiceCaseId) : '',
+    service_quote_addition_id: defaultServiceQuoteAdditionId ? String(defaultServiceQuoteAdditionId) : '',
     due_date: '',
     payment_terms: '30 dias',
     notes: '',
@@ -33,6 +35,7 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
   const [timbreFetched, setTimbreFetched] = useState(false);
   const [businessUnitKey, setBusinessUnitKey] = useState("");
   const [dueDateTouched, setDueDateTouched] = useState(false);
+  const [currencyTouched, setCurrencyTouched] = useState(false);
 
   const toISO = (val) => {
     if (!val) return "";
@@ -48,14 +51,27 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
     if (defaultDealId) {
       preloadDealData(defaultDealId);
     }
+    if (defaultServiceCaseId) {
+      preloadServiceCaseData(defaultServiceCaseId);
+    }
+    if (defaultServiceQuoteAdditionId) {
+      setForm((prev) => ({ ...prev, service_quote_addition_id: String(defaultServiceQuoteAdditionId) }));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaultDealId]);
+  }, [defaultDealId, defaultServiceCaseId, defaultServiceQuoteAdditionId]);
 
   useEffect(() => {
     const dealId = defaultDealId || form.deal_id || undefined;
-    loadDefaults(dealId, businessUnitKey);
+    const serviceCaseId = defaultServiceCaseId || form.service_case_id || undefined;
+    loadDefaults(dealId, serviceCaseId, businessUnitKey);
+    if (dealId) loadQuoteCurrency(dealId);
+    if (defaultServiceQuoteAdditionId) {
+      loadServiceAdditionQuoteCurrency(defaultServiceQuoteAdditionId);
+    } else if (serviceCaseId) {
+      loadServiceQuoteCurrency(serviceCaseId);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaultDealId, form.deal_id, businessUnitKey]);
+  }, [defaultDealId, defaultServiceCaseId, defaultServiceQuoteAdditionId, form.deal_id, form.service_case_id, businessUnitKey, currencyTouched]);
 
   // Recalcula vencimiento según términos de pago (días) si no fue tocado manualmente
   useEffect(() => {
@@ -94,7 +110,11 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
           customer_doc: prev.customer_doc || data.organization.ruc || '',
           customer_doc_type: prev.customer_doc_type || 'RUC',
           customer_email: prev.customer_email || data.organization.email || '',
-          customer_address: prev.customer_address || data.organization.address || '',
+          customer_address:
+            prev.customer_address ||
+            data.organization.branch?.address ||
+            data.organization.address ||
+            '',
         }));
       }
       // cargar documentos OC de la operación
@@ -112,10 +132,115 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
     }
   }
 
-  async function loadDefaults(dealId, buKeyHint = "") {
+  async function preloadServiceCaseData(serviceCaseId) {
+    try {
+      const { data } = await api.get(`/service/cases/${serviceCaseId}`);
+      const sc = data?.case || data || null;
+      if (sc?.org_id) {
+        setBusinessUnitKey("atm-industrial");
+        let org = null;
+        try {
+          const { data: orgRes } = await api.get(`/organizations/${sc.org_id}`);
+          org = orgRes || null;
+        } catch (_) {
+          org = null;
+        }
+        let branchAddress = "";
+        if (sc.org_branch_id) {
+          try {
+            const { data: branches } = await api.get(`/organizations/${sc.org_id}/branches`);
+            const b = (branches || []).find((x) => String(x.id) === String(sc.org_branch_id));
+            branchAddress = b?.address || "";
+          } catch (_) {}
+        }
+        setForm((prev) => ({
+          ...prev,
+          customer_doc: prev.customer_doc || org?.ruc || sc.org_ruc || '',
+          customer_doc_type: prev.customer_doc_type || 'RUC',
+          customer_email: prev.customer_email || org?.email || '',
+          customer_address: prev.customer_address || branchAddress || org?.address || '',
+        }));
+      }
+    } catch (err) {
+      console.error('No se pudo precargar datos del service case', err);
+    }
+  }
+
+  async function loadQuoteCurrency(dealId) {
+    try {
+      const { data } = await api.get(`/deals/${dealId}/quote`);
+      const inputs = data?.quote?.inputs || data?.inputs || {};
+      const curr = String(inputs.operation_currency || 'USD').toUpperCase();
+      const rate = Number(inputs.exchange_rate_operation_sell_usd || 1) || 1;
+      setForm((prev) => {
+        if (currencyTouched) return prev;
+        return {
+          ...prev,
+          currency_code: curr || prev.currency_code,
+          exchange_rate: rate || prev.exchange_rate,
+        };
+      });
+    } catch (err) {
+      console.warn('No se pudo cargar moneda desde cotizacion', err?.message);
+    }
+  }
+
+  async function loadServiceQuoteCurrency(serviceCaseId) {
+    try {
+      const { data } = await api.get(`/service/cases/${serviceCaseId}/quote`);
+      const inputs = data?.inputs || {};
+      const curr = String(inputs.operation_currency || 'USD').toUpperCase();
+      const rate = Number(inputs.exchange_rate_operation_sell_usd || 1) || 1;
+      setForm((prev) => {
+        if (currencyTouched) return prev;
+        return {
+          ...prev,
+          currency_code: curr || prev.currency_code,
+          exchange_rate: rate || prev.exchange_rate,
+        };
+      });
+    } catch (err) {
+      console.warn('No se pudo cargar moneda desde service quote', err?.message);
+    }
+  }
+
+  async function loadServiceAdditionQuoteCurrency(additionId) {
+    try {
+      const { data } = await api.get(`/service/additional-quotes/${additionId}`);
+      const inputs = data?.inputs || {};
+      let curr = String(inputs.operation_currency || '').toUpperCase();
+      let rate = Number(inputs.exchange_rate_operation_sell_usd || 0) || 0;
+      if (!curr || !rate) {
+        const caseId = data?.service_case_id;
+        if (caseId) {
+          const base = await api.get(`/service/cases/${caseId}/quote`).catch(() => null);
+          const baseInputs = base?.data?.inputs || {};
+          curr = String(baseInputs.operation_currency || 'USD').toUpperCase();
+          rate = Number(baseInputs.exchange_rate_operation_sell_usd || 1) || 1;
+        }
+      }
+      setForm((prev) => {
+        if (currencyTouched) return prev;
+        return {
+          ...prev,
+          currency_code: curr || prev.currency_code,
+          exchange_rate: rate || prev.exchange_rate,
+        };
+      });
+      setCurrencyTouched(true);
+    } catch (err) {
+      console.warn('No se pudo cargar moneda desde adicional', err?.message);
+    }
+  }
+
+  async function loadDefaults(dealId, serviceCaseId, buKeyHint = "") {
     try {
       const { data } = await api.get('/invoices/defaults', {
-        params: dealId ? { deal_id: dealId } : {},
+        params: dealId
+          ? { deal_id: dealId }
+          : serviceCaseId
+          ? { service_case_id: serviceCaseId }
+          : {},
       });
       const effectiveBU =
         String(data?.business_unit_key || buKeyHint || businessUnitKey || "").toLowerCase();
@@ -182,8 +307,8 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!form.deal_id) {
-      alert('Ingresa el ID de la operacion (deal)');
+    if (!form.deal_id && !form.service_case_id) {
+      alert('Ingresa el ID de la operación o del servicio');
       return;
     }
 
@@ -197,7 +322,9 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
     try {
       const payload = {
         ...form,
-        deal_id: Number(form.deal_id),
+        deal_id: form.deal_id ? Number(form.deal_id) : null,
+        service_case_id: form.service_case_id ? Number(form.service_case_id) : null,
+        service_quote_addition_id: form.service_quote_addition_id ? Number(form.service_quote_addition_id) : null,
         percentage: pct,
         exchange_rate: Number(form.exchange_rate) || 1,
       };
@@ -222,19 +349,60 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="md:col-span-1">
-              <label className="block text-sm font-medium mb-1">ID de operacion (deal)</label>
-              <input
-                type="number"
-                className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100"
-                value={form.deal_id}
-                onChange={(e) => setForm({ ...form, deal_id: e.target.value })}
-                placeholder="Ej: 123"
-                required
-                disabled={Boolean(defaultDealId)}
-              />
-              <p className="text-xs text-slate-500 mt-1">Usa el presupuesto del deal.</p>
-            </div>
+            {defaultServiceCaseId ? (
+              <div className="md:col-span-1">
+                <label className="block text-sm font-medium mb-1">ID de servicio (mantenimiento)</label>
+                <input
+                  type="number"
+                  className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100"
+                  value={form.service_case_id}
+                  onChange={(e) => setForm({ ...form, service_case_id: e.target.value })}
+                  placeholder="Ej: 123"
+                  required
+                  disabled={Boolean(defaultServiceCaseId)}
+                />
+                <p className="text-xs text-slate-500 mt-1">Usa el presupuesto del servicio.</p>
+              </div>
+            ) : (
+              <>
+                <div className="md:col-span-1">
+                  <label className="block text-sm font-medium mb-1">ID de operacion (deal)</label>
+                  <input
+                    type="number"
+                    className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100"
+                    value={form.deal_id}
+                    onChange={(e) => setForm({ ...form, deal_id: e.target.value })}
+                    placeholder="Ej: 123"
+                    disabled={Boolean(defaultDealId)}
+                  />
+                  <p className="text-xs text-slate-500 mt-1">Usa el presupuesto del deal.</p>
+                </div>
+                <div className="md:col-span-1">
+                  <label className="block text-sm font-medium mb-1">ID de servicio (mantenimiento)</label>
+                  <input
+                    type="number"
+                    className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100"
+                    value={form.service_case_id}
+                    onChange={(e) => setForm({ ...form, service_case_id: e.target.value })}
+                    placeholder="Ej: 12"
+                    disabled={Boolean(defaultServiceCaseId)}
+                  />
+                  <p className="text-xs text-slate-500 mt-1">Usa el presupuesto del servicio.</p>
+                </div>
+              </>
+            )}
+            {defaultServiceQuoteAdditionId && (
+              <div className="md:col-span-1">
+                <label className="block text-sm font-medium mb-1">ID de adicional</label>
+                <input
+                  type="number"
+                  className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100"
+                  value={form.service_quote_addition_id}
+                  disabled
+                />
+                <p className="text-xs text-slate-500 mt-1">Factura sobre presupuesto adicional.</p>
+              </div>
+            )}
             <div>
               <label className="block text-sm font-medium mb-1">Vencimiento</label>
               <input
@@ -376,7 +544,10 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
               <select
                 className="w-full border rounded-lg px-3 py-2"
                 value={form.currency_code}
-                onChange={(e) => setForm({ ...form, currency_code: e.target.value })}
+                onChange={(e) => {
+                  setCurrencyTouched(true);
+                  setForm({ ...form, currency_code: e.target.value });
+                }}
               >
                 <option value="USD">USD</option>
                 <option value="PYG">PYG</option>
@@ -389,7 +560,10 @@ export default function InvoiceCreateModal({ defaultDealId, onClose, onSuccess }
                 step="0.0001"
                 className="w-full border rounded-lg px-3 py-2"
                 value={form.exchange_rate}
-                onChange={(e) => setForm({ ...form, exchange_rate: e.target.value })}
+                onChange={(e) => {
+                  setCurrencyTouched(true);
+                  setForm({ ...form, exchange_rate: e.target.value });
+                }}
               />
             </div>
           </div>

@@ -8,9 +8,10 @@ import useParamOptions from '../hooks/useParamOptions';
 // 👉 Cabecera gráfica desde /public (no requiere import):
 const HEADER_SRC = `${import.meta.env.BASE_URL}quote-header.png`;
 
-// ====== Constantes PDF (A4) ======
-const PDF_PAGE_W_MM = 210;
-const PDF_MARGIN = { top: 10, right: 10, bottom: 12, left: 10 };
+// ====== Constantes PDF (misma medida que ATM INDUSTRIAL) ======
+const PDF_PAGE_W_MM = 340;
+const PDF_PAGE_H_MM = 541;
+const PDF_MARGIN = { top: 0, right: 0, bottom: 0, left: 0 };
 const CONTENT_W_MM = PDF_PAGE_W_MM - PDF_MARGIN.left - PDF_MARGIN.right - 0.2;
 
 const decimalsFrom = (raw) => {
@@ -37,6 +38,20 @@ const money = (n, decimalsHint) => {
   return out.replace('.', ','); // usa coma si hay decimales
 };
 
+const formatByCurrency = (n, currency = 'USD', decimalsHint) => {
+  const curr = String(currency || 'USD').toUpperCase();
+  const isPyg = curr === 'PYG' || curr === 'GS';
+  if (n === null || n === undefined || n === '') return '0';
+  const numeric = Number(n);
+  if (!Number.isFinite(numeric)) return String(n);
+  if (isPyg) {
+    return numeric.toLocaleString('es-PY', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    });
+  }
+  return money(numeric, decimalsHint);
+};
 const num = (v) => {
   if (v === '' || v === null || v === undefined) return 0;
   const s = String(v).replace(/\./g, '').replace(',', '.');
@@ -309,6 +324,7 @@ export default function QuoteGenerator(){
 
   // Ítems
   const [items, setItems] = useState([]);
+  const [operationCurrency, setOperationCurrency] = useState('USD');
 
   // ======= Opciones administrables (incluye NUEVAS llaves) =======
   const { options: termOpts } = useParamOptions(
@@ -471,6 +487,8 @@ export default function QuoteGenerator(){
           const d = csMaybe.data;
           const h = d.header || {};
           const gsRate = num(h.gsRate) || 0;
+          const opCurrency = String(h.operationCurrency || h.currency || 'USD').toUpperCase();
+          setOperationCurrency(opCurrency);
 
           const allInEnabled = !!h.allInEnabled;
           const allInName = String(h.allInServiceName || '').trim();
@@ -509,7 +527,7 @@ export default function QuoteGenerator(){
               cantidad: 1,
               servicio: v.concepto || 'Servicio',
               observacion: '',
-              moneda: 'USD',
+              moneda: opCurrency,
               precio: 0,
               impuesto: 'EXENTA',
             }));
@@ -528,7 +546,7 @@ export default function QuoteGenerator(){
                   cantidad: 1,
                   servicio: allInName,
                   observacion: '',
-                  moneda: 'USD',
+                  moneda: opCurrency,
                   precio: ventaBaseTotal,
                   impuesto: 'EXENTA',
                 },
@@ -548,30 +566,39 @@ export default function QuoteGenerator(){
                 cantidad: 1,
                 servicio: v.concepto || 'Servicio',
                 observacion: '',
-                moneda: 'USD',
+                moneda: opCurrency,
                 precio: valor,
                 impuesto: 'EXENTA',
               };
             });
           }
 
-          const locCliItems = (d.locCliRows || []).map(v => ({
-            cantidad: 1,
-            servicio: v.concepto || 'Gasto local',
-            observacion: '',
-            moneda: 'USD',
-            precio: gsRate ? num(v.gs) / gsRate : 0,
-            impuesto: 'EXENTA',
-          }));
+          const locCliItems = (d.locCliRows || []).map(v => {
+            const precio = opCurrency === 'PYG' || opCurrency === 'GS'
+              ? num(v.gs)
+              : (gsRate ? num(v.gs) / gsRate : 0);
+            return {
+              cantidad: 1,
+              servicio: v.concepto || 'Gasto local',
+              observacion: '',
+              moneda: opCurrency,
+              precio,
+              impuesto: 'EXENTA',
+            };
+          });
 
-          const segVentaItems = (d.segVentaRows || []).map(v => ({
-            cantidad: 1,
-            servicio: v.concepto || 'Seguro',
-            observacion: '',
-            moneda: 'USD',
-            precio: v.usd ?? 0,
-            impuesto: '10%',
-          }));
+          const segVentaItems = (d.segVentaRows || []).map(v => {
+            const baseVal = num(v.usd ?? v.monto ?? 0);
+            const precio = baseVal;
+            return {
+              cantidad: 1,
+              servicio: v.concepto || 'Seguro',
+              observacion: '',
+              moneda: opCurrency,
+              precio,
+              impuesto: '10%',
+            };
+          });
 
           setItems([...ventaItems, ...locCliItems, ...segVentaItems]);
         }
@@ -581,11 +608,11 @@ export default function QuoteGenerator(){
     })();
   }, [id]);
 
-  const totalUSD = useMemo(
-    () => items.reduce((acc, it) => acc + (it.moneda === 'USD' ? num(it.precio) * (num(it.cantidad) || 1) : 0), 0),
+  const totalAmount = useMemo(
+    () => items.reduce((acc, it) => acc + (num(it.precio) * (num(it.cantidad) || 1)), 0),
     [items]
   );
-  const totalUsdDecimals = useMemo(
+  const totalDecimals = useMemo(
     () => items.reduce(
       (acc, it) => Math.max(acc, decimalsFrom(it.precio), decimalsFrom(it.cantidad)),
       0
@@ -703,8 +730,8 @@ export default function QuoteGenerator(){
         margin: [PDF_MARGIN.top, PDF_MARGIN.right, PDF_MARGIN.bottom, PDF_MARGIN.left],
         filename: fileName,
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        html2canvas: { scale: 2.5, useCORS: true, backgroundColor: '#ffffff' },
+        jsPDF: { unit: 'mm', format: [PDF_PAGE_W_MM, PDF_PAGE_H_MM], orientation: 'portrait' },
         pagebreak: { mode: ['css', 'legacy'] },
       };
       html2pdf().from(el).set(opt).save();
@@ -731,7 +758,7 @@ export default function QuoteGenerator(){
         /* tabla de especificaciones: columna 1 = etiqueta+":" , columna 2 = valor */
         .kv-grid{
           display: grid;
-          grid-template-columns: 210px 1fr; /* 👈 valores alineados */
+          grid-template-columns: 230px 1fr; /* 👈 valores alineados (más ancho para tipografía grande) */
           column-gap: 8px;
           row-gap: 4px;
         }
@@ -858,7 +885,13 @@ export default function QuoteGenerator(){
         {/* Ítems */}
         <div className="bg-white rounded-xl border p-3 space-y-2">
           <div className="text-sm font-semibold">Ítems del presupuesto</div>
-          <ItemsTable items={items} setItems={setItems} totalUSD={totalUSD} totalDecimals={totalUsdDecimals} />
+          <ItemsTable
+            items={items}
+            setItems={setItems}
+            totalAmount={totalAmount}
+            totalDecimals={totalDecimals}
+            currency={operationCurrency}
+          />
         </div>
 
         {/* Observaciones / Términos */}
@@ -917,15 +950,15 @@ export default function QuoteGenerator(){
 
       {/* ================= PREVIEW / PDF (A4) ================= */}
       <div id="quote-print" className="bg-white border rounded-xl p-0">
-        <div className="mx-auto text-[13px] leading-5" style={{ width: `${CONTENT_W_MM}mm` }}>
+        <div className="mx-auto text-[15px] leading-6" style={{ width: `${CONTENT_W_MM}mm` }}>
           <img src={HEADER_SRC} crossOrigin="anonymous" alt="Cabecera presupuesto" className="w-full h-auto" />
 
           <div className="flex justify-between items-start px-4 mt-3 avoid-break">
-            <div className="text-[14px]">
+            <div className="text-[16px]">
               <div className="font-semibold">{cliente || deal.org_name}</div>
               <div className="text-slate-600">Atn. {contacto || deal.contact_name || '—'}</div>
             </div>
-            <div className="text-right text-[12px] text-slate-700">
+            <div className="text-right text-[13px] text-slate-700">
               <div>Asunción {fecha}</div>
               <div className="font-semibold">REF. N° {ref || deal.reference}</div>
             </div>
@@ -988,16 +1021,17 @@ export default function QuoteGenerator(){
                     <td className="px-2 py-1">{it.cantidad || 1}</td>
                     <td className="px-2 py-1">{it.servicio}</td>
                     <td className="px-2 py-1">{it.observacion}</td>
-                    <td className="px-2 py-1">{it.moneda}</td>
-                    <td className="px-2 py-1 text-right">
-                      {money(num(it.precio), decimalsFrom(it.precio))}
-                    </td>
-                    <td className="px-2 py-1 text-right">
-                      {money(
-                        (num(it.cantidad) || 1) * num(it.precio),
-                        Math.max(decimalsFrom(it.precio), decimalsFrom(it.cantidad))
-                      )}
-                    </td>
+                  <td className="px-2 py-1">{it.moneda}</td>
+                  <td className="px-2 py-1 text-right">
+                    {formatByCurrency(num(it.precio), it.moneda, decimalsFrom(it.precio))}
+                  </td>
+                  <td className="px-2 py-1 text-right">
+                    {formatByCurrency(
+                      (num(it.cantidad) || 1) * num(it.precio),
+                      it.moneda,
+                      Math.max(decimalsFrom(it.precio), decimalsFrom(it.cantidad))
+                    )}
+                  </td>
                     <td className="px-2 py-1">{it.impuesto}</td>
                   </tr>
                 ))}
@@ -1005,8 +1039,10 @@ export default function QuoteGenerator(){
               <tfoot>
                 <tr className="border-t" style={{ borderColor: '#e5e7eb' }}>
                   <td colSpan={5} className="px-2 py-2 font-semibold text-right">TOTAL</td>
-                  <td className="px-2 py-2 font-extrabold text-right">{money(totalUSD, totalUsdDecimals)}</td>
-                  <td className="px-2 py-2 font-semibold">USD</td>
+                  <td className="px-2 py-2 font-extrabold text-right">
+                    {formatByCurrency(totalAmount, operationCurrency, totalDecimals)}
+                  </td>
+                  <td className="px-2 py-2 font-semibold">{operationCurrency}</td>
                 </tr>
               </tfoot>
             </table>
@@ -1113,7 +1149,7 @@ function Row({ label, value, className = '' }){
 }
 
 /** Tabla de ítems separada (para mantener limpio el componente) */
-function ItemsTable({ items, setItems, totalUSD, totalDecimals }) {
+function ItemsTable({ items, setItems, totalAmount, totalDecimals, currency = "USD" }) {
   const decimalsForTotal =
     typeof totalDecimals === 'number'
       ? totalDecimals
@@ -1124,7 +1160,7 @@ function ItemsTable({ items, setItems, totalUSD, totalDecimals }) {
 
   const updateItem = (idx, patch) => setItems(prev => prev.map((it,i)=> i===idx ? { ...it, ...patch } : it));
   const removeItem = (idx) => setItems(prev => prev.filter((_,i)=>i!==idx));
-  const addItem = () => setItems(prev => [...prev, { cantidad: 1, servicio: '', observacion: '', moneda: 'USD', precio: '', impuesto: 'EXENTA' }]);
+  const addItem = () => setItems(prev => [...prev, { cantidad: 1, servicio: '', observacion: '', moneda: currency || 'USD', precio: '', impuesto: 'EXENTA' }]);
 
   return (
     <>
@@ -1149,6 +1185,7 @@ function ItemsTable({ items, setItems, totalUSD, totalDecimals }) {
               <td>
                 <select className="border rounded px-1" value={it.moneda} onChange={e=>updateItem(idx, { moneda: e.target.value })}>
                   <option>USD</option>
+                  <option>PYG</option>
                 </select>
               </td>
               <td className="text-right">
@@ -1169,7 +1206,9 @@ function ItemsTable({ items, setItems, totalUSD, totalDecimals }) {
       </table>
       <div className="flex justify-between mt-2">
         <button className="px-3 py-1 rounded bg-blue-600 text-white" onClick={addItem}>+ Agregar ítem</button>
-        <div className="text-sm font-bold">TOTAL USD {money(totalUSD, decimalsForTotal)}</div>
+        <div className="text-sm font-bold">
+          TOTAL {currency} {formatByCurrency(totalAmount, currency, decimalsForTotal)}
+        </div>
       </div>
     </>
   );

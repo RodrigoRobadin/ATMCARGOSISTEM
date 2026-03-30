@@ -11,6 +11,7 @@ const router = Router();
 ensureCreditNoteTables().catch((err) => console.error('init credit tables', err?.message));
 ensureInvoiceCreditColumns().catch((err) => console.error('init credit cols', err?.message));
 ensureReceiptTables().catch((err) => console.error('init receipts', err?.message));
+ensureInvoiceMoneyColumns().catch((err) => console.error('init money cols', err?.message));
 
 // =================== HELPERS ===================
 async function ensureInvoiceSequence() {
@@ -49,6 +50,7 @@ async function ensureInvoiceExtraColumns() {
     "ALTER TABLE invoices ADD COLUMN sales_rep VARCHAR(128) NULL",
     "ALTER TABLE invoices ADD COLUMN sales_rep_id INT NULL",
     "ALTER TABLE invoices ADD COLUMN purchase_order_ref VARCHAR(128) NULL",
+    "ALTER TABLE invoices ADD COLUMN service_case_id INT NULL",
   ];
   for (const sql of alters) {
     try {
@@ -89,6 +91,309 @@ async function fetchQuoteTotalUsd(dealId, conn) {
   );
 }
 
+async function fetchInvoiceLockStatus({ deal_id, service_case_id }) {
+  if (!deal_id && !service_case_id) return { locked: false, count: 0 };
+  try {
+    const [[row]] = await pool.query(
+      `SELECT COUNT(*) AS cnt
+         FROM invoices
+        WHERE status <> 'anulada'
+          AND COALESCE(net_total_amount, total_amount, 0) > 0.01
+          AND ${deal_id ? 'deal_id = ?' : 'service_case_id = ?'}`,
+      [deal_id ? deal_id : service_case_id]
+    );
+    const count = Number(row?.cnt || 0);
+    return { locked: count > 0, count };
+  } catch (err) {
+    if (err?.code === 'ER_BAD_FIELD_ERROR') {
+      return { locked: false, count: 0 };
+    }
+    throw err;
+  }
+}
+
+async function fetchServiceQuoteTotalUsd(serviceCaseId, conn) {
+  const [[row]] = await conn.query(
+    'SELECT computed_json FROM service_quotes WHERE service_case_id = ? LIMIT 1',
+    [serviceCaseId]
+  );
+  if (!row?.computed_json) return null;
+  const computed = asJson(row.computed_json);
+  return (
+    computed?.oferta?.totals?.total_sales_usd ??
+    computed?.operacion?.totals?.total_sell_usd ??
+    null
+  );
+}
+
+async function fetchServiceQuoteAdditionTotalUsd(additionId, conn) {
+  const [[row]] = await conn.query(
+    'SELECT computed_json FROM service_quote_additions WHERE id = ? LIMIT 1',
+    [additionId]
+  );
+  if (!row?.computed_json) return null;
+  const computed = asJson(row.computed_json);
+  return (
+    computed?.oferta?.totals?.total_sales_usd ??
+    computed?.operacion?.totals?.total_sell_usd ??
+    null
+  );
+}
+
+async function ensureInvoiceMoneyColumns() {
+  const alters = [
+    "ALTER TABLE invoices MODIFY COLUMN subtotal DECIMAL(18,2) NULL",
+    "ALTER TABLE invoices MODIFY COLUMN tax_amount DECIMAL(18,2) NULL",
+    "ALTER TABLE invoices MODIFY COLUMN total_amount DECIMAL(18,2) NULL",
+    "ALTER TABLE invoices MODIFY COLUMN balance DECIMAL(18,2) NULL",
+    "ALTER TABLE invoices MODIFY COLUMN paid_amount DECIMAL(18,2) NULL",
+    "ALTER TABLE invoices MODIFY COLUMN base_amount DECIMAL(18,2) NULL",
+    "ALTER TABLE invoices MODIFY COLUMN credited_total DECIMAL(18,2) NOT NULL DEFAULT 0",
+    "ALTER TABLE invoices MODIFY COLUMN net_total_amount DECIMAL(18,2) NOT NULL DEFAULT 0",
+    "ALTER TABLE invoices MODIFY COLUMN net_balance DECIMAL(18,2) NOT NULL DEFAULT 0",
+    "ALTER TABLE invoice_items MODIFY COLUMN unit_price DECIMAL(18,2) NULL",
+    "ALTER TABLE invoice_items MODIFY COLUMN subtotal DECIMAL(18,2) NULL",
+  ];
+  for (const sql of alters) {
+    try {
+      await pool.query(sql);
+    } catch (err) {
+      if (err?.code === 'ER_BAD_FIELD_ERROR' || err?.code === 'ER_PARSE_ERROR') continue;
+      throw err;
+    }
+  }
+}
+
+async function fetchQuoteCurrencyInfo(dealId, conn) {
+  const [[row]] = await conn.query(
+    'SELECT inputs_json FROM quotes WHERE deal_id = ? LIMIT 1',
+    [dealId]
+  );
+  if (!row?.inputs_json) return { currency: 'USD', exchange_rate: 1 };
+  const inputs = asJson(row.inputs_json) || {};
+  const currency = String(inputs.operation_currency || 'USD').toUpperCase();
+  const exchange_rate = Number(inputs.exchange_rate_operation_sell_usd || 1) || 1;
+  return { currency, exchange_rate };
+}
+
+async function fetchServiceQuoteCurrencyInfo(serviceCaseId, conn) {
+  const [[row]] = await conn.query(
+    'SELECT inputs_json FROM service_quotes WHERE service_case_id = ? LIMIT 1',
+    [serviceCaseId]
+  );
+  if (!row?.inputs_json) return { currency: 'USD', exchange_rate: 1 };
+  const inputs = asJson(row.inputs_json) || {};
+  const currency = String(inputs.operation_currency || 'USD').toUpperCase();
+  const exchange_rate = Number(inputs.exchange_rate_operation_sell_usd || 1) || 1;
+  return { currency, exchange_rate };
+}
+
+async function fetchServiceQuoteAdditionCurrencyInfo(additionId, conn) {
+  const [[row]] = await conn.query(
+    'SELECT inputs_json, service_case_id FROM service_quote_additions WHERE id = ? LIMIT 1',
+    [additionId]
+  );
+  if (!row?.inputs_json) {
+    if (row?.service_case_id) return fetchServiceQuoteCurrencyInfo(row.service_case_id, conn);
+    return { currency: 'USD', exchange_rate: 1 };
+  }
+  const inputs = asJson(row.inputs_json) || {};
+  const currencyRaw = inputs.operation_currency || '';
+  const currency = String(currencyRaw || '').toUpperCase();
+  const exchange_rate = Number(inputs.exchange_rate_operation_sell_usd || 0) || 0;
+  if (!currency || exchange_rate === 0) {
+    if (row?.service_case_id) return fetchServiceQuoteCurrencyInfo(row.service_case_id, conn);
+  }
+  return { currency: currency || 'USD', exchange_rate: exchange_rate || 1 };
+}
+
+async function fetchDealBranchInfo(dealId, conn) {
+  try {
+    const [[row]] = await conn.query(
+      `
+      SELECT d.org_branch_id, ob.name, ob.address, ob.city, ob.country
+        FROM deals d
+        LEFT JOIN org_branches ob ON ob.id = d.org_branch_id
+       WHERE d.id = ?
+       LIMIT 1
+      `,
+      [dealId]
+    );
+    if (!row?.org_branch_id) return null;
+    return row;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchServiceCaseBranchInfo(serviceCaseId, conn) {
+  try {
+    const [[row]] = await conn.query(
+      `
+      SELECT sc.org_branch_id, ob.name, ob.address, ob.city, ob.country
+        FROM service_cases sc
+        LEFT JOIN org_branches ob ON ob.id = sc.org_branch_id
+       WHERE sc.id = ?
+       LIMIT 1
+      `,
+      [serviceCaseId]
+    );
+    if (!row?.org_branch_id) return null;
+    return row;
+  } catch {
+    return null;
+  }
+}
+
+function round2(n) {
+  return Number((Number(n || 0)).toFixed(2));
+}
+
+async function fetchQuoteItemsForInvoice(dealId, conn) {
+  const [[row]] = await conn.query(
+    'SELECT inputs_json, computed_json FROM quotes WHERE deal_id = ? LIMIT 1',
+    [dealId]
+  );
+  if (!row) return [];
+  const inputs = asJson(row.inputs_json) || {};
+  const computed = asJson(row.computed_json) || {};
+  const inputItems = Array.isArray(inputs.items) ? inputs.items : [];
+  const computedItems =
+    computed?.oferta?.items ||
+    computed?.items ||
+    [];
+
+  if (!Array.isArray(computedItems) || computedItems.length === 0) {
+    // fallback a inputs si no hay computed
+    return inputItems.map((it, idx) => {
+      const qty = Number(it.qty || 0) || 1;
+      const unitPrice = Number(it.unit_price || it.unitPrice || 0) ||
+        Number(it.door_value_usd || 0) + Number(it.additional_usd || 0);
+      const rate = Number(it.tax_rate ?? it.taxRate ?? 10) || 0;
+      return {
+        description: it.description || 'Item',
+        quantity: qty,
+        unit_price: unitPrice,
+        tax_rate: rate,
+        item_order: it.item_order ?? it.line_no ?? idx,
+      };
+    });
+  }
+
+  return computedItems.map((it, idx) => {
+    const match =
+      inputItems.find((x) => Number(x.line_no ?? x.item_order ?? 0) === Number(it.line_no ?? it.item_order ?? 0)) ||
+      inputItems[idx] ||
+      {};
+    const qty = Number(it.qty || match.qty || 0) || 1;
+    const unitPrice = Number(it.unit_price ?? match.unit_price ?? match.unitPrice ?? 0) ||
+      (Number(it.total_sales || 0) && qty ? Number(it.total_sales || 0) / qty : 0);
+    const rate = Number(match.tax_rate ?? match.taxRate ?? 10) || 0;
+    return {
+      description: it.description || match.description || 'Item',
+      quantity: qty,
+      unit_price: unitPrice,
+      tax_rate: rate,
+      item_order: it.item_order ?? it.line_no ?? idx,
+    };
+  });
+}
+
+async function fetchServiceQuoteItemsForInvoice(serviceCaseId, conn) {
+  const [[row]] = await conn.query(
+    'SELECT inputs_json, computed_json FROM service_quotes WHERE service_case_id = ? LIMIT 1',
+    [serviceCaseId]
+  );
+  if (!row) return [];
+  const inputs = asJson(row.inputs_json) || {};
+  const computed = asJson(row.computed_json) || {};
+  const inputItems = Array.isArray(inputs.items) ? inputs.items : [];
+  const computedItems =
+    computed?.oferta?.items ||
+    computed?.items ||
+    [];
+
+  if (!Array.isArray(computedItems) || computedItems.length === 0) {
+    return inputItems.map((it, idx) => {
+      const qty = Number(it.qty || 0) || 1;
+      const unitPrice = Number(it.unit_price || it.unitPrice || 0) ||
+        Number(it.door_value_usd || 0) + Number(it.additional_usd || 0);
+      const rate = Number(it.tax_rate ?? it.taxRate ?? 10) || 0;
+      return {
+        description: it.description || 'Item',
+        quantity: qty,
+        unit_price: unitPrice,
+        tax_rate: rate,
+        item_order: it.item_order ?? it.line_no ?? idx,
+      };
+    });
+  }
+
+  return computedItems.map((it, idx) => {
+    const match =
+      inputItems.find((x) => Number(x.line_no ?? x.item_order ?? 0) === Number(it.line_no ?? it.item_order ?? 0)) ||
+      inputItems[idx] ||
+      {};
+    const qty = Number(it.qty || match.qty || 0) || 1;
+    const unitPrice = Number(it.unit_price ?? match.unit_price ?? match.unitPrice ?? 0) ||
+      (Number(it.total_sales || 0) && qty ? Number(it.total_sales || 0) / qty : 0);
+    const rate = Number(match.tax_rate ?? match.taxRate ?? 10) || 0;
+    return {
+      description: it.description || match.description || 'Item',
+      quantity: qty,
+      unit_price: unitPrice,
+      tax_rate: rate,
+      item_order: it.item_order ?? it.line_no ?? idx,
+    };
+  });
+}
+
+async function fetchServiceQuoteAdditionItemsForInvoice(additionId, conn) {
+  const [[row]] = await conn.query(
+    'SELECT inputs_json, computed_json FROM service_quote_additions WHERE id = ? LIMIT 1',
+    [additionId]
+  );
+  if (!row) return [];
+  const inputs = asJson(row.inputs_json) || {};
+  const computed = asJson(row.computed_json) || {};
+  const inputItems = Array.isArray(inputs.items) ? inputs.items : [];
+  const computedItems = computed?.oferta?.items || computed?.items || [];
+
+  if (!Array.isArray(computedItems) || computedItems.length === 0) {
+    return inputItems.map((it, idx) => {
+      const qty = Number(it.qty || 0) || 1;
+      const unitPrice = Number(it.unit_price || it.unitPrice || 0) ||
+        Number(it.door_value_usd || 0) + Number(it.additional_usd || 0);
+      const rate = Number(it.tax_rate ?? it.taxRate ?? 10) || 0;
+      return {
+        description: it.description || 'Item',
+        quantity: qty,
+        unit_price: unitPrice,
+        tax_rate: rate,
+        item_order: it.item_order ?? it.line_no ?? idx,
+      };
+    });
+  }
+
+  return computedItems.map((it, idx) => {
+    const match =
+      inputItems.find((x) => Number(x.line_no ?? x.item_order ?? 0) === Number(it.line_no ?? it.item_order ?? 0)) ||
+      inputItems[idx] ||
+      {};
+    const qty = Number(it.qty || match.qty || 0) || 1;
+    const unitPrice = Number(it.unit_price ?? match.unit_price ?? match.unitPrice ?? 0) ||
+      (Number(it.total_sales || 0) && qty ? Number(it.total_sales || 0) / qty : 0);
+    const rate = Number(match.tax_rate ?? match.taxRate ?? 10) || 0;
+    return {
+      description: it.description || match.description || 'Item',
+      quantity: qty,
+      unit_price: unitPrice,
+      tax_rate: rate,
+      item_order: it.item_order ?? it.line_no ?? idx,
+    };
+  });
+}
+
 async function ensureInvoiceItemsTaxColumn() {
   try {
     await pool.query("ALTER TABLE invoice_items ADD COLUMN tax_rate DECIMAL(5,2) NULL");
@@ -103,6 +408,7 @@ async function ensureInvoiceCreditColumns() {
     "ALTER TABLE invoices ADD COLUMN net_total_amount DECIMAL(15,2) NOT NULL DEFAULT 0",
     "ALTER TABLE invoices ADD COLUMN net_balance DECIMAL(15,2) NOT NULL DEFAULT 0",
     "ALTER TABLE invoices ADD COLUMN canceled_by_credit_note_id INT NULL",
+    "ALTER TABLE invoices ADD COLUMN service_quote_addition_id INT NULL",
   ];
   for (const sql of alters) {
     try {
@@ -430,6 +736,20 @@ function extractSeqFromNumber(num = '') {
   return Number.isFinite(n) ? n : null;
 }
 
+function splitTaxFromGross(gross = 0, rate = 0) {
+  const total = Number(gross || 0) || 0;
+  const r = Number(rate || 0) || 0;
+  if (r >= 9) {
+    const tax = total / 11;
+    return { base: total - tax, tax };
+  }
+  if (r >= 4) {
+    const tax = total / 21;
+    return { base: total - tax, tax };
+  }
+  return { base: total, tax: 0 };
+}
+
 async function fetchLastSeq(point, establishment, conn = pool, numberField = 'invoice_number', table = 'invoices') {
   try {
     const [[row]] = await conn.query(
@@ -556,8 +876,13 @@ async function recomputeInvoicePayments(invoiceId) {
   const netTotal = parseFloat(inv.net_total_amount || 0);
   const netBalance = Math.max(0, netTotal - paid);
   let newStatus = 'emitida';
-  if (netBalance <= 0.01) newStatus = 'pagada';
-  else if (paid > 0) newStatus = 'pago_parcial';
+  if (netTotal <= 0.01) {
+    newStatus = 'anulada';
+  } else if (netBalance <= 0.01) {
+    newStatus = 'pagada';
+  } else if (paid > 0) {
+    newStatus = 'pago_parcial';
+  }
   await pool.query(
     `UPDATE invoices 
      SET paid_amount = ?, net_balance = ?, status = ?
@@ -613,10 +938,13 @@ async function generateInvoiceNumber() {
 }
 
 function calculateTotals(items) {
-  const subtotal = items.reduce((sum, item) => sum + parseFloat(item.subtotal || 0), 0);
+  const subtotal = items.reduce((sum, item) => {
+    const { base } = splitTaxFromGross(parseFloat(item.subtotal || 0), item.tax_rate ?? 0);
+    return sum + base;
+  }, 0);
   const taxAmount = items.reduce((sum, item) => {
-    const rate = parseFloat(item.tax_rate ?? 10) || 0;
-    return sum + (parseFloat(item.subtotal || 0) * rate) / 100;
+    const { tax } = splitTaxFromGross(parseFloat(item.subtotal || 0), item.tax_rate ?? 0);
+    return sum + tax;
   }, 0);
   const total = subtotal + taxAmount;
   return {
@@ -636,15 +964,15 @@ function breakdownByRate(items) {
   };
   (items || []).forEach((it) => {
     const rate = parseFloat(it.tax_rate ?? 10) || 0;
-    const base = parseFloat(it.subtotal || 0) || 0;
+    const { base, tax } = splitTaxFromGross(parseFloat(it.subtotal || 0), rate);
     if (rate < 1) {
       acc.base0 += base;
     } else if (rate < 9) {
       acc.base5 += base;
-      acc.iva5 += (base * rate) / 100;
+      acc.iva5 += tax;
     } else {
       acc.base10 += base;
-      acc.iva10 += (base * rate) / 100;
+      acc.iva10 += tax;
     }
   });
   return {
@@ -801,10 +1129,30 @@ function extractCostItems(rawData = {}) {
 
 // =================== ENDPOINTS ===================
 
-// GET /api/invoices/defaults?deal_id=#
+// GET /api/invoices/lock-status?deal_id=#&service_case_id=#
+router.get('/lock-status', requireAuth, async (req, res) => {
+  try {
+    const deal_id = Number(req.query?.deal_id || 0) || null;
+    const service_case_id = Number(req.query?.service_case_id || 0) || null;
+    if (!deal_id && !service_case_id) {
+      return res.status(400).json({ error: 'deal_id o service_case_id es requerido' });
+    }
+    const status = await fetchInvoiceLockStatus({ deal_id, service_case_id });
+    res.json({
+      locked: status.locked,
+      count: status.count,
+      reason: status.locked ? 'facturada' : null,
+    });
+  } catch (e) {
+    console.error('[invoices] lock-status error:', e);
+    res.status(500).json({ error: 'No se pudo obtener el estado de bloqueo' });
+  }
+});
+
+// GET /api/invoices/defaults?deal_id=#&service_case_id=#
 router.get('/defaults', requireAuth, async (req, res) => {
   try {
-    const { deal_id } = req.query;
+    const { deal_id, service_case_id } = req.query;
     let buKey = '';
     let pipelineId = null;
     let pipelineName = '';
@@ -813,6 +1161,10 @@ router.get('/defaults', requireAuth, async (req, res) => {
       buKey = info.business_unit_key || '';
       pipelineId = info.pipeline_id || null;
       pipelineName = info.pipeline_name || '';
+    } else if (service_case_id) {
+      buKey = 'atm-industrial';
+      pipelineId = 1;
+      pipelineName = 'ATM INDUSTRIAL';
     }
     const isIndustrial = isIndustrialContext({ buKey, pipelineName }) || pipelineId === 1;
     const defaults = await peekInvoiceDefaults({ buKey: isIndustrial ? (buKey || 'atm-industrial') : buKey, pipelineName });
@@ -830,40 +1182,167 @@ router.get('/', requireAuth, async (req, res) => {
     const userId = req.user.id;
     const userRole = String(req.user.role || '').toLowerCase();
 
-    let query = `
-      SELECT 
-        i.*, 
-        o.name as organization_name,
-        d.title as deal_title,
-        d.reference as deal_reference,
-        u.name as created_by_name
-      FROM invoices i
-      LEFT JOIN organizations o ON o.id = i.organization_id
-      LEFT JOIN deals d ON d.id = i.deal_id
-      LEFT JOIN users u ON u.id = i.created_by
-      WHERE 1=1
-    `;
     const params = [];
 
-    if (userRole === 'ejecutivo') {
-      query += ' AND i.created_by = ?';
-      params.push(userId);
-    }
-    if (status) { query += ' AND i.status = ?'; params.push(status); }
-    if (organization_id) { query += ' AND i.organization_id = ?'; params.push(organization_id); }
-    if (from_date) { query += ' AND i.issue_date >= ?'; params.push(from_date); }
-    if (to_date) { query += ' AND i.issue_date <= ?'; params.push(to_date); }
-    if (search) {
-      query += ' AND (i.invoice_number LIKE ? OR o.name LIKE ? OR d.reference LIKE ?)';
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
-    }
+    const buildQuery = (withService) => {
+      let q = `
+        SELECT 
+          i.*,
+          o.name as organization_name,
+          COALESCE(d.title, ${withService ? 'sc.reference' : "''"}) as deal_title,
+          COALESCE(d.reference, ${withService ? 'sc.reference' : "''"}) as deal_reference,
+          u.name as created_by_name,
+          it.first_item_desc as first_item_desc,
+          COALESCE(
+            i.currency_code,
+            JSON_UNQUOTE(JSON_EXTRACT(sqa.inputs_json, '$.operation_currency')),
+            JSON_UNQUOTE(JSON_EXTRACT(ql.inputs_json, '$.operation_currency'))${withService ? ', JSON_UNQUOTE(JSON_EXTRACT(sq.inputs_json, \'$.operation_currency\'))' : ''},
+            'USD'
+          ) AS currency_resolved,
+          COALESCE(
+            i.exchange_rate,
+            JSON_EXTRACT(sqa.inputs_json, '$.exchange_rate_operation_sell_usd'),
+            JSON_EXTRACT(ql.inputs_json, '$.exchange_rate_operation_sell_usd')${withService ? ', JSON_EXTRACT(sq.inputs_json, \'$.exchange_rate_operation_sell_usd\')' : ''},
+            1
+          ) AS exchange_rate_resolved,
+          COALESCE(
+            i.currency_code,
+            JSON_UNQUOTE(JSON_EXTRACT(sqa.inputs_json, '$.operation_currency')),
+            JSON_UNQUOTE(JSON_EXTRACT(ql.inputs_json, '$.operation_currency'))${withService ? ', JSON_UNQUOTE(JSON_EXTRACT(sq.inputs_json, \'$.operation_currency\'))' : ''},
+            'USD'
+          ) AS currency_code,
+          COALESCE(
+            i.exchange_rate,
+            JSON_EXTRACT(sqa.inputs_json, '$.exchange_rate_operation_sell_usd'),
+            JSON_EXTRACT(ql.inputs_json, '$.exchange_rate_operation_sell_usd')${withService ? ', JSON_EXTRACT(sq.inputs_json, \'$.exchange_rate_operation_sell_usd\')' : ''},
+            1
+          ) AS exchange_rate
+        FROM invoices i
+        LEFT JOIN organizations o ON o.id = i.organization_id
+        LEFT JOIN deals d ON d.id = i.deal_id
+        LEFT JOIN service_quote_additions sqa ON sqa.id = i.service_quote_addition_id
+        LEFT JOIN (
+          SELECT invoice_id,
+                 SUBSTRING_INDEX(GROUP_CONCAT(description ORDER BY item_order, id SEPARATOR '||'), '||', 1) AS first_item_desc
+            FROM invoice_items
+           GROUP BY invoice_id
+        ) it ON it.invoice_id = i.id
+        LEFT JOIN (
+          SELECT q1.deal_id, q1.inputs_json
+          FROM quotes q1
+          JOIN (SELECT deal_id, MAX(id) AS id FROM quotes GROUP BY deal_id) q2 ON q2.id = q1.id
+        ) ql ON ql.deal_id = i.deal_id
+        ${withService ? 'LEFT JOIN service_cases sc ON sc.id = i.service_case_id' : ''}
+        ${withService ? 'LEFT JOIN service_quotes sq ON sq.service_case_id = i.service_case_id' : ''}
+        LEFT JOIN users u ON u.id = i.created_by
+        WHERE 1=1
+      `;
 
-    query += ' ORDER BY i.created_at DESC';
-    const [invoices] = await pool.query(query, params);
-    res.json(invoices);
+      if (userRole === 'ejecutivo') {
+        q += ' AND i.created_by = ?';
+        params.push(userId);
+      }
+      if (status) { q += ' AND i.status = ?'; params.push(status); }
+      if (organization_id) { q += ' AND i.organization_id = ?'; params.push(organization_id); }
+      if (from_date) { q += ' AND i.issue_date >= ?'; params.push(from_date); }
+      if (to_date) { q += ' AND i.issue_date <= ?'; params.push(to_date); }
+      if (search) {
+        q += ` AND (i.invoice_number LIKE ? OR o.name LIKE ? OR d.reference LIKE ?${withService ? ' OR sc.reference LIKE ?' : ''})`;
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+        if (withService) params.push(`%${search}%`);
+      }
+
+      q += ' ORDER BY i.created_at DESC';
+      return q;
+    };
+
+    try {
+      const query = buildQuery(true);
+      const [invoices] = await pool.query(query, params);
+      return res.json(invoices);
+    } catch (err) {
+      if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
+      params.length = 0;
+      const query = buildQuery(false);
+      const [invoices] = await pool.query(query, params);
+      return res.json(invoices);
+    }
   } catch (e) {
     console.error('[invoices] Error listing:', e);
     res.status(500).json({ error: 'Error al listar facturas' });
+  }
+});
+
+// GET /api/invoices/operation-docs?deal_id=# or service_case_id=#
+router.get('/operation-docs', requireAuth, async (req, res) => {
+  try {
+    const dealId = Number(req.query?.deal_id || 0);
+    const serviceCaseId = Number(req.query?.service_case_id || 0);
+    if (!dealId && !serviceCaseId) {
+      return res.status(400).json({ error: 'deal_id o service_case_id requerido' });
+    }
+
+    const [invRows] = await pool.query(
+      `SELECT id, invoice_number, issue_date, created_at, status, total_amount, currency_code
+         FROM invoices
+        WHERE ${dealId ? 'deal_id = ?' : 'service_case_id = ?'}
+        ORDER BY issue_date ASC, created_at ASC, id ASC`,
+      [dealId || serviceCaseId]
+    );
+
+    let cnRows = [];
+    try {
+      const [rows] = await pool.query(
+        `SELECT cn.id, cn.credit_note_number, cn.issue_date, cn.created_at, cn.status, cn.total_amount, cn.invoice_id
+           FROM credit_notes cn
+           JOIN invoices i ON i.id = cn.invoice_id
+          WHERE ${dealId ? 'i.deal_id = ?' : 'i.service_case_id = ?'}
+          ORDER BY cn.issue_date ASC, cn.created_at ASC, cn.id ASC`,
+        [dealId || serviceCaseId]
+      );
+      cnRows = rows || [];
+    } catch (err) {
+      if (err?.code !== 'ER_NO_SUCH_TABLE') throw err;
+      cnRows = [];
+    }
+
+    const docs = [
+      ...(invRows || []).map((r) => ({
+        kind: 'invoice',
+        id: r.id,
+        number: r.invoice_number,
+        issue_date: r.issue_date,
+        created_at: r.created_at,
+        status: r.status,
+        total_amount: r.total_amount,
+        currency_code: r.currency_code,
+      })),
+      ...(cnRows || []).map((r) => ({
+        kind: 'credit_note',
+        id: r.id,
+        number: r.credit_note_number,
+        issue_date: r.issue_date,
+        created_at: r.created_at,
+        status: r.status,
+        total_amount: r.total_amount,
+        currency_code: null,
+        invoice_id: r.invoice_id,
+      })),
+    ];
+
+    docs.sort((a, b) => {
+      const da = a.issue_date ? new Date(a.issue_date) : a.created_at ? new Date(a.created_at) : new Date(0);
+      const db = b.issue_date ? new Date(b.issue_date) : b.created_at ? new Date(b.created_at) : new Date(0);
+      const diff = da - db;
+      if (diff !== 0) return diff;
+      if (a.kind !== b.kind) return a.kind === 'invoice' ? -1 : 1;
+      return Number(a.id || 0) - Number(b.id || 0);
+    });
+
+    res.json(docs);
+  } catch (e) {
+    console.error('[invoices] operation-docs error:', e);
+    res.status(500).json({ error: 'No se pudieron obtener los documentos' });
   }
 });
 
@@ -873,9 +1352,12 @@ router.post('/', requireAuth, async (req, res) => {
   try {
     await ensureInvoiceExtraColumns();
     await ensureInvoiceCreditColumns();
+    await ensureInvoiceMoneyColumns();
 
     const {
       deal_id,
+      service_case_id,
+      service_quote_addition_id,
       due_date,
       payment_terms,
       notes,
@@ -896,25 +1378,62 @@ router.post('/', requireAuth, async (req, res) => {
       percentage,
     } = req.body || {};
 
-    if (!deal_id) {
-      return res.status(400).json({ error: 'deal_id es requerido' });
+    if (!deal_id && !service_case_id && !service_quote_addition_id) {
+      return res.status(400).json({ error: 'deal_id o service_case_id es requerido' });
     }
 
     await conn.beginTransaction();
 
-    const [[deal]] = await conn.query(
-      `SELECT d.id, d.org_id AS organization_id, d.reference, d.title, d.value AS deal_value, bu.key_slug AS business_unit_key
-       FROM deals d
-       LEFT JOIN business_units bu ON bu.id = d.business_unit_id
-       WHERE d.id = ?`,
-      [deal_id]
-    );
-    if (!deal) {
-      await conn.rollback();
-      return res.status(400).json({ error: 'Operacion no encontrada' });
+    let deal = null;
+    let serviceCase = null;
+    let addition = null;
+    let buKey = '';
+    if (deal_id) {
+      const [[row]] = await conn.query(
+        `SELECT d.id, d.org_id AS organization_id, d.reference, d.title, d.value AS deal_value, bu.key_slug AS business_unit_key
+         FROM deals d
+         LEFT JOIN business_units bu ON bu.id = d.business_unit_id
+         WHERE d.id = ?`,
+        [deal_id]
+      );
+      deal = row || null;
+      if (!deal) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'Operacion no encontrada' });
+      }
+      buKey = deal.business_unit_key || '';
+    } else {
+      const [[row]] = await conn.query(
+        `SELECT sc.id, sc.org_id AS organization_id, sc.reference, sc.status
+           FROM service_cases sc
+          WHERE sc.id = ?`,
+        [service_case_id]
+      );
+      serviceCase = row || null;
+      if (!serviceCase && service_quote_addition_id) {
+        const [[addRow]] = await conn.query(
+          `SELECT a.id, a.service_case_id, sc.org_id AS organization_id, sc.reference, sc.status
+             FROM service_quote_additions a
+             LEFT JOIN service_cases sc ON sc.id = a.service_case_id
+            WHERE a.id = ?`,
+          [service_quote_addition_id]
+        );
+        if (addRow?.service_case_id) {
+          serviceCase = {
+            id: addRow.service_case_id,
+            organization_id: addRow.organization_id,
+            reference: addRow.reference,
+            status: addRow.status,
+          };
+          addition = { id: addRow.id, service_case_id: addRow.service_case_id };
+        }
+      }
+      if (!serviceCase) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'Servicio no encontrado' });
+      }
+      buKey = 'atm-industrial';
     }
-
-    const buKey = deal.business_unit_key || '';
     const { invoice_number, point_of_issue: poi, establishment: est } = await nextInvoiceNumber(
       buKey,
       conn
@@ -923,30 +1442,119 @@ router.post('/', requireAuth, async (req, res) => {
     const issueDate = new Date();
     const dueDate = due_date ? new Date(due_date) : null;
     const perc = Number(percentage || 100);
-    const quoteTotalUsd = await fetchQuoteTotalUsd(deal_id, conn);
-    const baseAmount = Number(req.body?.base_amount ?? quoteTotalUsd ?? deal.deal_value ?? 0) || 0;
+    const useAddition = Number(service_quote_addition_id || 0) > 0;
+    const effectiveServiceCaseId = deal_id ? null : (service_case_id || serviceCase?.id || null);
+    const quoteTotalUsd = deal_id
+      ? await fetchQuoteTotalUsd(deal_id, conn)
+      : useAddition
+      ? await fetchServiceQuoteAdditionTotalUsd(Number(service_quote_addition_id), conn)
+      : await fetchServiceQuoteTotalUsd(effectiveServiceCaseId, conn);
+    const baseAmountUsd = Number(
+      req.body?.base_amount ??
+      quoteTotalUsd ??
+      (deal ? deal.deal_value : 0) ??
+      0
+    ) || 0;
 
-    const [[agg]] = await conn.query(
-      `SELECT COALESCE(SUM(percentage),0) AS used_pct
-         FROM invoices
-        WHERE deal_id = ?
-          AND status <> 'anulada'`,
-      [deal_id]
-    );
-    const usedPct = Number(agg.used_pct || 0);
-    if (usedPct + perc > 100.0001) {
-      await conn.rollback();
-      return res.status(400).json({ error: `El porcentaje supera el 100% (ya facturado ${usedPct.toFixed(2)}%)` });
+    const branchInfo = deal_id
+      ? await fetchDealBranchInfo(deal_id, conn)
+      : await fetchServiceCaseBranchInfo(effectiveServiceCaseId, conn);
+    const branchAddress = branchInfo
+      ? [branchInfo.address, branchInfo.city, branchInfo.country].filter(Boolean).join(' - ')
+      : null;
+    const resolvedCustomerAddress = customer_address || branchAddress || null;
+
+    if (useAddition) {
+      const [[agg]] = await conn.query(
+        `SELECT COALESCE(SUM(percentage),0) AS used_pct
+           FROM invoices
+          WHERE service_quote_addition_id = ?
+            AND status <> 'anulada'`,
+        [service_quote_addition_id]
+      );
+      const usedPct = Number(agg.used_pct || 0);
+      if (usedPct + perc > 100.0001) {
+        await conn.rollback();
+        return res.status(400).json({ error: `El porcentaje supera el 100% (ya facturado ${usedPct.toFixed(2)}%)` });
+      }
+    } else {
+      const [[agg]] = await conn.query(
+        `SELECT COALESCE(SUM(percentage),0) AS used_pct
+           FROM invoices
+          WHERE ${deal_id ? 'deal_id = ?' : 'service_case_id = ?'}
+            AND status <> 'anulada'`,
+        [deal_id ? deal_id : effectiveServiceCaseId]
+      );
+      const usedPct = Number(agg.used_pct || 0);
+      if (usedPct + perc > 100.0001) {
+        await conn.rollback();
+        return res.status(400).json({ error: `El porcentaje supera el 100% (ya facturado ${usedPct.toFixed(2)}%)` });
+      }
     }
 
-    const subtotal = Number((baseAmount * (perc / 100)).toFixed(2));
-    const tax_amount = 0;
-    const total_amount = subtotal;
+    // ✅ Moneda: por defecto desde la cotización
+    const quoteCurrency = deal_id
+      ? await fetchQuoteCurrencyInfo(deal_id, conn)
+      : useAddition
+      ? await fetchServiceQuoteAdditionCurrencyInfo(Number(service_quote_addition_id), conn)
+      : await fetchServiceQuoteCurrencyInfo(effectiveServiceCaseId, conn);
+    const curr = String(currency_code || req.body?.currency || quoteCurrency.currency || 'USD').toUpperCase();
+    const exRate = Number(exchange_rate || quoteCurrency.exchange_rate || 1) || 1;
+    const isPyg = curr === 'PYG' || curr === 'GS';
+    const currencyFactor = isPyg ? exRate : 1;
+    const baseAmount = round2(baseAmountUsd * currencyFactor);
 
-    // ✅ Moneda: si hoy trabajás solo USD, dejalo siempre en USD.
-    // Aun así respetamos si te mandan currency_code/currency en el body.
-    const curr = String(currency_code || req.body?.currency || 'USD').toUpperCase();
-    const exRate = Number(exchange_rate || 1) || 1;
+    const itemsFromQuote = deal_id
+      ? await fetchQuoteItemsForInvoice(deal_id, conn)
+      : useAddition
+      ? await fetchServiceQuoteAdditionItemsForInvoice(Number(service_quote_addition_id), conn)
+      : await fetchServiceQuoteItemsForInvoice(effectiveServiceCaseId, conn);
+    const factor = perc / 100;
+    let invoiceItems = [];
+    if (itemsFromQuote.length > 0) {
+      invoiceItems = itemsFromQuote.map((it, idx) => {
+        const qty = Number(it.quantity || 0) || 1;
+        const unitPriceAdjUsd = round2(Number(it.unit_price || 0) * factor);
+        const unitPriceAdj = round2(unitPriceAdjUsd * currencyFactor);
+        const subtotal = round2(qty * unitPriceAdj);
+        return {
+          description: it.description || 'Item',
+          quantity: qty,
+          unit_price: unitPriceAdj,
+          subtotal,
+          tax_rate: Number(it.tax_rate ?? 0) || 0,
+          item_order: Number.isFinite(Number(it.item_order)) ? Number(it.item_order) : idx,
+        };
+      });
+    } else {
+      const baseSubtotal = round2(baseAmount * factor);
+      invoiceItems = [
+        {
+          description: 'Presupuesto de la operacion',
+          quantity: 1,
+          unit_price: baseSubtotal,
+          subtotal: baseSubtotal,
+          tax_rate: 0,
+          item_order: 0,
+        },
+      ];
+    }
+
+    const subtotal = round2(
+      invoiceItems.reduce((sum, it) => {
+        const { base } = splitTaxFromGross(Number(it.subtotal || 0), it.tax_rate ?? 0);
+        return sum + base;
+      }, 0)
+    );
+    const tax_amount = round2(
+      invoiceItems.reduce((sum, it) => {
+        const { tax } = splitTaxFromGross(Number(it.subtotal || 0), it.tax_rate ?? 0);
+        return sum + tax;
+      }, 0)
+    );
+    const total_amount = round2(
+      invoiceItems.reduce((sum, it) => sum + Number(it.subtotal || 0), 0)
+    );
 
     const credited_total = 0;
     const net_total_amount = Number((total_amount - credited_total).toFixed(2));
@@ -954,7 +1562,7 @@ router.post('/', requireAuth, async (req, res) => {
 
     const [result] = await conn.query(
   `INSERT INTO invoices (
-    deal_id, organization_id, invoice_number, issue_date, due_date, payment_terms, notes,
+    deal_id, service_case_id, service_quote_addition_id, organization_id, invoice_number, issue_date, due_date, payment_terms, notes,
     payment_condition, timbrado_number, timbrado_start_date, timbrado_expires_at,
     point_of_issue, establishment, customer_doc_type, customer_doc, customer_email, customer_address,
     currency_code, exchange_rate, sales_rep, purchase_order_ref,
@@ -963,18 +1571,18 @@ router.post('/', requireAuth, async (req, res) => {
     credited_total, net_total_amount, net_balance,
     status, created_by
   ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?,
-    ?, ?, ?, ?,
-    ?, ?, ?, ?, ?,
-    ?, ?,
-    ?, ?, ?,
+    ?, ?, ?, ?, ?, ?,
     ?, ?
   )`,
   [
-    deal.id,
-    deal.organization_id,
+    deal ? deal.id : null,
+    serviceCase ? serviceCase.id : null,
+    service_quote_addition_id ? Number(service_quote_addition_id) : null,
+    deal ? deal.organization_id : serviceCase?.organization_id,
     invoice_number,
     issueDate,
     dueDate,
@@ -989,9 +1597,9 @@ router.post('/', requireAuth, async (req, res) => {
     customer_doc_type || 'RUC',
     customer_doc || null,
     customer_email || null,
-    customer_address || null,
-    currency_code || 'USD',
-    Number(exchange_rate || 1) || 1,
+    resolvedCustomerAddress,
+    curr,
+    exRate,
     sales_rep || null,
     purchase_order_ref || null,
     perc,
@@ -1011,22 +1619,24 @@ router.post('/', requireAuth, async (req, res) => {
 
     const newId = result.insertId;
 
-    // Guardar item generico del presupuesto
+    // Guardar items
     await ensureInvoiceItemsTaxColumn();
-    await conn.query(
-      `INSERT INTO invoice_items
-       (invoice_id, description, quantity, unit_price, subtotal, tax_rate, item_order)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        newId,
-        'Presupuesto de la operacion',
-        1,
-        subtotal,
-        subtotal,
-        0,
-        0,
-      ]
-    );
+    for (const it of invoiceItems) {
+      await conn.query(
+        `INSERT INTO invoice_items
+         (invoice_id, description, quantity, unit_price, subtotal, tax_rate, item_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          newId,
+          it.description,
+          it.quantity,
+          it.unit_price,
+          it.subtotal,
+          it.tax_rate ?? 0,
+          it.item_order ?? 0,
+        ]
+      );
+    }
 
     await conn.commit();
 
@@ -1100,16 +1710,33 @@ router.delete('/:id', requireAuth, async (req, res) => {
 router.get('/receipts', requireAuth, async (req, res) => {
   try {
     await ensureReceiptTables();
-    const [rows] = await pool.query(
-      `SELECT r.*, i.invoice_number, i.organization_id, i.deal_id, d.reference as deal_reference, o.name as organization_name
-         FROM receipts r
-         LEFT JOIN invoices i ON i.id = r.invoice_id
-         LEFT JOIN deals d ON d.id = i.deal_id
-         LEFT JOIN organizations o ON o.id = i.organization_id
-        WHERE r.status = 'emitido'
-        ORDER BY r.issue_date DESC, r.id DESC`
-    );
-    res.json(rows);
+    try {
+      const [rows] = await pool.query(
+        `SELECT r.*, i.invoice_number, i.organization_id, i.deal_id, i.service_case_id,
+                COALESCE(d.reference, sc.reference) as deal_reference, o.name as organization_name
+           FROM receipts r
+           LEFT JOIN invoices i ON i.id = r.invoice_id
+           LEFT JOIN deals d ON d.id = i.deal_id
+           LEFT JOIN service_cases sc ON sc.id = i.service_case_id
+           LEFT JOIN organizations o ON o.id = i.organization_id
+          WHERE r.status = 'emitido'
+          ORDER BY r.issue_date DESC, r.id DESC`
+      );
+      return res.json(rows);
+    } catch (err) {
+      if (err?.code !== 'ER_BAD_FIELD_ERROR') throw err;
+      const [rows] = await pool.query(
+        `SELECT r.*, i.invoice_number, i.organization_id, i.deal_id,
+                d.reference as deal_reference, o.name as organization_name
+           FROM receipts r
+           LEFT JOIN invoices i ON i.id = r.invoice_id
+           LEFT JOIN deals d ON d.id = i.deal_id
+           LEFT JOIN organizations o ON o.id = i.organization_id
+          WHERE r.status = 'emitido'
+          ORDER BY r.issue_date DESC, r.id DESC`
+      );
+      return res.json(rows);
+    }
   } catch (e) {
     console.error('[receipts] Error listing', e);
     res.status(500).json({ error: 'Error al listar recibos' });
@@ -1377,12 +2004,13 @@ router.get('/:id', requireAuth, async (req, res) => {
         o.city as organization_city,
         d.id as deal_id,
         d.title as deal_title,
-        d.reference as deal_reference,
+        COALESCE(d.reference, sc.reference) as deal_reference,
         u.name as created_by_name,
         u2.name as issued_by_name
       FROM invoices i
       LEFT JOIN organizations o ON o.id = i.organization_id
       LEFT JOIN deals d ON d.id = i.deal_id
+      LEFT JOIN service_cases sc ON sc.id = i.service_case_id
       LEFT JOIN users u ON u.id = i.created_by
       LEFT JOIN users u2 ON u2.id = i.issued_by
       WHERE i.id = ?`,
@@ -1392,6 +2020,20 @@ router.get('/:id', requireAuth, async (req, res) => {
     if (!invoice) return res.status(404).json({ error: 'Factura no encontrada' });
     if (!canManageInvoice(req.user, invoice)) {
       return res.status(403).json({ error: 'No tienes permiso para ver esta factura' });
+    }
+
+    if ((!invoice.currency_code || !invoice.exchange_rate) && invoice.service_quote_addition_id) {
+      try {
+        const [[addRow]] = await pool.query(
+          'SELECT inputs_json FROM service_quote_additions WHERE id = ? LIMIT 1',
+          [invoice.service_quote_addition_id]
+        );
+        const inputs = asJson(addRow?.inputs_json) || {};
+        const curr = String(inputs.operation_currency || '').toUpperCase();
+        const rate = Number(inputs.exchange_rate_operation_sell_usd || 0) || 0;
+        if (!invoice.currency_code && curr) invoice.currency_code = curr;
+        if (!invoice.exchange_rate && rate) invoice.exchange_rate = rate;
+      } catch (_) {}
     }
 
     const [items] = await pool.query(
@@ -1426,17 +2068,32 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
         o.ruc as organization_ruc,
         o.address as organization_address,
         o.city as organization_city,
-        d.reference as deal_reference,
-        d.title as deal_title
+        COALESCE(d.reference, sc.reference) as deal_reference,
+        COALESCE(d.title, sc.reference) as deal_title
       FROM invoices i
       LEFT JOIN organizations o ON o.id = i.organization_id
       LEFT JOIN deals d ON d.id = i.deal_id
+      LEFT JOIN service_cases sc ON sc.id = i.service_case_id
       WHERE i.id = ?`,
       [id]
     );
     if (!invoice) return res.status(404).json({ error: 'Factura no encontrada' });
     if (!canManageInvoice(req.user, invoice)) {
       return res.status(403).json({ error: 'No tienes permiso para ver esta factura' });
+    }
+
+    if ((!invoice.currency_code || !invoice.exchange_rate) && invoice.service_quote_addition_id) {
+      try {
+        const [[addRow]] = await pool.query(
+          'SELECT inputs_json FROM service_quote_additions WHERE id = ? LIMIT 1',
+          [invoice.service_quote_addition_id]
+        );
+        const inputs = asJson(addRow?.inputs_json) || {};
+        const curr = String(inputs.operation_currency || '').toUpperCase();
+        const rate = Number(inputs.exchange_rate_operation_sell_usd || 0) || 0;
+        if (!invoice.currency_code && curr) invoice.currency_code = curr;
+        if (!invoice.exchange_rate && rate) invoice.exchange_rate = rate;
+      } catch (_) {}
     }
 
     const [items] = await pool.query(
@@ -1587,6 +2244,17 @@ router.post('/credit-notes', requireAuth, async (req, res) => {
     if (error) return res.status(error.code).json({ error: error.msg });
     if (['borrador', 'anulada'].includes(invoice.status)) {
       return res.status(400).json({ error: 'Solo se puede crear nota de crédito sobre facturas emitidas' });
+    }
+    const [[receiptRow]] = await pool.query(
+      `SELECT COUNT(*) AS cnt
+         FROM receipts
+        WHERE invoice_id = ?
+          AND status = 'emitido'
+          AND COALESCE(net_amount, amount, 0) > 0`,
+      [invoice_id]
+    );
+    if (Number(receiptRow?.cnt || 0) > 0) {
+      return res.status(400).json({ error: 'No se puede crear nota de crédito: la factura ya tiene recibos.' });
     }
 
     const items = Array.isArray(payloadItems) ? payloadItems : null;

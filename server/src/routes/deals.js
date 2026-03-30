@@ -14,13 +14,63 @@ function formatReference(n) {
   return `OP-${String(n).padStart(6, '0')}`;
 }
 
+async function getParamValue(key, conn = pool) {
+  try {
+    const [[row]] = await conn.query(
+      'SELECT `key`, value FROM param_values WHERE `key` = ? ORDER BY ord, id DESC LIMIT 1',
+      [key]
+    );
+    return row || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function upsertParam(key, value, conn = pool) {
+  try {
+    const existing = await getParamValue(key, conn);
+    if (existing?.key) {
+      await conn.query('UPDATE param_values SET value = ?, active = 1, ord = 0 WHERE `key` = ?', [value, key]);
+      return;
+    }
+  } catch (_) {}
+  await conn.query(
+    'INSERT INTO param_values (`key`, value, ord, active) VALUES (?, ?, 0, 1)',
+    [key, value]
+  );
+}
+
+async function computeNextGlobalReference(conn = pool, advance = true) {
+  const paramKey = 'op_next_reference';
+  const legacyKeys = ['op_sv_next_reference'];
+
+  const [[opRow]] = await conn.query(
+    "SELECT MAX(CAST(SUBSTRING(reference, 4) AS UNSIGNED)) AS max_ref\n" +
+      "FROM deals WHERE reference REGEXP '^OP-[0-9]+$'"
+  );
+
+  let next = Number(opRow?.max_ref || 0) + 1;
+
+  const paramVal = parseInt((await getParamValue(paramKey, conn))?.value || 'NaN', 10);
+  if (Number.isFinite(paramVal)) next = Math.max(next, paramVal);
+
+  for (const k of legacyKeys) {
+    const v = parseInt((await getParamValue(k, conn))?.value || 'NaN', 10);
+    if (Number.isFinite(v)) next = Math.max(next, v);
+  }
+
+  if (next < 2) next = 2; // nunca generar OP-000001
+  if (advance) await upsertParam(paramKey, String(next + 1), conn);
+  return next;
+}
+
 (async () => {
   try {
     const q = `
       SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
       WHERE TABLE_SCHEMA = DATABASE()
         AND TABLE_NAME = 'deals'
-        AND COLUMN_NAME IN ('advisor_user_id','created_by_user_id')
+        AND COLUMN_NAME IN ('advisor_user_id','created_by_user_id','org_branch_id')
     `;
     const [cols] = await pool.query(q);
     const names = new Set(cols.map(c => c.COLUMN_NAME));
@@ -30,6 +80,9 @@ function formatReference(n) {
     }
     if (!names.has('created_by_user_id')) {
       await pool.query(`ALTER TABLE deals ADD COLUMN created_by_user_id BIGINT NULL AFTER advisor_user_id`);
+    }
+    if (!names.has('org_branch_id')) {
+      await pool.query(`ALTER TABLE deals ADD COLUMN org_branch_id INT NULL AFTER org_id`);
     }
   } catch (e) {
     console.error('No se pudieron asegurar columnas en deals:', e?.message || e);
@@ -145,9 +198,8 @@ const upload = multer({ storage });
 })();
 
 router.get('/next-reference', async (_req, res) => {
-  const [rows] = await pool.query(`SHOW TABLE STATUS LIKE 'deals'`);
-  const nextId = rows?.[0]?.Auto_increment || 1;
-  res.json({ preview: formatReference(nextId) });
+  const nextSeq = await computeNextGlobalReference(pool, false);
+  res.json({ preview: formatReference(nextSeq) });
 });
 
 router.get('/', requireAuth, async (req, res) => {
@@ -197,7 +249,7 @@ router.get('/', requireAuth, async (req, res) => {
   const [rows] = await pool.query(
     `SELECT
        d.id, d.reference, d.title, d.value, d.status, d.stage_id, d.pipeline_id, d.business_unit_id,
-       d.contact_id, d.org_id, d.created_at,
+       d.contact_id, d.org_id, d.org_branch_id, d.created_at,
        d.advisor_user_id          AS deal_advisor_user_id,
        du.name                    AS deal_advisor_name,
        d.created_by_user_id,
@@ -255,6 +307,12 @@ router.get('/:id', async (req, res) => {
        o.address AS org_address,
        o.city AS org_city,
 
+       ob.id AS org_branch_id,
+       ob.name AS org_branch_name,
+       ob.address AS org_branch_address,
+       ob.city AS org_branch_city,
+       ob.country AS org_branch_country,
+
        c.name  AS contact_name, c.email AS contact_email, c.phone AS contact_phone,
        bu.name AS business_unit_name, bu.key_slug AS business_unit_key,
 
@@ -262,6 +320,7 @@ router.get('/:id', async (req, res) => {
        p.name  AS pipeline_name
      FROM deals d
      LEFT JOIN organizations  o  ON o.id  = d.org_id
+     LEFT JOIN org_branches   ob ON ob.id = d.org_branch_id
      LEFT JOIN contacts       c  ON c.id  = d.contact_id
      LEFT JOIN users          du ON du.id = d.advisor_user_id
      LEFT JOIN users          cu ON cu.id = d.created_by_user_id
@@ -293,6 +352,13 @@ router.get('/:id', async (req, res) => {
     email: row.org_email,
     address: row.org_address,
     city: row.org_city,
+    branch: row.org_branch_id ? {
+      id: row.org_branch_id,
+      name: row.org_branch_name,
+      address: row.org_branch_address,
+      city: row.org_branch_city,
+      country: row.org_branch_country,
+    } : null,
   } : null;
 
   res.json({ deal: row, organization, activities });
@@ -644,7 +710,8 @@ router.post('/', requireAuth, async (req, res) => {
     );
 
     const newId = dealIns.insertId;
-    const reference = formatReference(newId);
+    const nextSeq = await computeNextGlobalReference(conn, true);
+    const reference = formatReference(nextSeq);
 
     await conn.query(
       'UPDATE deals SET reference = ? WHERE id = ?',
@@ -734,6 +801,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
     title,
     value, status, stage_id, contact_id, org_id, business_unit_id,
     advisor_user_id,
+    org_branch_id,
   } = req.body;
 
   const fields = [];
@@ -747,6 +815,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
   if (stage_id !== undefined)        { fields.push('stage_id = ?');         params.push(stage_id); }
   if (contact_id !== undefined)      { fields.push('contact_id = ?');       params.push(contact_id); }
   if (org_id !== undefined)          { fields.push('org_id = ?');           params.push(org_id); }
+  if (org_branch_id !== undefined)   { fields.push('org_branch_id = ?');    params.push(org_branch_id || null); }
   if (business_unit_id !== undefined){ fields.push('business_unit_id = ?'); params.push(business_unit_id); }
   if (advisor_user_id !== undefined) { fields.push('advisor_user_id = ?');  params.push(advisor_user_id || null); }
 

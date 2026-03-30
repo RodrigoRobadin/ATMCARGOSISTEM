@@ -44,11 +44,11 @@ export default function Quotes() {
       </div>
 
       {loading ? (
-        <div className="text-sm text-slate-500">Cargando...</div>
+        <div className="text-sm text-slate-500 dark:text-slate-400">Cargando...</div>
       ) : (
-        <div className="overflow-auto rounded-xl border">
+        <div className="overflow-auto rounded-xl border dark:border-slate-800 dark:bg-slate-950">
           <table className="min-w-full text-sm">
-            <thead className="bg-slate-100 text-left">
+            <thead className="bg-slate-100 dark:bg-slate-900 text-left">
               <tr>
                 <th className="px-3 py-2">Ref</th>
                 <th className="px-3 py-2">Cliente</th>
@@ -62,13 +62,13 @@ export default function Quotes() {
             <tbody>
               {quotes.length === 0 && (
                 <tr>
-                  <td className="px-3 py-2 text-slate-500" colSpan={7}>
+                  <td className="px-3 py-2 text-slate-500 dark:text-slate-400" colSpan={7}>
                     Sin registros.
                   </td>
                 </tr>
               )}
               {quotes.map((q) => (
-                <tr key={q.id} className="border-t">
+                <tr key={q.id} className="border-t dark:border-slate-800">
                   <td className="px-3 py-2">{q.ref_code || `#${q.id}`}</td>
                   <td className="px-3 py-2">{q.client_name || "-"}</td>
                   <td className="px-3 py-2">{q.status || "draft"}</td>
@@ -78,17 +78,17 @@ export default function Quotes() {
                   <td className="px-3 py-2 text-right">
                     {q.profit_total_usd != null ? q.profit_total_usd.toFixed(2) : "-"}
                   </td>
-                  <td className="px-3 py-2 text-slate-500">
+                  <td className="px-3 py-2 text-slate-500 dark:text-slate-400">
                     {q.updated_at ? new Date(q.updated_at).toLocaleString() : "-"}
                   </td>
                   <td className="px-3 py-2">
                     <div className="flex gap-3 items-center">
-                      <Link className="text-blue-600 underline" to={`/quotes/${q.id}`}>
+                      <Link className="text-blue-600 dark:text-blue-400 underline" to={`/quotes/${q.id}`}>
                         Editar
                       </Link>
 
                       <button
-                        className="text-emerald-700 underline"
+                        className="text-emerald-700 dark:text-emerald-400 underline"
                         onClick={() => exportXlsx(q.id)}
                       >
                         Export XLSX

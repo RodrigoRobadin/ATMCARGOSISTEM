@@ -10,6 +10,7 @@ import { api } from "../api";
 import DetCosSheet from "./DetCosSheet";
 import QuoteEditor from "./QuoteEditor";
 import ReportPreview from "../components/op-details/ReportPreview";
+import OperationExpenseInvoices from "../components/OperationExpenseInvoices.jsx";
 import IndustrialDoorList from "../components/op-details/IndustrialDoorList";
 import {
   buildQuoteEmailPlainText,
@@ -260,6 +261,82 @@ function FileTabViewer({ context }) {
   );
 }
 
+/* ======== Visor de factura / nota de crédito (PDF embebido) ======== */
+function OperationDocViewer({ doc }) {
+  const [pdfUrl, setPdfUrl] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!doc) return;
+    let active = true;
+    let objectUrl = '';
+    setLoading(true);
+    setError('');
+    setPdfUrl('');
+
+    const endpoint =
+      doc.kind === 'credit_note'
+        ? `/invoices/credit-notes/${doc.id}/pdf`
+        : `/invoices/${doc.id}/pdf`;
+
+    api
+      .get(endpoint, { responseType: 'blob' })
+      .then((res) => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(
+          new Blob([res.data], { type: 'application/pdf' })
+        );
+        setPdfUrl(objectUrl);
+      })
+      .catch(() => {
+        if (active) setError('No se pudo cargar el PDF.');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [doc?.id, doc?.kind]);
+
+  if (!doc) return null;
+
+  return (
+    <div className="bg-white rounded-2xl shadow p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm">
+          <b>{doc.kind === 'credit_note' ? 'Nota de crédito' : 'Factura'}</b>
+          {doc.number ? ` — ${doc.number}` : ''}
+        </div>
+        {pdfUrl && (
+          <button
+            className="text-sm underline"
+            onClick={() => window.open(pdfUrl, '_blank')}
+          >
+            Abrir en pestaña nueva
+          </button>
+        )}
+      </div>
+      {loading && (
+        <div className="text-sm text-slate-500">Cargando PDF…</div>
+      )}
+      {error && <div className="text-sm text-red-600">{error}</div>}
+      {!loading && !error && pdfUrl && (
+        <div className="h-[70vh]">
+          <iframe
+            src={pdfUrl}
+            title={`${doc.kind}-${doc.id}`}
+            className="w-full h-full border rounded"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ---------- usuarios ---------- */
 function getCurrentUserFromStorage() {
   try {
@@ -319,12 +396,24 @@ export default function OperationDetailIndustrial() {
 
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState(null);
+  const [orgBranches, setOrgBranches] = useState([]);
+  const [orgBranchId, setOrgBranchId] = useState(null);
+  const [branchLoading, setBranchLoading] = useState(false);
+  const [branchFormOpen, setBranchFormOpen] = useState(false);
+  const [newBranch, setNewBranch] = useState({
+    name: "",
+    address: "",
+    city: "",
+    country: "",
+  });
 
   const [desc, setDesc] = useState("");
   const [cf, setCf] = useState({});
   const [cfSupported, setCfSupported] = useState(true);
   const [editMode, setEditMode] = useState(false);
   const [dirtyCF, setDirtyCF] = useState(new Set());
+  const [invoiceLock, setInvoiceLock] = useState({ locked: false, count: 0 });
+  const [invoiceLockLoading, setInvoiceLockLoading] = useState(false);
 
   const [profitUSD, setProfitUSD] = useState(null);
 
@@ -335,10 +424,12 @@ export default function OperationDetailIndustrial() {
 
   const [activeTab, setActiveTab] = useState("detalle");
   const [uploadingFiles, setUploadingFiles] = useState([]);
+  const [expenseOpenKey, setExpenseOpenKey] = useState(0);
 
   const [quoteId, setQuoteId] = useState(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteErr, setQuoteErr] = useState("");
+  const [quoteRevisions, setQuoteRevisions] = useState([]);
 
   const [notesList, setNotesList] = useState([]);
   const [notesLoading, setNotesLoading] = useState(false);
@@ -354,8 +445,103 @@ export default function OperationDetailIndustrial() {
     incoterm: [],
   });
 
+  const isLocked = Boolean(invoiceLock?.locked);
+
   const [generatingReport, setGeneratingReport] = useState(false);
   const [showReportPreview, setShowReportPreview] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    const orgId = deal?.org_id;
+    if (!orgId) {
+      setOrgBranches([]);
+      setOrgBranchId(null);
+      return undefined;
+    }
+    setOrgBranchId(deal?.org_branch_id || null);
+    (async () => {
+      setBranchLoading(true);
+      try {
+        const { data } = await api.get(`/organizations/${orgId}/branches`);
+        if (live) setOrgBranches(Array.isArray(data) ? data : []);
+      } catch (_) {
+        if (live) setOrgBranches([]);
+      } finally {
+        if (live) setBranchLoading(false);
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [deal?.org_id, deal?.org_branch_id]);
+
+  useEffect(() => {
+    if (!id) {
+      setInvoiceLock({ locked: false, count: 0 });
+      return;
+    }
+    let live = true;
+    (async () => {
+      setInvoiceLockLoading(true);
+      try {
+        const { data } = await api.get("/invoices/lock-status", {
+          params: { deal_id: id },
+        });
+        if (live) {
+          setInvoiceLock({
+            locked: Boolean(data?.locked),
+            count: Number(data?.count || 0),
+          });
+        }
+      } catch (_) {
+        if (live) setInvoiceLock({ locked: false, count: 0 });
+      } finally {
+        if (live) setInvoiceLockLoading(false);
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [id]);
+
+  useEffect(() => {
+    if (isLocked && editMode) setEditMode(false);
+  }, [isLocked, editMode]);
+
+  async function updateBranchSelection(nextId) {
+    const branchId = nextId ? Number(nextId) : null;
+    setOrgBranchId(branchId);
+    if (!deal?.id) return;
+    try {
+      await api.patch(`/deals/${deal.id}`, { org_branch_id: branchId });
+      setDeal((prev) => (prev ? { ...prev, org_branch_id: branchId } : prev));
+    } catch (e) {
+      console.error("No se pudo actualizar la sucursal", e);
+    }
+  }
+
+  async function createBranch() {
+    if (!deal?.org_id) return;
+    const payload = {
+      name: newBranch.name?.trim() || null,
+      address: newBranch.address?.trim() || null,
+      city: newBranch.city?.trim() || null,
+      country: newBranch.country?.trim() || null,
+    };
+    if (!payload.name && !payload.address) return;
+    try {
+      const { data } = await api.post(`/organizations/${deal.org_id}/branches`, payload);
+      const branch = data || null;
+      if (branch) {
+        setOrgBranches((prev) => [...prev, branch]);
+        await updateBranchSelection(branch.id);
+      }
+      setBranchFormOpen(false);
+      setNewBranch({ name: "", address: "", city: "", country: "" });
+    } catch (e) {
+      console.error("No se pudo crear sucursal", e);
+    }
+  }
 
   // correo
   const [showEmailModal, setShowEmailModal] = useState(false);
@@ -390,6 +576,19 @@ export default function OperationDetailIndustrial() {
       setQuoteErr("No se pudo cargar/crear la cotización.");
     } finally {
       setQuoteLoading(false);
+    }
+  }
+
+  async function fetchQuoteRevisions(qid) {
+    if (!qid) {
+      setQuoteRevisions([]);
+      return;
+    }
+    try {
+      const { data } = await api.get(`/quotes/${qid}/revisions`);
+      setQuoteRevisions(Array.isArray(data) ? data : []);
+    } catch (_) {
+      setQuoteRevisions([]);
     }
   }
 
@@ -663,9 +862,27 @@ export default function OperationDetailIndustrial() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  useEffect(() => {
+    if (!quoteId) {
+      setQuoteRevisions([]);
+      return;
+    }
+    fetchQuoteRevisions(quoteId);
+  }, [quoteId]);
+
+  useEffect(() => {
+    function handleRevisionCreated(e) {
+      const qid = e?.detail?.quoteId;
+      if (qid && qid === quoteId) fetchQuoteRevisions(qid);
+    }
+    window.addEventListener("quote-revision-created", handleRevisionCreated);
+    return () => window.removeEventListener("quote-revision-created", handleRevisionCreated);
+  }, [quoteId]);
+
   /* ---------- guardar ---------- */
 
   async function saveAll() {
+    if (isLocked) return;
     try {
       await api.patch(`/deals/${id}`, {
         description: desc || null,
@@ -896,9 +1113,37 @@ export default function OperationDetailIndustrial() {
     docLabel: docLabelFor(f.type, currentTT),
   }));
 
+  const [opDocs, setOpDocs] = useState([]);
+
+  useEffect(() => {
+    if (!id) return;
+    let live = true;
+    api
+      .get("/invoices/operation-docs", { params: { deal_id: id } })
+      .then(({ data }) => {
+        if (!live) return;
+        setOpDocs(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (!live) return;
+        setOpDocs([]);
+      })
+    return () => {
+      live = false;
+    };
+  }, [id]);
+
+  const docTabs = opDocs.map((d) => ({
+    id: `doc-${d.kind}-${d.id}`,
+    kind: "opdoc",
+    label: `${d.kind === "credit_note" ? "NC" : "Factura"} ${d.number || d.id}`,
+    doc: d,
+  }));
+
   const topTabs = [
     { id: "detalle", kind: "base", label: "Detalle" },
     { id: "documentos", kind: "base", label: "Documentos" },
+    { id: "gastos", kind: "base", label: "Gastos" },
     {
       id: "detcos",
       kind: "base",
@@ -909,12 +1154,39 @@ export default function OperationDetailIndustrial() {
       kind: "base",
       label: "Detalle de oferta",
     },
+    ...docTabs,
+    ...quoteRevisions.map((r) => ({
+      id: `rev-${r.id}`,
+      kind: "revision",
+      label: r.name || `Rev ${r.id}`,
+      revisionId: r.id,
+    })),
     ...flatUploadingTabs,
     ...flatFileTabs,
   ];
 
   const isFileTab = (id) =>
     String(id).startsWith("f-") || String(id).startsWith("up-");
+
+  const isDocTab = (id) => String(id).startsWith("doc-");
+
+  function getDocFromTab(id) {
+    const sid = String(id);
+    if (!sid.startsWith("doc-")) return null;
+    const parts = sid.split("-");
+    const kind = parts[1];
+    const docId = parts.slice(2).join("-");
+    return opDocs.find((d) => String(d.id) === String(docId) && d.kind === kind) || null;
+  }
+
+  const isRevisionTab = (id) => String(id).startsWith("rev-");
+
+  function getRevisionIdFromTab(id) {
+    const sid = String(id);
+    if (!sid.startsWith("rev-")) return null;
+    const revId = Number(sid.slice(4));
+    return Number.isFinite(revId) ? revId : null;
+  }
 
   function getFileFromTab(id) {
     const sid = String(id);
@@ -977,6 +1249,9 @@ export default function OperationDetailIndustrial() {
     deal?.org_phone || getCF("org_phone") || getCF("phone") || "";
   const orgEmail =
     deal?.org_email || getCF("org_email") || getCF("email") || "";
+  const selectedBranch = orgBranches.find(
+    (b) => b.id === Number(orgBranchId)
+  );
 
   /* ---------- pipeline / ejecutivo ---------- */
 
@@ -1563,7 +1838,11 @@ export default function OperationDetailIndustrial() {
             {!editMode ? (
               <button
                 className="px-3 py-1.5 text-xs rounded-lg border"
-                onClick={() => setEditMode(true)}
+                onClick={() => {
+                  if (isLocked) return;
+                  setEditMode(true);
+                }}
+                disabled={isLocked}
               >
                 Modificar
               </button>
@@ -1578,6 +1857,7 @@ export default function OperationDetailIndustrial() {
                 <button
                   className="px-3 py-1.5 text-xs rounded-lg bg-black text-white"
                   onClick={saveAll}
+                  disabled={isLocked}
                 >
                   Guardar cambios
                 </button>
@@ -1585,6 +1865,14 @@ export default function OperationDetailIndustrial() {
             )}
           </div>
         </div>
+        {isLocked && (
+          <div className="mt-3 p-3 rounded-lg border border-amber-200 bg-amber-50 text-amber-800 text-sm">
+            Operación facturada. No se puede modificar el detalle.
+          </div>
+        )}
+        {invoiceLockLoading && (
+          <div className="mt-2 text-xs text-slate-500">Verificando facturas...</div>
+        )}
       </div>
 
       {/* TABS */}
@@ -1621,6 +1909,8 @@ export default function OperationDetailIndustrial() {
                 mercaderia: (cf["mercaderia"] || {}).value,
               }}
             />
+          ) : activeTab === "gastos" ? (
+            <div />
           ) : activeTab === "detalle-oferta" ? (
             quoteLoading ? (
               <div className="bg-white rounded-2xl shadow p-4 text-sm text-slate-600">
@@ -1642,6 +1932,16 @@ export default function OperationDetailIndustrial() {
                 No se encontró la cotización.
               </div>
             )
+          ) : isRevisionTab(activeTab) ? (
+            <div className="bg-white rounded-2xl shadow p-3">
+              <iframe
+                title="Presupuesto revision"
+                className="w-full h-[900px] border rounded-lg"
+                src={`/operations/${id}/industrial-quote-embed?revision_id=${getRevisionIdFromTab(activeTab)}&embed=1`}
+              />
+            </div>
+          ) : isDocTab(activeTab) ? (
+            <OperationDocViewer doc={getDocFromTab(activeTab)} />
           ) : isFileTab(activeTab) ? (
             <FileTabViewer
               context={getFileFromTab(activeTab)}
@@ -1830,6 +2130,128 @@ export default function OperationDetailIndustrial() {
                     <Input value={orgEmail} readOnly />
                   </Field>
                 </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 mb-4">
+                  <Field
+                    label="Sucursal (facturación)"
+                    right={
+                      editMode ? (
+                        <button
+                          type="button"
+                          className="text-xs text-blue-600 hover:underline"
+                          onClick={() => setBranchFormOpen((v) => !v)}
+                        >
+                          {branchFormOpen ? "Cerrar" : "Agregar"}
+                        </button>
+                      ) : null
+                    }
+                  >
+                    {editMode ? (
+                      <Select
+                        value={orgBranchId || ""}
+                        onChange={(e) =>
+                          updateBranchSelection(e.target.value || null)
+                        }
+                      >
+                        <option value="">— Dirección principal —</option>
+                        {orgBranches.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {b.name || b.address || `Sucursal ${b.id}`}
+                          </option>
+                        ))}
+                      </Select>
+                    ) : (
+                      <Input
+                        readOnly
+                        value={
+                          selectedBranch?.name ||
+                          selectedBranch?.address ||
+                          "—"
+                        }
+                      />
+                    )}
+                  </Field>
+                  <Field label="Dirección sucursal">
+                    <Input
+                      readOnly
+                      value={selectedBranch?.address || "—"}
+                    />
+                  </Field>
+                </div>
+                {branchFormOpen && (
+                  <div className="bg-slate-50 border rounded-xl p-3 mb-4">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                      <label className="block text-xs">
+                        Nombre
+                        <input
+                          className="w-full mt-1 border rounded-lg px-2 py-1 text-sm"
+                          value={newBranch.name}
+                          onChange={(e) =>
+                            setNewBranch((prev) => ({
+                              ...prev,
+                              name: e.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="block text-xs md:col-span-2">
+                        Dirección
+                        <input
+                          className="w-full mt-1 border rounded-lg px-2 py-1 text-sm"
+                          value={newBranch.address}
+                          onChange={(e) =>
+                            setNewBranch((prev) => ({
+                              ...prev,
+                              address: e.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="block text-xs">
+                        Ciudad
+                        <input
+                          className="w-full mt-1 border rounded-lg px-2 py-1 text-sm"
+                          value={newBranch.city}
+                          onChange={(e) =>
+                            setNewBranch((prev) => ({
+                              ...prev,
+                              city: e.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="block text-xs">
+                        País
+                        <input
+                          className="w-full mt-1 border rounded-lg px-2 py-1 text-sm"
+                          value={newBranch.country}
+                          onChange={(e) =>
+                            setNewBranch((prev) => ({
+                              ...prev,
+                              country: e.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                    <div className="flex gap-2 mt-3">
+                      <button
+                        type="button"
+                        className="px-3 py-2 rounded-lg bg-black text-white text-sm"
+                        onClick={createBranch}
+                        disabled={branchLoading}
+                      >
+                        Guardar sucursal
+                      </button>
+                      <button
+                        type="button"
+                        className="px-3 py-2 rounded-lg border bg-white text-sm"
+                        onClick={() => setBranchFormOpen(false)}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-3 mb-4">
                   <Field label="Contacto">
                     <Input
@@ -2288,6 +2710,11 @@ export default function OperationDetailIndustrial() {
               </div>
             </>
           )}
+          <OperationExpenseInvoices
+            operationId={Number(id)}
+            showList={activeTab === "gastos"}
+            openNewKey={expenseOpenKey}
+          />
         </section>
 
         {/* ASIDE */}
@@ -2364,6 +2791,12 @@ export default function OperationDetailIndustrial() {
                 onClick={() => openEmailModal("flete")}
               >
                 Pedir tarifa (flete)
+              </button>
+              <button
+                className="px-3 py-2 text-sm rounded-lg bg-black text-white"
+                onClick={() => setExpenseOpenKey((k) => k + 1)}
+              >
+                + Factura de compra
               </button>
               <button
                 className="px-3 py-2 text-sm rounded-lg border"
@@ -2683,8 +3116,3 @@ export default function OperationDetailIndustrial() {
     </div>
   );
 }
-
-
-
-
-

@@ -22,8 +22,17 @@ const statusLabels = {
   vencida: 'Vencida',
 };
 
-const fmtMoney = (v) =>
-  new Intl.NumberFormat('es-PY', { style: 'currency', currency: 'USD' }).format(v || 0);
+const normalizeCurrency = (code) => {
+  const c = String(code || '').toUpperCase();
+  if (c === 'GS') return 'PYG';
+  return c || 'USD';
+};
+
+const fmtMoney = (v, currency) =>
+  new Intl.NumberFormat('es-PY', {
+    style: 'currency',
+    currency: normalizeCurrency(currency),
+  }).format(v || 0);
 const fmtDate = (v) => (v ? new Date(v).toLocaleDateString('es-PY') : 'â€”');
 
 export default function Invoices() {
@@ -63,8 +72,13 @@ export default function Invoices() {
         })();
       const pendingPct = Math.max(0, 100 - totalPct);
       const pendingAmount = baseAmount != null ? (baseAmount * pendingPct) / 100 : null;
+      const currency =
+        active.find((it) => it.currency_code)?.currency_code ||
+        active.find((it) => it.currency_resolved)?.currency_resolved ||
+        'USD';
       return {
         ...group,
+        currency,
         summary: {
           totalPct,
           totalAmount,
@@ -225,8 +239,8 @@ export default function Invoices() {
                     {group.reference || 'Sin referencia'} {group.title ? `- ${group.title}` : ''}
                   </div>
                   <div className="text-xs text-slate-600 mt-0.5">
-                    Facturado: {(group.summary?.totalPct || 0).toFixed(0)}% ({fmtMoney(group.summary?.totalAmount || 0)}) · Pendiente: {(group.summary?.pendingPct || 0).toFixed(0)}%
-                    {group.summary?.pendingAmount != null ? ` (${fmtMoney(group.summary.pendingAmount)})` : ''}
+                    Facturado: {(group.summary?.totalPct || 0).toFixed(0)}% ({fmtMoney(group.summary?.totalAmount || 0, group.currency)}) · Pendiente: {(group.summary?.pendingPct || 0).toFixed(0)}%
+                    {group.summary?.pendingAmount != null ? ` (${fmtMoney(group.summary.pendingAmount, group.currency)})` : ''}
                   </div>
                 </div>
                 <div className="text-xs text-slate-600">Facturas: {group.items.length}</div>
@@ -285,7 +299,7 @@ export default function Invoices() {
                         {fmtDate(invoice.due_date)}
                       </td>
                       <td className="px-4 py-3 text-sm text-right font-medium">
-                        {fmtMoney(invoice.total_amount)}
+                        {fmtMoney(invoice.total_amount, invoice.currency_code || invoice.currency_resolved)}
                       </td>
                       <td className="px-4 py-3 text-sm text-right">
                         <span
@@ -293,7 +307,7 @@ export default function Invoices() {
                             invoice.balance > 0 ? 'text-orange-600 font-medium' : 'text-green-600'
                           }
                         >
-                          {fmtMoney(invoice.balance)}
+                          {fmtMoney(invoice.balance, invoice.currency_code || invoice.currency_resolved)}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-center">

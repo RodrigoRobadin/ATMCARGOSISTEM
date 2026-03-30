@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import DetCosSheet from "./DetCosSheet";
 import ReportPreview from "../components/op-details/ReportPreview";
+import OperationExpenseInvoices from "../components/OperationExpenseInvoices.jsx";
 
 // 👇 Ajustá la ruta real según tu backend
 const PROVIDERS_ENDPOINT = "/organizations";
@@ -294,6 +295,82 @@ function FileTabViewer({ context }) {
   );
 }
 
+/* ======== Visor de factura / nota de crédito (PDF embebido) ======== */
+function OperationDocViewer({ doc }) {
+  const [pdfUrl, setPdfUrl] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!doc) return;
+    let active = true;
+    let objectUrl = '';
+    setLoading(true);
+    setError('');
+    setPdfUrl('');
+
+    const endpoint =
+      doc.kind === 'credit_note'
+        ? `/invoices/credit-notes/${doc.id}/pdf`
+        : `/invoices/${doc.id}/pdf`;
+
+    api
+      .get(endpoint, { responseType: 'blob' })
+      .then((res) => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(
+          new Blob([res.data], { type: 'application/pdf' })
+        );
+        setPdfUrl(objectUrl);
+      })
+      .catch(() => {
+        if (active) setError('No se pudo cargar el PDF.');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [doc?.id, doc?.kind]);
+
+  if (!doc) return null;
+
+  return (
+    <div className="bg-white rounded-2xl shadow p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm">
+          <b>{doc.kind === 'credit_note' ? 'Nota de crédito' : 'Factura'}</b>
+          {doc.number ? ` — ${doc.number}` : ''}
+        </div>
+        {pdfUrl && (
+          <button
+            className="text-sm underline"
+            onClick={() => window.open(pdfUrl, '_blank')}
+          >
+            Abrir en pestaña nueva
+          </button>
+        )}
+      </div>
+      {loading && (
+        <div className="text-sm text-slate-500">Cargando PDF…</div>
+      )}
+      {error && <div className="text-sm text-red-600">{error}</div>}
+      {!loading && !error && pdfUrl && (
+        <div className="h-[70vh]">
+          <iframe
+            src={pdfUrl}
+            title={`${doc.kind}-${doc.id}`}
+            className="w-full h-full border rounded"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ---- helpers para links superpuestos en campos de detalle ---- */
 function getFileNiceName(f) {
   return visibleNameOf(f);
@@ -449,6 +526,7 @@ export default function OperationDetail() {
   const [activeTab, setActiveTab] = useState("detalle");
   const [filesRefreshKey, setFilesRefreshKey] = useState(0);
   const [uploadingFiles, setUploadingFiles] = useState([]);
+  const [expenseOpenKey, setExpenseOpenKey] = useState(0);
 
   // NUEVO: adjuntos por nota (ya guardados) y adjuntos de la nota en edición
   const [noteAttachmentsMap, setNoteAttachmentsMap] = useState({}); // { [activityId]: [fileId, ...] }
@@ -1828,10 +1906,39 @@ useEffect(() => {
   file: f,
   docLabel: docLabelFor(f.type, currentTT),
 }));
+  const [opDocs, setOpDocs] = useState([]);
+
+  useEffect(() => {
+    if (!id) return;
+    let live = true;
+    api
+      .get("/invoices/operation-docs", { params: { deal_id: id } })
+      .then(({ data }) => {
+        if (!live) return;
+        setOpDocs(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (!live) return;
+        setOpDocs([]);
+      })
+    return () => {
+      live = false;
+    };
+  }, [id]);
+
+  const docTabs = opDocs.map((d) => ({
+    id: `doc-${d.kind}-${d.id}`,
+    kind: "opdoc",
+    label: `${d.kind === "credit_note" ? "NC" : "Factura"} ${d.number || d.id}`,
+    doc: d,
+  }));
+
   const topTabs = [
     { id: "detalle", kind: "base", label: "Detalle" },
     { id: "documentos", kind: "base", label: "Documentos" },
+    { id: "gastos", kind: "base", label: "Gastos" },
     { id: "detcos", kind: "base", label: "Planilla de costos (DET COS)" },
+    ...docTabs,
     ...flatUploadingTabs,
     ...flatFileTabs,
   ];
@@ -1844,6 +1951,17 @@ useEffect(() => {
   }
   const isFileTab = (id) =>
     String(id).startsWith("f-") || String(id).startsWith("up-");
+
+  const isDocTab = (id) => String(id).startsWith("doc-");
+
+  function getDocFromTab(id) {
+    const sid = String(id);
+    if (!sid.startsWith("doc-")) return null;
+    const parts = sid.split("-");
+    const kind = parts[1];
+    const docId = parts.slice(2).join("-");
+    return opDocs.find((d) => String(d.id) === String(docId) && d.kind === kind) || null;
+  }
   function getFileFromTab(id) {
     const sid = String(id);
     if (sid.startsWith("up-")) {
@@ -2331,8 +2449,12 @@ function providerHasFreightTag(p = {}) {
                 mercaderia: (cf["mercaderia"] || {}).value,
               }}
             />
+          ) : activeTab === "gastos" ? (
+            <div />
           ) : isFileTab(activeTab) ? (
             <FileTabViewer context={getFileFromTab(activeTab)} />
+          ) : isDocTab(activeTab) ? (
+            <OperationDocViewer doc={getDocFromTab(activeTab)} />
           ) : activeTab === "documentos" ? (
             /* ================= PESTAÑA DOCUMENTOS ================= */
             <div className="bg-white rounded-2xl shadow p-4">
@@ -2993,6 +3115,11 @@ function providerHasFreightTag(p = {}) {
             </>
           )}
         
+          <OperationExpenseInvoices
+            operationId={Number(id)}
+            showList={activeTab === "gastos"}
+            openNewKey={expenseOpenKey}
+          />
         </section>
         {/* ASIDE */}
         <aside className="space-y-4">
@@ -3054,6 +3181,12 @@ function providerHasFreightTag(p = {}) {
                 onClick={() => openEmailModal("flete")}
               >
                 Pedir tarifa (flete)
+              </button>
+              <button
+                className="px-3 py-2 text-sm rounded-lg bg-black text-white"
+                onClick={() => setExpenseOpenKey((k) => k + 1)}
+              >
+                + Factura de compra
               </button>
             </div>
           </div>

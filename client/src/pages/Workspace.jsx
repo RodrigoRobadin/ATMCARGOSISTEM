@@ -205,9 +205,12 @@ export default function Workspace() {
         const { data } = await api.get("/quotes");
         const map = {};
         for (const row of data || []) {
-          if (row?.deal_id == null || row?.profit_total_usd == null) continue;
+          if (row?.deal_id == null) continue;
           if (map[row.deal_id] !== undefined) continue;
-          map[row.deal_id] = row.profit_total_usd;
+          map[row.deal_id] = {
+            profit_total_display: row.profit_total_display,
+            profit_total_currency: row.profit_total_currency || "USD",
+          };
         }
         if (!cancelled) setQuoteTotals(map);
       } catch {}
@@ -228,6 +231,23 @@ export default function Workspace() {
 
   function stageLabel(stage) {
     return stageAliasMap[String(stage.id)] || stage.name;
+  }
+
+  function stageProfitSums(stageId) {
+    const list = grouped[stageId] || [];
+    return list.reduce((acc, deal) => {
+      const q = quoteTotals[deal.id];
+      if (q && typeof q.profit_total_display === "number") {
+        const curr = String(q.profit_total_currency || "USD").toUpperCase();
+        const label = curr === "PYG" || curr === "GS" ? "Gs" : "USD";
+        acc[label] = (acc[label] || 0) + Number(q.profit_total_display || 0);
+        return acc;
+      }
+      if (deal?.value != null) {
+        acc.USD = (acc.USD || 0) + Number(deal.value || 0);
+      }
+      return acc;
+    }, {});
   }
 
   async function onDragEnd(result) {
@@ -313,8 +333,28 @@ export default function Workspace() {
                   className="bg-white rounded-2xl shadow p-3 min-h-[200px]"
                 >
                   <div className="mb-2">
-                    <div className="font-medium flex items-center justify-between">
-                      <span>{stageLabel(stage)}</span>
+                      <div className="font-medium flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span>{stageLabel(stage)}</span>
+                          {(() => {
+                            const sums = stageProfitSums(stage.id);
+                            const labels = Object.keys(sums || {});
+                            if (!labels.length) return null;
+                            return (
+                              <span className="flex items-center gap-2">
+                                {labels.map((label) => {
+                                  const decimals = label === "Gs" ? 0 : 2;
+                                  const val = Number(sums[label] || 0);
+                                  return (
+                                    <span key={label} className="text-xs bg-emerald-50 text-emerald-700 rounded px-2 py-0.5">
+                                      {`Profit ${label} ${val.toLocaleString("es-ES", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`}
+                                    </span>
+                                  );
+                                })}
+                              </span>
+                            );
+                          })()}
+                        </div>
                       <span className="text-xs bg-slate-100 rounded px-2 py-0.5">
                         {grouped[stage.id]?.length || 0}
                       </span>
@@ -405,9 +445,26 @@ export default function Workspace() {
                               </div>
 
                               <div className="flex items-center gap-2 flex-wrap mt-2">
-                                  <span className="text-xs bg-emerald-50 text-emerald-700 rounded px-2 py-0.5">
-                                    $ {Number(quoteTotals[deal.id] ?? (deal.value || 0)).toLocaleString()}
-                                  </span>
+                                  {(() => {
+                                    const q = quoteTotals[deal.id];
+                                    if (q && typeof q.profit_total_display === "number") {
+                                      const curr = String(q.profit_total_currency || "USD").toUpperCase();
+                                      const label = curr === "PYG" || curr === "GS" ? "Gs" : "USD";
+                                      const decimals = label === "Gs" ? 0 : 2;
+                                      const val = Number(q.profit_total_display || 0);
+                                      return (
+                                        <span className="text-xs bg-emerald-50 text-emerald-700 rounded px-2 py-0.5">
+                                          {`${label} ${val.toLocaleString("es-ES", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`}
+                                        </span>
+                                      );
+                                    }
+                                    const fallback = Number(deal.value || 0);
+                                    return (
+                                      <span className="text-xs bg-emerald-50 text-emerald-700 rounded px-2 py-0.5">
+                                        {`USD ${fallback.toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                                      </span>
+                                    );
+                                  })()}
                                 {typeof createdDays === "number" && (
                                   <span className="text-xs bg-slate-100 rounded px-2 py-0.5">
                                     hace {createdDays} d

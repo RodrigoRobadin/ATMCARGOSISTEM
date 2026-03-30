@@ -194,7 +194,48 @@ router.get("/", async (req, res) => {
 
     const notes = [...(notesFn || []), ...(notesAct || [])];
 
-    return res.json({ deals, organizations, contacts, notes });
+    /* ================== SERVICES (MANTENIMIENTO) ================== */
+    const sqlServices = `
+      SELECT DISTINCT
+        sc.id,
+        sc.reference,
+        sc.status,
+        o.name AS org_name,
+        d.placa_id,
+        d.modelo
+      FROM service_cases sc
+      LEFT JOIN organizations o ON o.id = sc.org_id
+      LEFT JOIN client_doors d ON d.id = sc.door_id
+      LEFT JOIN service_case_doors sd ON sd.service_case_id = sc.id
+      WHERE
+        sc.reference LIKE ?
+        OR o.name LIKE ?
+        OR d.placa_id LIKE ?
+        OR d.modelo LIKE ?
+        OR sc.status LIKE ?
+        OR sd.maintenance_detail LIKE ?
+        OR sd.repair_detail LIKE ?
+        OR sd.parts_components LIKE ?
+        OR sd.parts_actuators LIKE ?
+      ORDER BY sc.id DESC
+      LIMIT 50
+    `;
+
+    const servicesParams = [
+      like, like, like, like, like,
+      like, like, like, like
+    ];
+    const [serviceRows] = await pool.query(sqlServices, servicesParams);
+    const services = serviceRows.map((r) => ({
+      id: r.id,
+      reference: r.reference,
+      status: r.status,
+      org_name: r.org_name,
+      placa_id: r.placa_id,
+      modelo: r.modelo,
+    }));
+
+    return res.json({ deals, organizations, contacts, notes, services });
 
   } catch (err) {
     console.error("[search] error", err);
