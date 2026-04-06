@@ -58,6 +58,7 @@ import notificationsRouter from './routes/notifications.js';
 import messagesRouter from './routes/messages.js';
 import adminFinanceRouter from './routes/adminFinance.js';
 import serviceRouter from './routes/service.js';
+import containerRouter from './routes/container.js';
 
 // ⭐️ NUEVO: solicitudes de flete
 import freightRequestsRouter from './routes/freightRequests.js';
@@ -243,6 +244,7 @@ app.use('/api/notifications', notificationsRouter);
 app.use('/api/messages', messagesRouter);
 app.use('/api/admin/finance', adminFinanceRouter);
 app.use('/api/service', serviceRouter);
+app.use('/api/container', containerRouter);
 
 // ⭐️ Operaciones (crear/leer y PUT por tipo: air/ocean/road/multimodal)
 app.use('/api/operations', operationsRouter);

@@ -11,6 +11,8 @@ const emptyItem = (n = 1) => ({
   qty: 1,
   door_value_usd: 0,
   additional_usd: 0, // ✅ adicional por item
+  sale_mode: "auto", // auto | manual
+  sale_price: "",
 });
 
 const emptyInstall = (n = 1) => ({
@@ -97,7 +99,7 @@ function parseLocaleNumber(raw) {
   return Number.isFinite(num) ? num : 0;
 }
 
-function NumericInput({ value, onChange, decimals = 2, className = "", placeholder = "" }) {
+function NumericInput({ value, onChange, decimals = 2, className = "", placeholder = "", ...rest }) {
   const [text, setText] = useState(() =>
     value === null || value === undefined ? "" : formatLocaleNumber(value, decimals)
   );
@@ -114,6 +116,7 @@ function NumericInput({ value, onChange, decimals = 2, className = "", placehold
       inputMode="decimal"
       placeholder={placeholder}
       value={text}
+      {...rest}
       onFocus={() => {
         setEditing(true);
         setText(value === null || value === undefined ? "" : String(value));
@@ -398,7 +401,14 @@ export default function QuoteEditor({
         prev.ref_code,
       items:
         Array.isArray(data?.inputs?.items) && data.inputs.items.length
-          ? data.inputs.items
+          ? data.inputs.items.map((it) => ({
+              ...it,
+              sale_mode: it?.sale_mode || "auto",
+              sale_price:
+                it?.sale_price === null || it?.sale_price === undefined
+                  ? ""
+                  : it.sale_price,
+            }))
           : prev.items,
       install_items:
         Array.isArray(data?.inputs?.install_items) && data.inputs.install_items.length
@@ -574,12 +584,8 @@ export default function QuoteEditor({
       if (Array.isArray(payloadInputs.items)) {
         payloadInputs.items = payloadInputs.items.map((it) => ({
           ...it,
-          tax_rate: Number(it.tax_rate ?? 10),
-        }));
-      }
-      if (Array.isArray(payloadInputs.items)) {
-        payloadInputs.items = payloadInputs.items.map((it) => ({
-          ...it,
+          sale_mode: it.sale_mode || "auto",
+          sale_price: it.sale_price === "" ? null : it.sale_price,
           tax_rate: Number(it.tax_rate ?? 10),
         }));
       }
@@ -657,6 +663,14 @@ export default function QuoteEditor({
     setError("");
     try {
       const payloadInputs = { ...inputs };
+      if (Array.isArray(payloadInputs.items)) {
+        payloadInputs.items = payloadInputs.items.map((it) => ({
+          ...it,
+          sale_mode: it.sale_mode || "auto",
+          sale_price: it.sale_price === "" ? null : it.sale_price,
+          tax_rate: Number(it.tax_rate ?? 10),
+        }));
+      }
       if (dealId) payloadInputs.deal_id = dealId;
       if (isService && serviceCaseId) payloadInputs.service_case_id = serviceCaseId;
 
@@ -738,7 +752,11 @@ export default function QuoteEditor({
     if (isLocked) return;
     setInputs((prev) => {
       const items = [...(prev.items || [])];
-      items[i] = { ...items[i], [key]: value };
+      const next = { ...items[i], [key]: value };
+      if (key === "sale_mode" && value === "auto") {
+        next.sale_price = "";
+      }
+      items[i] = next;
       return { ...prev, items };
     });
   }
@@ -1203,6 +1221,7 @@ export default function QuoteEditor({
                   <th className="px-3 py-2 text-right">IVA</th>
                   <th className="px-3 py-2 text-right">Costo item ({currencyLabel})</th>
                   <th className="px-3 py-2 text-right">Adicional ({currencyLabel})</th>
+                  <th className="px-3 py-2 text-right">Venta ({currencyLabel})</th>
                   <th className="px-3 py-2 text-right">Acciones</th>
                 </tr>
               </thead>
@@ -1265,6 +1284,25 @@ export default function QuoteEditor({
                         onChange={(v) => setItem(idx, "additional_usd", v)}
                       />
                     </td>
+                    <td className="px-3 py-2 w-44">
+                      <div className="flex flex-col gap-1">
+                        <select
+                          className="w-full border rounded-lg px-2 py-1 text-xs"
+                          value={it.sale_mode || "auto"}
+                          onChange={(e) => setItem(idx, "sale_mode", e.target.value)}
+                        >
+                          <option value="auto">Automático</option>
+                          <option value="manual">Manual</option>
+                        </select>
+                        <NumericInput
+                          className="w-full border rounded-lg px-2 py-1 text-right"
+                          value={it.sale_price ?? 0}
+                          onChange={(v) => setItem(idx, "sale_price", v)}
+                          placeholder={it.sale_mode === "manual" ? "Precio venta" : "Auto"}
+                          disabled={it.sale_mode !== "manual"}
+                        />
+                      </div>
+                    </td>
                     <td className="px-3 py-2 w-28">
                       <button className="text-red-600 hover:underline" onClick={() => removeItem(idx)} type="button">
                         Quitar
@@ -1273,7 +1311,7 @@ export default function QuoteEditor({
                   </tr>
                 ))}
                 <tr className="border-t">
-                  <td className="px-3 py-2" colSpan={6}>
+                  <td className="px-3 py-2" colSpan={7}>
                     <button className="px-3 py-2 rounded-lg border bg-white hover:bg-slate-50 text-sm" onClick={addItem} type="button">
                       + Agregar item
                     </button>
@@ -1360,7 +1398,7 @@ export default function QuoteEditor({
                 step="1"
                 className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
                 value={inputs.exchange_rate_customs_internal_gs_per_usd ?? 7000}
-                onChange={(e) => setField("exchange_rate_customs_internal_gs_per_usd", n2(e.target.value) || 7000)}
+                onChange={(e) => setField("exchange_rate_customs_internal_gs_per_usd", n2(e.target.value))}
               />
             </div>
             <div className="lg:col-span-2 text-xs text-slate-500 flex items-end">

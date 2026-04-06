@@ -120,7 +120,7 @@ export default function ServiceDoorDetail() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">Equipo {door?.placa_id}</h1>
+          <h1 className="text-xl font-semibold">Equipo {door?.nombre || door?.placa_id}</h1>
           <div className="text-sm text-slate-500">{door?.org_name || door?.org_id} {door?.org_ruc ? `? ${door.org_ruc}` : ""}</div>
         </div>
         <div className="flex gap-2">
@@ -138,6 +138,7 @@ export default function ServiceDoorDetail() {
         <div><span className="text-xs text-slate-500">Sucursal</span><div>{door?.org_branch_name || "Sin sucursal"}</div></div>
         <div><span className="text-xs text-slate-500">Direccion sucursal</span><div>{door?.org_branch_address || "-"}</div></div>
         <div><span className="text-xs text-slate-500">RUC</span><div>{door?.org_ruc || "-"}</div></div>
+        <div><span className="text-xs text-slate-500">Nombre</span><div>{door?.nombre || "-"}</div></div>
         <div><span className="text-xs text-slate-500">Nro. Serie</span><div>{door?.nro_serie || "—"}</div></div>
         <div><span className="text-xs text-slate-500">Sector</span><div>{door?.sector || "—"}</div></div>
         <div><span className="text-xs text-slate-500">Marca</span><div>{door?.marca || "Rayflex"}</div></div>

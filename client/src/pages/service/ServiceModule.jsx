@@ -11,6 +11,7 @@ const emptyDoor = {
   placa_id: "",
   ref_int: "",
   nro_serie: "",
+  nombre: "",
   sector: "",
   marca: "Rayflex",
   modelo: "",
@@ -224,6 +225,8 @@ export default function ServiceModule() {
   const [showDoorModal, setShowDoorModal] = useState(false);
   const [doorForm, setDoorForm] = useState(emptyDoor);
   const [editingDoorId, setEditingDoorId] = useState(null);
+  const [doorModalVariant, setDoorModalVariant] = useState("center"); // center | side
+  const [activeModal, setActiveModal] = useState(null); // "case" | "door" | null
   const [selectedClient, setSelectedClient] = useState(null);
   const [clientDoorsOpen, setClientDoorsOpen] = useState(false);
   const [pendingStageMove, setPendingStageMove] = useState(null);
@@ -321,6 +324,7 @@ export default function ServiceModule() {
       const refInt = String(d.ref_int || "").toLowerCase();
       const nroSerie = String(d.nro_serie || "").toLowerCase();
       const sector = String(d.sector || "").toLowerCase();
+      const nombre = String(d.nombre || "").toLowerCase();
       const orgName = String(d.org_name || "").toLowerCase();
       const orgBranch = String(d.org_branch_name || "").toLowerCase();
       const orgId = String(d.org_id || "").toLowerCase();
@@ -331,6 +335,7 @@ export default function ServiceModule() {
         refInt.includes(q) ||
         nroSerie.includes(q) ||
         sector.includes(q) ||
+        nombre.includes(q) ||
         orgName.includes(q) ||
         orgBranch.includes(q) ||
         orgId.includes(q) ||
@@ -444,16 +449,24 @@ export default function ServiceModule() {
         alert("Org y placa son requeridos");
         return;
       }
+      let createdId = null;
       if (editingDoorId) {
         await api.put(`/service/doors/${editingDoorId}`, payload);
       } else {
-        await api.post("/service/doors", payload);
+        const res = await api.post("/service/doors", payload);
+        createdId = res?.data?.id || null;
       }
       const { data } = await api.get("/service/doors");
       setDoors(data || []);
       setShowDoorModal(false);
       setDoorForm(emptyDoor);
       setEditingDoorId(null);
+      if (showCaseModal && createdId && String(payload.org_id) === String(caseForm.org_id)) {
+        setCaseForm((prev) => ({
+          ...prev,
+          door_ids: Array.from(new Set([...(prev.door_ids || []), createdId])),
+        }));
+      }
     } catch (e) {
       alert("No se pudo crear equipo");
     }
@@ -479,6 +492,7 @@ export default function ServiceModule() {
         placa_id: door.placa_id || "",
         ref_int: door.ref_int || "",
         nro_serie: door.nro_serie || "",
+        nombre: door.nombre || "",
         sector: door.sector || "",
         marca: door.marca || "Rayflex",
         modelo: door.modelo || "",
@@ -498,6 +512,8 @@ export default function ServiceModule() {
         setOrgSearch("");
       }
       setEditingDoorId(doorId);
+      setDoorModalVariant("center");
+      setActiveModal("door");
       setShowDoorModal(true);
     } catch (e) {
       alert("No se pudo cargar el equipo");
@@ -551,10 +567,25 @@ export default function ServiceModule() {
               Planilla
             </button>
           </div>
-          <button className="btn" onClick={() => { setEditingDoorId(null); setDoorForm(emptyDoor); setShowDoorModal(true); }}>
+          <button
+            className="btn"
+            onClick={() => {
+              setEditingDoorId(null);
+              setDoorForm(emptyDoor);
+              setDoorModalVariant("center");
+              setActiveModal("door");
+              setShowDoorModal(true);
+            }}
+          >
             + Nuevo equipo
           </button>
-          <button className="btn btn-primary" onClick={() => setShowCaseModal(true)}>
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              setActiveModal("case");
+              setShowCaseModal(true);
+            }}
+          >
             + Nuevo servicio
           </button>
         </div>
@@ -715,7 +746,7 @@ export default function ServiceModule() {
           <div className="flex items-center gap-2">
             <input
               className="border rounded px-3 py-2 w-full max-w-md"
-              placeholder="Buscar por placa, serie, sector, organizacion o modelo"
+              placeholder="Buscar por placa, nombre, serie, sector, organizacion o modelo"
               value={doorSearch}
               onChange={(e) => setDoorSearch(e.target.value)}
             />
@@ -795,6 +826,7 @@ export default function ServiceModule() {
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-100 text-slate-600">
                   <tr>
+                    <th className="text-left px-3 py-2">Nombre</th>
                     <th className="text-left px-3 py-2">Placa</th>
                     <th className="text-left px-3 py-2">Reff Int</th>
                     <th className="text-left px-3 py-2">Nro. Serie</th>
@@ -809,6 +841,7 @@ export default function ServiceModule() {
                 <tbody>
                   {selectedClient.doors.map((d) => (
                     <tr key={d.id} className="border-t">
+                      <td className="px-3 py-2">{d.nombre || "---"}</td>
                       <td className="px-3 py-2">{d.placa_id}</td>
                       <td className="px-3 py-2">{d.ref_int || "---"}</td>
                       <td className="px-3 py-2">{d.nro_serie || "---"}</td>
@@ -829,7 +862,7 @@ export default function ServiceModule() {
                   ))}
                   {selectedClient.doors.length === 0 && (
                     <tr>
-                      <td colSpan={9} className="px-3 py-4 text-center text-slate-500">
+                      <td colSpan={10} className="px-3 py-4 text-center text-slate-500">
                         Sin equipos para este cliente.
                       </td>
                     </tr>
@@ -842,10 +875,24 @@ export default function ServiceModule() {
       )}
 
       {showDoorModal && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl w-full max-w-2xl p-4">
-            <div className="text-lg font-semibold mb-2">
-              {editingDoorId ? "Editar equipo" : "Nuevo equipo"}
+        <div
+          className={`fixed inset-0 ${doorModalVariant === "side" ? "pointer-events-none" : "bg-black/30 flex items-center justify-center"} ${activeModal === "door" ? "z-[70]" : "z-[60]"}`}
+        >
+          <div
+            className={`${doorModalVariant === "side" ? "absolute right-0 top-0 h-full w-full max-w-md shadow-xl border-l border-slate-200" : "rounded-xl w-full max-w-2xl"} bg-white p-4 overflow-auto pointer-events-auto`}
+            onMouseDown={() => setActiveModal("door")}
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-lg font-semibold">
+                {editingDoorId ? "Editar equipo" : "Nuevo equipo"}
+              </div>
+              <button
+                type="button"
+                className="text-sm text-slate-600 hover:underline"
+                onClick={() => setShowDoorModal(false)}
+              >
+                Cerrar
+              </button>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="space-y-1">
@@ -892,6 +939,12 @@ export default function ServiceModule() {
                 placeholder="Nro. Serie"
                 value={doorForm.nro_serie}
                 onChange={(e) => setDoorForm({ ...doorForm, nro_serie: e.target.value })}
+              />
+              <input
+                className="border rounded px-2 py-1"
+                placeholder="Nombre"
+                value={doorForm.nombre}
+                onChange={(e) => setDoorForm({ ...doorForm, nombre: e.target.value })}
               />
               <input
                 className="border rounded px-2 py-1"
@@ -1025,8 +1078,11 @@ export default function ServiceModule() {
       )}
 
       {showCaseModal && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl w-full max-w-xl p-4">
+        <div className={`fixed inset-0 bg-black/30 flex items-center justify-center ${activeModal === "case" ? "z-[70]" : "z-[60]"}`}>
+          <div
+            className="bg-white rounded-xl w-full max-w-xl p-4"
+            onMouseDown={() => setActiveModal("case")}
+          >
             <div className="text-lg font-semibold mb-2">Nuevo servicio</div>
             <div className="grid grid-cols-1 gap-3">
               <div className="space-y-1">
@@ -1057,7 +1113,26 @@ export default function ServiceModule() {
                 </datalist>
               </div>
               <div className="border rounded p-2">
-                <div className="text-xs text-slate-500 mb-2">Equipos del cliente</div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-xs text-slate-500">Equipos del cliente</div>
+                  <button
+                    type="button"
+                    className="text-xs text-blue-600 hover:underline"
+                    onClick={() => {
+                      setEditingDoorId(null);
+                      setDoorForm({
+                        ...emptyDoor,
+                        org_id: caseForm.org_id || "",
+                      });
+                      setOrgSearch(caseForm.org_label || "");
+                      setDoorModalVariant("side");
+                      setActiveModal("door");
+                      setShowDoorModal(true);
+                    }}
+                  >
+                    + Agregar equipo
+                  </button>
+                </div>
                 <div className="max-h-40 overflow-auto space-y-1">
                   {caseDoors.length === 0 && (
                     <div className="text-xs text-slate-400">No hay equipos para esta organizaciÃ³n</div>
@@ -1076,7 +1151,11 @@ export default function ServiceModule() {
                             setCaseForm({ ...caseForm, door_ids: next });
                           }}
                         />
-                        <span className="truncate">{d.placa_id || `Equipo ${d.id}`} {d.modelo ? `(${d.modelo})` : ""}</span>
+                        <span className="truncate">
+                          {(d.nombre || d.placa_id || `Equipo ${d.id}`)}
+                          {d.sector ? ` · ${d.sector}` : ""}
+                          {d.modelo ? ` (${d.modelo})` : ""}
+                        </span>
                       </label>
                     );
                   })}
@@ -1091,7 +1170,9 @@ export default function ServiceModule() {
                           to={`/service/doors/${d.id}`}
                           className="px-2 py-1 text-xs bg-slate-100 rounded hover:bg-slate-200"
                         >
-                          {d.placa_id || `Equipo ${d.id}`} {d.modelo ? `(${d.modelo})` : ""}
+                          {(d.nombre || d.placa_id || `Equipo ${d.id}`)}
+                          {d.sector ? ` · ${d.sector}` : ""}
+                          {d.modelo ? ` (${d.modelo})` : ""}
                         </Link>
                       ))}
                     </div>

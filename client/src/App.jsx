@@ -44,6 +44,10 @@ import ServiceModule from './pages/service/ServiceModule.jsx';
 import ServiceDoorDetail from './pages/service/ServiceDoorDetail.jsx';
 import ServiceCaseDetail from './pages/service/ServiceCaseDetail.jsx';
 import ServiceAdditionalQuoteEditor from './pages/service/ServiceAdditionalQuoteEditor.jsx';
+import ContainerMaster from './pages/container/ContainerMaster.jsx';
+import ContainerContracts from './pages/container/ContainerContracts.jsx';
+import ContainerAlerts from './pages/container/ContainerAlerts.jsx';
+import ContainerBilling from './pages/container/ContainerBilling.jsx';
 
 // Seguimiento
 import Invoices from './pages/Invoices.jsx';
@@ -69,6 +73,7 @@ const sidebarIcons = {
   general: String.fromCodePoint(0x1F4CB),
   kanban: String.fromCodePoint(0x1F9E9),
   cargo: String.fromCodePoint(0x1F69A),
+  container: String.fromCodePoint(0x1F4E6),
   industrial: String.fromCodePoint(0x1F3ED),
   service: String.fromCodePoint(0x1F527),
   admin: String.fromCodePoint(0x1F4C4),
@@ -153,6 +158,31 @@ function Layout({ children }) {
             Workspaces
           </div>
           <SideLink to="/workspace/atm-cargo" icon={sidebarIcons.cargo} label="ATM CARGO" />
+          <div className="relative group/container-nav">
+            <SideLink to="/workspace/atm-container" icon={sidebarIcons.container} label="ATM CONTAINER" />
+            <div className="hidden group-hover/container-nav:block ml-8 mt-1 space-y-1">
+              <SideLink
+                to="/container/master"
+                icon={sidebarIcons.container}
+                label="Maestro de contenedores"
+              />
+              <SideLink
+                to="/container/contracts"
+                icon={sidebarIcons.quotes}
+                label="Contratos container"
+              />
+              <SideLink
+                to="/container/alerts"
+                icon={sidebarIcons.followup}
+                label="Alertas container"
+              />
+              <SideLink
+                to="/container/billing"
+                icon={sidebarIcons.admin}
+                label="Facturación mensual"
+              />
+            </div>
+          </div>
           {/* Workspace industrial unico */}
           <SideLink to="/workspace/atm-industrial" icon={sidebarIcons.industrial} label="ATM INDUSTRIAL" />
           {(role === 'admin' || role === 'service') && (
@@ -322,6 +352,10 @@ export default function App() {
                 {/* Workspaces */}
                 <Route path="/workspace/:key" element={<Workspace />} />
                 <Route path="/workspace/:key/table" element={<WorkspaceTable />} />
+                <Route path="/container/master" element={<ContainerMaster />} />
+                <Route path="/container/contracts" element={<ContainerContracts />} />
+                <Route path="/container/alerts" element={<ContainerAlerts />} />
+                <Route path="/container/billing" element={<ContainerBilling />} />
 
                 {/* ---- Secciones restringidas a admin/manager ---- */}
                 <Route

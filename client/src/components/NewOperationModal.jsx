@@ -23,9 +23,17 @@ const Select = ({ children, ...props }) => (
 const LOAD_TYPES = {
   AEREO: ["LCL"],
   MARITIMO: ["FCL", "LCL"],
-  TERRESTRE: ["FTL", "LTL"],
-  MULTIMODAL: ["N/A"],
+  TERRESTRE: ["FTL", "LTL", "FCL"],
+  MULTIMODAL: ["FCL", "N/A"],
 };
+
+const CONTAINER_TYPES = [
+  { value: "40 ST", label: "40 ST" },
+  { value: "20 ST", label: "20 ST" },
+  { value: "Reefer 40", label: "Reefer 40" },
+  { value: "Reefer 20", label: "Reefer 20" },
+  { value: "HC", label: "HC" },
+];
 
 // Fallback para Tipo de operación
 const OP_TYPE_FALLBACK = [
@@ -378,6 +386,18 @@ export default function NewOperationModal({
   const [countries] = useState(FALLBACK_COUNTRIES);
   const [cities] = useState(FALLBACK_CITIES);
 
+  const isFcl = String(clase || "").toUpperCase() === "FCL";
+
+  useEffect(() => {
+    if (isFcl) {
+      setUnidad("Contenedores");
+      setContainerRows((prev) => (prev && prev.length ? prev : [{ type: "", qty: "" }]));
+    } else {
+      setContainerRows([]);
+    }
+  }, [isFcl]);
+
+
   // Tipo de operación
   const [tipoOp, setTipoOp] = useState(""); // IMPORT | EXPORT | EXTERIOR
   const [tipoOpManual, setTipoOpManual] = useState(false);
@@ -388,6 +408,7 @@ export default function NewOperationModal({
   const [unidad, setUnidad] = useState("Bultos");
   const [peso, setPeso] = useState("");
   const [volumen, setVolumen] = useState("");
+  const [containerRows, setContainerRows] = useState([]);
 
   // Negocio/CRM
   const [businessUnits, setBusinessUnits] = useState([]);
@@ -683,7 +704,38 @@ export default function NewOperationModal({
     setContactOpen(false);
   }
 
-  async function handleCreate(e) {
+  const addContainerRow = () => setContainerRows((prev) => ([...(prev || []), { type: '', qty: '', cntr_no: '', seal_no: '' }]));
+const setContainerRow = (idx, key, value) => {
+  setContainerRows((prev) => {
+    const arr = [...(prev || [])];
+    arr[idx] = { ...(arr[idx] || {}), [key]: value };
+    return arr;
+  });
+};
+const removeContainerRow = (idx) => {
+  setContainerRows((prev) => {
+    const arr = [...(prev || [])];
+    arr.splice(idx, 1);
+    return arr;
+  });
+};
+  const normalizedContainers = () =>
+  (containerRows || [])
+    .map((r) => ({
+      type: String(r?.type || '').trim(),
+      qty: String(r?.qty || '').trim(),
+      cntr_no: String(r?.cntr_no || '').trim(),
+      seal_no: String(r?.seal_no || '').trim(),
+    }))
+    .filter((r) => r.type && Number(r.qty || 0) > 0)
+    .map((r) => ({
+      type: r.type,
+      qty: Number(r.qty || 0),
+      cntr_no: r.cntr_no || '',
+      seal_no: r.seal_no || ''
+    }));
+
+async function handleCreate(e) {
     e?.preventDefault?.();
     if (!canSave || saving) return;
     setSaving(true);
@@ -769,7 +821,37 @@ export default function NewOperationModal({
       }
       await Promise.all(cfPayloads.map((p) => api.post(`/deals/${dealId}/custom-fields`, p)));
 
+
+      // Guardar snapshot por modalidad (CF JSON) para que quede pre-cargado en el detalle
+      const saveSnapshot = async (modalKey, payload) => {
+        try {
+          await api.post(`/deals/${dealId}/custom-fields`, {
+            key: modalKey,
+            label: `OP ${modalKey.replace('op_', '').replace('_json', '').toUpperCase()} JSON`,
+            type: 'json',
+            value: JSON.stringify(payload || {}),
+          });
+        } catch {
+          // no-op
+        }
+      };
+
+      const containersPayload = isFcl ? normalizedContainers() : [];
+
+
+
       if (modo === "MARITIMO") {
+        const oceanPayload = {
+          load_type: clase,
+          pol: origen || "",
+          pod: destino || "",
+          commodity: mercaderia || "",
+          packages: cantidad || "",
+          weight_kg: peso || "",
+          volume_m3: volumen || "",
+          containers_json: containersPayload,
+        };
+        await saveSnapshot('op_ocean_json', oceanPayload);
         await api.put(`/operations/${dealId}/ocean`, {
           load_type: clase,
           pol: origen || "",
@@ -778,8 +860,20 @@ export default function NewOperationModal({
           packages: cantidad || "",
           weight_kg: peso || "",
           volume_m3: volumen || "",
+          containers_json: containersPayload,
         }).catch(() => {});
       } else if (modo === "TERRESTRE") {
+        const roadPayload = {
+          cargo_class: clase,
+          origin_city: origen || "",
+          destination_city: destino || "",
+          commodity: mercaderia || "",
+          packages: cantidad || "",
+          weight_kg: peso || "",
+          volume_m3: volumen || "",
+          containers_json: containersPayload,
+        };
+        await saveSnapshot('op_road_json', roadPayload);
         await api.put(`/operations/${dealId}/road`, {
           cargo_class: clase,
           origin_city: origen || "",
@@ -788,6 +882,7 @@ export default function NewOperationModal({
           packages: cantidad || "",
           weight_kg: peso || "",
           volume_m3: volumen || "",
+          containers_json: containersPayload,
         }).catch(() => {});
       } else if (modo === "AEREO") {
         await api.put(`/operations/${dealId}/air`, {
@@ -797,6 +892,28 @@ export default function NewOperationModal({
           packages: cantidad || "",
           weight_gross_kg: peso || "",
           volume_m3: volumen || "",
+        }).catch(() => {});
+      } else if (modo === "MULTIMODAL") {
+        const multiPayload = {
+          cargo_type: clase,
+          origin_port: origen || "",
+          destination_port: destino || "",
+          commodity: mercaderia || "",
+          packages: cantidad || "",
+          weight_gross_kg: peso || "",
+          volume_m3: volumen || "",
+          containers_json: containersPayload,
+        };
+        await saveSnapshot('op_multimodal_json', multiPayload);
+        await api.put(`/operations/${dealId}/multimodal`, {
+          cargo_type: clase,
+          origin_port: origen || "",
+          destination_port: destino || "",
+          commodity: mercaderia || "",
+          packages: cantidad || "",
+          weight_gross_kg: peso || "",
+          volume_m3: volumen || "",
+          containers_json: containersPayload,
         }).catch(() => {});
       }
 
@@ -1085,12 +1202,59 @@ export default function NewOperationModal({
               </label>
               <label className="text-sm">
                 Unidad
-                <Select value={unidad} onChange={(e) => setUnidad(e.target.value)}>
-                  <option value="Bultos">Bultos</option>
-                  <option value="Cajas">Cajas</option>
-                  <option value="Pallets">Pallets</option>
+                <Select value={unidad} onChange={(e) => setUnidad(e.target.value)} disabled={isFcl}>
+                  {isFcl ? (
+                    <option value="Contenedores">Contenedores</option>
+                  ) : (
+                    <>
+                      <option value="Bultos">Bultos</option>
+                      <option value="Cajas">Cajas</option>
+                      <option value="Pallets">Pallets</option>
+                    </>
+                  )}
                 </Select>
               </label>
+
+              {isFcl && (
+                <div className="col-span-2 bg-white border rounded-lg p-2">
+                  <div className="text-sm font-medium mb-2">Contenedores</div>
+                  <div className="grid gap-2">
+                    {(containerRows || []).map((r, idx) => (
+                      <div key={`cntr-${idx}`} className="grid grid-cols-[1fr_110px_auto] gap-2 items-end">
+                        <label className="text-sm">
+                          Tipo de contenedor
+                          <Select value={r.type || ""} onChange={(e) => setContainerRow(idx, "type", e.target.value)}>
+                            <option value="">Elegir...</option>
+                            {CONTAINER_TYPES.map((t) => (
+                              <option key={t.value} value={t.value}>{t.label}</option>
+                            ))}
+                          </Select>
+                        </label>
+                        <label className="text-sm">
+                          Cantidad
+                          <Input value={r.qty || ""} onChange={(e) => setContainerRow(idx, "qty", e.target.value)} placeholder="1" />
+                        </label>
+                        <button
+                          type="button"
+                          className="px-2 py-1 text-sm rounded border hover:bg-slate-50"
+                          onClick={() => removeContainerRow(idx)}
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                    ))}
+                    <div>
+                      <button
+                        type="button"
+                        className="px-3 py-1.5 text-sm rounded border border-dashed"
+                        onClick={addContainerRow}
+                      >
+                        + Agregar contenedor
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
               <label className="text-sm">
                 Peso (kg)
                 <Input value={peso} onChange={(e) => setPeso(e.target.value)} placeholder="Ej: 2500" />

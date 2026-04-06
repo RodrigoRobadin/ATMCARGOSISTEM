@@ -105,7 +105,7 @@ function computeDespacho(inputs, ofertaTotals) {
 
   const imponibleUsd = n(ofertaTotals?.sum_doors_usd) + n(inputs.freight_international_total_usd) + n(inputs.insurance_sale_total_usd);
   const tcAduana = n(inputs.exchange_rate_customs_gs_per_usd); // ej 7800
-  const tcInterno = n(inputs.exchange_rate_customs_internal_gs_per_usd || 1);
+  const tcInterno = n(inputs.exchange_rate_customs_internal_gs_per_usd ?? 1);
 
   // Acumulamos base IVA (en USD) con los que tienen include_in_iva_base
   let ivaBaseUsd = imponibleUsd;

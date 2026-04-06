@@ -78,7 +78,7 @@ router.get('/', requireAuth, async (req, res) => {
     const params = [];
     if (q) {
       const like = `%${q}%`;
-      where.push('(name LIKE ? OR razon_social LIKE ? OR ruc LIKE ? OR industry LIKE ?)');
+      where.push('(o.name LIKE ? OR o.razon_social LIKE ? OR o.ruc LIKE ? OR o.industry LIKE ?)');
       params.push(like, like, like, like);
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';

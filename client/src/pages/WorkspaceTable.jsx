@@ -4,6 +4,7 @@ import { useParams, Link } from "react-router-dom";
 import { api } from "../api";
 import NewOperationModal from "../components/NewOperationModal";
 import NewIndustrialOperationModal from "../components/NewIndustrialOperationModal";
+import NewContainerOperationModal from "../components/NewContainerOperationModal";
 
 /* ---------- UI ---------- */
 function FunnelIcon({ className = "w-4 h-4" }) {
@@ -199,6 +200,7 @@ export default function WorkspaceTable() {
     key === "atm-industrial" ||
     key === "industrial-rayflex" ||
     key === "industrial-boplan";
+  const isContainer = key === "atm-container";
 
   /* ---------- Carga base ---------- */
   useEffect(() => {
@@ -546,6 +548,25 @@ export default function WorkspaceTable() {
             stages={stages}
             defaultBusinessUnitId={bu.id}
             industrialKey={key}
+            onCreated={async () => {
+              try {
+                const { data: d } = await api.get("/deals", {
+                  params: {
+                    pipeline_id: pipelineId,
+                    business_unit_id: bu.id,
+                  },
+                });
+                setDeals(Array.isArray(d) ? d : []);
+              } catch {}
+              setOpenModal(false);
+            }}
+          />
+        ) : isContainer ? (
+          <NewContainerOperationModal
+            onClose={() => setOpenModal(false)}
+            pipelineId={pipelineId}
+            stages={stages}
+            defaultBusinessUnitId={bu.id}
             onCreated={async () => {
               try {
                 const { data: d } = await api.get("/deals", {

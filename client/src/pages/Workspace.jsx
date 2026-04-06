@@ -5,6 +5,7 @@ import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { api } from "../api";
 import NewOperationModal from "../components/NewOperationModal";
 import NewIndustrialOperationModal from "../components/NewIndustrialOperationModal";
+import NewContainerOperationModal from "../components/NewContainerOperationModal";
 import { useAuth } from "../auth.jsx";
 
 /* helpers */
@@ -86,6 +87,8 @@ export default function Workspace() {
 
   const isIndustrial =
     key === "atm-industrial" || (bu && bu.key_slug === "atm-industrial");
+  const isContainer =
+    key === "atm-container" || (bu && bu.key_slug === "atm-container");
 
   useEffect(() => {
     (async () => {
@@ -500,6 +503,17 @@ export default function Workspace() {
       {openModal &&
         (isIndustrial ? (
           <NewIndustrialOperationModal
+            onClose={() => setOpenModal(false)}
+            pipelineId={pipelineId}
+            stages={stages}
+            defaultBusinessUnitId={bu.id}
+            onCreated={async () => {
+              await refresh();
+              setOpenModal(false);
+            }}
+          />
+        ) : isContainer ? (
+          <NewContainerOperationModal
             onClose={() => setOpenModal(false)}
             pipelineId={pipelineId}
             stages={stages}

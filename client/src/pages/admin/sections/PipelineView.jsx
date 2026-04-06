@@ -3,6 +3,7 @@ import React, { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../../api";
 import InvoiceCreateModal from "../../../components/InvoiceCreateModal.jsx";
+import { useAuth } from "../../../auth.jsx";
 
 const fmtDateTime = (v) => {
   if (!v) return "—";
@@ -22,6 +23,8 @@ export default function PipelineView({
   onChangeStage,
   onOpenDocs,
 }) {
+  const { user } = useAuth();
+  const isAdmin = String(user?.role || "").toLowerCase() === "admin";
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [selectedDealId, setSelectedDealId] = useState(null);
   const [selectedServiceCaseId, setSelectedServiceCaseId] = useState(null);
@@ -125,21 +128,27 @@ export default function PipelineView({
                         Documentos
                       </button>
                     )}
-                    <button
-                      className="btn bg-green-600 text-white hover:bg-green-700"
-                      onClick={() => {
-                        if (op.op_type === "service") {
-                          setSelectedServiceCaseId(op.id);
-                          setSelectedDealId(null);
-                        } else {
-                          setSelectedDealId(op.id);
-                          setSelectedServiceCaseId(null);
-                        }
-                        setShowInvoiceModal(true);
-                      }}
-                    >
-                      Facturar
-                    </button>
+                    {isAdmin ? (
+                      <button
+                        className="btn bg-green-600 text-white hover:bg-green-700"
+                        onClick={() => {
+                          if (op.op_type === "service") {
+                            setSelectedServiceCaseId(op.id);
+                            setSelectedDealId(null);
+                          } else {
+                            setSelectedDealId(op.id);
+                            setSelectedServiceCaseId(null);
+                          }
+                          setShowInvoiceModal(true);
+                        }}
+                      >
+                        Facturar
+                      </button>
+                    ) : (
+                      <span className="btn bg-slate-50 text-slate-600 border border-slate-200 cursor-default">
+                        Pendiente de administracion
+                      </span>
+                    )}
                   </div>
                 </div>
               ))}

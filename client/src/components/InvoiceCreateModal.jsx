@@ -1,12 +1,22 @@
 ﻿// client/src/components/InvoiceCreateModal.jsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { api, fetchUsersByRole } from '../api';
 
-export default function InvoiceCreateModal({ defaultDealId, defaultServiceCaseId, defaultServiceQuoteAdditionId, onClose, onSuccess }) {
+export default function InvoiceCreateModal({
+  defaultDealId,
+  defaultServiceCaseId,
+  defaultServiceQuoteAdditionId,
+  defaultContainerBillingCycleId,
+  defaultContainerBillingCycle,
+  onClose,
+  onSuccess
+}) {
+  const [quoteCurrencyInfo, setQuoteCurrencyInfo] = useState({ currency: 'USD', exchange_rate: 1 });
   const [form, setForm] = useState({
     deal_id: defaultDealId ? String(defaultDealId) : '',
     service_case_id: defaultServiceCaseId ? String(defaultServiceCaseId) : '',
     service_quote_addition_id: defaultServiceQuoteAdditionId ? String(defaultServiceQuoteAdditionId) : '',
+    container_billing_cycle_id: defaultContainerBillingCycleId ? String(defaultContainerBillingCycleId) : '',
     due_date: '',
     payment_terms: '30 dias',
     notes: '',
@@ -31,11 +41,48 @@ export default function InvoiceCreateModal({ defaultDealId, defaultServiceCaseId
   const [executives, setExecutives] = useState([]);
   const [ocDocs, setOcDocs] = useState([]);
   const [dealOrg, setDealOrg] = useState(null);
+  const [containerBilling, setContainerBilling] = useState(defaultContainerBillingCycle || null);
   const [suggestedNumber, setSuggestedNumber] = useState("");
   const [timbreFetched, setTimbreFetched] = useState(false);
   const [businessUnitKey, setBusinessUnitKey] = useState("");
   const [dueDateTouched, setDueDateTouched] = useState(false);
   const [currencyTouched, setCurrencyTouched] = useState(false);
+  const isContainerBilling = Boolean(defaultContainerBillingCycleId || form.container_billing_cycle_id);
+  const isContainerInitialInvoice = !isContainerBilling && String(businessUnitKey || "").toLowerCase() === "atm-container";
+  const containerSourceLabel = useMemo(() => {
+    if (!containerBilling) return "";
+    return [
+      containerBilling.contract_no ? `Contrato ${containerBilling.contract_no}` : null,
+      containerBilling.cycle_label ? `Ciclo ${containerBilling.cycle_label}` : null,
+      containerBilling.reference || null,
+    ].filter(Boolean).join(" · ");
+  }, [containerBilling]);
+
+  const normalizeCurrencyCode = (value) => {
+    const code = String(value || 'USD').toUpperCase();
+    return code === 'GS' ? 'PYG' : code;
+  };
+
+  const getSuggestedExchangeRate = (info, fallback = 1) => {
+    const sourceCurrency = normalizeCurrencyCode(info?.currency);
+    const sourceRate = Number(info?.exchange_rate || 0) || 0;
+    const fallbackRate = Number(fallback || 0) || 0;
+    if (sourceCurrency === 'PYG') {
+      if (sourceRate > 1) return sourceRate;
+      if (fallbackRate > 1) return fallbackRate;
+      return '';
+    }
+    if (sourceRate > 1) return sourceRate;
+    if (fallbackRate > 1) return fallbackRate;
+    return 1;
+  };
+
+  const requiresExchangeRate = useMemo(() => {
+    const sourceCurrency = normalizeCurrencyCode(quoteCurrencyInfo.currency);
+    const targetCurrency = normalizeCurrencyCode(form.currency_code);
+    const currencies = new Set(['USD', 'PYG']);
+    return currencies.has(sourceCurrency) && currencies.has(targetCurrency) && sourceCurrency !== targetCurrency;
+  }, [form.currency_code, quoteCurrencyInfo]);
 
   const toISO = (val) => {
     if (!val) return "";
@@ -48,6 +95,9 @@ export default function InvoiceCreateModal({ defaultDealId, defaultServiceCaseId
 
   useEffect(() => {
     loadExecutives();
+    if (defaultContainerBillingCycleId) {
+      preloadContainerBillingData(defaultContainerBillingCycleId, defaultContainerBillingCycle);
+    }
     if (defaultDealId) {
       preloadDealData(defaultDealId);
     }
@@ -58,20 +108,34 @@ export default function InvoiceCreateModal({ defaultDealId, defaultServiceCaseId
       setForm((prev) => ({ ...prev, service_quote_addition_id: String(defaultServiceQuoteAdditionId) }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaultDealId, defaultServiceCaseId, defaultServiceQuoteAdditionId]);
+  }, [defaultDealId, defaultServiceCaseId, defaultServiceQuoteAdditionId, defaultContainerBillingCycleId]);
 
   useEffect(() => {
-    const dealId = defaultDealId || form.deal_id || undefined;
+    const dealId = defaultDealId || defaultContainerBillingCycle?.deal_id || containerBilling?.deal_id || form.deal_id || undefined;
     const serviceCaseId = defaultServiceCaseId || form.service_case_id || undefined;
     loadDefaults(dealId, serviceCaseId, businessUnitKey);
-    if (dealId) loadQuoteCurrency(dealId);
+    if (defaultContainerBillingCycleId || containerBilling?.id) {
+      loadContainerBillingCurrency(defaultContainerBillingCycle || containerBilling);
+    } else if (dealId) {
+      loadQuoteCurrency(dealId);
+    }
     if (defaultServiceQuoteAdditionId) {
       loadServiceAdditionQuoteCurrency(defaultServiceQuoteAdditionId);
     } else if (serviceCaseId) {
       loadServiceQuoteCurrency(serviceCaseId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaultDealId, defaultServiceCaseId, defaultServiceQuoteAdditionId, form.deal_id, form.service_case_id, businessUnitKey, currencyTouched]);
+  }, [defaultDealId, defaultServiceCaseId, defaultServiceQuoteAdditionId, defaultContainerBillingCycleId, defaultContainerBillingCycle, containerBilling, form.deal_id, form.service_case_id, businessUnitKey, currencyTouched]);
+
+  useEffect(() => {
+    if (!isContainerInitialInvoice) return;
+    setForm((prev) => ({
+      ...prev,
+      mode: "total",
+      percentage: "100",
+      notes: prev.notes || "Factura inicial ATM CONTAINER. Incluye el primer mes de alquiler.",
+    }));
+  }, [isContainerInitialInvoice]);
 
   // Recalcula vencimiento según términos de pago (días) si no fue tocado manualmente
   useEffect(() => {
@@ -132,6 +196,33 @@ export default function InvoiceCreateModal({ defaultDealId, defaultServiceCaseId
     }
   }
 
+  async function preloadContainerBillingData(billingCycleId, seed = null) {
+    try {
+      const row = seed || (await api.get(`/container/billing/${billingCycleId}`)).data;
+      if (!row) return;
+      setContainerBilling(row);
+      setBusinessUnitKey(row.business_unit_key || "atm-container");
+      setForm((prev) => ({
+        ...prev,
+        deal_id: prev.deal_id || String(row.deal_id || ''),
+        container_billing_cycle_id: String(row.id || billingCycleId),
+        due_date: prev.due_date || row.due_date || '',
+        payment_terms: prev.payment_terms || 'mensual',
+        notes: prev.notes || `Mensualidad ${row.cycle_label || ''}`.trim(),
+        payment_condition: prev.payment_condition || 'credito',
+        currency_code: prev.currency_code || row.currency_code || 'PYG',
+        exchange_rate: prev.exchange_rate || 1,
+        customer_doc: prev.customer_doc || row.client_ruc || '',
+        customer_doc_type: prev.customer_doc_type || 'RUC',
+        customer_email: prev.customer_email || row.client_email || '',
+        customer_address: prev.customer_address || row.client_address || '',
+        purchase_order_ref: prev.purchase_order_ref || row.contract_no || '',
+      }));
+    } catch (err) {
+      console.error('No se pudo precargar mensualidad container', err);
+    }
+  }
+
   async function preloadServiceCaseData(serviceCaseId) {
     try {
       const { data } = await api.get(`/service/cases/${serviceCaseId}`);
@@ -172,12 +263,14 @@ export default function InvoiceCreateModal({ defaultDealId, defaultServiceCaseId
       const inputs = data?.quote?.inputs || data?.inputs || {};
       const curr = String(inputs.operation_currency || 'USD').toUpperCase();
       const rate = Number(inputs.exchange_rate_operation_sell_usd || 1) || 1;
+      setQuoteCurrencyInfo({ currency: curr || 'USD', exchange_rate: rate || 1 });
       setForm((prev) => {
         if (currencyTouched) return prev;
+        const suggestedRate = getSuggestedExchangeRate({ currency: curr, exchange_rate: rate }, prev.exchange_rate);
         return {
           ...prev,
           currency_code: curr || prev.currency_code,
-          exchange_rate: rate || prev.exchange_rate,
+          exchange_rate: suggestedRate === '' ? prev.exchange_rate : suggestedRate,
         };
       });
     } catch (err) {
@@ -191,12 +284,14 @@ export default function InvoiceCreateModal({ defaultDealId, defaultServiceCaseId
       const inputs = data?.inputs || {};
       const curr = String(inputs.operation_currency || 'USD').toUpperCase();
       const rate = Number(inputs.exchange_rate_operation_sell_usd || 1) || 1;
+      setQuoteCurrencyInfo({ currency: curr || 'USD', exchange_rate: rate || 1 });
       setForm((prev) => {
         if (currencyTouched) return prev;
+        const suggestedRate = getSuggestedExchangeRate({ currency: curr, exchange_rate: rate }, prev.exchange_rate);
         return {
           ...prev,
           currency_code: curr || prev.currency_code,
-          exchange_rate: rate || prev.exchange_rate,
+          exchange_rate: suggestedRate === '' ? prev.exchange_rate : suggestedRate,
         };
       });
     } catch (err) {
@@ -219,18 +314,44 @@ export default function InvoiceCreateModal({ defaultDealId, defaultServiceCaseId
           rate = Number(baseInputs.exchange_rate_operation_sell_usd || 1) || 1;
         }
       }
+      setQuoteCurrencyInfo({ currency: curr || 'USD', exchange_rate: rate || 1 });
       setForm((prev) => {
         if (currencyTouched) return prev;
+        const suggestedRate = getSuggestedExchangeRate({ currency: curr, exchange_rate: rate }, prev.exchange_rate);
         return {
           ...prev,
           currency_code: curr || prev.currency_code,
-          exchange_rate: rate || prev.exchange_rate,
+          exchange_rate: suggestedRate === '' ? prev.exchange_rate : suggestedRate,
         };
       });
       setCurrencyTouched(true);
     } catch (err) {
       console.warn('No se pudo cargar moneda desde adicional', err?.message);
     }
+  }
+
+  async function loadContainerBillingCurrency(seed = null) {
+    const row = seed || containerBilling;
+    if (!row) return;
+    setQuoteCurrencyInfo({
+      currency: String(row.currency_code || 'PYG').toUpperCase(),
+      exchange_rate: Number(row.exchange_rate || row.contract_exchange_rate || 0) || 0,
+    });
+    setForm((prev) => {
+      if (currencyTouched) return prev;
+      const suggestedRate = getSuggestedExchangeRate(
+        {
+          currency: String(row.currency_code || 'PYG').toUpperCase(),
+          exchange_rate: Number(row.exchange_rate || row.contract_exchange_rate || 0) || 0,
+        },
+        prev.exchange_rate
+      );
+      return {
+        ...prev,
+        currency_code: String(row.currency_code || 'PYG').toUpperCase(),
+        exchange_rate: suggestedRate === '' ? prev.exchange_rate : suggestedRate,
+      };
+    });
   }
 
   async function loadDefaults(dealId, serviceCaseId, buKeyHint = "") {
@@ -307,14 +428,20 @@ export default function InvoiceCreateModal({ defaultDealId, defaultServiceCaseId
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!form.deal_id && !form.service_case_id) {
-      alert('Ingresa el ID de la operación o del servicio');
+    if (!form.deal_id && !form.service_case_id && !form.container_billing_cycle_id) {
+      alert('Ingresa el ID de la operación, del servicio o una mensualidad container');
       return;
     }
 
     const pct = form.mode === 'percentage' ? Number(form.percentage) : 100;
     if (Number.isNaN(pct) || pct <= 0 || pct > 100) {
       alert('Ingresa un porcentaje valido entre 1 y 100');
+      return;
+    }
+
+    const fxValue = Number(form.exchange_rate || 0) || 0;
+    if (requiresExchangeRate && fxValue <= 1) {
+      alert('Carga un tipo de cambio valido mayor a 1 para convertir entre PYG y USD.');
       return;
     }
 
@@ -325,8 +452,9 @@ export default function InvoiceCreateModal({ defaultDealId, defaultServiceCaseId
         deal_id: form.deal_id ? Number(form.deal_id) : null,
         service_case_id: form.service_case_id ? Number(form.service_case_id) : null,
         service_quote_addition_id: form.service_quote_addition_id ? Number(form.service_quote_addition_id) : null,
+        container_billing_cycle_id: form.container_billing_cycle_id ? Number(form.container_billing_cycle_id) : null,
         percentage: pct,
-        exchange_rate: Number(form.exchange_rate) || 1,
+        exchange_rate: fxValue || 1,
       };
       const { data } = await api.post('/invoices', payload);
       alert('Factura creada correctamente');
@@ -348,8 +476,45 @@ export default function InvoiceCreateModal({ defaultDealId, defaultServiceCaseId
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {isContainerBilling && (
+            <div className="rounded-lg border bg-slate-50 px-4 py-3 text-sm">
+              <div className="font-medium text-slate-800">Origen de facturación</div>
+              <div className="text-slate-600 mt-1">{containerSourceLabel || "Mensualidad ATM CONTAINER"}</div>
+            </div>
+          )}
+          {isContainerInitialInvoice && (
+            <div className="rounded-lg border bg-amber-50 px-4 py-3 text-sm">
+              <div className="font-medium text-amber-900">Factura inicial ATM CONTAINER</div>
+              <div className="text-amber-800 mt-1">
+                Esta factura sale desde Administracion sobre la operacion aprobada y cubre el primer mes de alquiler.
+              </div>
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {defaultServiceCaseId ? (
+            {isContainerBilling ? (
+              <>
+                <div className="md:col-span-1">
+                  <label className="block text-sm font-medium mb-1">ID de mensualidad</label>
+                  <input
+                    type="number"
+                    className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100"
+                    value={form.container_billing_cycle_id}
+                    disabled
+                  />
+                  <p className="text-xs text-slate-500 mt-1">Se genera desde ATM CONTAINER.</p>
+                </div>
+                <div className="md:col-span-1">
+                  <label className="block text-sm font-medium mb-1">ID de operacion (deal)</label>
+                  <input
+                    type="number"
+                    className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100"
+                    value={form.deal_id}
+                    disabled
+                  />
+                  <p className="text-xs text-slate-500 mt-1">Operación vinculada a la mensualidad.</p>
+                </div>
+              </>
+            ) : defaultServiceCaseId ? (
               <div className="md:col-span-1">
                 <label className="block text-sm font-medium mb-1">ID de servicio (mantenimiento)</label>
                 <input
@@ -444,6 +609,7 @@ export default function InvoiceCreateModal({ defaultDealId, defaultServiceCaseId
               <select
                 className="w-full border rounded-lg px-3 py-2"
                 value={form.mode}
+                disabled={isContainerBilling || isContainerInitialInvoice}
                 onChange={(e) => {
                   const mode = e.target.value;
                   if (mode === "total") {
@@ -452,14 +618,26 @@ export default function InvoiceCreateModal({ defaultDealId, defaultServiceCaseId
                     setForm((prev) => ({ ...prev, mode, percentage: prev.percentage || "60" }));
                   }
                 }}
-              >
-                <option value="total">100% del presupuesto</option>
-                <option value="percentage">Porcentaje</option>
-              </select>
-            </div>
+                >
+                  <option value="total">{isContainerBilling ? "Monto de mensualidad" : "100% del presupuesto"}</option>
+                  {!isContainerBilling && !isContainerInitialInvoice && <option value="percentage">Porcentaje</option>}
+                </select>
+              </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Porcentaje a facturar</label>
-              {form.mode === "percentage" ? (
+              <label className="block text-sm font-medium mb-1">
+                {isContainerBilling ? "Monto mensual" : isContainerInitialInvoice ? "Factura inicial" : "Porcentaje a facturar"}
+              </label>
+              {isContainerBilling ? (
+                <input
+                  type="text"
+                  className="w-full border rounded-lg px-3 py-2 bg-slate-100"
+                  value={containerBilling ? `${containerBilling.currency_code || "PYG"} ${Number(containerBilling.amount || 0).toLocaleString(String(containerBilling.currency_code || "PYG").toUpperCase() === "USD" ? "en-US" : "es-PY", {
+                    minimumFractionDigits: String(containerBilling.currency_code || "PYG").toUpperCase() === "USD" ? 2 : 0,
+                    maximumFractionDigits: String(containerBilling.currency_code || "PYG").toUpperCase() === "USD" ? 2 : 0,
+                  })}` : ""}
+                  readOnly
+                />
+              ) : form.mode === "percentage" && !isContainerInitialInvoice ? (
                 <select
                   className="w-full border rounded-lg px-3 py-2"
                   value={form.percentage}
@@ -546,7 +724,19 @@ export default function InvoiceCreateModal({ defaultDealId, defaultServiceCaseId
                 value={form.currency_code}
                 onChange={(e) => {
                   setCurrencyTouched(true);
-                  setForm({ ...form, currency_code: e.target.value });
+                  const nextCurrency = e.target.value;
+                  const currentRate = Number(form.exchange_rate || 0) || 0;
+                  const suggestedRate = getSuggestedExchangeRate(quoteCurrencyInfo, currentRate);
+                  setForm({
+                    ...form,
+                    currency_code: nextCurrency,
+                    exchange_rate:
+                      currentRate > 1
+                        ? currentRate
+                        : suggestedRate === ''
+                        ? ''
+                        : suggestedRate,
+                  });
                 }}
               >
                 <option value="USD">USD</option>
@@ -565,6 +755,11 @@ export default function InvoiceCreateModal({ defaultDealId, defaultServiceCaseId
                   setForm({ ...form, exchange_rate: e.target.value });
                 }}
               />
+              <p className="text-xs text-slate-500 mt-1">
+                {requiresExchangeRate
+                  ? 'Se usa para convertir entre PYG y USD.'
+                  : 'Referencia cambiaria de la factura.'}
+              </p>
             </div>
           </div>
 

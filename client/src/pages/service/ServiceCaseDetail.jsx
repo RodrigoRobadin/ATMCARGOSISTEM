@@ -177,6 +177,7 @@ export default function ServiceCaseDetail() {
     if (!q) return list;
     return list.filter((d) => {
       return (
+        String(d.nombre || "").toLowerCase().includes(q) ||
         String(d.placa_id || "").toLowerCase().includes(q) ||
         String(d.modelo || "").toLowerCase().includes(q) ||
         String(d.marca || "").toLowerCase().includes(q) ||
@@ -776,7 +777,11 @@ export default function ServiceCaseDetail() {
                   </div>
                   <div>
                     <div className="text-xs text-slate-500">Puerta principal</div>
-                    <div>{data.placa_id || "-"} {data.modelo ? `(${data.modelo})` : ""}</div>
+                    <div>
+                      {data.nombre || data.placa_id || "-"}
+                      {data.sector ? ` · ${data.sector}` : ""}
+                      {data.modelo ? ` (${data.modelo})` : ""}
+                    </div>
                   </div>
                   <div>
                     <div className="text-xs text-slate-500">Dimensiones</div>
@@ -822,7 +827,9 @@ export default function ServiceCaseDetail() {
                         to={`/service/doors/${d.id}`}
                         className="px-2 py-1 text-xs bg-slate-100 rounded hover:bg-slate-200"
                       >
-                        {d.placa_id || `Puerta ${d.id}`} {d.modelo ? `(${d.modelo})` : ""}
+                        {(d.nombre || d.placa_id || `Puerta ${d.id}`)}
+                        {d.sector ? ` · ${d.sector}` : ""}
+                        {d.modelo ? ` (${d.modelo})` : ""}
                       </Link>
                     ))}
                   </div>
@@ -851,7 +858,9 @@ export default function ServiceCaseDetail() {
                                 }}
                               />
                               <span className="truncate">
-                                {d.placa_id || `Puerta ${d.id}`} {d.modelo ? `(${d.modelo})` : ""}
+                                {(d.nombre || d.placa_id || `Puerta ${d.id}`)}
+                                {d.sector ? ` · ${d.sector}` : ""}
+                                {d.modelo ? ` (${d.modelo})` : ""}
                               </span>
                             </label>
                           );

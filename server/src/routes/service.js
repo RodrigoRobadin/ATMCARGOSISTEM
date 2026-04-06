@@ -131,6 +131,7 @@ async function ensureServiceTables() {
       placa_id VARCHAR(120) NOT NULL,
       ref_int VARCHAR(120) NULL,
       nro_serie VARCHAR(120) NULL,
+      nombre VARCHAR(120) NULL,
       sector VARCHAR(120) NULL,
       marca VARCHAR(120) DEFAULT 'Rayflex',
       modelo VARCHAR(120) NULL,
@@ -154,6 +155,9 @@ async function ensureServiceTables() {
   } catch (_) {}
   try {
     await pool.query('ALTER TABLE client_doors ADD COLUMN nro_serie VARCHAR(120) NULL');
+  } catch (_) {}
+  try {
+    await pool.query('ALTER TABLE client_doors ADD COLUMN nombre VARCHAR(120) NULL');
   } catch (_) {}
   try {
     await pool.query('ALTER TABLE client_doors ADD COLUMN sector VARCHAR(120) NULL');
@@ -1193,6 +1197,7 @@ router.post('/doors', requireAuth, requireAnyRole('admin', 'service'), async (re
     placa_id,
     ref_int,
     nro_serie,
+    nombre,
     sector,
     marca,
     modelo,
@@ -1210,14 +1215,15 @@ router.post('/doors', requireAuth, requireAnyRole('admin', 'service'), async (re
 
   const [result] = await pool.query(
     `INSERT INTO client_doors
-     (org_id, org_branch_id, placa_id, ref_int, nro_serie, sector, marca, modelo, dimensiones, fecha_instalacion, fecha_ultimo_mantenimiento, notas)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (org_id, org_branch_id, placa_id, ref_int, nro_serie, nombre, sector, marca, modelo, dimensiones, fecha_instalacion, fecha_ultimo_mantenimiento, notas)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       org_id,
       org_branch_id || null,
       placa_id,
       ref_int || null,
       nro_serie || null,
+      nombre || null,
       sector || null,
       marca || 'Rayflex',
       modelo || null,
@@ -1256,6 +1262,7 @@ router.put('/doors/:id', requireAuth, requireAnyRole('admin', 'service'), async 
     placa_id,
     ref_int,
     nro_serie,
+    nombre,
     sector,
     marca,
     modelo,
@@ -1269,7 +1276,7 @@ router.put('/doors/:id', requireAuth, requireAnyRole('admin', 'service'), async 
 
   await pool.query(
     `UPDATE client_doors
-        SET org_id = ?, org_branch_id = ?, placa_id = ?, ref_int = ?, nro_serie = ?, sector = ?, marca = ?, modelo = ?, dimensiones = ?,
+        SET org_id = ?, org_branch_id = ?, placa_id = ?, ref_int = ?, nro_serie = ?, nombre = ?, sector = ?, marca = ?, modelo = ?, dimensiones = ?,
             fecha_instalacion = ?, fecha_ultimo_mantenimiento = ?, notas = ?
       WHERE id = ?`,
     [
@@ -1278,6 +1285,7 @@ router.put('/doors/:id', requireAuth, requireAnyRole('admin', 'service'), async 
       placa_id,
       ref_int || null,
       nro_serie || null,
+      nombre || null,
       sector || null,
       marca || 'Rayflex',
       modelo || null,
@@ -1724,7 +1732,7 @@ router.get('/cases/:id', requireAuth, requireAnyRole('admin', 'service'), async 
   if (!id) return res.status(400).json({ error: 'id invalido' });
   const [[row]] = await pool.query(
     `SELECT sc.*, o.name AS org_name, o.ruc AS org_ruc,
-            d.placa_id, d.marca, d.modelo, d.dimensiones,
+            d.placa_id, d.nombre, d.sector, d.marca, d.modelo, d.dimensiones,
             d.fecha_instalacion, d.fecha_ultimo_mantenimiento,
             s.name AS stage_name,
             ob.name AS org_branch_name, ob.address AS org_branch_address, ob.city AS org_branch_city,
@@ -1744,7 +1752,7 @@ router.get('/cases/:id', requireAuth, requireAnyRole('admin', 'service'), async 
   );
   if (!row) return res.status(404).json({ error: 'Caso no encontrado' });
   const [doors] = await pool.query(
-    `SELECT d.id, d.placa_id, d.marca, d.modelo, d.dimensiones,
+    `SELECT d.id, d.placa_id, d.nombre, d.sector, d.marca, d.modelo, d.dimensiones,
             sd.work_type, sd.maintenance_detail, sd.repair_detail, sd.revision_detail,
             sd.parts_components, sd.parts_actuators, sd.work_done, sd.parts_used, sd.cost
        FROM service_case_doors sd

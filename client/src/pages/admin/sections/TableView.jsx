@@ -1,6 +1,7 @@
 // client/src/pages/admin/sections/TableView.jsx
 import React from "react";
 import { Link } from "react-router-dom";
+import { useAuth } from "../../../auth.jsx";
 
 const fmtDateTime = (v) => {
   if (!v) return "—";
@@ -20,6 +21,8 @@ export default function TableView({
   onInvoice,
   showInTransit = false,
 }) {
+  const { user } = useAuth();
+  const isAdmin = String(user?.role || "").toLowerCase() === "admin";
   return (
     <div className="bg-white border rounded-lg overflow-hidden">
       <div className="px-3 py-2 border-b font-semibold bg-slate-50">Operaciones</div>
@@ -93,9 +96,15 @@ export default function TableView({
                       Docs
                     </button>
                   )}
-                  <button className="btn" onClick={() => onInvoice && onInvoice(r)}>
-                    Facturar
-                  </button>
+                  {isAdmin ? (
+                    <button className="btn" onClick={() => onInvoice && onInvoice(r)}>
+                      Facturar
+                    </button>
+                  ) : (
+                    <span className="btn bg-slate-50 text-slate-600 border border-slate-200 cursor-default">
+                      Pendiente de administracion
+                    </span>
+                  )}
                 </Td>
               </tr>
             ))}

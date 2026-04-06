@@ -1,6 +1,27 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
 
+const CONTAINER_TYPES = [
+  { value: '40 ST', label: '40 ST' },
+  { value: '20 ST', label: '20 ST' },
+  { value: 'Reefer 40', label: 'Reefer 40' },
+  { value: 'Reefer 20', label: 'Reefer 20' },
+  { value: 'HC', label: 'HC' },
+];
+
+const parseContainers = (v) => {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') {
+    try {
+      const parsed = JSON.parse(v);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
 export default function OceanDetail({ dealId, data = {}, saving, onSaving, onSaved }) {
   const [form, setForm] = useState({
     // Identificación / actores
@@ -28,7 +49,7 @@ export default function OceanDetail({ dealId, data = {}, saving, onSaving, onSav
     setForm(f => ({
       ...f,
       ...data,
-      containers_json: Array.isArray(data?.containers_json) ? data.containers_json : [],
+      containers_json: parseContainers(data?.containers_json),
     }));
   }, [data]);
 
@@ -39,7 +60,12 @@ export default function OceanDetail({ dealId, data = {}, saving, onSaving, onSav
 
   const set = (k, v) => setForm(s => ({ ...s, [k]: v }));
 
-  const addCntr = () => set('containers_json', [...(form.containers_json || []), { cntr_no:'', seal_no:'' }]);
+  const isFcl = String(form.load_type || '').toUpperCase() === 'FCL';
+  const addCntr = () =>
+    set('containers_json', [
+      ...(form.containers_json || []),
+      isFcl ? { type: '', qty: '' } : { cntr_no:'', seal_no:'' }
+    ]);
   const setCntr = (i, k, v) => {
     const arr = [...(form.containers_json || [])];
     arr[i] = { ...arr[i], [k]: v };
@@ -66,9 +92,31 @@ export default function OceanDetail({ dealId, data = {}, saving, onSaving, onSav
 
   // resumen compacto para la barra
   const containersSummary = (form.containers_json || [])
-    .map((c, idx) => (c?.cntr_no ? c.cntr_no : `#${idx+1}`))
+    .map((c, idx) => {
+      if (isFcl) {
+        const t = String(c?.type || '').trim();
+
+        const q = Number(c?.qty || 0);
+        return t && q ? `${q} x ${t}` : `#${idx + 1}`;
+      }
+      return c?.cntr_no ? c.cntr_no : `#${idx + 1}`;
+    })
     .filter(Boolean)
     .join(' • ');
+
+  const containersQty = (form.containers_json || []).reduce(
+    (s, c) => s + Number(c?.qty || 0),
+    0
+  );
+  useEffect(() => {
+    if (isFcl) set('packages', String(containersQty || 0));
+  }, [isFcl, containersQty]);
+  useEffect(() => {
+    if (isFcl && (form.containers_json || []).length === 0) {
+      set('containers_json', [{ type: '', qty: '' }]);
+    }
+  }, [isFcl]);
+
 
   return (
     <div>
@@ -91,7 +139,13 @@ export default function OceanDetail({ dealId, data = {}, saving, onSaving, onSav
 
         {/* Carga */}
         <Input label="Mercadería" value={form.commodity} onChange={v => set('commodity', v)} />
-        <Input label="Bultos" type="number" value={form.packages} onChange={v => set('packages', v)} />
+        <Input
+          label={isFcl ? "Contenedores" : "Bultos"}
+          type="number"
+          value={isFcl ? containersQty : form.packages}
+          onChange={v => set('packages', v)}
+          disabled={isFcl}
+        />
         <Input label="Peso (kg)" type="number" value={form.weight_kg} onChange={v => set('weight_kg', v)} />
         <Input label="Volumen (m³)" type="number" value={form.volume_m3} onChange={v => set('volume_m3', v)} />
         <Input label="Chg. (kg)" type="number" value={form.chargeable_kg} onChange={v => set('chargeable_kg', v)} />
@@ -158,22 +212,27 @@ export default function OceanDetail({ dealId, data = {}, saving, onSaving, onSav
           <div style={{ flex: 1, marginLeft: 12, overflowX: 'auto', whiteSpace: 'nowrap' }}>
             {/* chips resumen */}
             {(form.containers_json || []).length ? (
-              (form.containers_json || []).map((c, i) => (
-                <span
-                  key={`chip-${i}`}
-                  style={{
-                    display: 'inline-block',
-                    fontSize: 12,
-                    background: '#e5e7eb',
-                    padding: '4px 8px',
-                    borderRadius: 999,
-                    marginRight: 6
-                  }}
-                  title={c.seal_no ? `Precinto: ${c.seal_no}` : 'Sin precinto'}
-                >
-                  {c.cntr_no || `CNTR #${i + 1}`}
-                </span>
-              ))
+              (form.containers_json || []).map((c, i) => {
+                const label = isFcl
+                  ? `${Number(c?.qty || 0) || ''} ${c?.type || ''}`.trim() || `CNTR #${i + 1}`
+                  : (c.cntr_no || `CNTR #${i + 1}`);
+                return (
+                  <span
+                    key={`chip-${i}`}
+                    style={{
+                      display: 'inline-block',
+                      fontSize: 12,
+                      background: '#e5e7eb',
+                      padding: '4px 8px',
+                      borderRadius: 999,
+                      marginRight: 6
+                    }}
+                    title={isFcl ? 'Contenedor' : (c.seal_no ? `Precinto: ${c.seal_no}` : 'Sin precinto')}
+                  >
+                    {label}
+                  </span>
+                );
+              })
             ) : (
               <span style={{ fontSize: 12, color: '#64748b' }}>Sin contenedores</span>
             )}
@@ -189,13 +248,29 @@ export default function OceanDetail({ dealId, data = {}, saving, onSaving, onSav
                 key={i}
                 style={{
                   display:'grid',
-                  gridTemplateColumns:'1fr 1fr auto',
+                  gridTemplateColumns: isFcl ? '1fr 120px 1fr 1fr auto' : '1fr 1fr auto',
                   gap: 8,
                   alignItems: 'end'
                 }}
               >
-                <Input label="CNTR Nro" value={c.cntr_no} onChange={v => setCntr(i, 'cntr_no', v)} />
-                <Input label="PRECINTO Nro" value={c.seal_no} onChange={v => setCntr(i, 'seal_no', v)} />
+                {isFcl ? (
+                  <>
+                    <Select
+                      label="Tipo de contenedor"
+                      value={c.type || ''}
+                      onChange={v => setCntr(i, 'type', v)}
+                      options={['', ...CONTAINER_TYPES.map(t => t.value)]}
+                    />
+                    <Input label="Cantidad" type="number" value={c.qty} onChange={v => setCntr(i, 'qty', v)} />
+                    <Input label="Nro contenedor" value={c.cntr_no} onChange={v => setCntr(i, 'cntr_no', v)} />
+                    <Input label="Nro precinto" value={c.seal_no} onChange={v => setCntr(i, 'seal_no', v)} />
+                  </>
+                ) : (
+                  <>
+                    <Input label="CNTR Nro" value={c.cntr_no} onChange={v => setCntr(i, 'cntr_no', v)} />
+                    <Input label="PRECINTO Nro" value={c.seal_no} onChange={v => setCntr(i, 'seal_no', v)} />
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={() => delCntr(i)}
@@ -209,10 +284,10 @@ export default function OceanDetail({ dealId, data = {}, saving, onSaving, onSav
                   }}
                   title="Eliminar contenedor"
                 >
-                  ✕
+                  X
                 </button>
               </div>
-            ))}
+            ))
 
             <div>
               <button

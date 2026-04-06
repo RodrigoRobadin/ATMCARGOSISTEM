@@ -3,36 +3,43 @@ import { useParams } from "react-router-dom";
 import { api } from "../api";
 import OperationDetail from "./OperationDetail";
 import OperationDetailIndustrial from "./OperationDetailIndustrial";
+import OperationDetailContainer from "./OperationDetailContainer";
 
 export default function OperationDetailSwitcher() {
   const { id } = useParams();
-  const [isIndustrial, setIsIndustrial] = useState(null); // null = cargando
+  const [detailKind, setDetailKind] = useState(null);
 
   useEffect(() => {
     let live = true;
 
     (async () => {
       try {
-        // Leemos los custom fields de la operación
-        const { data } = await api
+        const { data: dealData } = await api.get(`/deals/${id}`);
+        const buKey = String(dealData?.deal?.business_unit_key || "").toLowerCase();
+
+        if (buKey === "atm-container") {
+          if (live) setDetailKind("container");
+          return;
+        }
+
+        if (buKey === "atm-industrial") {
+          if (live) setDetailKind("industrial");
+          return;
+        }
+
+        const { data: customFields } = await api
           .get(`/deals/${id}/custom-fields`)
           .catch(() => ({ data: [] }));
 
-        const list = Array.isArray(data) ? data : [];
-
-        // Regla: es INDUSTRIAL si tiene el campo industrial_brand con algún valor
+        const list = Array.isArray(customFields) ? customFields : [];
         const hasIndustrialBrand = list.some(
-          (cf) =>
-            cf.key === "industrial_brand" &&
-            String(cf.value || "").trim() !== ""
+          (cf) => cf.key === "industrial_brand" && String(cf.value || "").trim() !== ""
         );
 
-        if (live) {
-          setIsIndustrial(hasIndustrialBrand);
-        }
+        if (live) setDetailKind(hasIndustrialBrand ? "industrial" : "default");
       } catch (err) {
-        console.warn("No se pudieron leer los custom-fields", err);
-        if (live) setIsIndustrial(false); // fallback: detalle normal
+        console.warn("No se pudo resolver el tipo de detalle", err);
+        if (live) setDetailKind("default");
       }
     })();
 
@@ -41,15 +48,17 @@ export default function OperationDetailSwitcher() {
     };
   }, [id]);
 
-  if (isIndustrial === null) {
-    return <p className="text-sm text-slate-600">Cargando…</p>;
+  if (detailKind === null) {
+    return <p className="text-sm text-slate-600">Cargando...</p>;
   }
 
-  // Si es industrial -> abrimos OperationDetailIndustrial
-  if (isIndustrial) {
+  if (detailKind === "container") {
+    return <OperationDetailContainer />;
+  }
+
+  if (detailKind === "industrial") {
     return <OperationDetailIndustrial />;
   }
 
-  // Si no, seguimos usando el OperationDetail clásico
   return <OperationDetail />;
 }

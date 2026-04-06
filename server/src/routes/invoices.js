@@ -51,6 +51,8 @@ async function ensureInvoiceExtraColumns() {
     "ALTER TABLE invoices ADD COLUMN sales_rep_id INT NULL",
     "ALTER TABLE invoices ADD COLUMN purchase_order_ref VARCHAR(128) NULL",
     "ALTER TABLE invoices ADD COLUMN service_case_id INT NULL",
+    "ALTER TABLE invoices ADD COLUMN container_billing_cycle_id INT NULL",
+    "ALTER TABLE invoices ADD COLUMN container_contract_id INT NULL",
   ];
   for (const sql of alters) {
     try {
@@ -245,8 +247,63 @@ async function fetchServiceCaseBranchInfo(serviceCaseId, conn) {
   }
 }
 
+async function fetchContainerBillingInfo(billingCycleId, conn) {
+  const [[row]] = await conn.query(
+    `
+      SELECT
+        bc.*,
+        c.contract_no,
+        c.id AS contract_id,
+        d.id AS deal_id,
+        d.org_id AS organization_id,
+        d.reference,
+        d.title,
+        bu.key_slug AS business_unit_key
+      FROM container_billing_cycles bc
+      INNER JOIN container_contracts c ON c.id = bc.contract_id
+      INNER JOIN deals d ON d.id = bc.deal_id
+      LEFT JOIN business_units bu ON bu.id = d.business_unit_id
+      WHERE bc.id = ?
+      LIMIT 1
+    `,
+    [billingCycleId]
+  );
+  return row || null;
+}
+
 function round2(n) {
   return Number((Number(n || 0)).toFixed(2));
+}
+
+function normalizeAmountToUsd(amount, currency, exchangeRate) {
+  const value = Number(amount || 0) || 0;
+  const code = String(currency || 'USD').toUpperCase();
+  const rate = Number(exchangeRate || 0) || 0;
+  if (code === 'PYG' || code === 'GS') {
+    return rate > 0 ? value / rate : value;
+  }
+  return value;
+}
+
+function convertUsdToCurrency(amountUsd, currency, exchangeRate) {
+  const value = Number(amountUsd || 0) || 0;
+  const code = String(currency || 'USD').toUpperCase();
+  const rate = Number(exchangeRate || 0) || 0;
+  if (code === 'PYG' || code === 'GS') {
+    return rate > 0 ? value * rate : value;
+  }
+  return value;
+}
+
+function resolveSourceExchangeRate(currency, sourceExchangeRate, requestedExchangeRate) {
+  const code = String(currency || 'USD').toUpperCase();
+  if (code === 'PYG' || code === 'GS') {
+    const sourceRate = Number(sourceExchangeRate || 0) || 0;
+    const requestedRate = Number(requestedExchangeRate || 0) || 0;
+    if (sourceRate > 1) return sourceRate;
+    if (requestedRate > 1) return requestedRate;
+  }
+  return 1;
 }
 
 async function fetchQuoteItemsForInvoice(dealId, conn) {
@@ -889,6 +946,56 @@ async function recomputeInvoicePayments(invoiceId) {
      WHERE id = ?`,
     [paid.toFixed(2), netBalance.toFixed(2), newStatus, invoiceId]
   );
+  await syncContainerBillingCycleFromInvoice(invoiceId);
+}
+
+async function syncContainerBillingCycleFromInvoice(invoiceId) {
+  try {
+    const [[invoice]] = await pool.query(
+      `SELECT id, status, container_billing_cycle_id, canceled_by_credit_note_id
+         FROM invoices
+        WHERE id = ?
+        LIMIT 1`,
+      [invoiceId]
+    );
+    if (!invoice?.container_billing_cycle_id) return;
+
+    let billingStatus = 'facturado';
+    if (String(invoice.status || '').toLowerCase() === 'pagada') {
+      billingStatus = 'cobrado';
+    } else if (String(invoice.status || '').toLowerCase() === 'anulada') {
+      if (invoice.canceled_by_credit_note_id) {
+        await pool.query(
+          `UPDATE container_billing_cycles
+              SET status = 'pendiente',
+                  invoice_id = NULL,
+                  invoiced_at = NULL,
+                  invoiced_by = NULL
+            WHERE id = ?`,
+          [invoice.container_billing_cycle_id]
+        );
+      } else {
+        await pool.query(
+          `UPDATE container_billing_cycles
+              SET status = 'anulado',
+                  invoice_id = ?
+            WHERE id = ?`,
+          [invoice.id, invoice.container_billing_cycle_id]
+        );
+      }
+      return;
+    }
+
+    await pool.query(
+      `UPDATE container_billing_cycles
+          SET status = ?,
+              invoice_id = ?
+        WHERE id = ?`,
+      [billingStatus, invoice.id, invoice.container_billing_cycle_id]
+    );
+  } catch (err) {
+    console.error('[invoices] Error syncing container billing cycle', err?.message || err);
+  }
 }
 
 async function recomputeInvoiceCredits(invoiceId) {
@@ -1052,6 +1159,10 @@ function canManageInvoice(user, invoice) {
     return Number(user.id) === Number(invoice.created_by);
   }
   return false;
+}
+
+function canViewInvoicePdf(user, invoice) {
+  return Boolean(user?.id);
 }
 
 function extractCostItems(rawData = {}) {
@@ -1358,6 +1469,7 @@ router.post('/', requireAuth, async (req, res) => {
       deal_id,
       service_case_id,
       service_quote_addition_id,
+      container_billing_cycle_id,
       due_date,
       payment_terms,
       notes,
@@ -1378,8 +1490,8 @@ router.post('/', requireAuth, async (req, res) => {
       percentage,
     } = req.body || {};
 
-    if (!deal_id && !service_case_id && !service_quote_addition_id) {
-      return res.status(400).json({ error: 'deal_id o service_case_id es requerido' });
+    if (!deal_id && !service_case_id && !service_quote_addition_id && !container_billing_cycle_id) {
+      return res.status(400).json({ error: 'deal_id, service_case_id o container_billing_cycle_id es requerido' });
     }
 
     await conn.beginTransaction();
@@ -1387,8 +1499,55 @@ router.post('/', requireAuth, async (req, res) => {
     let deal = null;
     let serviceCase = null;
     let addition = null;
+    let containerBilling = null;
     let buKey = '';
-    if (deal_id) {
+    if (container_billing_cycle_id) {
+      const userRole = String(req.user?.role || '').toLowerCase();
+      if (userRole !== 'admin') {
+        await conn.rollback();
+        return res.status(403).json({ error: 'Solo un usuario admin puede facturar mensualidades de ATM CONTAINER.' });
+      }
+      containerBilling = await fetchContainerBillingInfo(Number(container_billing_cycle_id), conn);
+      if (!containerBilling) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'Mensualidad container no encontrada' });
+      }
+      const [[latestBillingInvoice]] = await conn.query(
+        `
+          SELECT id, status, canceled_by_credit_note_id, invoice_number
+          FROM invoices
+          WHERE container_billing_cycle_id = ?
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+        `,
+        [Number(container_billing_cycle_id)]
+      );
+      const latestBillingInvoiceStatus = String(latestBillingInvoice?.status || '').toLowerCase();
+      if (latestBillingInvoice && latestBillingInvoiceStatus !== 'anulada') {
+        await conn.rollback();
+        return res.status(400).json({ error: 'La mensualidad ya fue facturada para ese periodo.' });
+      }
+      if (
+        latestBillingInvoice &&
+        latestBillingInvoiceStatus === 'anulada' &&
+        !latestBillingInvoice.canceled_by_credit_note_id
+      ) {
+        await conn.rollback();
+        return res.status(400).json({
+          error:
+            'Ese periodo mensual ya fue facturado. Solo puede refacturarse si la factura anterior fue anulada mediante nota de credito.',
+        });
+      }
+      deal = {
+        id: containerBilling.deal_id,
+        organization_id: containerBilling.organization_id,
+        reference: containerBilling.reference,
+        title: containerBilling.title,
+        deal_value: containerBilling.amount,
+        business_unit_key: containerBilling.business_unit_key || '',
+      };
+      buKey = deal.business_unit_key || '';
+    } else if (deal_id) {
       const [[row]] = await conn.query(
         `SELECT d.id, d.org_id AS organization_id, d.reference, d.title, d.value AS deal_value, bu.key_slug AS business_unit_key
          FROM deals d
@@ -1440,31 +1599,51 @@ router.post('/', requireAuth, async (req, res) => {
     );
 
     const issueDate = new Date();
-    const dueDate = due_date ? new Date(due_date) : null;
-    const perc = Number(percentage || 100);
+    const dueDate = due_date
+      ? new Date(due_date)
+      : containerBilling?.due_date
+      ? new Date(containerBilling.due_date)
+      : null;
+    const perc = containerBilling ? null : Number(percentage || 100);
     const useAddition = Number(service_quote_addition_id || 0) > 0;
-    const effectiveServiceCaseId = deal_id ? null : (service_case_id || serviceCase?.id || null);
-    const quoteTotalUsd = deal_id
+    const effectiveServiceCaseId = deal_id || containerBilling ? null : (service_case_id || serviceCase?.id || null);
+    const quoteCurrency = containerBilling
+      ? { currency: String(containerBilling.currency_code || 'PYG').toUpperCase(), exchange_rate: 1 }
+      : deal_id
+      ? await fetchQuoteCurrencyInfo(deal_id, conn)
+      : useAddition
+      ? await fetchServiceQuoteAdditionCurrencyInfo(Number(service_quote_addition_id), conn)
+      : await fetchServiceQuoteCurrencyInfo(effectiveServiceCaseId, conn);
+    const quoteTotalUsd = containerBilling
+      ? null
+      : deal_id
       ? await fetchQuoteTotalUsd(deal_id, conn)
       : useAddition
       ? await fetchServiceQuoteAdditionTotalUsd(Number(service_quote_addition_id), conn)
       : await fetchServiceQuoteTotalUsd(effectiveServiceCaseId, conn);
+    const fallbackDealValueUsd =
+      deal && quoteTotalUsd == null
+        ? normalizeAmountToUsd(deal.deal_value, quoteCurrency.currency, quoteCurrency.exchange_rate)
+        : 0;
     const baseAmountUsd = Number(
       req.body?.base_amount ??
+      containerBilling?.amount ??
       quoteTotalUsd ??
-      (deal ? deal.deal_value : 0) ??
+      fallbackDealValueUsd ??
       0
     ) || 0;
 
-    const branchInfo = deal_id
-      ? await fetchDealBranchInfo(deal_id, conn)
+    const branchInfo = deal_id || containerBilling
+      ? await fetchDealBranchInfo(deal?.id, conn)
       : await fetchServiceCaseBranchInfo(effectiveServiceCaseId, conn);
     const branchAddress = branchInfo
       ? [branchInfo.address, branchInfo.city, branchInfo.country].filter(Boolean).join(' - ')
       : null;
     const resolvedCustomerAddress = customer_address || branchAddress || null;
 
-    if (useAddition) {
+    if (containerBilling) {
+      // No aplica control porcentual por deal para mensualidades container.
+    } else if (useAddition) {
       const [[agg]] = await conn.query(
         `SELECT COALESCE(SUM(percentage),0) AS used_pct
            FROM invoices
@@ -1493,18 +1672,24 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     // ✅ Moneda: por defecto desde la cotización
-    const quoteCurrency = deal_id
-      ? await fetchQuoteCurrencyInfo(deal_id, conn)
-      : useAddition
-      ? await fetchServiceQuoteAdditionCurrencyInfo(Number(service_quote_addition_id), conn)
-      : await fetchServiceQuoteCurrencyInfo(effectiveServiceCaseId, conn);
     const curr = String(currency_code || req.body?.currency || quoteCurrency.currency || 'USD').toUpperCase();
     const exRate = Number(exchange_rate || quoteCurrency.exchange_rate || 1) || 1;
+    const quoteSourceExchangeRate = resolveSourceExchangeRate(
+      quoteCurrency.currency,
+      quoteCurrency.exchange_rate,
+      exRate
+    );
     const isPyg = curr === 'PYG' || curr === 'GS';
     const currencyFactor = isPyg ? exRate : 1;
-    const baseAmount = round2(baseAmountUsd * currencyFactor);
+    const effectiveBaseAmountUsd =
+      deal && quoteTotalUsd == null
+        ? normalizeAmountToUsd(deal.deal_value, quoteCurrency.currency, quoteSourceExchangeRate)
+        : baseAmountUsd;
+    const baseAmount = round2(effectiveBaseAmountUsd * currencyFactor);
 
-    const itemsFromQuote = deal_id
+    const itemsFromQuote = containerBilling
+      ? []
+      : deal_id
       ? await fetchQuoteItemsForInvoice(deal_id, conn)
       : useAddition
       ? await fetchServiceQuoteAdditionItemsForInvoice(Number(service_quote_addition_id), conn)
@@ -1514,8 +1699,14 @@ router.post('/', requireAuth, async (req, res) => {
     if (itemsFromQuote.length > 0) {
       invoiceItems = itemsFromQuote.map((it, idx) => {
         const qty = Number(it.quantity || 0) || 1;
-        const unitPriceAdjUsd = round2(Number(it.unit_price || 0) * factor);
-        const unitPriceAdj = round2(unitPriceAdjUsd * currencyFactor);
+        const unitPriceSource = Number(it.unit_price || 0) || 0;
+        const unitPriceSourceUsd = normalizeAmountToUsd(
+          unitPriceSource,
+          quoteCurrency.currency,
+          quoteSourceExchangeRate
+        );
+        const unitPriceAdjUsd = round2(unitPriceSourceUsd * factor);
+        const unitPriceAdj = round2(convertUsdToCurrency(unitPriceAdjUsd, curr, exRate));
         const subtotal = round2(qty * unitPriceAdj);
         return {
           description: it.description || 'Item',
@@ -1526,6 +1717,18 @@ router.post('/', requireAuth, async (req, res) => {
           item_order: Number.isFinite(Number(it.item_order)) ? Number(it.item_order) : idx,
         };
       });
+    } else if (containerBilling) {
+      const gross = round2(Number(containerBilling.amount || 0));
+      invoiceItems = [
+        {
+          description: `Canon de arrendamiento contrato ${containerBilling.contract_no || "-"} · Periodo ${containerBilling.cycle_label || "-"}`,
+          quantity: 1,
+          unit_price: gross,
+          subtotal: gross,
+          tax_rate: Number(containerBilling.tax_rate ?? 10) || 10,
+          item_order: 0,
+        },
+      ];
     } else {
       const baseSubtotal = round2(baseAmount * factor);
       invoiceItems = [
@@ -1562,7 +1765,7 @@ router.post('/', requireAuth, async (req, res) => {
 
     const [result] = await conn.query(
   `INSERT INTO invoices (
-    deal_id, service_case_id, service_quote_addition_id, organization_id, invoice_number, issue_date, due_date, payment_terms, notes,
+    deal_id, service_case_id, service_quote_addition_id, container_billing_cycle_id, container_contract_id, organization_id, invoice_number, issue_date, due_date, payment_terms, notes,
     payment_condition, timbrado_number, timbrado_start_date, timbrado_expires_at,
     point_of_issue, establishment, customer_doc_type, customer_doc, customer_email, customer_address,
     currency_code, exchange_rate, sales_rep, purchase_order_ref,
@@ -1571,7 +1774,7 @@ router.post('/', requireAuth, async (req, res) => {
     credited_total, net_total_amount, net_balance,
     status, created_by
   ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?,
@@ -1582,13 +1785,15 @@ router.post('/', requireAuth, async (req, res) => {
     deal ? deal.id : null,
     serviceCase ? serviceCase.id : null,
     service_quote_addition_id ? Number(service_quote_addition_id) : null,
+    container_billing_cycle_id ? Number(container_billing_cycle_id) : null,
+    containerBilling?.contract_id || null,
     deal ? deal.organization_id : serviceCase?.organization_id,
     invoice_number,
     issueDate,
     dueDate,
-    payment_terms || null,
-    notes || '',
-    payment_condition || 'credito',
+    payment_terms || (containerBilling ? 'mensual' : null),
+    notes || (containerBilling ? `Mensualidad ${containerBilling.cycle_label || ""}`.trim() : ''),
+    payment_condition || (containerBilling ? 'credito' : 'credito'),
     timbrado_number || null,
     timbrado_start_date || null,
     timbrado_expires_at || null,
@@ -1601,7 +1806,7 @@ router.post('/', requireAuth, async (req, res) => {
     curr,
     exRate,
     sales_rep || null,
-    purchase_order_ref || null,
+    purchase_order_ref || (containerBilling ? containerBilling.contract_no || null : null),
     perc,
     baseAmount,
     subtotal,
@@ -1635,6 +1840,17 @@ router.post('/', requireAuth, async (req, res) => {
           it.tax_rate ?? 0,
           it.item_order ?? 0,
         ]
+      );
+    }
+
+    if (containerBilling && container_billing_cycle_id) {
+      await conn.query(
+        `
+          UPDATE container_billing_cycles
+          SET invoice_id = ?, invoiced_at = NOW(), invoiced_by = ?, status = 'facturado'
+          WHERE id = ?
+        `,
+        [newId, req.user.id, Number(container_billing_cycle_id)]
       );
     }
 
@@ -1688,6 +1904,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
       ['Eliminada manualmente', id]
     );
     await conn.commit();
+    await syncContainerBillingCycleFromInvoice(id);
 
     const [[updated]] = await pool.query(
       `SELECT i.*, o.name as organization_name
@@ -2018,7 +2235,7 @@ router.get('/:id', requireAuth, async (req, res) => {
     );
 
     if (!invoice) return res.status(404).json({ error: 'Factura no encontrada' });
-    if (!canManageInvoice(req.user, invoice)) {
+    if (!canViewInvoicePdf(req.user, invoice)) {
       return res.status(403).json({ error: 'No tienes permiso para ver esta factura' });
     }
 
@@ -2078,7 +2295,7 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
       [id]
     );
     if (!invoice) return res.status(404).json({ error: 'Factura no encontrada' });
-    if (!canManageInvoice(req.user, invoice)) {
+    if (!canViewInvoicePdf(req.user, invoice)) {
       return res.status(403).json({ error: 'No tienes permiso para ver esta factura' });
     }
 

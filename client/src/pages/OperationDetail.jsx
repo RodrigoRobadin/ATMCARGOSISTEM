@@ -762,13 +762,37 @@ useEffect(() => {
 
 
       const opRoad = op.road || {};
-      let roadSnap = {};
-      try {
-        const rawRoad = cfVal("op_road_json");
-        if (rawRoad) roadSnap = JSON.parse(rawRoad);
-      } catch {
-        roadSnap = {};
-      }
+      const opOcean = op.ocean || {};
+
+      const parseCFJson = (value) => {
+        if (!value) return {};
+        if (typeof value === "object") return value;
+        if (typeof value === "string") {
+          try {
+            return JSON.parse(value);
+          } catch {
+            return {};
+          }
+        }
+        return {};
+      };
+
+      const parseContainers = (value) => {
+        if (Array.isArray(value)) return value;
+        if (typeof value === "string") {
+          try {
+            const parsed = JSON.parse(value);
+            return Array.isArray(parsed) ? parsed : [];
+          } catch {
+            return [];
+          }
+        }
+        return [];
+      };
+
+      const oceanSnap = parseCFJson(cfVal("op_ocean_json"));
+      const roadSnap = parseCFJson(cfVal("op_road_json"));
+      const multiSnap = parseCFJson(cfVal("op_multimodal_json"));
 
       const getRoadField = (key, cfKey) =>
         opRoad[key] ??
@@ -791,11 +815,11 @@ useEffect(() => {
         customs_broker:
           op.air?.customs_broker ?? cfVal("ag_aduanera") ?? "",
         provider: op.air?.provider ?? cfVal("proveedor") ?? "",
-        origin_airport: op.air?.origin_airport ?? cfVal("origen_pto") ?? "",
+        origin_airport: op.air?.origin_airport ?? "",
         transshipment_airport:
           op.air?.transshipment_airport ?? cfVal("transb_pto") ?? "",
         destination_airport:
-          op.air?.destination_airport ?? cfVal("destino_pto") ?? "",
+          op.air?.destination_airport ?? "",
         commodity: op.air?.commodity ?? cfVal("mercaderia") ?? "",
         packages: op.air?.packages ?? cfVal("cant_bultos") ?? "",
         weight_gross_kg:
@@ -829,10 +853,10 @@ useEffect(() => {
         shipping_line:
           op.ocean?.shipping_line ?? cfVal("linea_marit") ?? "",
         load_type: op.ocean?.load_type ?? cfVal("tipo_carga") ?? "LCL",
-        pol: op.ocean?.pol ?? cfVal("origen_pto") ?? "",
+        pol: op.ocean?.pol ?? oceanSnap?.pol ?? "",
         transshipment_port:
           op.ocean?.transshipment_port ?? cfVal("transb_pto") ?? "",
-        pod: op.ocean?.pod ?? cfVal("destino_pto") ?? "",
+        pod: op.ocean?.pod ?? oceanSnap?.pod ?? "",
         commodity: op.ocean?.commodity ?? cfVal("mercaderia") ?? "",
         packages: op.ocean?.packages ?? cfVal("cant_bultos") ?? "",
         weight_kg: op.ocean?.weight_kg ?? cfVal("peso_bruto") ?? "",
@@ -860,9 +884,9 @@ useEffect(() => {
         trans_depart:
           op.ocean?.trans_depart ?? cfVal("salida_transb") ?? "",
         eta: op.ocean?.eta ?? cfVal("llegada_destino") ?? "",
-        containers_json: Array.isArray(op.ocean?.containers_json)
-          ? op.ocean.containers_json
-          : [],
+        containers_json: parseContainers(op.ocean?.containers_json).length
+          ? parseContainers(op.ocean?.containers_json)
+          : parseContainers(oceanSnap?.containers_json),
         // NUEVO: términos doc
         doc_master_term:
           op.ocean?.doc_master_term ?? cfVal("doc_master_term") ?? "",
@@ -879,8 +903,8 @@ useEffect(() => {
         driver_name: getRoadField("driver_name", "chofer"),
         driver_phone: getRoadField("driver_phone", "chofer_tel"),
         border_crossing: getRoadField("border_crossing", "cruce_frontera"),
-        origin_city: getRoadField("origin_city", "origen_pto"),
-        destination_city: getRoadField("destination_city", "destino_pto"),
+        origin_city: getRoadField("origin_city"),
+        destination_city: getRoadField("destination_city"),
         route_itinerary: getRoadField("route_itinerary", "itinerario"),
         cargo_class: getRoadField("cargo_class", "clase_carga") || "FTL",
         commodity: getRoadField("commodity", "mercaderia"),
@@ -903,11 +927,9 @@ useEffect(() => {
         etd: getRoadField("etd", "f_est_salida"),
         eta: getRoadField("eta", "llegada_destino"),
         transit_days: getRoadField("transit_days", "dias_transito"),
-        containers_json: Array.isArray(opRoad.containers_json)
-          ? opRoad.containers_json
-          : Array.isArray(roadSnap.containers_json)
-          ? roadSnap.containers_json
-          : [],
+        containers_json: parseContainers(opRoad.containers_json).length
+          ? parseContainers(opRoad.containers_json)
+          : parseContainers(roadSnap.containers_json),
       });
 
       setMulti({
@@ -923,6 +945,9 @@ useEffect(() => {
           : [],
         observations:
           op.multimodal?.observations ?? cfVal("observaciones") ?? "",
+        origin_port: op.multimodal?.origin_port ?? multiSnap?.origin_port ?? "",
+        destination_port:
+          op.multimodal?.destination_port ?? multiSnap?.destination_port ?? "",
         // NUEVO: términos doc
         doc_master_term:
           op.multimodal?.doc_master_term ??
@@ -930,6 +955,9 @@ useEffect(() => {
           "",
         doc_house_term:
           op.multimodal?.doc_house_term ?? cfVal("doc_house_term") ?? "",
+        containers_json: parseContainers(op.multimodal?.containers_json).length
+          ? parseContainers(op.multimodal?.containers_json)
+          : parseContainers(multiSnap?.containers_json),
       });
 
       let profit = null;
@@ -1196,6 +1224,12 @@ useEffect(() => {
             pick: (p) => p.airline,
           },
           {
+            key: "itinerario",
+            label: "Itinerario",
+            type: "text",
+            pick: (p) => p.itinerary,
+          },
+          {
             key: "shpr_cnee",
             label: "SHPR - CNEE",
             type: "text",
@@ -1220,22 +1254,10 @@ useEffect(() => {
             pick: (p) => p.provider,
           },
           {
-            key: "origen_pto",
-            label: "Origen",
-            type: "text",
-            pick: (p) => p.origin_airport,
-          },
-          {
             key: "transb_pto",
             label: "Transbordo",
             type: "text",
             pick: (p) => p.transshipment_airport,
-          },
-          {
-            key: "destino_pto",
-            label: "Destino",
-            type: "text",
-            pick: (p) => p.destination_airport,
           },
           {
             key: "mercaderia",
@@ -1357,22 +1379,10 @@ useEffect(() => {
             pick: (p) => p.shipping_line,
           },
           {
-            key: "origen_pto",
-            label: "Puerto Origen",
-            type: "text",
-            pick: (p) => p.pol,
-          },
-          {
             key: "transb_pto",
             label: "Transbordo",
             type: "text",
             pick: (p) => p.transshipment_port,
-          },
-          {
-            key: "destino_pto",
-            label: "Puerto Destino",
-            type: "text",
-            pick: (p) => p.pod,
           },
           {
             key: "mercaderia",
@@ -1487,6 +1497,12 @@ useEffect(() => {
             label: "Precinto",
             type: "text",
             pick: (p) => p.seal_no,
+          },
+          {
+            key: "itinerario",
+            label: "Itinerario",
+            type: "text",
+            pick: (p) => p.route_itinerary,
           },
           {
             key: "observaciones",
@@ -2052,9 +2068,52 @@ const executiveName =
   const destino = getCF("destino_pto");
   const merca = getCF("mercaderia");
 
+  const normalizeContainers = (value) => {
+    if (Array.isArray(value)) return value;
+    if (typeof value === "string") {
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  };
+
+  const containersSource =
+    currentTT === "OCEAN"
+      ? ocean?.containers_json
+      : currentTT === "ROAD"
+      ? road?.containers_json
+      : currentTT === "MULTIMODAL"
+      ? multi?.containers_json
+      : [];
+  const containersList = normalizeContainers(containersSource);
+  const containersSummary = containersList.length
+    ? Object.entries(
+        containersList.reduce((acc, c) => {
+          const type = String(c?.type || "").trim();
+          if (!type) return acc;
+          const qty = Number(c?.qty || 0) || 0;
+          acc[type] = (acc[type] || 0) + qty;
+          return acc;
+        }, {})
+      )
+        .map(([type, qty]) => `${qty}x${type}`)
+        .join(", ")
+    : "";
+
   if (tipoOp) headerLabelParts.push(tipoOp);
   if (modalidad) headerLabelParts.push(modalidad);
-  if (tipoCarga) headerLabelParts.push(tipoCarga);
+  if (tipoCarga) {
+    const isFcl = String(tipoCarga).toUpperCase() === "FCL";
+    if (isFcl && containersSummary) {
+      headerLabelParts.push(`FCL ${containersSummary}`);
+    } else {
+      headerLabelParts.push(tipoCarga);
+    }
+  }
   if (origen || destino)
     headerLabelParts.push(`${origen || "?"} → ${destino || "?"}`);
   if (merca) headerLabelParts.push(merca);
@@ -2201,18 +2260,27 @@ function providerHasFreightTag(p = {}) {
   function buildFreightRequestTemplate() {
     const tipoOpV = getCF("tipo_operacion") || "—";
     const modalidadV = getCF("modalidad_carga") || currentTT || "—";
+    const tipoCargaV =
+      getCF("tipo_carga") ||
+      ocean.load_type ||
+      road.cargo_class ||
+      multi.cargo_type ||
+      "";
+    const isFcl = String(tipoCargaV).toUpperCase() === "FCL";
     const incotermV = getCF("incoterm") || "—";
     const origenV =
-      getCF("origen_pto") ||
       air.origin_airport ||
       ocean.pol ||
       road.origin_city ||
+      multi.origin_port ||
+      getCF("origen_pto") ||
       "—";
     const destinoV =
-      getCF("destino_pto") ||
       air.destination_airport ||
       ocean.pod ||
       road.destination_city ||
+      multi.destination_port ||
+      getCF("destino_pto") ||
       "—";
     const mercaV =
       getCF("mercaderia") ||
@@ -2233,25 +2301,67 @@ function providerHasFreightTag(p = {}) {
     // 👉 Usamos el asunto base común
     const subj = emailSubjectBase;
 
+    const escapeHtml = (v) =>
+      String(v ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+
+    const row = [
+      { label: "Tipo de operación", value: tipoOpV },
+      { label: "Modalidad", value: modalidadV },
+      { label: "Incoterm", value: incotermV },
+      { label: "Origen", value: origenV },
+      { label: "Destino", value: destinoV },
+      { label: "Mercadería", value: mercaV },
+      {
+        label: isFcl ? "Contenedores" : "Bultos",
+        value: isFcl && containersSummary ? containersSummary : bultos,
+      },
+      { label: "Peso bruto", value: `${peso} kg` },
+      { label: "Volumen", value: `${volumen} m³` },
+    ];
+
+    const headerCells = row
+      .map(
+        (c) =>
+          `<th style="border:1px solid #e5e7eb;padding:6px 8px;text-align:left;font-weight:600;background:#f8fafc;">${escapeHtml(
+            c.label
+          )}</th>`
+      )
+      .join("");
+    const bodyCells = row
+      .map(
+        (c) =>
+          `<td style="border:1px solid #e5e7eb;padding:6px 8px;">${escapeHtml(
+            c.value
+          )}</td>`
+      )
+      .join("");
+
     const body =
-      `Estimados,\n\n` +
-      `Solicitamos su mejor tarifa de flete para la siguiente operación:\n\n` +
-      `• Tipo de operación: ${tipoOpV}\n` +
-      `• Modalidad: ${modalidadV}\n` +
-      `• Incoterm: ${incotermV}\n` +
-      `• Origen: ${origenV}\n` +
-      `• Destino: ${destinoV}\n` +
-      `• Mercadería: ${mercaV}\n` +
-      `• Bultos: ${bultos}\n` +
-      `• Peso bruto: ${peso} kg\n` +
-      `• Volumen: ${volumen} m³\n\n` +
-      `Favor indicar:\n` +
-      `• Frecuencia y transit time\n` +
-      `• Free time en destino\n` +
-      `• Condiciones de pago\n\n` +
-      `Referencia interna: ${deal.reference || id}\n\n` +
-      `Saludos,\n` +
-      `${me.name || ""}`;
+      `<div style="font-family:Arial,sans-serif;font-size:12px;line-height:1.4;">` +
+      `<p style="margin:0 0 8px 0;">Estimados,</p>` +
+      `<p style="margin:0 0 10px 0;">Solicitamos su mejor tarifa de flete para la siguiente operación:</p>` +
+      `<table style="border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:12px;">` +
+      `<thead><tr>${headerCells}</tr></thead>` +
+      `<tbody><tr>${bodyCells}</tr></tbody>` +
+      `</table>` +
+      `<div style="margin-top:10px;">` +
+      `<p style="margin:0 0 4px 0;">Favor indicar:</p>` +
+      `<ul style="margin:0 0 8px 18px;padding:0;">` +
+      `<li>Frecuencia y transit time</li>` +
+      `<li>Free time en destino</li>` +
+      `<li>Condiciones de pago</li>` +
+      `</ul>` +
+      `<p style="margin:0 0 8px 0;">Referencia interna: ${escapeHtml(
+        deal.reference || id
+      )}</p>` +
+      `<p style="margin:0;">Saludos,<br/>${escapeHtml(me.name || "")}</p>` +
+      `</div>` +
+      `</div>`;
 
     setEmailSubject(subj);
     setEmailBody(body);
@@ -3269,12 +3379,19 @@ function providerHasFreightTag(p = {}) {
               </div>
               <div>
                 <div className="mb-1 text-slate-500">Mensaje</div>
-                <textarea
-                  className="border rounded px-2 py-2 w-full font-mono text-xs"
-                  rows={12}
-                  value={emailBody}
-                  onChange={(e) => setEmailBody(e.target.value)}
-                />
+                {emailMode === "flete" ? (
+                  <div
+                    className="border rounded px-2 py-2 w-full text-sm bg-white overflow-auto"
+                    dangerouslySetInnerHTML={{ __html: emailBody }}
+                  />
+                ) : (
+                  <textarea
+                    className="border rounded px-2 py-2 w-full font-mono text-xs"
+                    rows={12}
+                    value={emailBody}
+                    onChange={(e) => setEmailBody(e.target.value)}
+                  />
+                )}
               </div>
 
               {emailMode === "flete" && (
@@ -3362,6 +3479,14 @@ function providerHasFreightTag(p = {}) {
 }
 
 /* ======= Subformularios ======= */
+const CONTAINER_TYPES = [
+  { value: '40 ST', label: '40 ST' },
+  { value: '20 ST', label: '20 ST' },
+  { value: 'Reefer 40', label: 'Reefer 40' },
+  { value: 'Reefer 20', label: 'Reefer 20' },
+  { value: 'HC', label: 'HC' },
+];
+
 function OceanForm({
   f,
   set,
@@ -3374,11 +3499,45 @@ function OceanForm({
   openFileTabByType,
   fileLabels,
 }) {
-  const list = Array.isArray(f.containers_json) ? f.containers_json : [];
+  const isFcl = String(f.load_type || '').toUpperCase() === 'FCL';
+  const list = Array.isArray(f.containers_json)
+    ? f.containers_json
+    : typeof f.containers_json === "string"
+    ? (() => {
+        try {
+          const parsed = JSON.parse(f.containers_json);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      })()
+    : [];
+  const containersQty = list.reduce((s, c) => s + Number(c?.qty || 0), 0);
+
+  const itineraryAuto = [f.pol, f.transshipment_port, f.pod]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean)
+    .join(" → ");
+
+  useEffect(() => {
+    if (isFcl) set('packages', String(containersQty || 0));
+  }, [isFcl, containersQty]);
+
+  useEffect(() => {
+    if (itineraryAuto && f.itinerary !== itineraryAuto) {
+      set("itinerary", itineraryAuto);
+    }
+  }, [itineraryAuto]);
+
+  useEffect(() => {
+    if (!readOnly && isFcl && list.length === 0) {
+      set('containers_json', [{ type: '', qty: '', cntr_no: '', seal_no: '' }]);
+    }
+  }, [isFcl]);
 
   const addCntr = () => {
     if (!readOnly)
-      set("containers_json", [...list, { cntr_no: "", seal_no: "" }]);
+      set("containers_json", [...list, isFcl ? { type: "", qty: "", cntr_no: "", seal_no: "" } : { cntr_no: "", seal_no: "" }]);
   };
 
   const setCntr = (i, k, v) => {
@@ -3508,8 +3667,13 @@ function OceanForm({
         <Field label="Mercadería">
           <Input {...bind("commodity")} />
         </Field>
-        <Field label="Bultos">
-          <Input type="number" {...bind("packages")} />
+        <Field label={isFcl ? "Contenedores" : "Bultos"}>
+          <Input
+            type="number"
+            value={isFcl ? containersQty : (f.packages || "")}
+            onChange={(e) => set("packages", e.target.value)}
+            readOnly={readOnly || isFcl}
+          />
         </Field>
         <Field label="Peso (kg)">
           <Input type="number" {...bind("weight_kg")} />
@@ -3527,7 +3691,7 @@ function OceanForm({
           <Input type="number" {...bind("free_days")} />
         </Field>
         <Field label="Itinerario">
-          <Input {...bind("itinerary")} />
+          <Input value={itineraryAuto || f.itinerary || ""} readOnly />
         </Field>
         <Field label="Entrega Doc. Naviera">
           <Input type="datetime-local" {...bind("doc_nav_delivery")} />
@@ -3564,7 +3728,14 @@ function OceanForm({
           <span className="text-xs text-slate-600">({list.length})</span>
           <span className="text-xs text-slate-500 truncate">
             {list.length
-              ? list.map((c, i) => c.cntr_no || `CNTR #${i + 1}`).join(" • ")
+              ? list
+                  .map((c, i) => {
+                    if (c.cntr_no) return c.cntr_no;
+                    if (c.type && c.qty) return `${c.qty}x ${c.type}`;
+                    if (c.type) return c.type;
+                    return `CNTR #${i + 1}`;
+                  })
+                  .join(" • ")
               : "—"}
           </span>
         </summary>
@@ -3574,20 +3745,64 @@ function OceanForm({
               key={i}
               className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2 items-end"
             >
-              <Field label="CNTR Nro">
-                <Input
-                  readOnly={readOnly}
-                  value={c.cntr_no || ""}
-                  onChange={(e) => setCntr(i, "cntr_no", e.target.value)}
-                />
-              </Field>
-              <Field label="PRECINTO Nro">
-                <Input
-                  readOnly={readOnly}
-                  value={c.seal_no || ""}
-                  onChange={(e) => setCntr(i, "seal_no", e.target.value)}
-                />
-              </Field>
+              {isFcl ? (
+                <>
+                  <Field label="Tipo de contenedor">
+                    <select
+                      className="w-full border rounded-lg px-3 py-2 text-sm bg-white"
+                      disabled={readOnly}
+                      value={c.type || ""}
+                      onChange={(e) => setCntr(i, "type", e.target.value)}
+                    >
+                      <option value="">Elegir...</option>
+                      {CONTAINER_TYPES.map((t) => (
+                        <option key={t.value} value={t.value}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Cantidad">
+                    <Input
+                      type="number"
+                      readOnly={readOnly}
+                      value={c.qty || ""}
+                      onChange={(e) => setCntr(i, "qty", e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Nro contenedor">
+                    <Input
+                      readOnly={readOnly}
+                      value={c.cntr_no || ""}
+                      onChange={(e) => setCntr(i, "cntr_no", e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Nro precinto">
+                    <Input
+                      readOnly={readOnly}
+                      value={c.seal_no || ""}
+                      onChange={(e) => setCntr(i, "seal_no", e.target.value)}
+                    />
+                  </Field>
+                </>
+              ) : (
+                <>
+                  <Field label="CNTR Nro">
+                    <Input
+                      readOnly={readOnly}
+                      value={c.cntr_no || ""}
+                      onChange={(e) => setCntr(i, "cntr_no", e.target.value)}
+                    />
+                  </Field>
+                  <Field label="PRECINTO Nro">
+                    <Input
+                      readOnly={readOnly}
+                      value={c.seal_no || ""}
+                      onChange={(e) => setCntr(i, "seal_no", e.target.value)}
+                    />
+                  </Field>
+                </>
+              )}
               {!readOnly && (
                 <button
                   type="button"
@@ -3626,6 +3841,17 @@ function RoadForm({
   openFileTabByType,
   fileLabels,
 }) {
+  const itineraryAuto = [f.origin_city, f.border_crossing, f.destination_city]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean)
+    .join(" → ");
+
+  useEffect(() => {
+    if (!readOnly && itineraryAuto && f.route_itinerary !== itineraryAuto) {
+      set("route_itinerary", itineraryAuto);
+    }
+  }, [itineraryAuto, readOnly]);
+
   const trucks = Array.isArray(f.containers_json)
     ? f.containers_json
     : [];
@@ -3754,7 +3980,7 @@ function RoadForm({
           <Input {...bind("seal_no")} />
         </Field>
         <Field label="Itinerario / ruta">
-          <Input {...bind("route_itinerary")} />
+          <Input value={itineraryAuto || f.route_itinerary || ""} readOnly />
         </Field>
       </div>
 
@@ -3885,11 +4111,42 @@ function MultimodalForm({
   openFileTabByType,
   fileLabels,
 }) {
+  const isFcl = String(f.cargo_type || '').toUpperCase() === 'FCL';
   const list = Array.isArray(f.containers_json) ? f.containers_json : [];
+  const containersQty = list.reduce((s, c) => s + Number(c?.qty || 0), 0);
+
+  const itineraryAuto = (() => {
+    const legs = Array.isArray(f.legs) ? f.legs : [];
+    if (!legs.length) return "";
+    const parts = [];
+    const firstOrigin = String(legs[0]?.origin || "").trim();
+    if (firstOrigin) parts.push(firstOrigin);
+    legs.forEach((L) => {
+      const dest = String(L?.destination || "").trim();
+      if (dest && parts[parts.length - 1] !== dest) parts.push(dest);
+    });
+    return parts.join(" → ");
+  })();
+
+  useEffect(() => {
+    if (isFcl) set('packages', String(containersQty || 0));
+  }, [isFcl, containersQty]);
+
+  useEffect(() => {
+    if (!readOnly && itineraryAuto && f.itinerary !== itineraryAuto) {
+      set("itinerary", itineraryAuto);
+    }
+  }, [itineraryAuto, readOnly]);
+
+  useEffect(() => {
+    if (!readOnly && isFcl && list.length === 0) {
+      set('containers_json', [{ type: '', qty: '', cntr_no: '', seal_no: '' }]);
+    }
+  }, [isFcl]);
 
   const addCntr = () => {
     if (!readOnly)
-      set("containers_json", [...list, { cntr_no: "", seal_no: "" }]);
+      set("containers_json", [...list, isFcl ? { type: "", qty: "", cntr_no: "", seal_no: "" } : { cntr_no: "", seal_no: "" }]);
   };
 
   const setCntr = (i, k, v) => {
@@ -4035,7 +4292,7 @@ function MultimodalForm({
           <Input {...bind("shipping_line")} />
         </Field>
         <Field label="Itinerario">
-          <Input {...bind("itinerary")} />
+          <Input value={itineraryAuto || f.itinerary || ""} readOnly />
         </Field>
         <Field label="Free days">
           <Input type="number" {...bind("free_days")} />
@@ -4180,6 +4437,17 @@ function AirForm({
   openFileTabByType,
   fileLabels,
 }) {
+  const itineraryAuto = [f.origin_airport, f.transshipment_airport, f.destination_airport]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean)
+    .join(" → ");
+
+  useEffect(() => {
+    if (!readOnly && itineraryAuto && f.itinerary !== itineraryAuto) {
+      set("itinerary", itineraryAuto);
+    }
+  }, [itineraryAuto, readOnly]);
+
   const setVolAndChg = (rawVol) => {
     const v = Number(String(rawVol).toString().replace(",", "."));
     if (isNaN(v) || !isFinite(v)) {
@@ -4369,6 +4637,9 @@ function AirForm({
             value={f.destination_airport || ""}
             onChange={(e) => set("destination_airport", e.target.value)}
           />
+        </Field>
+        <Field label="Itinerario">
+          <Input value={itineraryAuto || f.itinerary || ""} readOnly />
         </Field>
 
         <Field label="Mercadería">

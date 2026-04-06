@@ -2,6 +2,27 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
 
+const CONTAINER_TYPES = [
+  { value: '40 ST', label: '40 ST' },
+  { value: '20 ST', label: '20 ST' },
+  { value: 'Reefer 40', label: 'Reefer 40' },
+  { value: 'Reefer 20', label: 'Reefer 20' },
+  { value: 'HC', label: 'HC' },
+];
+
+const parseContainers = (v) => {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') {
+    try {
+      const parsed = JSON.parse(v);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
 const MODES = ['AIR', 'OCEAN', 'ROAD'];
 
 export default function MultimodalDetail({ dealId, data = {}, saving, onSaving, onSaved }) {
@@ -49,12 +70,44 @@ export default function MultimodalDetail({ dealId, data = {}, saving, onSaving, 
       ...f,
       ...data,
       legs: data?.legs || [],
-      containers_json: data?.containers_json || [],
+      containers_json: parseContainers(data?.containers_json),
       truck_plates_json: data?.truck_plates_json || []
     }));
   }, [data]);
 
   const set = (k, v) => setForm(s => ({ ...s, [k]: v }));
+  const isFcl = String(form.cargo_type || '').toUpperCase() === 'FCL';
+
+  const addCntr = () =>
+    set('containers_json', [
+      ...(form.containers_json || []),
+      { type: '', qty: '' }
+    ]);
+  const setCntr = (i, k, v) => {
+    const arr = [...(form.containers_json || [])];
+    arr[i] = { ...arr[i], [k]: v };
+    set('containers_json', arr);
+  };
+  const delCntr = (i) => {
+    const arr = [...(form.containers_json || [])];
+    arr.splice(i, 1);
+    set('containers_json', arr);
+  };
+
+  const containersQty = (form.containers_json || []).reduce(
+  useEffect(() => {
+    if (isFcl) set('packages', String(containersQty || 0));
+  }, [isFcl, containersQty]);
+  useEffect(() => {
+    if (isFcl && (form.containers_json || []).length === 0) {
+      set('containers_json', [{ type: '', qty: '' }]);
+    }
+  }, [isFcl]);
+
+    (s, c) => s + Number(c?.qty || 0),
+    0
+  );
+
 
   // Legs
   const addLeg = () => {
@@ -142,13 +195,81 @@ export default function MultimodalDetail({ dealId, data = {}, saving, onSaving, 
       <Section title="Datos de la carga">
         <Grid cols={4}>
           <Input label="MERCADERÍA" value={form.commodity} onChange={v => set('commodity', v)} />
-          <Input label="CANT BULTOS" type="number" value={form.packages} onChange={v => set('packages', v)} />
+          <Input
+            label={isFcl ? "CANT CONTENEDORES" : "CANT BULTOS"}
+            type="number"
+            value={isFcl ? containersQty : form.packages}
+            onChange={v => set('packages', v)}
+            disabled={isFcl}
+          />
           <Input label="P. BRUTO (kg)" type="number" value={form.weight_gross_kg} onChange={v => set('weight_gross_kg', v)} />
           <Input label="VOL M3" type="number" value={form.volume_m3} onChange={v => set('volume_m3', v)} />
           <Input label="P. VOL (kg)" type="number" value={form.chargeable_kg} onChange={v => set('chargeable_kg', v)} />
           <Input label="DIMENSIONES" value={form.dimensions_text} onChange={v => set('dimensions_text', v)} />
         </Grid>
       </Section>
+
+      {isFcl && (
+        <Section title="Contenedores">
+          <Grid cols={1}>
+            <div style={{ display: 'grid', gap: 8 }}>
+              {(form.containers_json || []).map((c, i) => (
+                <div
+                  key={i}
+                  style={{
+                    display:'grid',
+                    gridTemplateColumns:'1fr 120px 1fr 1fr auto',
+                    gap: 8,
+                    alignItems: 'end'
+                  }}
+                >
+                  <Select
+                    label="Tipo de contenedor"
+                    value={c.type || ''}
+                    onChange={v => setCntr(i, 'type', v)}
+                    options={['', ...CONTAINER_TYPES.map(t => t.value)]}
+                  />
+                  <Input label="Cantidad" type="number" value={c.qty} onChange={v => setCntr(i, 'qty', v)} />
+                  <Input label="Nro contenedor" value={c.cntr_no} onChange={v => setCntr(i, 'cntr_no', v)} />
+                  <Input label="Nro precinto" value={c.seal_no} onChange={v => setCntr(i, 'seal_no', v)} />
+                  <button
+                    type="button"
+                    onClick={() => delCntr(i)}
+                    style={{
+                      height: 36,
+                      border: 0,
+                      background: '#f1f5f9',
+                      borderRadius: 8,
+                      padding: '8px 10px',
+                      cursor: 'pointer'
+                    }}
+                    title="Eliminar contenedor"
+                  >
+                    X
+                  </button>
+                </div>
+              ))}
+              <div>
+                <button
+                  type="button"
+                  onClick={addCntr}
+                  style={{
+                    width: 180,
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    border: '1px dashed #94a3b8',
+                    background: 'transparent',
+                    cursor: 'pointer'
+                  }}
+                >
+                  + Agregar contenedor
+                </button>
+              </div>
+            </div>
+          </Grid>
+        </Section>
+      )}
+
 
       {/* ======= Tiempos / Free / Itinerario ======= */}
       <Section title="Tiempos & Free">

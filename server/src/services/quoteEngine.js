@@ -139,6 +139,8 @@ export function computeQuote(inputs = {}) {
 
   const ofertaBase = itemsArr.map((it, idx) => {
     const doorVal = toUsdOp(it.door_value_usd);
+    const saleMode = (it.sale_mode || "auto").toString();
+    const salePriceInput = toUsdOp(it.sale_price ?? 0);
     const participation = hasDoors ? doorVal / total_door_usd : 0;
     const flete_i = total_flete_usd * participation;
     const seguro_i = total_seguro_usd * participation;
@@ -148,6 +150,8 @@ export function computeQuote(inputs = {}) {
       description: it.description || "",
       qty: Number(it.qty || 0),
       door_value_usd: doorVal,
+      sale_mode: saleMode,
+      sale_price_input: salePriceInput,
       participation,
       flete_base: flete_i,
       seguro_base: seguro_i,
@@ -163,7 +167,7 @@ export function computeQuote(inputs = {}) {
      Base: Valor Imponible = CIF = Puertas + Flete + Seguro
   */
   const tcAduana = Number(exchange_rate_customs_gs_per_usd || 0);
-  const tcInterno = Number(exchange_rate_customs_internal_gs_per_usd || 1);
+  const tcInterno = Number(exchange_rate_customs_internal_gs_per_usd ?? 1);
 
   let customsLines = Array.isArray(customs_lines) ? customs_lines : [];
   if (!include_customs) customsLines = [];
@@ -317,18 +321,22 @@ export function computeQuote(inputs = {}) {
     const valor_imp_i = r.door_value_usd + flete_i + seguro_i; // CIF por item
     const sub_total_i = valor_imp_i + despacho_i + finan_i + instal_i;
 
-    // ✅ RENT = 30% sobre VALOR IMP (CIF)
-    const rent_i = r.door_value_usd * rentRate; // ✅ (solo puerta)
+    const isManual =
+      String(r.sale_mode || "").toLowerCase() === "manual" &&
+      Number(r.sale_price_input || 0) > 0;
 
+    // ✅ RENT = 30% sobre VALOR IMP (CIF) - solo si auto
+    const rent_i = isManual ? 0 : r.door_value_usd * rentRate; // ✅ (solo puerta)
 
-    // ✅ adicional por item (no prorrateo / no solo item 1)
-    const adicional_i = Number(r.adicional_input || 0);
+    // ✅ adicional por item (no prorrateo / no solo item 1) - solo si auto
+    const adicional_i = isManual ? 0 : Number(r.adicional_input || 0);
 
-    const total_sales_i = sub_total_i + rent_i + adicional_i;
+    const total_sales_i = isManual ? Number(r.sale_price_input || 0) : sub_total_i + rent_i + adicional_i;
     const unit_price_i = r.qty > 0 ? total_sales_i / r.qty : null;
 
     return {
       ...r,
+      sale_price: isManual ? Number(r.sale_price_input || 0) : null,
       flete: round2(flete_i),
       seguro: round2(seguro_i),
       despacho: round2(despacho_i),
@@ -347,6 +355,11 @@ export function computeQuote(inputs = {}) {
   const total_sales_usd = sumNum(ofertaItemsFull.map((r) => r.total_sales));
   const total_rent_usd = sumNum(ofertaItemsFull.map((r) => r.rent));
   const total_additional_usd = sumNum(ofertaItemsFull.map((r) => r.adicional));
+  const venta_puertas = sumNum(
+    ofertaItemsFull.map((r) =>
+      r.sale_price != null ? r.sale_price : Number(r.door_value_usd || 0) + Number(r.rent || 0)
+    )
+  );
 
   /* ================= OPERACION (profit final) ================= */
   const seguros_compra_usd = total_door_usd * Number(insurance_buy_rate || 0);
@@ -356,7 +369,6 @@ export function computeQuote(inputs = {}) {
       : total_seguro_usd - seguros_compra_usd;
 
   const compra_puertas = total_door_usd;
-  const venta_puertas = total_door_usd + total_rent_usd;
   const profit_puertas = venta_puertas - compra_puertas;
 
   const compra_flete = toUsdOp(freight_buy_usd);
