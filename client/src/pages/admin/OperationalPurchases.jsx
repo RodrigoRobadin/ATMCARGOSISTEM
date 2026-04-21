@@ -99,6 +99,8 @@ export default function OperationalPurchases() {
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [historyInvoice, setHistoryInvoice] = useState(null);
   const [paymentHistory, setPaymentHistory] = useState([]);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailInvoice, setDetailInvoice] = useState(null);
 
   const [orderModalOpen, setOrderModalOpen] = useState(false);
   const [orderInvoice, setOrderInvoice] = useState(null);
@@ -297,10 +299,33 @@ export default function OperationalPurchases() {
     setOrderModalOpen(true);
   }
 
+  function openDetail(inv) {
+    setDetailInvoice(inv);
+    setDetailOpen(true);
+  }
+
   function isRowSelectable(row) {
     const isCredito = String(row.condition_type || "").toUpperCase() === "CREDITO";
     const poStatus = String(row.payment_order_status || "").toLowerCase();
     return isCredito && poStatus !== "pagada";
+  }
+
+  function paymentGateLabel(row) {
+    const isCredito = String(row.condition_type || "").toUpperCase() === "CREDITO";
+    const poStatus = String(row.payment_order_status || "").toLowerCase();
+    if (!isCredito) return "Contado";
+    if (!row.payment_order_id) return "Sin orden de pago";
+    if (poStatus === "pendiente") return "OP en aprobacion";
+    if (poStatus === "aprobada") return "OP aprobada";
+    if (poStatus === "pago_parcial") return "OP con pago parcial";
+    if (poStatus === "pagada") return "OP pagada";
+    if (poStatus === "anulada") return "OP anulada";
+    return "Con OP";
+  }
+
+  function canRegisterPaymentFromDetail(row) {
+    const poStatus = String(row.payment_order_status || "").toLowerCase();
+    return row?.payment_order_id && ["aprobada", "pago_parcial"].includes(poStatus);
   }
 
   function toggleSelected(id) {
@@ -630,52 +655,12 @@ export default function OperationalPurchases() {
                     </td>
                     <td className="px-3 py-2">{r.currency_code || "PYG"} {formatMoney(r.balance, r.currency_code)}</td>
                     <td className="px-3 py-2">
-                      {String(r.condition_type || "").toUpperCase() === "CREDITO" && (
-                        <div className="flex flex-col gap-1">
-                          {!r.payment_order_id ? (
-                            <button
-                              className="px-2 py-1 rounded border text-xs text-blue-700 hover:bg-blue-50 text-left"
-                              onClick={() => openOrder(r)}
-                            >
-                              Generar orden de pago
-                            </button>
-                          ) : (
-                            <>
-                              <div className="text-left">
-                                <PaymentOrderBadge status={r.payment_order_status} />
-                              </div>
-                              <button
-                                className="px-2 py-1 rounded border text-xs text-blue-700 hover:bg-blue-50 text-left disabled:opacity-60"
-                                onClick={() => openPayment(r)}
-                                disabled={["pendiente", "anulada"].includes(String(r.payment_order_status || "").toLowerCase())}>
-                                {["pendiente"].includes(String(r.payment_order_status || "").toLowerCase())
-                                  ? "Pendiente aprobacion"
-                                  : ["anulada"].includes(String(r.payment_order_status || "").toLowerCase())
-                                  ? "Orden anulada"
-                                  : "Registrar pago"}
-                              </button>
-                              <button
-                                className="px-2 py-1 rounded border text-xs text-slate-700 hover:bg-slate-50 text-left"
-                                onClick={() => openOrderPdf(r, false)}
-                              >
-                                Ver orden de pago
-                              </button>
-                              <button
-                                className="px-2 py-1 rounded border text-xs text-slate-700 hover:bg-slate-50 text-left"
-                                onClick={() => openOrderPdf(r, true)}
-                              >
-                                Descargar orden de pago
-                              </button>
-                            </>
-                          )}
-                          <button
-                            className="px-2 py-1 rounded border text-xs text-emerald-700 hover:bg-emerald-50 text-left"
-                            onClick={() => openHistory(r)}
-                          >
-                            Ver pagos
-                          </button>
-                        </div>
-                      )}
+                      <button
+                        className="px-2 py-1 rounded border text-xs hover:bg-slate-50 text-left"
+                        onClick={() => openDetail(r)}
+                      >
+                        Ver detalle
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -687,6 +672,125 @@ export default function OperationalPurchases() {
           </div>
         </div>
       )}
+
+      {detailOpen && detailInvoice && (
+        <div className="fixed inset-0 z-40">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setDetailOpen(false)} />
+          <div className="absolute right-0 top-0 h-full w-full max-w-3xl overflow-y-auto bg-white shadow-xl">
+            <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b bg-white px-6 py-4">
+              <div>
+                <div className="text-xs text-slate-500">Detalle de compra operativa</div>
+                <h3 className="text-xl font-semibold text-slate-800">
+                  {detailInvoice.receipt_number || "Comprobante"} · {detailInvoice.supplier_display || "Proveedor"}
+                </h3>
+                <div className="mt-1 text-sm text-slate-500">
+                  {detailInvoice.operation_reference || detailInvoice.operation_id} · {detailInvoice.client_name || "--"}
+                </div>
+              </div>
+              <button className="rounded border px-3 py-2 text-sm" onClick={() => setDetailOpen(false)}>
+                Cerrar
+              </button>
+            </div>
+
+            <div className="space-y-4 p-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                <div className="rounded-xl border bg-white p-4">
+                  <div className="text-xs text-slate-500">Total</div>
+                  <div className="mt-2 text-sm font-semibold text-slate-800">
+                    {detailInvoice.currency_code || "PYG"} {formatMoney(detailInvoice.amount_total, detailInvoice.currency_code)}
+                  </div>
+                </div>
+                <div className="rounded-xl border bg-white p-4">
+                  <div className="text-xs text-slate-500">Saldo</div>
+                  <div className="mt-2 text-sm font-semibold text-slate-800">
+                    {detailInvoice.currency_code || "PYG"} {formatMoney(detailInvoice.balance, detailInvoice.currency_code)}
+                  </div>
+                </div>
+                <div className="rounded-xl border bg-white p-4">
+                  <div className="text-xs text-slate-500">Estado pago</div>
+                  <div className="mt-2">
+                    <span className={`text-xs px-2 py-1 rounded ${detailInvoice.payment_status === "pagado" ? "bg-emerald-100 text-emerald-700" : detailInvoice.payment_status === "parcial" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"}`}>
+                      {detailInvoice.payment_status || "pendiente"}
+                    </span>
+                  </div>
+                </div>
+                <div className="rounded-xl border bg-white p-4">
+                  <div className="text-xs text-slate-500">Orden de pago</div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {detailInvoice.payment_order_id ? (
+                      <PaymentOrderBadge status={detailInvoice.payment_order_status} />
+                    ) : (
+                      <span className="text-xs px-2 py-1 rounded bg-slate-100 text-slate-600">Sin OP</span>
+                    )}
+                    <span className="text-xs px-2 py-1 rounded bg-slate-50 text-slate-700">
+                      {paymentGateLabel(detailInvoice)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border bg-white p-4">
+                <div className="mb-3 text-sm font-medium text-slate-800">Datos</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                  <div><span className="text-slate-500">Operacion:</span> <span className="font-medium">{detailInvoice.operation_reference || detailInvoice.operation_id}</span></div>
+                  <div><span className="text-slate-500">Cliente:</span> <span className="font-medium">{detailInvoice.client_name || "--"}</span></div>
+                  <div><span className="text-slate-500">Proveedor:</span> <span className="font-medium">{detailInvoice.supplier_display || "--"}</span></div>
+                  <div><span className="text-slate-500">Vencimiento:</span> <span className="font-medium">{detailInvoice.due_date || "--"}</span></div>
+                  <div><span className="text-slate-500">Condicion:</span> <span className="font-medium">{detailInvoice.condition_type || "--"}</span></div>
+                  <div><span className="text-slate-500">Adjuntos:</span> <span className="font-medium">{detailInvoice.attachment_count || 0}</span></div>
+                </div>
+                {detailInvoice.attachment_url ? (
+                  <div className="mt-3">
+                    <a className="text-sm text-blue-600 underline" href={resolveUploadUrl(detailInvoice.attachment_url)} target="_blank" rel="noreferrer">
+                      Ver comprobante
+                    </a>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="rounded-2xl border bg-white p-4">
+                <div className="mb-3 text-sm font-medium text-slate-800">Acciones</div>
+                <div className="flex flex-wrap gap-2">
+                  <Link
+                    className="rounded border px-3 py-2 text-sm hover:bg-slate-50"
+                    to={detailInvoice.operation_type === "service" ? `/service/cases/${detailInvoice.operation_id}` : `/operations/${detailInvoice.operation_id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Abrir operacion
+                  </Link>
+                  {!detailInvoice.payment_order_id && String(detailInvoice.condition_type || "").toUpperCase() === "CREDITO" && (
+                    <button className="rounded border px-3 py-2 text-sm text-blue-700 hover:bg-blue-50" onClick={() => openOrder(detailInvoice)}>
+                      Generar orden de pago
+                    </button>
+                  )}
+                  {detailInvoice.payment_order_id && (
+                    <>
+                      <button className="rounded border px-3 py-2 text-sm hover:bg-slate-50" onClick={() => openOrderPdf(detailInvoice, false)}>
+                        Ver orden de pago
+                      </button>
+                      <button className="rounded border px-3 py-2 text-sm hover:bg-slate-50" onClick={() => openOrderPdf(detailInvoice, true)}>
+                        Descargar orden de pago
+                      </button>
+                    </>
+                  )}
+                  <button
+                    className="rounded border px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
+                    onClick={() => openPayment(detailInvoice)}
+                    disabled={!canRegisterPaymentFromDetail(detailInvoice)}
+                  >
+                    {canRegisterPaymentFromDetail(detailInvoice) ? "Registrar pago" : paymentGateLabel(detailInvoice)}
+                  </button>
+                  <button className="rounded border px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50" onClick={() => openHistory(detailInvoice)}>
+                    Ver pagos
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {paymentModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-4">

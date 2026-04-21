@@ -5,13 +5,15 @@ import React, {
   useState,
   useRef,
 } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
+import { useAuth } from "../auth.jsx";
 import DetCosSheet from "./DetCosSheet";
 import QuoteEditor from "./QuoteEditor";
 import ReportPreview from "../components/op-details/ReportPreview";
 import OperationExpenseInvoices from "../components/OperationExpenseInvoices.jsx";
 import IndustrialDoorList from "../components/op-details/IndustrialDoorList";
+import AdminOpsPanel from "../components/op-details/AdminOpsPanel.jsx";
 import {
   buildQuoteEmailPlainText,
   buildQuoteEmailHtml,
@@ -393,6 +395,9 @@ function providerHasFreightTag(p = {}) {
 
 export default function OperationDetailIndustrial() {
   const { id } = useParams();
+  const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const isAdmin = String(user?.role || "").toLowerCase() === "admin";
 
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState(null);
@@ -449,6 +454,22 @@ export default function OperationDetailIndustrial() {
 
   const [generatingReport, setGeneratingReport] = useState(false);
   const [showReportPreview, setShowReportPreview] = useState(false);
+  const requestedTab = String(searchParams.get("tab") || "").toLowerCase();
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (requestedTab === "administracion") {
+      setActiveTab("administracion");
+    }
+  }, [isAdmin, requestedTab, id]);
+
+  function handleTabChange(nextTab) {
+    setActiveTab(nextTab);
+    const nextParams = new URLSearchParams(searchParams);
+    if (isAdmin && nextTab === "administracion") nextParams.set("tab", "administracion");
+    else nextParams.delete("tab");
+    setSearchParams(nextParams, { replace: true });
+  }
 
   useEffect(() => {
     let live = true;
@@ -1144,6 +1165,7 @@ export default function OperationDetailIndustrial() {
     { id: "detalle", kind: "base", label: "Detalle" },
     { id: "documentos", kind: "base", label: "Documentos" },
     { id: "gastos", kind: "base", label: "Gastos" },
+    ...(isAdmin ? [{ id: "administracion", kind: "base", label: "Administración" }] : []),
     {
       id: "detcos",
       kind: "base",
@@ -1187,6 +1209,39 @@ export default function OperationDetailIndustrial() {
     const revId = Number(sid.slice(4));
     return Number.isFinite(revId) ? revId : null;
   }
+
+  function getStoredIndustrialRevisionId() {
+    try {
+      const raw = window.sessionStorage.getItem(`industrial-quote-revision:deal:${Number(id)}`);
+      const parsed = Number(raw || 0);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  const [selectedQuoteRevisionId, setSelectedQuoteRevisionId] = useState(() => getStoredIndustrialRevisionId());
+
+  useEffect(() => {
+    setSelectedQuoteRevisionId(getStoredIndustrialRevisionId());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  useEffect(() => {
+    function handleQuoteRevisionSelected(e) {
+      if (Number(e?.detail?.dealId || 0) !== Number(id)) return;
+      setSelectedQuoteRevisionId(e?.detail?.revisionId || null);
+    }
+    window.addEventListener("quote-revision-selected", handleQuoteRevisionSelected);
+    return () => window.removeEventListener("quote-revision-selected", handleQuoteRevisionSelected);
+  }, [id]);
+
+  const currentIndustrialRevisionId = isRevisionTab(activeTab)
+    ? getRevisionIdFromTab(activeTab)
+    : selectedQuoteRevisionId;
+  const industrialQuoteHref = currentIndustrialRevisionId
+    ? `/operations/${id}/industrial-quote?revision_id=${currentIndustrialRevisionId}`
+    : `/operations/${id}/industrial-quote`;
 
   function getFileFromTab(id) {
     const sid = String(id);
@@ -1885,7 +1940,7 @@ export default function OperationDetailIndustrial() {
                 ? "bg-black text-white"
                 : "bg-white"
                 }`}
-              onClick={() => setActiveTab(t.id)}
+              onClick={() => handleTabChange(t.id)}
               title={t.label}
             >
               {t.label}
@@ -1911,6 +1966,17 @@ export default function OperationDetailIndustrial() {
             />
           ) : activeTab === "gastos" ? (
             <div />
+          ) : activeTab === "administracion" ? (
+            <AdminOpsPanel
+              dealId={Number(id)}
+              deal={deal}
+              onDocsRefresh={() => {
+                api
+                  .get("/invoices/operation-docs", { params: { deal_id: id } })
+                  .then(({ data }) => setOpDocs(Array.isArray(data) ? data : []))
+                  .catch(() => setOpDocs([]));
+              }}
+            />
           ) : activeTab === "detalle-oferta" ? (
             quoteLoading ? (
               <div className="bg-white rounded-2xl shadow p-4 text-sm text-slate-600">
@@ -2774,7 +2840,7 @@ export default function OperationDetailIndustrial() {
               </button>
 
               <Link
-                to={`/operations/${id}/industrial-quote`}
+                to={industrialQuoteHref}
                 className="px-3 py-2 text-sm rounded-lg bg-blue-600 text-white text-center hover:opacity-90"
               >
                 Presupuesto (Industrial)

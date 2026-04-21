@@ -105,6 +105,9 @@ router.get("/ops", async (req, res) => {
          CONVERT(c.name USING utf8mb4) COLLATE utf8mb4_unicode_ci AS contact_name,
          d.updated_at,
          d.value,
+         d.business_unit_id,
+         CONVERT(bu.name USING utf8mb4) COLLATE utf8mb4_unicode_ci AS business_unit_name,
+         CONVERT(bu.key_slug USING utf8mb4) COLLATE utf8mb4_unicode_ci AS business_unit_key,
          CONVERT(inv.invoice_numbers USING utf8mb4) COLLATE utf8mb4_unicode_ci AS invoice_numbers,
          CONVERT(inv.invoice_statuses USING utf8mb4) COLLATE utf8mb4_unicode_ci AS invoice_statuses,
          CASE WHEN s.name = 'En transito' THEN 1 ELSE 0 END AS in_transit,
@@ -114,6 +117,7 @@ router.get("/ops", async (req, res) => {
        JOIN stages s             ON s.id = d.stage_id AND s.pipeline_id = d.pipeline_id
        LEFT JOIN organizations o ON o.id = d.org_id
        LEFT JOIN contacts      c ON c.id = d.contact_id
+       LEFT JOIN business_units bu ON bu.id = d.business_unit_id
        LEFT JOIN (
          SELECT
            deal_id,
@@ -140,6 +144,9 @@ router.get("/ops", async (req, res) => {
          NULL AS contact_name,
          sc.updated_at,
          0 AS value,
+         NULL AS business_unit_id,
+         'Servicios y mantenimiento' COLLATE utf8mb4_unicode_ci AS business_unit_name,
+         'services' COLLATE utf8mb4_unicode_ci AS business_unit_key,
          CONVERT(inv2.invoice_numbers USING utf8mb4) COLLATE utf8mb4_unicode_ci AS invoice_numbers,
          CONVERT(inv2.invoice_statuses USING utf8mb4) COLLATE utf8mb4_unicode_ci AS invoice_statuses,
          CASE WHEN s2.name = 'En transito' THEN 1 ELSE 0 END AS in_transit,

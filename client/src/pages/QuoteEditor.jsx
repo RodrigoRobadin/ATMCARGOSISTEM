@@ -3,11 +3,23 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams, useLocation } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth.jsx";
+import { RichTextDialogField } from "../components/RichTextEditor.jsx";
+
+function quoteRevisionSelectionStorageKey({ dealId = null, serviceCaseId = null } = {}) {
+  if (Number.isFinite(Number(serviceCaseId)) && Number(serviceCaseId) > 0) {
+    return `industrial-quote-revision:service:${Number(serviceCaseId)}`;
+  }
+  if (Number.isFinite(Number(dealId)) && Number(dealId) > 0) {
+    return `industrial-quote-revision:deal:${Number(dealId)}`;
+  }
+  return "";
+}
 
 const emptyItem = (n = 1) => ({
   line_no: n,
   description: "",
   observation: "",
+  observation_html: "",
   qty: 1,
   door_value_usd: 0,
   additional_usd: 0, // ✅ adicional por item
@@ -734,6 +746,32 @@ export default function QuoteEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, quoteIdProp, dealIdProp, serviceCaseId, serviceCaseIdProp]);
 
+  useEffect(() => {
+    const storageKey = quoteRevisionSelectionStorageKey({ dealId, serviceCaseId });
+    if (!storageKey) return;
+
+    try {
+      if (selectedRevisionId) {
+        window.sessionStorage.setItem(storageKey, String(selectedRevisionId));
+      } else {
+        window.sessionStorage.removeItem(storageKey);
+      }
+    } catch (_) {}
+
+    try {
+      window.dispatchEvent(
+        new CustomEvent("quote-revision-selected", {
+          detail: {
+            quoteId,
+            dealId,
+            serviceCaseId,
+            revisionId: selectedRevisionId || null,
+          },
+        })
+      );
+    } catch (_) {}
+  }, [selectedRevisionId, quoteId, dealId, serviceCaseId]);
+
   const ofertaTotals = computed?.oferta?.totals || null;
   const opTotals = computed?.operacion?.totals || null;
 
@@ -1243,12 +1281,24 @@ export default function QuoteEditor({
                         onChange={(e) => setItem(idx, "description", e.target.value)}
                       />
                     </td>
-                    <td className="px-3 py-2">
-                      <input
-                        className="w-full border rounded-lg px-2 py-1"
-                        placeholder="Observación / detalle"
-                        value={it.observation || ""}
-                        onChange={(e) => setItem(idx, "observation", e.target.value)}
+                    <td className="px-3 py-2 w-[240px]">
+                      <RichTextDialogField
+                        value={it.observation_html || it.observation || ""}
+                        placeholder="Observación / detalle con formato"
+                        dialogTitle={`Observación del item ${it.line_no ?? idx + 1}`}
+                        minHeightClass="min-h-[220px]"
+                        widthClass="w-[220px] max-w-[220px]"
+                        onChange={({ html, text }) => {
+                          setInputs((prev) => {
+                            const items = [...(prev.items || [])];
+                            items[idx] = {
+                              ...items[idx],
+                              observation_html: html,
+                              observation: text,
+                            };
+                            return { ...prev, items };
+                          });
+                        }}
                       />
                     </td>
                     <td className="px-3 py-2 w-28">

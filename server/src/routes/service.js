@@ -340,6 +340,10 @@ async function ensureServiceTables() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
+  try {
+    await pool.query('ALTER TABLE service_case_custom_fields MODIFY COLUMN value LONGTEXT NULL');
+  } catch (_) {}
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS service_case_install_costs (
       service_case_id INT PRIMARY KEY,

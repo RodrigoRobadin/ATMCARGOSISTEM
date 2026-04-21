@@ -116,10 +116,18 @@ function buildDraftContract(dealId, units = [], payload = {}) {
     },
     units: Array.isArray(payload.units)
       ? payload.units
+          .map((row, index) => ({
+            ...row,
+            line_order: row.line_order || index + 1,
+            monthly_rent_amount: row.monthly_rent_amount ?? 0,
+            currency_code: row.currency_code || currency,
+          }))
       : units.map((row, index) => ({
           container_unit_id: row.id,
           container_no: row.container_no,
           container_type: row.container_type,
+          monthly_rent_amount: 0,
+          currency_code: currency,
           line_order: index + 1,
         })),
     lines: Array.isArray(payload.lines) && payload.lines.length
@@ -202,6 +210,7 @@ export default function ContainerContractsPanel({ dealId, dealReference, dealOrg
       const normalizedUnits = (units || [])
         .filter((row) => selected.has(Number(row.id)))
         .map((row, index) => ({
+          ...(prev.units || []).find((unitRow) => Number(unitRow.container_unit_id) === Number(row.id)),
           container_unit_id: row.id,
           container_no: row.container_no,
           container_type: row.container_type,
@@ -278,6 +287,8 @@ export default function ContainerContractsPanel({ dealId, dealReference, dealOrg
               container_unit_id: unit.id,
               container_no: unit.container_no,
               container_type: unit.container_type,
+              monthly_rent_amount: 0,
+              currency_code: prev.contract.currency_code || "PYG",
               line_order: (prev.units || []).length + 1,
             },
           ];
@@ -318,6 +329,8 @@ export default function ContainerContractsPanel({ dealId, dealReference, dealOrg
         contract: contractData.contract,
         units: (contractData.units || []).map((row, index) => ({
           container_unit_id: row.container_unit_id,
+          monthly_rent_amount: Number(row.monthly_rent_amount || 0) || 0,
+          currency_code: row.currency_code || contractData.contract.currency_code || "PYG",
           line_order: index + 1,
         })),
         lines: (contractData.lines || []).map((row, index) => ({
@@ -529,6 +542,7 @@ export default function ContainerContractsPanel({ dealId, dealReference, dealOrg
                   patchContract("currency_code", nextCurrency);
                   setContractData((prev) => ({
                     ...prev,
+                    units: (prev.units || []).map((unit) => ({ ...unit, currency_code: nextCurrency })),
                     lines: (prev.lines || []).map((line) => ({ ...line, currency_code: nextCurrency })),
                   }));
                 }}>
@@ -732,6 +746,59 @@ export default function ContainerContractsPanel({ dealId, dealReference, dealOrg
                 })}
                 {!units.length && <div className="text-sm text-slate-500">No hay contenedores cargados.</div>}
               </div>
+              {!!(contractData.units || []).length && (
+                <div className="space-y-3 pt-2">
+                  <div className="text-sm font-medium text-slate-700">Canon mensual por contenedor</div>
+                  {(contractData.units || []).map((unitRow, index) => (
+                    <div
+                      key={`${unitRow.container_unit_id}-${index}`}
+                      className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_180px_120px] gap-3 border rounded-xl p-3"
+                    >
+                      <div>
+                        <div className="font-medium">{unitRow.container_no || `Contenedor #${unitRow.container_unit_id}`}</div>
+                        <div className="text-xs text-slate-500">{unitRow.container_type || "Sin tipo"}</div>
+                      </div>
+                      <label className="text-sm">
+                        <div className="text-xs text-slate-600 mb-1">Monto mensual</div>
+                        <input
+                          className="w-full border rounded-lg px-3 py-2"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={unitRow.monthly_rent_amount ?? 0}
+                          onChange={(e) =>
+                            setContractData((prev) => ({
+                              ...prev,
+                              units: (prev.units || []).map((row, rowIndex) =>
+                                rowIndex === index ? { ...row, monthly_rent_amount: e.target.value } : row
+                              ),
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="text-sm">
+                        <div className="text-xs text-slate-600 mb-1">Moneda</div>
+                        <select
+                          className="w-full border rounded-lg px-3 py-2 bg-white"
+                          value={unitRow.currency_code || contractData.contract.currency_code || "PYG"}
+                          onChange={(e) =>
+                            setContractData((prev) => ({
+                              ...prev,
+                              units: (prev.units || []).map((row, rowIndex) =>
+                                rowIndex === index ? { ...row, currency_code: e.target.value } : row
+                              ),
+                            }))
+                          }
+                        >
+                          {CURRENCIES.map((currency) => (
+                            <option key={currency} value={currency}>{currency}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="rounded-xl border p-4 space-y-3">

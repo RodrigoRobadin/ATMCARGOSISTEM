@@ -125,10 +125,28 @@ export default function ContainerBillingPanel({ dealId }) {
   }
 
   async function generateBilling(contractId) {
+    const contract = contracts.find((row) => Number(row.id) === Number(contractId));
+    const contractLabel = contract?.contract_no || `Contrato #${contractId}`;
+    if (!window.confirm(`Vas a generar la siguiente mensualidad de ${contractLabel}. Deseas continuar?`)) {
+      return;
+    }
+
     try {
       setBusyId(`generate-${contractId}`);
       const { data } = await api.post(`/container/contracts/${contractId}/billing/generate`);
-      setRows((prev) => [data, ...prev]);
+      const created = Array.isArray(data?.created)
+        ? data.created
+        : data
+        ? [data]
+        : [];
+      setRows((prev) => [...created, ...prev]);
+      const createdMsg = created.length
+        ? `${created.length} mensualidad${created.length === 1 ? "" : "es"} generada${created.length === 1 ? "" : "s"}`
+        : "No se generaron mensualidades";
+      const skippedMsg = Array.isArray(data?.skipped) && data.skipped.length
+        ? `\nOmitidas: ${data.skipped.map((row) => row.container_no || row.container_unit_id || "contenedor").join(", ")}.`
+        : "";
+      alert(`${createdMsg}.${skippedMsg}`);
     } catch (err) {
       console.error("generate container billing", err);
       alert(err?.response?.data?.error || "No se pudo generar la mensualidad.");
@@ -217,6 +235,7 @@ export default function ContainerBillingPanel({ dealId }) {
             <thead className="bg-slate-50">
               <tr>
                 <th className="px-3 py-2 text-left">Contrato</th>
+                <th className="px-3 py-2 text-left">Contenedor</th>
                 <th className="px-3 py-2 text-left">Ciclo</th>
                 <th className="px-3 py-2 text-left">Periodo</th>
                 <th className="px-3 py-2 text-left">Vencimiento</th>
@@ -230,7 +249,7 @@ export default function ContainerBillingPanel({ dealId }) {
             <tbody>
               {loading && (
                 <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={10} className="px-4 py-8 text-center text-slate-500">
                     Cargando...
                   </td>
                 </tr>
@@ -241,6 +260,7 @@ export default function ContainerBillingPanel({ dealId }) {
                   return (
                   <tr key={row.id} className="border-t">
                     <td className="px-3 py-2 font-medium">{row.contract_no || "-"}</td>
+                    <td className="px-3 py-2 text-slate-700">{row.containers_label || "-"}</td>
                     <td className="px-3 py-2">{row.cycle_label || "-"}</td>
                     <td className="px-3 py-2">{row.period_start} - {row.period_end}</td>
                     <td className="px-3 py-2">{row.due_date || "-"}</td>
@@ -308,7 +328,7 @@ export default function ContainerBillingPanel({ dealId }) {
                 })}
               {!loading && !rows.length && (
                 <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={10} className="px-4 py-8 text-center text-slate-500">
                     No hay mensualidades generadas todavia.
                   </td>
                 </tr>

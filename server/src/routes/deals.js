@@ -169,6 +169,13 @@ const upload = multer({ storage });
       } catch (_) {}
     }
 
+    try {
+      await pool.query(`
+        ALTER TABLE deal_custom_fields
+        MODIFY COLUMN \`value\` LONGTEXT NULL
+      `);
+    } catch (_) {}
+
     try { await pool.query(`ALTER TABLE deal_custom_fields ADD INDEX idx_dcf_deal (deal_id)`); } catch (_) {}
     try {
       await pool.query(`

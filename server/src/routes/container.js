@@ -211,12 +211,27 @@ async function ensureContainerSchema() {
       id INT AUTO_INCREMENT PRIMARY KEY,
       contract_id INT NOT NULL,
       container_unit_id INT NOT NULL,
+      monthly_rent_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+      currency_code VARCHAR(8) NOT NULL DEFAULT 'PYG',
       line_order INT NOT NULL DEFAULT 1,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_container_contract_units_contract (contract_id),
       INDEX idx_container_contract_units_unit (container_unit_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+
+  const [contractUnitCols] = await pool.query(`
+    SELECT COLUMN_NAME
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'container_contract_units'
+  `);
+  const contractUnitColSet = new Set((contractUnitCols || []).map((row) => row.COLUMN_NAME));
+  if (!contractUnitColSet.has('monthly_rent_amount')) {
+    await pool.query(`ALTER TABLE container_contract_units ADD COLUMN monthly_rent_amount DECIMAL(15,2) NOT NULL DEFAULT 0 AFTER container_unit_id`);
+  }
+  if (!contractUnitColSet.has('currency_code')) {
+    await pool.query(`ALTER TABLE container_contract_units ADD COLUMN currency_code VARCHAR(8) NOT NULL DEFAULT 'PYG' AFTER monthly_rent_amount`);
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS container_contract_lines (
@@ -283,6 +298,7 @@ async function ensureContainerSchema() {
       id INT AUTO_INCREMENT PRIMARY KEY,
       contract_id INT NOT NULL,
       deal_id INT NOT NULL,
+      container_unit_id INT NULL,
       cycle_label VARCHAR(20) NOT NULL,
       period_start DATE NOT NULL,
       period_end DATE NOT NULL,
@@ -294,9 +310,10 @@ async function ensureContainerSchema() {
       created_by INT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      UNIQUE KEY uq_container_billing_contract_cycle (contract_id, cycle_label),
+      UNIQUE KEY uq_container_billing_contract_unit_cycle (contract_id, container_unit_id, cycle_label),
       INDEX idx_container_billing_contract (contract_id),
       INDEX idx_container_billing_deal (deal_id),
+      INDEX idx_container_billing_unit (container_unit_id),
       INDEX idx_container_billing_status (status),
       INDEX idx_container_billing_due_date (due_date)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -311,6 +328,19 @@ async function ensureContainerSchema() {
   if (!billingColSet.has('invoice_id')) {
     await pool.query(`ALTER TABLE container_billing_cycles ADD COLUMN invoice_id INT NULL AFTER status`);
   }
+  if (!billingColSet.has('container_unit_id')) {
+    await pool.query(`ALTER TABLE container_billing_cycles ADD COLUMN container_unit_id INT NULL AFTER deal_id`);
+    await pool.query(`
+      UPDATE container_billing_cycles bc
+      INNER JOIN (
+        SELECT ccu.contract_id, MIN(ccu.container_unit_id) AS container_unit_id, COUNT(*) AS total_units
+        FROM container_contract_units ccu
+        GROUP BY ccu.contract_id
+      ) one_unit ON one_unit.contract_id = bc.contract_id AND one_unit.total_units = 1
+      SET bc.container_unit_id = one_unit.container_unit_id
+      WHERE bc.container_unit_id IS NULL
+    `);
+  }
   if (!billingColSet.has('invoiced_at')) {
     await pool.query(`ALTER TABLE container_billing_cycles ADD COLUMN invoiced_at DATETIME NULL AFTER invoice_id`);
   }
@@ -320,6 +350,15 @@ async function ensureContainerSchema() {
   if (!billingColSet.has('tax_rate')) {
     await pool.query(`ALTER TABLE container_billing_cycles ADD COLUMN tax_rate DECIMAL(6,2) NOT NULL DEFAULT 10 AFTER currency_code`);
   }
+  try {
+    await pool.query(`ALTER TABLE container_billing_cycles DROP INDEX uq_container_billing_contract_cycle`);
+  } catch (_err) {}
+  try {
+    await pool.query(`ALTER TABLE container_billing_cycles ADD UNIQUE KEY uq_container_billing_contract_unit_cycle (contract_id, container_unit_id, cycle_label)`);
+  } catch (_err) {}
+  try {
+    await pool.query(`ALTER TABLE container_billing_cycles ADD INDEX idx_container_billing_unit (container_unit_id)`);
+  } catch (_err) {}
 }
 
 async function getContainerBusinessUnitId() {
@@ -444,6 +483,8 @@ async function getContractFull(contractId, { revisionId = null } = {}) {
       SELECT
         ccu.id,
         ccu.container_unit_id,
+        ccu.monthly_rent_amount,
+        ccu.currency_code,
         ccu.line_order,
         cu.container_no,
         cu.container_type,
@@ -563,9 +604,15 @@ async function upsertContractGraph(contractId, payload) {
       const unit = units[index];
       if (!unit?.container_unit_id) continue;
       await conn.query(
-        `INSERT INTO container_contract_units (contract_id, container_unit_id, line_order)
-         VALUES (?, ?, ?)`,
-        [contractId, unit.container_unit_id, index + 1]
+        `INSERT INTO container_contract_units (contract_id, container_unit_id, monthly_rent_amount, currency_code, line_order)
+         VALUES (?, ?, ?, ?, ?)`,
+        [
+          contractId,
+          unit.container_unit_id,
+          Number(unit.monthly_rent_amount || 0) || 0,
+          unit.currency_code || header.currency_code || 'PYG',
+          index + 1,
+        ]
       );
     }
 
@@ -624,7 +671,7 @@ function clampDueDate(year, monthIndex, day) {
   return new Date(year, monthIndex, Math.min(Math.max(Number(day || 1), 1), maxDay));
 }
 
-async function getBillingSeed(contractId) {
+async function getBillingSeeds(contractId) {
   const [[contract]] = await pool.query(
     `
       SELECT
@@ -652,16 +699,6 @@ async function getBillingSeed(contractId) {
   );
   if (!contract) return null;
 
-  const [[unitInfo]] = await pool.query(
-    `
-      SELECT MIN(cu.delivered_at) AS first_delivered_at
-      FROM container_contract_units ccu
-      INNER JOIN container_units cu ON cu.id = ccu.container_unit_id
-      WHERE ccu.contract_id = ?
-    `,
-    [contractId]
-  );
-
   const [[lineInfo]] = await pool.query(
     `
       SELECT
@@ -669,17 +706,6 @@ async function getBillingSeed(contractId) {
         COALESCE(SUM(amount), 0) AS total_amount
       FROM container_contract_lines
       WHERE contract_id = ?
-    `,
-    [contractId]
-  );
-
-  const [[lastCycle]] = await pool.query(
-    `
-      SELECT id, cycle_label, period_start, period_end, due_date
-      FROM container_billing_cycles
-      WHERE contract_id = ?
-      ORDER BY period_start DESC, id DESC
-      LIMIT 1
     `,
     [contractId]
   );
@@ -697,17 +723,72 @@ async function getBillingSeed(contractId) {
     [contract.deal_id]
   );
 
-  return {
-    ...contract,
-    first_delivered_at: unitInfo?.first_delivered_at || null,
-    rent_amount: Number(lineInfo?.rent_amount || 0),
-    total_amount: Number(lineInfo?.total_amount || 0),
-    last_cycle: lastCycle || null,
-    initial_invoice_id: initialInvoice?.id || null,
-    initial_invoice_number: initialInvoice?.invoice_number || null,
-    initial_invoice_date: initialInvoice?.issue_date || null,
-    first_month_included: Boolean(initialInvoice?.id),
-  };
+  const [contractUnitsRaw] = await pool.query(
+    `
+      SELECT
+        ccu.container_unit_id,
+        ccu.monthly_rent_amount,
+        ccu.currency_code,
+        cu.container_no,
+        cu.container_type,
+        cu.delivered_at
+      FROM container_contract_units ccu
+      INNER JOIN container_units cu ON cu.id = ccu.container_unit_id
+      WHERE ccu.contract_id = ?
+      ORDER BY ccu.line_order ASC, cu.id ASC
+    `,
+    [contractId]
+  );
+  const seenUnitIds = new Set();
+  const contractUnits = (contractUnitsRaw || []).filter((row) => {
+    const key = Number(row?.container_unit_id || 0);
+    if (!key || seenUnitIds.has(key)) return false;
+    seenUnitIds.add(key);
+    return true;
+  });
+
+  const seeds = [];
+  const singleUnitFallbackAmount = contractUnits.length === 1
+    ? Number(lineInfo?.rent_amount || lineInfo?.total_amount || 0)
+    : 0;
+  for (const unit of contractUnits || []) {
+    const [[unitLastCycle]] = await pool.query(
+      `
+        SELECT id, cycle_label, period_start, period_end, due_date
+        FROM container_billing_cycles
+        WHERE contract_id = ? AND container_unit_id = ?
+        ORDER BY period_start DESC, id DESC
+        LIMIT 1
+      `,
+      [contractId, unit.container_unit_id]
+    );
+    const [[legacyLastCycle]] = await pool.query(
+      `
+        SELECT id, cycle_label, period_start, period_end, due_date
+        FROM container_billing_cycles
+        WHERE contract_id = ? AND container_unit_id IS NULL
+        ORDER BY period_start DESC, id DESC
+        LIMIT 1
+      `,
+      [contractId]
+    );
+    seeds.push({
+      ...contract,
+      container_unit_id: unit.container_unit_id,
+      container_no: unit.container_no || null,
+      container_type: unit.container_type || null,
+      first_delivered_at: unit?.delivered_at || null,
+      rent_amount: Number(unit?.monthly_rent_amount || 0) || singleUnitFallbackAmount,
+      unit_currency_code: unit?.currency_code || contract.currency_code || 'PYG',
+      total_amount: Number(lineInfo?.total_amount || 0),
+      last_cycle: unitLastCycle || legacyLastCycle || null,
+      initial_invoice_id: initialInvoice?.id || null,
+      initial_invoice_number: initialInvoice?.invoice_number || null,
+      initial_invoice_date: initialInvoice?.issue_date || null,
+      first_month_included: Boolean(initialInvoice?.id),
+    });
+  }
+  return seeds;
 }
 
 function buildNextBillingCycle(seed) {
@@ -727,9 +808,18 @@ function buildNextBillingCycle(seed) {
     period_end: toSqlDate(periodEnd),
     due_date: toSqlDate(dueDate),
     amount: Number(seed?.rent_amount || seed?.total_amount || 0),
-    currency_code: seed?.currency_code || 'PYG',
+    currency_code: seed?.unit_currency_code || seed?.currency_code || 'PYG',
     tax_rate: 10,
+    container_unit_id: seed?.container_unit_id || null,
   };
+}
+
+function billingPeriodsOverlap(startA, endA, startB, endB) {
+  const a1 = startOfDay(startA);
+  const a2 = startOfDay(endA);
+  const b1 = startOfDay(startB);
+  const b2 = startOfDay(endB);
+  return a1 <= b2 && b1 <= a2;
 }
 
 async function computeDealAlerts({ dealId = null } = {}) {
@@ -928,6 +1018,8 @@ router.post('/deals/:dealId/contracts', requireAuth, async (req, res) => {
     },
     units: selectedUnits.map((row, index) => ({
       container_unit_id: row.id,
+      monthly_rent_amount: 0,
+      currency_code: currencyCode,
       line_order: index + 1,
     })),
     lines: [
@@ -1120,6 +1212,8 @@ router.post('/contracts/:id/renewals', requireAuth, async (req, res) => {
     },
     units: (existing.units || []).map((row, index) => ({
       container_unit_id: row.container_unit_id,
+      monthly_rent_amount: Number(row.monthly_rent_amount || 0) || 0,
+      currency_code: row.currency_code || existing.contract.currency_code || 'PYG',
       line_order: index + 1,
     })),
     lines: (existing.lines || []).map((row, index) => ({
@@ -1485,59 +1579,140 @@ router.post('/contracts/:id/billing/generate', requireAuth, async (req, res) => 
   const contract = await getContractFull(contractId);
   if (!contract) return res.status(404).json({ error: 'Contrato no encontrado' });
 
-  const seed = await getBillingSeed(contractId);
-  if (!seed) return res.status(404).json({ error: 'Contrato no encontrado' });
-  if (!seed.first_delivered_at) {
-    return res.status(400).json({ error: 'Primero debes registrar la entrega real del contenedor para iniciar la mensualidad.' });
+  const seeds = await getBillingSeeds(contractId);
+  if (!seeds || !seeds.length) {
+    return res.status(400).json({ error: 'El contrato no tiene contenedores vinculados.' });
   }
 
-  const nextCycle = buildNextBillingCycle(seed);
-  const [[existingCycle]] = await pool.query(
-    'SELECT id FROM container_billing_cycles WHERE contract_id = ? AND period_start = ? LIMIT 1',
-    [contractId, nextCycle.period_start]
-  );
-  if (existingCycle) {
-    return res.status(400).json({ error: 'Ese ciclo mensual ya fue generado.' });
+  const createdIds = [];
+  const skipped = [];
+
+  for (const seed of seeds) {
+    if (!seed.first_delivered_at) {
+      skipped.push({
+        container_unit_id: seed.container_unit_id,
+        container_no: seed.container_no || null,
+        reason: 'Primero debes registrar la entrega real del contenedor para iniciar la mensualidad.',
+      });
+      continue;
+    }
+    if (!(Number(seed.rent_amount || 0) > 0)) {
+      skipped.push({
+        container_unit_id: seed.container_unit_id,
+        container_no: seed.container_no || null,
+        reason: 'Define el monto mensual del contenedor dentro del contrato.',
+      });
+      continue;
+    }
+
+    const nextCycle = buildNextBillingCycle(seed);
+    if (seed.first_month_included && seed.first_delivered_at) {
+      const firstCoveredStart = toSqlDate(seed.first_delivered_at);
+      const firstCoveredEnd = toSqlDate(addDays(addMonths(seed.first_delivered_at, 1), -1));
+      if (
+        billingPeriodsOverlap(
+          nextCycle.period_start,
+          nextCycle.period_end,
+          firstCoveredStart,
+          firstCoveredEnd
+        )
+      ) {
+        skipped.push({
+          container_unit_id: seed.container_unit_id,
+          container_no: seed.container_no || null,
+          reason: `El primer periodo ya fue cubierto por la factura inicial ${seed.initial_invoice_number || ''}`.trim(),
+        });
+        continue;
+      }
+    }
+
+    const [[existingCycle]] = await pool.query(
+      `SELECT id
+         FROM container_billing_cycles
+        WHERE contract_id = ?
+          AND container_unit_id <=> ?
+          AND (period_start = ? OR cycle_label = ?)
+        LIMIT 1`,
+      [contractId, seed.container_unit_id || null, nextCycle.period_start, nextCycle.cycle_label]
+    );
+    if (existingCycle) {
+      skipped.push({
+        container_unit_id: seed.container_unit_id,
+        container_no: seed.container_no || null,
+        reason: 'Ese ciclo mensual ya fue generado para el contenedor.',
+      });
+      continue;
+    }
+
+    try {
+      const [result] = await pool.query(
+        `
+          INSERT INTO container_billing_cycles (
+            contract_id, deal_id, container_unit_id, cycle_label, period_start, period_end, due_date,
+            amount, currency_code, tax_rate, status, notes
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendiente', ?)
+        `,
+        [
+          contractId,
+          seed.deal_id,
+          seed.container_unit_id || null,
+          nextCycle.cycle_label,
+          nextCycle.period_start,
+          nextCycle.period_end,
+          nextCycle.due_date,
+          nextCycle.amount,
+          nextCycle.currency_code,
+          nextCycle.tax_rate,
+          seed.first_month_included && !seed.last_cycle
+            ? `Primer mes cubierto por factura inicial ${seed.initial_invoice_number || ''}`.trim()
+            : null,
+        ]
+      );
+      createdIds.push(Number(result.insertId));
+    } catch (err) {
+      if (err?.code === 'ER_DUP_ENTRY') {
+        skipped.push({
+          container_unit_id: seed.container_unit_id,
+          container_no: seed.container_no || null,
+          reason: 'Ese ciclo mensual ya existe para el contenedor.',
+        });
+        continue;
+      }
+      throw err;
+    }
   }
 
-  const [result] = await pool.query(
-    `
-      INSERT INTO container_billing_cycles (
-        contract_id, deal_id, cycle_label, period_start, period_end, due_date,
-        amount, currency_code, tax_rate, status, notes
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendiente', ?)
-    `,
-    [
-      contractId,
-      seed.deal_id,
-      nextCycle.cycle_label,
-      nextCycle.period_start,
-      nextCycle.period_end,
-      nextCycle.due_date,
-      nextCycle.amount,
-      nextCycle.currency_code,
-      nextCycle.tax_rate,
-      seed.first_month_included && !seed.last_cycle
-        ? `Primer mes cubierto por factura inicial ${seed.initial_invoice_number || ''}`.trim()
-        : null,
-    ]
-  );
+  if (!createdIds.length) {
+    return res.status(400).json({
+      error: skipped[0]?.reason || 'No se generaron mensualidades nuevas.',
+      skipped,
+    });
+  }
 
-  const [[row]] = await pool.query(
+  const [rows] = await pool.query(
     `
       SELECT
-        bc.*, c.contract_no, inv.invoice_number, inv.status AS invoice_status
+        bc.*, c.contract_no, inv.invoice_number, inv.status AS invoice_status,
+        TRIM(CONCAT(
+          COALESCE(cu_bill.container_no, ''),
+          CASE
+            WHEN cu_bill.container_no IS NOT NULL AND cu_bill.container_no <> '' AND cu_bill.container_type IS NOT NULL AND cu_bill.container_type <> '' THEN ' · '
+            ELSE ''
+          END,
+          COALESCE(cu_bill.container_type, '')
+        )) AS containers_label
       FROM container_billing_cycles bc
       INNER JOIN container_contracts c ON c.id = bc.contract_id
       LEFT JOIN invoices inv ON inv.id = bc.invoice_id
-      WHERE bc.id = ?
-      LIMIT 1
+      LEFT JOIN container_units cu_bill ON cu_bill.id = bc.container_unit_id
+      WHERE bc.id IN (${createdIds.map(() => '?').join(',')})
+      ORDER BY bc.period_start DESC, bc.id DESC
     `,
-    [result.insertId]
+    createdIds
   );
 
-  res.status(201).json(row);
+  res.status(201).json({ created: rows || [], skipped });
 });
 
 router.get('/billing', requireAuth, async (req, res) => {
@@ -1560,9 +1735,19 @@ router.get('/billing', requireAuth, async (req, res) => {
       OR d.title LIKE ?
       OR client.name LIKE ?
       OR provider.name LIKE ?
+      OR EXISTS (
+        SELECT 1
+        FROM container_contract_units ccu2
+        INNER JOIN container_units cu2 ON cu2.id = ccu2.container_unit_id
+        WHERE ccu2.contract_id = c.id
+          AND (
+            cu2.container_no LIKE ?
+            OR cu2.container_type LIKE ?
+          )
+      )
     )`);
     const like = `%${q}%`;
-    params.push(like, like, like, like, like, like);
+    params.push(like, like, like, like, like, like, like, like);
   }
 
   const [rows] = await pool.query(
@@ -1603,10 +1788,38 @@ router.get('/billing', requireAuth, async (req, res) => {
         d.reference,
         d.title,
         client.name AS client_name,
-        provider.name AS provider_name
+        provider.name AS provider_name,
+        CASE
+          WHEN bc.container_unit_id IS NOT NULL THEN TRIM(CONCAT(
+            COALESCE(cu_bill.container_no, ''),
+            CASE
+              WHEN cu_bill.container_no IS NOT NULL AND cu_bill.container_no <> '' AND cu_bill.container_type IS NOT NULL AND cu_bill.container_type <> '' THEN ' · '
+              ELSE ''
+            END,
+            COALESCE(cu_bill.container_type, '')
+          ))
+          ELSE (
+            SELECT GROUP_CONCAT(
+              TRIM(CONCAT(
+                COALESCE(cu.container_no, ''),
+                CASE
+                  WHEN cu.container_no IS NOT NULL AND cu.container_no <> '' AND cu.container_type IS NOT NULL AND cu.container_type <> '' THEN ' · '
+                  ELSE ''
+                END,
+                COALESCE(cu.container_type, '')
+              ))
+              ORDER BY ccu.line_order ASC, cu.id ASC
+              SEPARATOR ' | '
+            )
+            FROM container_contract_units ccu
+            INNER JOIN container_units cu ON cu.id = ccu.container_unit_id
+            WHERE ccu.contract_id = bc.contract_id
+          )
+        END AS containers_label
       FROM container_billing_cycles bc
       INNER JOIN container_contracts c ON c.id = bc.contract_id
       LEFT JOIN invoices inv ON inv.id = bc.invoice_id
+      LEFT JOIN container_units cu_bill ON cu_bill.id = bc.container_unit_id
       INNER JOIN deals d ON d.id = bc.deal_id
       INNER JOIN business_units bu ON bu.id = d.business_unit_id
       LEFT JOIN organizations client ON client.id = d.org_id
@@ -1670,10 +1883,38 @@ router.get('/billing/:id', requireAuth, async (req, res) => {
         client.ruc AS client_ruc,
         client.email AS client_email,
         client.address AS client_address,
-        provider.name AS provider_name
+        provider.name AS provider_name,
+        CASE
+          WHEN bc.container_unit_id IS NOT NULL THEN TRIM(CONCAT(
+            COALESCE(cu_bill.container_no, ''),
+            CASE
+              WHEN cu_bill.container_no IS NOT NULL AND cu_bill.container_no <> '' AND cu_bill.container_type IS NOT NULL AND cu_bill.container_type <> '' THEN ' · '
+              ELSE ''
+            END,
+            COALESCE(cu_bill.container_type, '')
+          ))
+          ELSE (
+            SELECT GROUP_CONCAT(
+              TRIM(CONCAT(
+                COALESCE(cu.container_no, ''),
+                CASE
+                  WHEN cu.container_no IS NOT NULL AND cu.container_no <> '' AND cu.container_type IS NOT NULL AND cu.container_type <> '' THEN ' · '
+                  ELSE ''
+                END,
+                COALESCE(cu.container_type, '')
+              ))
+              ORDER BY ccu.line_order ASC, cu.id ASC
+              SEPARATOR ' | '
+            )
+            FROM container_contract_units ccu
+            INNER JOIN container_units cu ON cu.id = ccu.container_unit_id
+            WHERE ccu.contract_id = bc.contract_id
+          )
+        END AS containers_label
       FROM container_billing_cycles bc
       INNER JOIN container_contracts c ON c.id = bc.contract_id
       LEFT JOIN invoices inv ON inv.id = bc.invoice_id
+      LEFT JOIN container_units cu_bill ON cu_bill.id = bc.container_unit_id
       INNER JOIN deals d ON d.id = bc.deal_id
       INNER JOIN business_units bu ON bu.id = d.business_unit_id
       LEFT JOIN organizations client ON client.id = d.org_id
@@ -1728,10 +1969,38 @@ router.get('/deals/:dealId/billing', requireAuth, async (req, res) => {
           WHERE i2.container_billing_cycle_id = bc.id
           ORDER BY i2.created_at DESC, i2.id DESC
           LIMIT 1
-        ) AS latest_credit_note_id
+        ) AS latest_credit_note_id,
+        CASE
+          WHEN bc.container_unit_id IS NOT NULL THEN TRIM(CONCAT(
+            COALESCE(cu_bill.container_no, ''),
+            CASE
+              WHEN cu_bill.container_no IS NOT NULL AND cu_bill.container_no <> '' AND cu_bill.container_type IS NOT NULL AND cu_bill.container_type <> '' THEN ' · '
+              ELSE ''
+            END,
+            COALESCE(cu_bill.container_type, '')
+          ))
+          ELSE (
+            SELECT GROUP_CONCAT(
+              TRIM(CONCAT(
+                COALESCE(cu.container_no, ''),
+                CASE
+                  WHEN cu.container_no IS NOT NULL AND cu.container_no <> '' AND cu.container_type IS NOT NULL AND cu.container_type <> '' THEN ' · '
+                  ELSE ''
+                END,
+                COALESCE(cu.container_type, '')
+              ))
+              ORDER BY ccu.line_order ASC, cu.id ASC
+              SEPARATOR ' | '
+            )
+            FROM container_contract_units ccu
+            INNER JOIN container_units cu ON cu.id = ccu.container_unit_id
+            WHERE ccu.contract_id = bc.contract_id
+          )
+        END AS containers_label
       FROM container_billing_cycles bc
       INNER JOIN container_contracts c ON c.id = bc.contract_id
       LEFT JOIN invoices inv ON inv.id = bc.invoice_id
+      LEFT JOIN container_units cu_bill ON cu_bill.id = bc.container_unit_id
       WHERE bc.deal_id = ?
       ORDER BY bc.due_date DESC, bc.id DESC
     `,
@@ -1808,7 +2077,34 @@ router.patch('/billing/:id/status', requireAuth, async (req, res) => {
         d.reference,
         d.title,
         client.name AS client_name,
-        provider.name AS provider_name
+        provider.name AS provider_name,
+        CASE
+          WHEN bc.container_unit_id IS NOT NULL THEN TRIM(CONCAT(
+            COALESCE(cu_bill.container_no, ''),
+            CASE
+              WHEN cu_bill.container_no IS NOT NULL AND cu_bill.container_no <> '' AND cu_bill.container_type IS NOT NULL AND cu_bill.container_type <> '' THEN ' · '
+              ELSE ''
+            END,
+            COALESCE(cu_bill.container_type, '')
+          ))
+          ELSE (
+            SELECT GROUP_CONCAT(
+              TRIM(CONCAT(
+                COALESCE(cu.container_no, ''),
+                CASE
+                  WHEN cu.container_no IS NOT NULL AND cu.container_no <> '' AND cu.container_type IS NOT NULL AND cu.container_type <> '' THEN ' · '
+                  ELSE ''
+                END,
+                COALESCE(cu.container_type, '')
+              ))
+              ORDER BY ccu.line_order ASC, cu.id ASC
+              SEPARATOR ' | '
+            )
+            FROM container_contract_units ccu
+            INNER JOIN container_units cu ON cu.id = ccu.container_unit_id
+            WHERE ccu.contract_id = bc.contract_id
+          )
+        END AS containers_label
       FROM container_billing_cycles bc
       INNER JOIN container_contracts c ON c.id = bc.contract_id
       LEFT JOIN invoices inv ON inv.id = bc.invoice_id
@@ -1816,6 +2112,7 @@ router.patch('/billing/:id/status', requireAuth, async (req, res) => {
       LEFT JOIN organizations client ON client.id = d.org_id
       LEFT JOIN container_operation_details cod ON cod.deal_id = d.id
       LEFT JOIN organizations provider ON provider.id = cod.provider_id
+      LEFT JOIN container_units cu_bill ON cu_bill.id = bc.container_unit_id
       WHERE bc.id = ?
       LIMIT 1
     `,

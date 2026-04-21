@@ -1,10 +1,12 @@
 // client/src/pages/service/ServiceCaseDetail.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../../api";
+import { useAuth } from "../../auth.jsx";
 import QuoteEditor from "../QuoteEditor.jsx";
 import InvoiceCreateModal from "../../components/InvoiceCreateModal.jsx";
 import OperationExpenseInvoices from "../../components/OperationExpenseInvoices.jsx";
+import AdminOpsPanel from "../../components/op-details/AdminOpsPanel.jsx";
 
 function safeJsonArray(v) {
   if (!v) return [];
@@ -100,6 +102,8 @@ function OperationDocViewer({ doc }) {
 
 export default function ServiceCaseDetail() {
   const { id } = useParams();
+  const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const caseId = Number(id || 0);
   const [tab, setTab] = useState("detalle");
   const [expenseOpenKey, setExpenseOpenKey] = useState(0);
@@ -146,6 +150,8 @@ export default function ServiceCaseDetail() {
   const [doorsPickerOpen, setDoorsPickerOpen] = useState(false);
   const [doorSearch, setDoorSearch] = useState("");
   const [doorSelection, setDoorSelection] = useState([]);
+  const isAdmin = String(user?.role || "").toLowerCase() === "admin";
+  const requestedTab = String(searchParams.get("tab") || "").toLowerCase();
 
   const isLocked = Boolean(invoiceLock?.locked);
   const lockClass = isLocked ? "pointer-events-none opacity-60" : "";
@@ -219,6 +225,21 @@ export default function ServiceCaseDetail() {
   useEffect(() => {
     if (form) setDraft(form);
   }, [form]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (requestedTab === "administracion") {
+      setTab("administracion");
+    }
+  }, [isAdmin, requestedTab, caseId]);
+
+  function handleTabChange(nextTab) {
+    setTab(nextTab);
+    const nextParams = new URLSearchParams(searchParams);
+    if (isAdmin && nextTab === "administracion") nextParams.set("tab", "administracion");
+    else nextParams.delete("tab");
+    setSearchParams(nextParams, { replace: true });
+  }
 
   useEffect(() => {
     if (!caseId) return;
@@ -335,6 +356,7 @@ export default function ServiceCaseDetail() {
     { id: "presupuesto", label: "Presupuesto" },
     { id: "informes", label: "Informes" },
     { id: "gastos", label: "Gastos" },
+    ...(isAdmin ? [{ id: "administracion", label: "Administración" }] : []),
   ];
 
   useEffect(() => {
@@ -375,6 +397,36 @@ export default function ServiceCaseDetail() {
     const revId = Number(sid.slice(4));
     return Number.isFinite(revId) ? revId : null;
   };
+  const getStoredIndustrialRevisionId = () => {
+    try {
+      const raw = window.sessionStorage.getItem(`industrial-quote-revision:service:${Number(caseId)}`);
+      const parsed = Number(raw || 0);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    } catch (_) {
+      return null;
+    }
+  };
+  const [selectedQuoteRevisionId, setSelectedQuoteRevisionId] = useState(() => getStoredIndustrialRevisionId());
+
+  useEffect(() => {
+    setSelectedQuoteRevisionId(getStoredIndustrialRevisionId());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [caseId]);
+
+  useEffect(() => {
+    function handleQuoteRevisionSelected(e) {
+      if (Number(e?.detail?.serviceCaseId || 0) !== Number(caseId)) return;
+      setSelectedQuoteRevisionId(e?.detail?.revisionId || null);
+    }
+    window.addEventListener("quote-revision-selected", handleQuoteRevisionSelected);
+    return () => window.removeEventListener("quote-revision-selected", handleQuoteRevisionSelected);
+  }, [caseId]);
+  const currentIndustrialRevisionId = isRevisionTab(tab)
+    ? getRevisionIdFromTab(tab)
+    : selectedQuoteRevisionId;
+  const serviceIndustrialQuoteHref = currentIndustrialRevisionId
+    ? `/service/cases/${caseId}/industrial-quote?serviceCaseId=${caseId}&revision_id=${currentIndustrialRevisionId}`
+    : `/service/cases/${caseId}/industrial-quote?serviceCaseId=${caseId}`;
 
   const isDocTab = (id) => String(id).startsWith("doc-");
   const getDocFromTab = (id) => {
@@ -717,7 +769,7 @@ export default function ServiceCaseDetail() {
 
       <div className="bg-white border rounded-2xl p-2 flex flex-wrap gap-2 shadow-sm">
         {allTabs.map((t) => (
-          <TabButton key={t.id} active={tab === t.id} onClick={() => setTab(t.id)}>
+          <TabButton key={t.id} active={tab === t.id} onClick={() => handleTabChange(t.id)}>
             {t.label}
           </TabButton>
         ))}
@@ -1360,7 +1412,7 @@ export default function ServiceCaseDetail() {
               <div className="text-sm text-slate-600 mb-2">Generador de presupuesto</div>
               <button
                 className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
-                onClick={() => window.open(`/service/cases/${caseId}/industrial-quote?serviceCaseId=${caseId}`, "_blank")}
+                onClick={() => window.open(serviceIndustrialQuoteHref, "_blank")}
               >
                 Abrir PDF de cotizacion
               </button>
@@ -1481,6 +1533,24 @@ export default function ServiceCaseDetail() {
               openNewKey={expenseOpenKey}
             />
           )}
+
+          {tab === "administracion" && (
+            <AdminOpsPanel
+              serviceCaseId={caseId}
+              deal={{
+                reference: data.reference || `#${data.id}`,
+                org_name: data.org_name || "-",
+                stage_name: data.stage_name || "-",
+                operation_currency: "USD",
+              }}
+              onDocsRefresh={() => {
+                api
+                  .get("/invoices/operation-docs", { params: { service_case_id: caseId } })
+                  .then(({ data: docs }) => setOpDocs(Array.isArray(docs) ? docs : []))
+                  .catch(() => setOpDocs([]));
+              }}
+            />
+          )}
         </div>
 
         <aside className="space-y-4 justify-self-end lg:sticky lg:top-4 self-start">
@@ -1510,7 +1580,7 @@ export default function ServiceCaseDetail() {
               </button>
               <button
                 className="w-full px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700 text-sm"
-                onClick={() => window.open(`/service/cases/${caseId}/industrial-quote?serviceCaseId=${caseId}`, "_blank")}
+                onClick={() => window.open(serviceIndustrialQuoteHref, "_blank")}
               >
                 Presupuesto (Mantenimiento)
               </button>

@@ -1,9 +1,26 @@
 // server/src/routes/params.js
 import { Router } from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import multer from 'multer';
 import { pool } from '../services/db.js';
 import { requireAuth, requireRole } from '../middlewares/auth.js';
 
 const router = Router();
+
+const brandingStorage = multer.diskStorage({
+  destination(_req, _file, cb) {
+    const dir = path.resolve('uploads', 'branding');
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename(_req, file, cb) {
+    const ext = path.extname(file.originalname || '') || '.png';
+    cb(null, `quote-logo-${Date.now()}${ext}`);
+  },
+});
+
+const brandingUpload = multer({ storage: brandingStorage });
 
 /* ===== import “tolerante” del auditor ===== */
 let logAudit = async () => {};
@@ -147,6 +164,35 @@ try {
   }
 })();
 
+async function upsertSingleValue(key, value) {
+  const [[existing]] = await pool.query(
+    'SELECT id FROM param_values WHERE `key` = ? ORDER BY `ord`, id LIMIT 1',
+    [key]
+  );
+
+  if (existing?.id) {
+    await pool.query(
+      'UPDATE param_values SET `value` = ?, `active` = 1 WHERE id = ?',
+      [value, existing.id]
+    );
+    const [[row]] = await pool.query(
+      'SELECT id, `key`, `value`, `ord`, `active` FROM param_values WHERE id = ?',
+      [existing.id]
+    );
+    return row;
+  }
+
+  const [ins] = await pool.query(
+    'INSERT INTO param_values (`key`, `value`, `ord`, `active`) VALUES (?, ?, 0, 1)',
+    [key, value]
+  );
+  const [[row]] = await pool.query(
+    'SELECT id, `key`, `value`, `ord`, `active` FROM param_values WHERE id = ?',
+    [ins.insertId]
+  );
+  return row;
+}
+
 /* ====== Fallbacks útiles para selects (cuando la tabla aún no tiene data) ====== */
 const FALLBACK_OPTIONS = {
   operation_type: [
@@ -280,6 +326,33 @@ router.get('/:key/options', requireAuth, async (req, res, next) => {
     next(err);
   }
 });
+
+router.post(
+  '/upload-logo',
+  requireAuth,
+  requireRole('admin'),
+  brandingUpload.single('file'),
+  async (req, res, next) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'Archivo requerido' });
+      const key = String(req.body?.key || 'quote_brand_logo_url').trim() || 'quote_brand_logo_url';
+      const relUrl = `/uploads/branding/${req.file.filename}`;
+      const row = await upsertSingleValue(key, relUrl);
+
+      await logAudit(req, {
+        action: 'update',
+        entity: 'param_value',
+        entityId: Number(row?.id || 0),
+        message: `Actualizado archivo para parametro ${key}`,
+        payload: { key, value: relUrl },
+      });
+
+      res.status(201).json({ ...row, url: relUrl });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 /**
  * POST /api/params

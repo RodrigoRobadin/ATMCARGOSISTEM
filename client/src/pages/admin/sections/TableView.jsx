@@ -45,7 +45,11 @@ export default function TableView({
               <tr key={r.id} className="border-t">
                 <Td>
                   <Link
-                    to={r.op_type === "service" ? `/service/cases/${r.id}` : `/operations/${r.id}`}
+                    to={
+                      r.op_type === "service"
+                        ? `/service/cases/${r.id}?tab=administracion`
+                        : `/operations/${r.id}?tab=administracion`
+                    }
                     className="font-medium hover:underline"
                   >
                     {r.reference}

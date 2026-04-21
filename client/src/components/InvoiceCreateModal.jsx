@@ -8,6 +8,7 @@ export default function InvoiceCreateModal({
   defaultServiceQuoteAdditionId,
   defaultContainerBillingCycleId,
   defaultContainerBillingCycle,
+  defaultSelectedQuoteItems = [],
   onClose,
   onSuccess
 }) {
@@ -47,6 +48,7 @@ export default function InvoiceCreateModal({
   const [businessUnitKey, setBusinessUnitKey] = useState("");
   const [dueDateTouched, setDueDateTouched] = useState(false);
   const [currencyTouched, setCurrencyTouched] = useState(false);
+  const hasSelectedQuoteItems = Array.isArray(defaultSelectedQuoteItems) && defaultSelectedQuoteItems.length > 0;
   const isContainerBilling = Boolean(defaultContainerBillingCycleId || form.container_billing_cycle_id);
   const isContainerInitialInvoice = !isContainerBilling && String(businessUnitKey || "").toLowerCase() === "atm-container";
   const containerSourceLabel = useMemo(() => {
@@ -136,6 +138,15 @@ export default function InvoiceCreateModal({
       notes: prev.notes || "Factura inicial ATM CONTAINER. Incluye el primer mes de alquiler.",
     }));
   }, [isContainerInitialInvoice]);
+
+  useEffect(() => {
+    if (!hasSelectedQuoteItems) return;
+    setForm((prev) => ({
+      ...prev,
+      mode: "total",
+      percentage: "100",
+    }));
+  }, [hasSelectedQuoteItems]);
 
   // Recalcula vencimiento según términos de pago (días) si no fue tocado manualmente
   useEffect(() => {
@@ -434,7 +445,7 @@ export default function InvoiceCreateModal({
     }
 
     const pct = form.mode === 'percentage' ? Number(form.percentage) : 100;
-    if (Number.isNaN(pct) || pct <= 0 || pct > 100) {
+    if (!hasSelectedQuoteItems && (Number.isNaN(pct) || pct <= 0 || pct > 100)) {
       alert('Ingresa un porcentaje valido entre 1 y 100');
       return;
     }
@@ -453,8 +464,9 @@ export default function InvoiceCreateModal({
         service_case_id: form.service_case_id ? Number(form.service_case_id) : null,
         service_quote_addition_id: form.service_quote_addition_id ? Number(form.service_quote_addition_id) : null,
         container_billing_cycle_id: form.container_billing_cycle_id ? Number(form.container_billing_cycle_id) : null,
-        percentage: pct,
+        percentage: hasSelectedQuoteItems ? null : pct,
         exchange_rate: fxValue || 1,
+        selected_quote_items: hasSelectedQuoteItems ? defaultSelectedQuoteItems : undefined,
       };
       const { data } = await api.post('/invoices', payload);
       alert('Factura creada correctamente');
@@ -487,6 +499,14 @@ export default function InvoiceCreateModal({
               <div className="font-medium text-amber-900">Factura inicial ATM CONTAINER</div>
               <div className="text-amber-800 mt-1">
                 Esta factura sale desde Administracion sobre la operacion aprobada y cubre el primer mes de alquiler.
+              </div>
+            </div>
+          )}
+          {hasSelectedQuoteItems && (
+            <div className="rounded-lg border bg-blue-50 px-4 py-3 text-sm">
+              <div className="font-medium text-blue-900">Facturaci?n por ?tems seleccionados</div>
+              <div className="text-blue-800 mt-1">
+                Se facturar?n ?nicamente los ?tems pendientes que seleccionaste en Administraci?n.
               </div>
             </div>
           )}
@@ -609,7 +629,7 @@ export default function InvoiceCreateModal({
               <select
                 className="w-full border rounded-lg px-3 py-2"
                 value={form.mode}
-                disabled={isContainerBilling || isContainerInitialInvoice}
+                disabled={isContainerBilling || isContainerInitialInvoice || hasSelectedQuoteItems}
                 onChange={(e) => {
                   const mode = e.target.value;
                   if (mode === "total") {
@@ -620,12 +640,12 @@ export default function InvoiceCreateModal({
                 }}
                 >
                   <option value="total">{isContainerBilling ? "Monto de mensualidad" : "100% del presupuesto"}</option>
-                  {!isContainerBilling && !isContainerInitialInvoice && <option value="percentage">Porcentaje</option>}
+                  {!isContainerBilling && !isContainerInitialInvoice && !hasSelectedQuoteItems && <option value="percentage">Porcentaje</option>}
                 </select>
               </div>
             <div>
               <label className="block text-sm font-medium mb-1">
-                {isContainerBilling ? "Monto mensual" : isContainerInitialInvoice ? "Factura inicial" : "Porcentaje a facturar"}
+                {isContainerBilling ? "Monto mensual" : isContainerInitialInvoice ? "Factura inicial" : hasSelectedQuoteItems ? "?tems seleccionados" : "Porcentaje a facturar"}
               </label>
               {isContainerBilling ? (
                 <input
@@ -635,6 +655,13 @@ export default function InvoiceCreateModal({
                     minimumFractionDigits: String(containerBilling.currency_code || "PYG").toUpperCase() === "USD" ? 2 : 0,
                     maximumFractionDigits: String(containerBilling.currency_code || "PYG").toUpperCase() === "USD" ? 2 : 0,
                   })}` : ""}
+                  readOnly
+                />
+              ) : hasSelectedQuoteItems ? (
+                <input
+                  type="text"
+                  className="w-full border rounded-lg px-3 py-2 bg-slate-100"
+                  value={`${defaultSelectedQuoteItems.length} item(s)`}
                   readOnly
                 />
               ) : form.mode === "percentage" && !isContainerInitialInvoice ? (

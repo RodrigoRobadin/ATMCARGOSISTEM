@@ -1,6 +1,6 @@
 // client/src/pages/AdminParams.jsx
 import React, { useEffect, useMemo, useState } from "react";
-import { api } from "../api";
+import { API_BASE, api } from "../api";
 
 // === Grupos de parametros administrables ===
 const PARAM_GROUPS = [
@@ -38,6 +38,18 @@ const PARAM_GROUPS = [
     description:
       "Plantillas completas para presupuesto industrial (contenido en JSON).",
     keys: ["quote_template"],
+  },
+  {
+    title: "Presupuesto - Branding",
+    description:
+      "Logo y datos fijos del PDF formal de cotizacion.",
+    keys: [
+      "quote_brand_logo_url",
+      "quote_brand_city",
+      "quote_brand_footer_web",
+      "quote_brand_footer_address",
+      "quote_brand_footer_phone",
+    ],
   },
   {
     title: "Kanban",
@@ -207,6 +219,7 @@ export default function AdminParams() {
                 label={key}
                 keyName={key}
                 rows={map[key] || []}
+                onReplaceRows={(nextRows) => setKeyList(key, () => nextRows)}
                 onChangeRow={(idx, patch) =>
                   setKeyList(key, (list) =>
                     list.map((r, i) => (i === idx ? { ...r, ...patch } : r))
@@ -230,6 +243,7 @@ function ParamCard({
   label,
   keyName,
   rows,
+  onReplaceRows,
   onChangeRow,
   onClickSave,
   onClickRemove,
@@ -237,6 +251,7 @@ function ParamCard({
   saving,
 }) {
   const [newVal, setNewVal] = useState("");
+  const [uploading, setUploading] = useState(false);
   const [tplForm, setTplForm] = useState({
     name: "",
     observaciones: "",
@@ -251,13 +266,84 @@ function ParamCard({
     observaciones_producto: "",
   });
   const isTemplate = keyName === "quote_template";
+  const isLogo = keyName === "quote_brand_logo_url";
   const isDate =
     keyName === "invoice_timbre_valid_from" ||
     keyName === "invoice_timbre_valid_to";
+  const logoPreviewSrc =
+    isLogo && rows[0]?.value
+      ? String(rows[0].value).startsWith("/uploads/")
+        ? `${String(API_BASE || "").replace(/\/api$/, "")}${rows[0].value}`
+        : rows[0].value
+      : "";
+
+  async function uploadLogo(file) {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("key", keyName);
+      const { data } = await api.post("/params/upload-logo", form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      const nextRows = rows.length
+        ? rows.map((row, idx) =>
+            idx === 0
+              ? {
+                  ...row,
+                  id: data.id,
+                  value: data.value,
+                  ord: data.ord ?? row.ord ?? 0,
+                  active: data.active === 0 ? 0 : 1,
+                }
+              : row
+          )
+        : [
+            {
+              id: data.id,
+              value: data.value,
+              ord: data.ord ?? 0,
+              active: data.active === 0 ? 0 : 1,
+            },
+          ];
+      onReplaceRows?.(nextRows);
+    } catch (e) {
+      console.error("No se pudo subir el logo:", e);
+      alert("No se pudo subir el logo.");
+    } finally {
+      setUploading(false);
+    }
+  }
 
   return (
     <div className="border rounded-xl p-3">
       <div className="font-medium mb-2">{prettyLabel(label)}</div>
+
+      {isLogo && (
+        <div className="mb-3 rounded-lg border bg-slate-50 p-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/svg+xml"
+              onChange={(e) => uploadLogo(e.target.files?.[0])}
+              disabled={saving || uploading}
+            />
+            <span className="text-xs text-slate-500">
+              {uploading ? "Subiendo..." : "Subi el logo para el PDF formal."}
+            </span>
+          </div>
+          {rows[0]?.value ? (
+            <div className="mt-3">
+              <img
+                src={logoPreviewSrc}
+                alt="Logo cotizacion"
+                className="max-h-24 rounded border bg-white p-2"
+              />
+            </div>
+          ) : null}
+        </div>
+      )}
 
       {/* Tabla de valores */}
       <div className="overflow-x-auto">
@@ -501,6 +587,11 @@ function prettyLabel(key) {
     quote_incluye: "Que incluye",
     quote_no_incluye: "Que no incluye",
     quote_template: "Plantillas de condiciones",
+    quote_brand_logo_url: "Logo PDF formal",
+    quote_brand_city: "Ciudad para fecha",
+    quote_brand_footer_web: "Web pie de pagina",
+    quote_brand_footer_address: "Direccion pie de pagina",
+    quote_brand_footer_phone: "Telefono pie de pagina",
 
     // Kanban
     kanban_pipeline: "Pipeline (por nombre)",

@@ -160,7 +160,7 @@ export default function ContainerBilling() {
         <div className="grid grid-cols-1 md:grid-cols-[1fr_240px] gap-3 mt-4">
           <input
             className="w-full border rounded-lg px-3 py-2 text-sm"
-            placeholder="Buscar por ciclo, contrato, operacion, cliente o proveedor"
+            placeholder="Buscar por ciclo, contrato, operacion, cliente, proveedor o contenedor"
             value={filters.q}
             onChange={(e) => setFilters((prev) => ({ ...prev, q: e.target.value }))}
           />
@@ -218,6 +218,7 @@ export default function ContainerBilling() {
                 <th className="px-3 py-2 text-left">Operacion</th>
                 <th className="px-3 py-2 text-left">Cliente</th>
                 <th className="px-3 py-2 text-left">Proveedor</th>
+                <th className="px-3 py-2 text-left">Contenedor</th>
                 <th className="px-3 py-2 text-left">Ciclo</th>
                 <th className="px-3 py-2 text-left">Periodo</th>
                 <th className="px-3 py-2 text-left">Vencimiento</th>
@@ -231,7 +232,7 @@ export default function ContainerBilling() {
             <tbody>
               {loading && (
                 <tr>
-                  <td colSpan={12} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={13} className="px-4 py-8 text-center text-slate-500">
                     Cargando...
                   </td>
                 </tr>
@@ -249,6 +250,7 @@ export default function ContainerBilling() {
                     </td>
                     <td className="px-3 py-2">{row.client_name || "-"}</td>
                     <td className="px-3 py-2">{row.provider_name || "-"}</td>
+                    <td className="px-3 py-2 text-slate-700">{row.containers_label || "-"}</td>
                     <td className="px-3 py-2">{row.cycle_label || "-"}</td>
                     <td className="px-3 py-2">{row.period_start} - {row.period_end}</td>
                     <td className="px-3 py-2">{row.due_date || "-"}</td>
@@ -316,7 +318,7 @@ export default function ContainerBilling() {
                 })}
               {!loading && !rows.length && (
                 <tr>
-                  <td colSpan={12} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={13} className="px-4 py-8 text-center text-slate-500">
                     No hay mensualidades generadas.
                   </td>
                 </tr>

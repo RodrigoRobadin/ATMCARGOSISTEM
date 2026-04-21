@@ -12,6 +12,7 @@ ensureCreditNoteTables().catch((err) => console.error('init credit tables', err?
 ensureInvoiceCreditColumns().catch((err) => console.error('init credit cols', err?.message));
 ensureReceiptTables().catch((err) => console.error('init receipts', err?.message));
 ensureInvoiceMoneyColumns().catch((err) => console.error('init money cols', err?.message));
+ensureInvoiceItemSourceColumns().catch((err) => console.error('init invoice item source cols', err?.message));
 
 // =================== HELPERS ===================
 async function ensureInvoiceSequence() {
@@ -62,6 +63,21 @@ async function ensureInvoiceExtraColumns() {
       if (err?.code !== 'ER_DUP_FIELDNAME') {
         throw err;
       }
+    }
+  }
+}
+
+async function ensureInvoiceItemSourceColumns() {
+  const alters = [
+    "ALTER TABLE invoice_items ADD COLUMN source_type VARCHAR(32) NULL",
+    "ALTER TABLE invoice_items ADD COLUMN source_parent_id INT NULL",
+    "ALTER TABLE invoice_items ADD COLUMN source_item_key VARCHAR(64) NULL",
+  ];
+  for (const sql of alters) {
+    try {
+      await pool.query(sql);
+    } catch (err) {
+      if (err?.code !== 'ER_DUP_FIELDNAME') throw err;
     }
   }
 }
@@ -258,11 +274,14 @@ async function fetchContainerBillingInfo(billingCycleId, conn) {
         d.org_id AS organization_id,
         d.reference,
         d.title,
-        bu.key_slug AS business_unit_key
+        bu.key_slug AS business_unit_key,
+        cu.container_no,
+        cu.container_type
       FROM container_billing_cycles bc
       INNER JOIN container_contracts c ON c.id = bc.contract_id
       INNER JOIN deals d ON d.id = bc.deal_id
       LEFT JOIN business_units bu ON bu.id = d.business_unit_id
+      LEFT JOIN container_units cu ON cu.id = bc.container_unit_id
       WHERE bc.id = ?
       LIMIT 1
     `,
@@ -295,6 +314,41 @@ function convertUsdToCurrency(amountUsd, currency, exchangeRate) {
   return value;
 }
 
+function startOfDay(value) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function addDays(dateLike, days) {
+  const date = startOfDay(dateLike);
+  if (!date) return null;
+  date.setDate(date.getDate() + Number(days || 0));
+  return date;
+}
+
+function addMonthsSafe(dateLike, months) {
+  const date = startOfDay(dateLike);
+  if (!date) return null;
+  const target = new Date(date);
+  const originalDay = target.getDate();
+  target.setDate(1);
+  target.setMonth(target.getMonth() + Number(months || 0));
+  const maxDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(originalDay, maxDay));
+  return target;
+}
+
+function datesOverlap(startA, endA, startB, endB) {
+  const a1 = startOfDay(startA);
+  const a2 = startOfDay(endA);
+  const b1 = startOfDay(startB);
+  const b2 = startOfDay(endB);
+  if (!a1 || !a2 || !b1 || !b2) return false;
+  return a1 <= b2 && b1 <= a2;
+}
+
 function resolveSourceExchangeRate(currency, sourceExchangeRate, requestedExchangeRate) {
   const code = String(currency || 'USD').toUpperCase();
   if (code === 'PYG' || code === 'GS') {
@@ -304,6 +358,47 @@ function resolveSourceExchangeRate(currency, sourceExchangeRate, requestedExchan
     if (requestedRate > 1) return requestedRate;
   }
   return 1;
+}
+
+async function fetchContainerInitialInvoiceCoverage(contractId, dealId, conn) {
+  const [[initialInvoice]] = await conn.query(
+    `
+      SELECT id, invoice_number, issue_date
+      FROM invoices
+      WHERE deal_id = ?
+        AND container_billing_cycle_id IS NULL
+        AND status <> 'anulada'
+      ORDER BY issue_date ASC, id ASC
+      LIMIT 1
+    `,
+    [dealId]
+  );
+  if (!initialInvoice?.id) return null;
+
+  const [[contractRow]] = await conn.query(
+    `
+      SELECT c.effective_from, MIN(cu.delivered_at) AS first_delivered_at
+      FROM container_contracts c
+      LEFT JOIN container_contract_units ccu ON ccu.contract_id = c.id
+      LEFT JOIN container_units cu ON cu.id = ccu.container_unit_id
+      WHERE c.id = ?
+      GROUP BY c.id, c.effective_from
+      LIMIT 1
+    `,
+    [contractId]
+  );
+
+  const firstStart = startOfDay(contractRow?.first_delivered_at || contractRow?.effective_from);
+  if (!firstStart) return null;
+  const firstEnd = addDays(addMonthsSafe(firstStart, 1), -1);
+  if (!firstEnd) return null;
+
+  return {
+    initial_invoice_id: Number(initialInvoice.id),
+    initial_invoice_number: initialInvoice.invoice_number || null,
+    period_start: firstStart,
+    period_end: firstEnd,
+  };
 }
 
 async function fetchQuoteItemsForInvoice(dealId, conn) {
@@ -327,12 +422,14 @@ async function fetchQuoteItemsForInvoice(dealId, conn) {
       const unitPrice = Number(it.unit_price || it.unitPrice || 0) ||
         Number(it.door_value_usd || 0) + Number(it.additional_usd || 0);
       const rate = Number(it.tax_rate ?? it.taxRate ?? 10) || 0;
+      const itemOrder = it.item_order ?? it.line_no ?? idx;
       return {
         description: it.description || 'Item',
         quantity: qty,
         unit_price: unitPrice,
         tax_rate: rate,
-        item_order: it.item_order ?? it.line_no ?? idx,
+        item_order: itemOrder,
+        source_item_key: `deal_quote:${itemOrder}`,
       };
     });
   }
@@ -346,12 +443,14 @@ async function fetchQuoteItemsForInvoice(dealId, conn) {
     const unitPrice = Number(it.unit_price ?? match.unit_price ?? match.unitPrice ?? 0) ||
       (Number(it.total_sales || 0) && qty ? Number(it.total_sales || 0) / qty : 0);
     const rate = Number(match.tax_rate ?? match.taxRate ?? 10) || 0;
+    const itemOrder = it.item_order ?? it.line_no ?? idx;
     return {
       description: it.description || match.description || 'Item',
       quantity: qty,
       unit_price: unitPrice,
       tax_rate: rate,
-      item_order: it.item_order ?? it.line_no ?? idx,
+      item_order: itemOrder,
+      source_item_key: `deal_quote:${itemOrder}`,
     };
   });
 }
@@ -422,12 +521,14 @@ async function fetchServiceQuoteAdditionItemsForInvoice(additionId, conn) {
       const unitPrice = Number(it.unit_price || it.unitPrice || 0) ||
         Number(it.door_value_usd || 0) + Number(it.additional_usd || 0);
       const rate = Number(it.tax_rate ?? it.taxRate ?? 10) || 0;
+      const itemOrder = it.item_order ?? it.line_no ?? idx;
       return {
         description: it.description || 'Item',
         quantity: qty,
         unit_price: unitPrice,
         tax_rate: rate,
-        item_order: it.item_order ?? it.line_no ?? idx,
+        item_order: itemOrder,
+        source_item_key: `service_quote:${itemOrder}`,
       };
     });
   }
@@ -441,14 +542,137 @@ async function fetchServiceQuoteAdditionItemsForInvoice(additionId, conn) {
     const unitPrice = Number(it.unit_price ?? match.unit_price ?? match.unitPrice ?? 0) ||
       (Number(it.total_sales || 0) && qty ? Number(it.total_sales || 0) / qty : 0);
     const rate = Number(match.tax_rate ?? match.taxRate ?? 10) || 0;
+    const itemOrder = it.item_order ?? it.line_no ?? idx;
     return {
       description: it.description || match.description || 'Item',
       quantity: qty,
       unit_price: unitPrice,
       tax_rate: rate,
-      item_order: it.item_order ?? it.line_no ?? idx,
+      item_order: itemOrder,
+      source_item_key: `service_quote:${itemOrder}`,
     };
   });
+}
+
+
+async function fetchDealQuoteBillableItems(dealId, conn) {
+  await ensureInvoiceItemSourceColumns();
+  const quoteItems = await fetchQuoteItemsForInvoice(dealId, conn);
+  if (!quoteItems.length) return [];
+
+  const quoteCurrency = await fetchQuoteCurrencyInfo(dealId, conn);
+  const billCurrency = String(quoteCurrency?.currency || 'USD').toUpperCase();
+
+  const [rows] = await conn.query(
+    `SELECT ii.source_item_key,
+            MAX(i.id) AS last_invoice_id,
+            MAX(i.invoice_number) AS last_invoice_number,
+            MAX(i.status) AS last_invoice_status,
+            COUNT(*) AS used_count
+       FROM invoice_items ii
+       INNER JOIN invoices i ON i.id = ii.invoice_id
+      WHERE i.deal_id = ?
+        AND i.status <> 'anulada'
+        AND ii.source_type = 'deal_quote'
+        AND ii.source_parent_id = ?
+        AND ii.source_item_key IS NOT NULL
+      GROUP BY ii.source_item_key`,
+    [dealId, dealId]
+  );
+  const usedMap = new Map((rows || []).map((row) => [String(row.source_item_key || ''), row]));
+  return quoteItems.map((item, idx) => {
+    const sourceItemKey = String(item.source_item_key || `deal_quote:${item.item_order ?? idx}`);
+    const used = usedMap.get(sourceItemKey) || null;
+    const quantity = Number(item.quantity || 0) || 1;
+    const unitPrice = Number(item.unit_price || 0) || 0;
+    const total = Number((quantity * unitPrice).toFixed(2));
+    return {
+      source_item_key: sourceItemKey,
+      item_order: Number(item.item_order ?? idx) || idx,
+      description: item.description || 'Item',
+      quantity,
+      unit_price: unitPrice,
+      total,
+      tax_rate: Number(item.tax_rate ?? 0) || 0,
+      currency_code: billCurrency,
+      invoiced: Boolean(used),
+      pending: !used,
+      invoice_id: used?.last_invoice_id || null,
+      invoice_number: used?.last_invoice_number || null,
+      invoice_status: used?.last_invoice_status || null,
+    };
+  });
+}
+
+async function assertDealQuoteItemsAvailable(dealId, selectedKeys, conn) {
+  const billableItems = await fetchDealQuoteBillableItems(dealId, conn);
+  const wanted = new Set((selectedKeys || []).map((key) => String(key || '')));
+  const invalid = billableItems.filter((item) => wanted.has(String(item.source_item_key)) && item.invoiced);
+  if (invalid.length) {
+    const labels = invalid.map((item) => item.description).join(', ');
+    throw new Error(`Los siguientes items ya fueron facturados: ${labels}`);
+  }
+  return billableItems.filter((item) => wanted.has(String(item.source_item_key)) && item.pending);
+}
+
+
+async function fetchServiceCaseBillableItems(serviceCaseId, conn) {
+  await ensureInvoiceItemSourceColumns();
+  const quoteItems = await fetchServiceQuoteItemsForInvoice(serviceCaseId, conn);
+  if (!quoteItems.length) return [];
+  const quoteCurrency = await fetchServiceQuoteCurrencyInfo(serviceCaseId, conn);
+  const billCurrency = String(quoteCurrency?.currency || 'USD').toUpperCase();
+
+  const [rows] = await conn.query(
+    `SELECT ii.source_item_key,
+            MAX(i.id) AS last_invoice_id,
+            MAX(i.invoice_number) AS last_invoice_number,
+            MAX(i.status) AS last_invoice_status,
+            COUNT(*) AS used_count
+       FROM invoice_items ii
+       INNER JOIN invoices i ON i.id = ii.invoice_id
+      WHERE i.service_case_id = ?
+        AND i.status <> 'anulada'
+        AND ii.source_type = 'service_quote'
+        AND ii.source_parent_id = ?
+        AND ii.source_item_key IS NOT NULL
+      GROUP BY ii.source_item_key`,
+    [serviceCaseId, serviceCaseId]
+  );
+  const usedMap = new Map((rows || []).map((row) => [String(row.source_item_key || ''), row]));
+  return quoteItems.map((item, idx) => {
+    const sourceItemKey = String(item.source_item_key || `service_quote:${item.item_order ?? idx}`);
+    const used = usedMap.get(sourceItemKey) || null;
+    const quantity = Number(item.quantity || 0) || 1;
+    const unitPrice = Number(item.unit_price || 0) || 0;
+    const total = Number((quantity * unitPrice).toFixed(2));
+    return {
+      source_item_key: sourceItemKey,
+      item_order: Number(item.item_order ?? idx) || idx,
+      description: item.description || 'Item',
+      quantity,
+      unit_price: unitPrice,
+      total,
+      tax_rate: Number(item.tax_rate ?? 0) || 0,
+      currency_code: billCurrency,
+      invoiced: Boolean(used),
+      pending: !used,
+      invoice_id: used?.last_invoice_id || null,
+      invoice_number: used?.last_invoice_number || null,
+      invoice_status: used?.last_invoice_status || null,
+    };
+  });
+}
+
+async function assertServiceQuoteItemsAvailable(serviceCaseId, selectedKeys, conn) {
+  const billableItems = await fetchServiceCaseBillableItems(serviceCaseId, conn);
+  const wanted = new Set((selectedKeys || []).map((key) => String(key || '')));
+  const invalid = billableItems.filter((item) => wanted.has(String(item.source_item_key)) && item.invoiced);
+  if (invalid.length) {
+    const labels = invalid.map((item) => item.description).join(', ');
+    throw new Error(`Los siguientes items ya fueron facturados: ${labels}`);
+  }
+  return billableItems.filter((item) => wanted.has(String(item.source_item_key)) && item.pending);
 }
 
 async function ensureInvoiceItemsTaxColumn() {
@@ -1457,6 +1681,28 @@ router.get('/operation-docs', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/invoices/billable-items?deal_id=#
+router.get('/billable-items', requireAuth, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    await ensureInvoiceItemSourceColumns();
+    const dealId = Number(req.query?.deal_id || 0);
+    const serviceCaseId = Number(req.query?.service_case_id || 0);
+    if (!dealId && !serviceCaseId) {
+      return res.status(400).json({ error: 'deal_id o service_case_id requerido' });
+    }
+    const items = dealId
+      ? await fetchDealQuoteBillableItems(dealId, conn)
+      : await fetchServiceCaseBillableItems(serviceCaseId, conn);
+    res.json(items);
+  } catch (e) {
+    console.error('[invoices] billable-items error:', e);
+    res.status(500).json({ error: e?.message || 'No se pudieron obtener los items facturables' });
+  } finally {
+    conn.release();
+  }
+});
+
 // POST /api/invoices - Crear factura (borrador)
 router.post('/', requireAuth, async (req, res) => {
   const conn = await pool.getConnection();
@@ -1488,10 +1734,19 @@ router.post('/', requireAuth, async (req, res) => {
       sales_rep,
       purchase_order_ref,
       percentage,
+      selected_quote_items,
     } = req.body || {};
+
+    const selectedQuoteItems = Array.isArray(selected_quote_items)
+      ? selected_quote_items.map((v) => String(v || '').trim()).filter(Boolean)
+      : [];
+    const hasSelectedQuoteItems = selectedQuoteItems.length > 0;
 
     if (!deal_id && !service_case_id && !service_quote_addition_id && !container_billing_cycle_id) {
       return res.status(400).json({ error: 'deal_id, service_case_id o container_billing_cycle_id es requerido' });
+    }
+    if (hasSelectedQuoteItems && !deal_id && !service_case_id) {
+      return res.status(400).json({ error: 'La seleccion de items pendientes solo aplica a operaciones o servicios.' });
     }
 
     await conn.beginTransaction();
@@ -1511,6 +1766,25 @@ router.post('/', requireAuth, async (req, res) => {
       if (!containerBilling) {
         await conn.rollback();
         return res.status(400).json({ error: 'Mensualidad container no encontrada' });
+      }
+      const initialCoverage = await fetchContainerInitialInvoiceCoverage(
+        Number(containerBilling.contract_id),
+        Number(containerBilling.deal_id),
+        conn
+      );
+      if (
+        initialCoverage &&
+        datesOverlap(
+          containerBilling.period_start,
+          containerBilling.period_end,
+          initialCoverage.period_start,
+          initialCoverage.period_end
+        )
+      ) {
+        await conn.rollback();
+        return res.status(400).json({
+          error: `El primer periodo ya fue cubierto por la factura inicial ${initialCoverage.initial_invoice_number || `#${initialCoverage.initial_invoice_id}`}.`,
+        });
       }
       const [[latestBillingInvoice]] = await conn.query(
         `
@@ -1604,7 +1878,7 @@ router.post('/', requireAuth, async (req, res) => {
       : containerBilling?.due_date
       ? new Date(containerBilling.due_date)
       : null;
-    const perc = containerBilling ? null : Number(percentage || 100);
+    const perc = containerBilling || hasSelectedQuoteItems ? null : Number(percentage || 100);
     const useAddition = Number(service_quote_addition_id || 0) > 0;
     const effectiveServiceCaseId = deal_id || containerBilling ? null : (service_case_id || serviceCase?.id || null);
     const quoteCurrency = containerBilling
@@ -1656,7 +1930,7 @@ router.post('/', requireAuth, async (req, res) => {
         await conn.rollback();
         return res.status(400).json({ error: `El porcentaje supera el 100% (ya facturado ${usedPct.toFixed(2)}%)` });
       }
-    } else {
+    } else if (!hasSelectedQuoteItems) {
       const [[agg]] = await conn.query(
         `SELECT COALESCE(SUM(percentage),0) AS used_pct
            FROM invoices
@@ -1687,14 +1961,25 @@ router.post('/', requireAuth, async (req, res) => {
         : baseAmountUsd;
     const baseAmount = round2(effectiveBaseAmountUsd * currencyFactor);
 
-    const itemsFromQuote = containerBilling
+    let itemsFromQuote = containerBilling
       ? []
       : deal_id
       ? await fetchQuoteItemsForInvoice(deal_id, conn)
       : useAddition
       ? await fetchServiceQuoteAdditionItemsForInvoice(Number(service_quote_addition_id), conn)
       : await fetchServiceQuoteItemsForInvoice(effectiveServiceCaseId, conn);
-    const factor = perc / 100;
+    if (hasSelectedQuoteItems) {
+      const selectedPendingItems = deal_id
+        ? await assertDealQuoteItemsAvailable(Number(deal_id), selectedQuoteItems, conn)
+        : await assertServiceQuoteItemsAvailable(Number(effectiveServiceCaseId), selectedQuoteItems, conn);
+      if (!selectedPendingItems.length) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'Los items seleccionados ya no estan pendientes de facturar.' });
+      }
+      const selectedMap = new Map(selectedPendingItems.map((item) => [String(item.source_item_key), item]));
+      itemsFromQuote = itemsFromQuote.filter((item) => selectedMap.has(String(item.source_item_key || '')));
+    }
+    const factor = hasSelectedQuoteItems ? 1 : (perc / 100);
     let invoiceItems = [];
     if (itemsFromQuote.length > 0) {
       invoiceItems = itemsFromQuote.map((it, idx) => {
@@ -1715,13 +2000,16 @@ router.post('/', requireAuth, async (req, res) => {
           subtotal,
           tax_rate: Number(it.tax_rate ?? 0) || 0,
           item_order: Number.isFinite(Number(it.item_order)) ? Number(it.item_order) : idx,
+          source_type: deal_id ? 'deal_quote' : effectiveServiceCaseId ? 'service_quote' : null,
+          source_parent_id: deal_id ? Number(deal_id) : effectiveServiceCaseId ? Number(effectiveServiceCaseId) : null,
+          source_item_key: it.source_item_key || null,
         };
       });
     } else if (containerBilling) {
       const gross = round2(Number(containerBilling.amount || 0));
       invoiceItems = [
         {
-          description: `Canon de arrendamiento contrato ${containerBilling.contract_no || "-"} Â· Periodo ${containerBilling.cycle_label || "-"}`,
+          description: `Canon de arrendamiento contrato ${containerBilling.contract_no || "-"}${containerBilling.container_no ? ` · Contenedor ${containerBilling.container_no}${containerBilling.container_type ? ` ${containerBilling.container_type}` : ""}` : ""} · Periodo ${containerBilling.cycle_label || "-"}`,
           quantity: 1,
           unit_price: gross,
           subtotal: gross,
@@ -1762,6 +2050,7 @@ router.post('/', requireAuth, async (req, res) => {
     const credited_total = 0;
     const net_total_amount = Number((total_amount - credited_total).toFixed(2));
     const net_balance = Number((total_amount - credited_total).toFixed(2));
+    const effectiveInvoiceBaseAmount = hasSelectedQuoteItems ? total_amount : baseAmount;
 
     const [result] = await conn.query(
   `INSERT INTO invoices (
@@ -1808,7 +2097,7 @@ router.post('/', requireAuth, async (req, res) => {
     sales_rep || null,
     purchase_order_ref || (containerBilling ? containerBilling.contract_no || null : null),
     perc,
-    baseAmount,
+    effectiveInvoiceBaseAmount,
     subtotal,
     tax_amount,
     total_amount,
@@ -1829,8 +2118,8 @@ router.post('/', requireAuth, async (req, res) => {
     for (const it of invoiceItems) {
       await conn.query(
         `INSERT INTO invoice_items
-         (invoice_id, description, quantity, unit_price, subtotal, tax_rate, item_order)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         (invoice_id, description, quantity, unit_price, subtotal, tax_rate, item_order, source_type, source_parent_id, source_item_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           newId,
           it.description,
@@ -1839,6 +2128,9 @@ router.post('/', requireAuth, async (req, res) => {
           it.subtotal,
           it.tax_rate ?? 0,
           it.item_order ?? 0,
+          it.source_type || null,
+          it.source_parent_id || null,
+          it.source_item_key || null,
         ]
       );
     }
@@ -2778,3 +3070,4 @@ router.get('/credit-notes/:id/pdf', requireAuth, async (req, res) => {
 });
 
 export default router;
+

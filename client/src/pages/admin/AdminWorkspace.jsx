@@ -1,4 +1,3 @@
-// client/src/pages/admin/AdminWorkspace.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../../api";
 import PipelineView from "./sections/PipelineView.jsx";
@@ -9,8 +8,9 @@ import InvoiceCreateModal from "../../components/InvoiceCreateModal.jsx";
 const STAGE_ANCHOR_NAME = "Conf a Coord";
 
 export default function AdminWorkspace() {
-  const [view, setView] = useState("pipeline"); // pipeline | table
+  const [view, setView] = useState("pipeline");
   const [pipelineId, setPipelineId] = useState(1);
+  const [moduleFilter, setModuleFilter] = useState("all");
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
@@ -25,15 +25,13 @@ export default function AdminWorkspace() {
   const [selectedDealId, setSelectedDealId] = useState(null);
   const [selectedServiceCaseId, setSelectedServiceCaseId] = useState(null);
 
-  // --------- loaders ---------
   async function loadStages(pid) {
-    // OJO: sin /api al inicio
     const { data } = await api.get(`/admin/stages?pipeline_id=${pid}`);
     return Array.isArray(data) ? data : [];
   }
+
   async function loadOps(pid) {
-    const ts = Date.now(); // anti-cache
-    // OJO: sin /api al inicio
+    const ts = Date.now();
     const { data } = await api.get(
       `/admin/ops?pipeline_id=${pid}&from_stage=${encodeURIComponent(
         STAGE_ANCHOR_NAME
@@ -47,12 +45,15 @@ export default function AdminWorkspace() {
       setLoading(true);
       setErr("");
       try {
-        const [S, O] = await Promise.all([loadStages(pipelineId), loadOps(pipelineId)]);
-        setStages(S);
-        setOps(O);
-      } catch (e) {
-        console.error("Error cargando /admin:", e);
-        setErr(e?.message || "No se pudo cargar la información.");
+        const [loadedStages, loadedOps] = await Promise.all([
+          loadStages(pipelineId),
+          loadOps(pipelineId),
+        ]);
+        setStages(loadedStages);
+        setOps(loadedOps);
+      } catch (error) {
+        console.error("Error cargando /admin:", error);
+        setErr(error?.message || "No se pudo cargar la informacion.");
         setStages([]);
         setOps([]);
       } finally {
@@ -61,26 +62,54 @@ export default function AdminWorkspace() {
     })();
   }, [pipelineId]);
 
-  // --------- derived: columnas/etapas desde Anchor ---------
   const { stagesFromAnchor, anchorStageId } = useMemo(() => {
-    // stages ya vienen ordenadas por order_index
     const anchor =
-      stages.find((s) => s.name?.toLowerCase() === STAGE_ANCHOR_NAME.toLowerCase()) ||
-      stages[0];
+      stages.find(
+        (stage) =>
+          String(stage.name || "").toLowerCase() ===
+          STAGE_ANCHOR_NAME.toLowerCase()
+      ) || stages[0];
 
     let sliced = stages;
     if (anchor) {
-      const idx = stages.findIndex((s) => s.id === anchor.id);
-      if (idx >= 0) sliced = stages.slice(idx);
+      const index = stages.findIndex((stage) => stage.id === anchor.id);
+      if (index >= 0) sliced = stages.slice(index);
     }
 
     return { stagesFromAnchor: sliced, anchorStageId: anchor?.id || null };
   }, [stages]);
 
+  const moduleOptions = useMemo(() => {
+    const map = new Map();
+    for (const op of ops) {
+      const key =
+        String(op.business_unit_key || "")
+          .trim()
+          .toLowerCase() || (op.op_type === "service" ? "services" : "sin-modulo");
+      const label =
+        String(op.business_unit_name || "").trim() ||
+        (op.op_type === "service" ? "Servicios y mantenimiento" : "Sin modulo");
+      if (!map.has(key)) map.set(key, label);
+    }
+    return [
+      { key: "all", label: "Todos los modulos" },
+      ...Array.from(map.entries())
+        .sort((a, b) => a[1].localeCompare(b[1], "es"))
+        .map(([key, label]) => ({ key, label })),
+    ];
+  }, [ops]);
+
   const filteredOps = useMemo(() => {
     const q = String(search || "").trim().toLowerCase();
-    if (!q) return ops;
     return ops.filter((op) => {
+      const opModuleKey =
+        String(op.business_unit_key || "")
+          .trim()
+          .toLowerCase() || (op.op_type === "service" ? "services" : "sin-modulo");
+
+      if (moduleFilter !== "all" && opModuleKey !== moduleFilter) return false;
+      if (!q) return true;
+
       const haystack = [
         op.reference,
         op.org_name,
@@ -90,26 +119,28 @@ export default function AdminWorkspace() {
         op.transport_type,
         op.invoice_numbers,
         op.invoice_statuses,
+        op.business_unit_name,
       ]
         .filter(Boolean)
-        .map((v) => String(v).toLowerCase())
+        .map((value) => String(value).toLowerCase())
         .join(" ");
+
       return haystack.includes(q);
     });
-  }, [ops, search]);
+  }, [moduleFilter, ops, search]);
 
-  // --------- actions ----------
   const openDocs = (op) => {
     setSelectedOp(op);
     setShowDocs(true);
   };
+
   const closeDocs = () => {
     setShowDocs(false);
     setSelectedOp(null);
   };
 
   const openInvoice = (op) => {
-    if (String(op?.op_type || "") === "service") {
+    if (String(op?.op_type || "").toLowerCase() === "service") {
       setSelectedServiceCaseId(op.id);
       setSelectedDealId(null);
     } else {
@@ -121,32 +152,35 @@ export default function AdminWorkspace() {
 
   async function changeStage(opId, newStageId, opType) {
     try {
-      // OJO: sin /api al inicio
       const { data } = await api.patch(`/admin/ops/${opId}/stage`, {
         stage_id: Number(newStageId),
         op_type: opType,
       });
-      // Reflejar al instante
-      setOps((prev) => prev.map((x) => (x.id === opId ? { ...x, ...data } : x)));
-    } catch (e) {
-      console.error("changeStage error", e);
+      setOps((prev) =>
+        prev.map((item) => (item.id === opId ? { ...item, ...data } : item))
+      );
+    } catch (error) {
+      console.error("changeStage error", error);
       alert("No se pudo cambiar la etapa");
     }
   }
 
   return (
     <div className="p-6">
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">Administración (Operaciones)</h1>
+          <h1 className="text-2xl font-bold text-slate-800">
+            Administracion (Operaciones)
+          </h1>
           <p className="text-slate-500 text-sm">
-            Gestión de operaciones confirmadas: documentos, compras y facturación.
+            Gestion de operaciones confirmadas: documentos, compras y facturacion.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <input
             className="border rounded-lg px-3 py-1 w-64"
-            placeholder="Buscar operación, cliente, referencia, estado, factura..."
+            placeholder="Buscar operacion, cliente, referencia, estado, factura..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -179,7 +213,30 @@ export default function AdminWorkspace() {
         </div>
       </div>
 
-      {loading && <div className="text-slate-500">Cargando…</div>}
+      <div className="mb-4 -mx-1 px-1 overflow-x-auto">
+        <div className="flex items-center gap-2 min-w-max">
+          {moduleOptions.map((option) => {
+            const active = moduleFilter === option.key;
+            return (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => setModuleFilter(option.key)}
+                className={`px-3 py-1.5 text-sm rounded-full border whitespace-nowrap transition ${
+                  active
+                    ? "bg-slate-900 text-white border-slate-900"
+                    : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+                }`}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {loading && <div className="text-slate-500">Cargando...</div>}
+
       {!loading && err && (
         <div className="mb-3 text-sm text-red-600 border border-red-200 bg-red-50 px-3 py-2 rounded">
           {err}
@@ -188,7 +245,8 @@ export default function AdminWorkspace() {
 
       {!loading && !err && filteredOps.length === 0 && (
         <div className="text-slate-500 text-sm">
-          No se encontraron operaciones desde <b>{STAGE_ANCHOR_NAME}</b> en adelante.
+          No se encontraron operaciones desde <b>{STAGE_ANCHOR_NAME}</b> en
+          adelante.
         </div>
       )}
 
@@ -197,7 +255,10 @@ export default function AdminWorkspace() {
           stages={stagesFromAnchor}
           items={filteredOps}
           anchorStageId={anchorStageId}
-          stageOptions={stages.map((s) => ({ value: s.id, label: s.name }))}
+          stageOptions={stages.map((stage) => ({
+            value: stage.id,
+            label: stage.name,
+          }))}
           onChangeStage={changeStage}
           onOpenDocs={openDocs}
         />
@@ -206,7 +267,10 @@ export default function AdminWorkspace() {
       {!loading && !err && filteredOps.length > 0 && view === "table" && (
         <TableView
           items={filteredOps}
-          stageOptions={stages.map((s) => ({ value: s.id, label: s.name }))}
+          stageOptions={stages.map((stage) => ({
+            value: stage.id,
+            label: stage.name,
+          }))}
           onChangeStage={changeStage}
           onOpenDocs={openDocs}
           onInvoice={openInvoice}

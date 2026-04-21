@@ -469,6 +469,8 @@ export default function AdminExpenses() {
       }
       setPaymentModalOpen(false);
       setPaymentExpense(null);
+      await loadExpenses();
+      await loadReport();
     } catch (e) {
       console.error('Error saving payment', e);
       alert('No se pudo registrar el pago.');
@@ -980,6 +982,8 @@ export default function AdminExpenses() {
                 <th className="text-left px-3 py-2">Vencimiento</th>
                 <th className="text-left px-3 py-2">Descripcion</th>
                 <th className="text-right px-3 py-2">Monto</th>
+                <th className="text-right px-3 py-2">Pagado</th>
+                <th className="text-right px-3 py-2">Saldo</th>
                 <th className="text-left px-3 py-2">Moneda</th>
                 <th className="text-left px-3 py-2">Estado</th>
                 <th className="text-left px-3 py-2">Factura</th>
@@ -997,6 +1001,10 @@ export default function AdminExpenses() {
                   <td className="px-3 py-2">{e.due_date || '-'}</td>
                   <td className="px-3 py-2">{e.description || '-'}</td>
                   <td className="px-3 py-2 text-right">{fmtMoney(e.amount)}</td>
+                  <td className="px-3 py-2 text-right">{fmtMoney(e.paid_amount || 0)}</td>
+                  <td className="px-3 py-2 text-right">
+                    {fmtMoney(Number(e.amount || 0) - Number(e.paid_amount || 0))}
+                  </td>
                   <td className="px-3 py-2">{e.currency_code || '-'}</td>
                   <td className="px-3 py-2 capitalize">{e.status || '-'}</td>
                   <td className="px-3 py-2">
@@ -1030,7 +1038,7 @@ export default function AdminExpenses() {
               ))}
               {!expenses.length && (
                 <tr>
-                  <td colSpan={12} className="px-3 py-4 text-center text-slate-500">
+                  <td colSpan={14} className="px-3 py-4 text-center text-slate-500">
                     Sin gastos registrados.
                   </td>
                 </tr>

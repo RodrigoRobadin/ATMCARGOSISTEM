@@ -59,6 +59,7 @@ import messagesRouter from './routes/messages.js';
 import adminFinanceRouter from './routes/adminFinance.js';
 import serviceRouter from './routes/service.js';
 import containerRouter from './routes/container.js';
+import accountsPayableRouter from './routes/accountsPayable.js';
 
 // ⭐️ NUEVO: solicitudes de flete
 import freightRequestsRouter from './routes/freightRequests.js';
@@ -243,6 +244,7 @@ app.use('/api/sales-goals', salesGoalsRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/messages', messagesRouter);
 app.use('/api/admin/finance', adminFinanceRouter);
+app.use('/api/accounts-payable', accountsPayableRouter);
 app.use('/api/service', serviceRouter);
 app.use('/api/container', containerRouter);
 

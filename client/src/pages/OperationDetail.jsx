@@ -1,10 +1,12 @@
 // client/src/pages/OperationDetail.jsx
 import React, { useEffect, useMemo, useState, useRef } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
+import { useAuth } from "../auth.jsx";
 import DetCosSheet from "./DetCosSheet";
 import ReportPreview from "../components/op-details/ReportPreview";
 import OperationExpenseInvoices from "../components/OperationExpenseInvoices.jsx";
+import AdminOpsPanel from "../components/op-details/AdminOpsPanel.jsx";
 
 // 👇 Ajustá la ruta real según tu backend
 const PROVIDERS_ENDPOINT = "/organizations";
@@ -503,6 +505,9 @@ function DocTextLink({
 /* =================== PÁGINA =================== */
 export default function OperationDetail() {
   const { id } = useParams();
+  const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const isAdmin = String(user?.role || "").toLowerCase() === "admin";
 
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState(null);
@@ -565,6 +570,22 @@ export default function OperationDetail() {
   const [selectedProviderIds, setSelectedProviderIds] = useState([]);
     // ====== VISTA PREVIA DE INFORME ======
   const [showReportPreview, setShowReportPreview] = useState(false);
+  const requestedTab = String(searchParams.get("tab") || "").toLowerCase();
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (requestedTab === "administracion") {
+      setActiveTab("administracion");
+    }
+  }, [isAdmin, requestedTab, id]);
+
+  function handleTabChange(nextTab) {
+    setActiveTab(nextTab);
+    const nextParams = new URLSearchParams(searchParams);
+    if (isAdmin && nextTab === "administracion") nextParams.set("tab", "administracion");
+    else nextParams.delete("tab");
+    setSearchParams(nextParams, { replace: true });
+  }
 
 
 
@@ -1953,6 +1974,7 @@ useEffect(() => {
     { id: "detalle", kind: "base", label: "Detalle" },
     { id: "documentos", kind: "base", label: "Documentos" },
     { id: "gastos", kind: "base", label: "Gastos" },
+    ...(isAdmin ? [{ id: "administracion", kind: "base", label: "Administración" }] : []),
     { id: "detcos", kind: "base", label: "Planilla de costos (DET COS)" },
     ...docTabs,
     ...flatUploadingTabs,
@@ -2536,7 +2558,7 @@ function providerHasFreightTag(p = {}) {
               className={`px-3 py-2 text-sm rounded-t-lg border-b-0 border whitespace-nowrap ${
                 activeTab === t.id ? "bg-black text-white" : "bg-white"
               }`}
-              onClick={() => setActiveTab(t.id)}
+              onClick={() => handleTabChange(t.id)}
               title={t.label}
             >
               {t.label}
@@ -2561,6 +2583,17 @@ function providerHasFreightTag(p = {}) {
             />
           ) : activeTab === "gastos" ? (
             <div />
+          ) : activeTab === "administracion" ? (
+            <AdminOpsPanel
+              dealId={Number(id)}
+              deal={deal}
+              onDocsRefresh={() => {
+                api
+                  .get("/invoices/operation-docs", { params: { deal_id: id } })
+                  .then(({ data }) => setOpDocs(Array.isArray(data) ? data : []))
+                  .catch(() => setOpDocs([]));
+              }}
+            />
           ) : isFileTab(activeTab) ? (
             <FileTabViewer context={getFileFromTab(activeTab)} />
           ) : isDocTab(activeTab) ? (

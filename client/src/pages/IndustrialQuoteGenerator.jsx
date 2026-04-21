@@ -4,9 +4,11 @@ import React, { useEffect, useMemo, useState } from 'react';
 
 import { Link, useParams, useSearchParams, useLocation } from 'react-router-dom';
 
-import { api } from '../api';
+import { API_BASE, api } from '../api';
 
 import { useAuth } from '../auth.jsx';
+import { RichTextContent, RichTextDialogField } from '../components/RichTextEditor.jsx';
+import { htmlToPlainText, sanitizeRichTextHtml } from '../utils/richText';
 
 import useParamOptions from '../hooks/useParamOptions';
 
@@ -23,6 +25,10 @@ const HEADER_SRC = `${import.meta.env.BASE_URL}quote-header.png`;
 const PDF_PAGE_W_MM = 340;
 
 const PDF_PAGE_H_MM = 541;
+
+const FORMAL_PAGE_W_MM = 291;
+
+const FORMAL_PAGE_H_MM = 406;
 
 const PDF_MARGIN = { top: 0, right: 0, bottom: 0, left: 0 };
 
@@ -113,6 +119,60 @@ const num = (v) => {
 // Paleta de branding
 
 const BRAND_BLUE = '#c62828'; // rojo para barras y cabeceras
+
+const PUBLIC_BASE = String(API_BASE || '').replace(/\/api$/, '');
+
+const resolvePublicAssetUrl = (value = '') => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^(data:|https?:\/\/)/i.test(raw)) return raw;
+  if (raw.startsWith('/')) return `${PUBLIC_BASE}${raw}`;
+  return raw;
+};
+
+const FORMAL_MONTHS = [
+  'enero',
+  'febrero',
+  'marzo',
+  'abril',
+  'mayo',
+  'junio',
+  'julio',
+  'agosto',
+  'septiembre',
+  'octubre',
+  'noviembre',
+  'diciembre',
+];
+
+function parseLooseDate(raw) {
+  if (!raw) return new Date();
+  if (raw instanceof Date && !Number.isNaN(raw.getTime())) return raw;
+  const text = String(raw).trim();
+  if (!text) return new Date();
+
+  const direct = new Date(text);
+  if (!Number.isNaN(direct.getTime())) return direct;
+
+  const match = text.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/);
+  if (match) {
+    const day = Number(match[1]);
+    const month = Number(match[2]) - 1;
+    const year = Number(match[3].length === 2 ? `20${match[3]}` : match[3]);
+    const parsed = new Date(year, month, day);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+
+  return new Date();
+}
+
+function formatFormalDate(raw, city = 'Asuncion') {
+  const date = parseLooseDate(raw);
+  const day = date.getDate();
+  const month = FORMAL_MONTHS[date.getMonth()] || '';
+  const year = date.getFullYear();
+  return `${city} ${day} de ${month} de ${year}`;
+}
 
 
 
@@ -550,6 +610,9 @@ function parseTags(raw='') {
 
 const tagsToText = (tags=[]) => tags.map(t => t.trim()).filter(Boolean).join('\n');
 
+const tagsToTextareaValue = (tags = []) =>
+  Array.isArray(tags) ? tags.map((t) => String(t ?? '')).join('\n') : String(tags ?? '');
+
 
 
 function normalizeTemplateSection(val) {
@@ -560,6 +623,57 @@ function normalizeTemplateSection(val) {
 
   return [];
 
+}
+
+function pickFirstFilledValue(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === 'string') {
+      if (value.trim() === '') continue;
+      return value;
+    }
+    return value;
+  }
+  return '';
+}
+
+function normalizeIndustrialItem(item = {}, idx = 0, fallbackCurrency = 'USD') {
+  const servicio =
+    String(
+      item?.servicio ??
+      item?.description ??
+      item?.descripcion ??
+      ''
+    ).trim() || `Item ${idx + 1}`;
+
+  const rawObservacionHtml = pickFirstFilledValue(
+    item?.observacion_html,
+    item?.ObservacionHtml,
+    item?.observation_html,
+    item?.description_html
+  );
+
+  const rawObservacion = pickFirstFilledValue(
+    item?.observacion,
+    item?.Observacion,
+    item?.observation,
+    item?.observations
+  );
+
+  const observacionHtml = sanitizeRichTextHtml(rawObservacionHtml || rawObservacion || '');
+  const observacion = String(rawObservacion || htmlToPlainText(observacionHtml) || '').trim();
+
+  return {
+    ...item,
+    cantidad: item?.cantidad ?? item?.quantity ?? item?.qty ?? 1,
+    servicio,
+    observacion,
+    observacion_html: observacionHtml,
+    moneda: item?.moneda ?? item?.currency_code ?? item?.currency ?? fallbackCurrency,
+    precio: item?.precio ?? item?.unit_price ?? item?.sale_price ?? 0,
+    impuesto: item?.impuesto || 'EXENTA',
+    include: item?.include !== false,
+  };
 }
 
 
@@ -716,6 +830,14 @@ export default function QuoteGenerator(){
 
   const [selectedTemplateName, setSelectedTemplateName] = useState('');
 
+  const [quoteBranding, setQuoteBranding] = useState({
+    logoUrl: '',
+    city: 'Asuncion',
+    footerWeb: 'www.atmcargo.com.py',
+    footerAddress: 'Cptan. Urbieta 175 e/ Av. Mcal. Lopez y Rio de Janeiro Asuncion - Paraguay',
+    footerPhone: 'Tel. +595 21 490382 / 444706',
+  });
+
 
 
   // Ítems
@@ -798,7 +920,17 @@ export default function QuoteGenerator(){
     (async () => {
       try {
         const { data } = await api.get('/params', {
-          params: { keys: 'quote_template', only_active: 1 },
+          params: {
+            keys: [
+              'quote_template',
+              'quote_brand_logo_url',
+              'quote_brand_city',
+              'quote_brand_footer_web',
+              'quote_brand_footer_address',
+              'quote_brand_footer_phone',
+            ].join(','),
+            only_active: 1,
+          },
         });
         const rows = Array.isArray(data?.quote_template) ? data.quote_template : [];
         const parsed = rows
@@ -809,6 +941,21 @@ export default function QuoteGenerator(){
             return { id: row.id, name, data: parsedValue.data };
           })
           .filter(Boolean);
+
+        const firstValue = (key) => {
+          const entries = Array.isArray(data?.[key]) ? data[key] : [];
+          const match = entries.find((row) => String(row?.value || '').trim() !== '');
+          return match?.value || '';
+        };
+
+        setQuoteBranding((prev) => ({
+          ...prev,
+          logoUrl: resolvePublicAssetUrl(firstValue('quote_brand_logo_url')),
+          city: firstValue('quote_brand_city') || prev.city,
+          footerWeb: firstValue('quote_brand_footer_web') || prev.footerWeb,
+          footerAddress: firstValue('quote_brand_footer_address') || prev.footerAddress,
+          footerPhone: firstValue('quote_brand_footer_phone') || prev.footerPhone,
+        }));
 
         // Plantilla fija Rayflex si no existe en params
         const rayflexTemplate = {
@@ -1238,9 +1385,10 @@ CORDIALES SALUDOS`,
 
         // Ítems: si hay guardados en CF, usarlos; si no, usar los de la cotización
 
-        const savedItemsRaw = cf['industrial_items_json'];
+        const savedItemsRaw = cfMap['industrial_items_json'];
 
         let mapped = [];
+        let savedItems = [];
 
         if (savedItemsRaw) {
 
@@ -1250,23 +1398,7 @@ CORDIALES SALUDOS`,
 
             if (Array.isArray(parsed)) {
 
-              mapped = parsed.map((it) => ({
-
-                cantidad: it.cantidad || 1,
-
-                servicio: it.servicio || it.description || 'Item',
-
-                observacion: it.observacion || it.Observacion || '',
-
-                moneda: cur || it.moneda || 'USD',
-
-                precio: it.precio ?? it.unit_price ?? 0,
-
-                impuesto: it.impuesto || 'EXENTA',
-
-                include: it.include !== false,
-
-              }));
+              savedItems = parsed.map((it, idx) => normalizeIndustrialItem(it, idx, cur || 'USD'));
 
             }
 
@@ -1278,30 +1410,35 @@ CORDIALES SALUDOS`,
 
         }
 
-        if (!mapped.length) {
+        // Preferimos los ítems crudos guardados en la cotización (inputs) para traer descripción + observación actuales
+        const rawItems =
+          quoteRes?.data?.quote?.inputs?.items ||
+          quoteRes?.data?.inputs?.items ||
+          [];
+        const ofertaItems = quoteRes?.data?.computed?.oferta?.items || [];
+        const resultadoItems = quoteRes?.data?.computed?.resultado?.items || [];
+        const sourceItems = rawItems.length
+          ? rawItems
+          : (ofertaItems.length ? ofertaItems : resultadoItems);
+        const sourceType = rawItems.length
+          ? 'raw'
+          : (ofertaItems.length || resultadoItems.length ? 'computed' : 'raw');
+        const hasSourceItems = sourceItems.some(
+          (it) => Number(it.qty || 0) > 0 || String(it.description || it.servicio || it.descripcion || "").trim()
+        );
+        const isPyg = cur === 'PYG' || cur === 'GS';
+        const rateValue = Number(rate || 1) || 1;
+        const conv = (v) => (isPyg && sourceType === 'computed' ? Number(v || 0) * rateValue : Number(v || 0));
 
-          // Preferimos los ítems crudos guardados en la cotización (inputs) para traer observación
+        if (hasSourceItems) {
 
-          const rawItems =
-            quoteRes?.data?.quote?.inputs?.items ||
-            quoteRes?.data?.inputs?.items ||
-            [];
-          const ofertaItems = quoteRes?.data?.computed?.oferta?.items || [];
-          const resultadoItems = quoteRes?.data?.computed?.resultado?.items || [];
-          const sourceItems = ofertaItems.length
-            ? ofertaItems
-            : (resultadoItems.length ? resultadoItems : rawItems);
-          const sourceType = rawItems.length
-            ? 'raw'
-            : (ofertaItems.length || resultadoItems.length ? 'computed' : 'raw');
-          const isPyg = cur === 'PYG' || cur === 'GS';
-          const rateValue = Number(rate || 1) || 1;
-          const conv = (v) => (isPyg && sourceType === 'computed' ? Number(v || 0) * rateValue : Number(v || 0));
-
+          const savedByLine = new Map(
+            savedItems.map((it, idx) => [String(it.line_no ?? idx), it])
+          );
 
           mapped = sourceItems
 
-            .filter((it) => Number(it.qty || 0) > 0 || String(it.description || it.servicio || "").trim())
+            .filter((it) => Number(it.qty || 0) > 0 || String(it.description || it.servicio || it.descripcion || "").trim())
 
             .map((it, idx) => {
 
@@ -1322,26 +1459,60 @@ CORDIALES SALUDOS`,
                 (door + extra) ||
                 (qty ? Number(it.total_sales || 0) / qty : Number(it.total_sales || 0));
               const unit = conv(unitBase);
+              const saved =
+                savedByLine.get(String(it.line_no ?? idx)) ||
+                savedItems[idx] ||
+                null;
 
-              return {
+              const savedInclude =
+                saved && saved.include !== undefined ? saved.include !== false : undefined;
 
-                cantidad: qty,
-
-                servicio: it.servicio || it.description || `Item ${idx + 1}`,
-
-                observacion: it.observacion || it.observation || "",
-
-                moneda: cur || it.moneda || "USD",
-
-                precio: unit,
-
-                impuesto: it.impuesto || "EXENTA",
-
-                include: it.include !== false,
-
-              };
+              return normalizeIndustrialItem({
+                ...(saved || {}),
+                ...it,
+                line_no: saved?.line_no ?? it.line_no ?? idx + 1,
+                cantidad: saved?.cantidad ?? saved?.quantity ?? saved?.qty ?? qty,
+                servicio: pickFirstFilledValue(
+                  saved?.servicio,
+                  saved?.description,
+                  saved?.descripcion,
+                  it?.servicio,
+                  it?.description,
+                  it?.descripcion,
+                  `Item ${idx + 1}`
+                ),
+                observacion_html: pickFirstFilledValue(
+                  saved?.observacion_html,
+                  saved?.ObservacionHtml,
+                  saved?.observation_html,
+                  saved?.description_html,
+                  it?.observacion_html,
+                  it?.ObservacionHtml,
+                  it?.observation_html,
+                  it?.description_html,
+                ),
+                observacion: pickFirstFilledValue(
+                  saved?.observacion,
+                  saved?.Observacion,
+                  saved?.observation,
+                  saved?.observations,
+                  it?.observacion,
+                  it?.Observacion,
+                  it?.observation,
+                  it?.observations,
+                  ""
+                ),
+                moneda: saved?.moneda || cur || it.moneda || "USD",
+                precio: saved?.precio ?? unit,
+                impuesto: saved?.impuesto || it.impuesto || "EXENTA",
+                include: savedInclude ?? (it.include !== false),
+              }, idx, cur || 'USD');
 
             });
+
+        } else {
+
+          mapped = savedItems;
 
         }
 
@@ -1359,11 +1530,19 @@ CORDIALES SALUDOS`,
 
 
 
+  const normalizedItems = useMemo(
+
+    () => items.map((it, idx) => normalizeIndustrialItem(it, idx, opCurrency || 'USD')),
+
+    [items, opCurrency]
+
+  );
+
   const displayItems = useMemo(
 
-    () => items.filter((it) => it.include !== false),
+    () => normalizedItems.filter((it) => it.include !== false),
 
-    [items]
+    [normalizedItems]
 
   );
 
@@ -1371,7 +1550,7 @@ CORDIALES SALUDOS`,
 
     () =>
 
-      items.reduce(
+      normalizedItems.reduce(
 
         (acc, it) =>
 
@@ -1387,7 +1566,7 @@ CORDIALES SALUDOS`,
 
       ),
 
-    [items]
+    [normalizedItems]
 
   );
 
@@ -1413,11 +1592,102 @@ CORDIALES SALUDOS`,
 
   );
 
+  const customFieldEntries = useMemo(
+    () => [
+      ['tipo_operacion', tipoOperacion],
+      ['tipo_transporte', tipoTransporte],
+      ['tipo_envio', tipoEnvio],
+      ['incoterms', incoterm],
+      ['pais_origen', paisOrigen],
+      ['pais_destino', paisDestino],
+      ['ciudad_origen', ciudadOrigen],
+      ['ciudad_destino', ciudadDestino],
+      ['aeropuerto_origen', aeropuertoOrigen],
+      ['aeropuerto_destino', aeropuertoDestino],
+      ['volumen_m3', volumenM3],
+      ['peso_bruto_kg', pesoBrutoKg],
+      ['mercaderia', mercaderia],
+      ['seguro_tipo', seguroTipo],
+      ['seguro_monto_usd', montoAsegurado],
+      ['aseguradora', aseguradora],
+      ['observaciones', observaciones],
+      ['observacion', observaciones],
+      ['validez_oferta', terminos.validez],
+      ['condicion_venta', terminos.condicionVenta],
+      ['plazo_credito', terminos.plazoCredito],
+      ['forma_pago', terminos.formaPago],
+      ['que_incluye', tagsToText(incluyeTags)],
+      ['que_no_incluye', tagsToText(noIncluyeTags)],
+      ['quote_template', selectedTemplate?.name || selectedTemplateName || ''],
+      ['responsabilidad_cliente', tagsToText(responsabilidadClienteTags)],
+      ['plazos_entrega', tagsToText(plazosEntregaTags)],
+      ['condicion_pago', tagsToText(condicionPagoTags)],
+      ['tipo_instalacion', tagsToText(tipoInstalacionTags)],
+      ['garantia', tagsToText(garantiaTags)],
+      ['observaciones_producto', tagsToText(observacionesProductoTags)],
+      ['industrial_items_json', JSON.stringify(normalizedItems)],
+    ],
+    [
+      tipoOperacion,
+      tipoTransporte,
+      tipoEnvio,
+      incoterm,
+      paisOrigen,
+      paisDestino,
+      ciudadOrigen,
+      ciudadDestino,
+      aeropuertoOrigen,
+      aeropuertoDestino,
+      volumenM3,
+      pesoBrutoKg,
+      mercaderia,
+      seguroTipo,
+      montoAsegurado,
+      aseguradora,
+      observaciones,
+      terminos,
+      incluyeTags,
+      noIncluyeTags,
+      selectedTemplate?.name,
+      selectedTemplateName,
+      responsabilidadClienteTags,
+      plazosEntregaTags,
+      condicionPagoTags,
+      tipoInstalacionTags,
+      garantiaTags,
+      observacionesProductoTags,
+      normalizedItems,
+    ]
+  );
+
+  const currentSaveSignature = useMemo(
+    () => JSON.stringify(customFieldEntries),
+    [customFieldEntries]
+  );
+
 
 
   // =================== Guardar en CF ===================
 
   const [saving, setSaving] = useState(false);
+  const [lastSavedSignature, setLastSavedSignature] = useState('');
+  const [signatureKeyReady, setSignatureKeyReady] = useState('');
+  const signatureKey = `${baseId || 'na'}:${revisionId || 'base'}:${isService ? 'service' : 'deal'}`;
+
+  useEffect(() => {
+    setLastSavedSignature('');
+    setSignatureKeyReady('');
+  }, [signatureKey]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (signatureKeyReady === signatureKey) return;
+    setLastSavedSignature(currentSaveSignature);
+    setSignatureKeyReady(signatureKey);
+  }, [loading, signatureKeyReady, signatureKey, currentSaveSignature]);
+
+  const hasUnsavedChanges =
+    signatureKeyReady === signatureKey && currentSaveSignature !== lastSavedSignature;
 
   async function saveToCustomFields() {
 
@@ -1425,91 +1695,7 @@ CORDIALES SALUDOS`,
 
       setSaving(true);
 
-      const entries = [
-
-        ['tipo_operacion',   tipoOperacion],
-
-        ['tipo_transporte',  tipoTransporte],
-
-        ['tipo_envio',       tipoEnvio],
-
-        ['incoterms',        incoterm],
-
-
-
-        ['pais_origen',      paisOrigen],
-
-        ['pais_destino',     paisDestino],
-
-        ['ciudad_origen',    ciudadOrigen],
-
-        ['ciudad_destino',   ciudadDestino],
-
-        ['aeropuerto_origen',aeropuertoOrigen],
-
-        ['aeropuerto_destino',aeropuertoDestino],
-
-
-
-        ['volumen_m3',       volumenM3],
-
-        ['peso_bruto_kg',    pesoBrutoKg],
-
-        ['mercaderia',       mercaderia],
-
-
-
-        ['seguro_tipo',      seguroTipo],
-
-        ['seguro_monto_usd', montoAsegurado],
-
-        ['aseguradora',      aseguradora],
-
-
-
-        ['observaciones',    observaciones],
-
-        ['observacion',      observaciones], // alias por si otras vistas usan singular
-
-
-
-        ['validez_oferta',   terminos.validez],
-
-        ['condicion_venta',  terminos.condicionVenta],
-
-        ['plazo_credito',    terminos.plazoCredito],
-
-        ['forma_pago',       terminos.formaPago],
-
-
-
-        // nuevos como lista (lineas)
-
-        ['que_incluye',      tagsToText(incluyeTags)],
-
-        ['que_no_incluye',   tagsToText(noIncluyeTags)],
-
-        ['quote_template',   selectedTemplate?.name || selectedTemplateName || ''],
-
-        ['responsabilidad_cliente', tagsToText(responsabilidadClienteTags)],
-
-        ['plazos_entrega',   tagsToText(plazosEntregaTags)],
-
-        ['condicion_pago',   tagsToText(condicionPagoTags)],
-
-        ['tipo_instalacion', tagsToText(tipoInstalacionTags)],
-
-        ['garantia',         tagsToText(garantiaTags)],
-
-        ['observaciones_producto', tagsToText(observacionesProductoTags)],
-
-        ['industrial_items_json', JSON.stringify(items)],
-
-      ];
-
-
-
-      await Promise.all(entries.map(async ([key, value]) => {
+      await Promise.all(customFieldEntries.map(async ([key, value]) => {
 
         const def = CF_SCHEMA[key] || { label: key, type: 'text' };
 
@@ -1536,6 +1722,8 @@ CORDIALES SALUDOS`,
       (cfs || []).forEach((r) => (map[r.key] = r.value ?? ''));
 
       setCf(map);
+      setLastSavedSignature(currentSaveSignature);
+      setSignatureKeyReady(signatureKey);
 
 
 
@@ -1673,6 +1861,134 @@ CORDIALES SALUDOS`,
 
 
 
+  function buildFormalSubject() {
+    const summary = displayItems
+      .slice(0, 3)
+      .map((item) => {
+        const qty = Number(item?.cantidad || 0);
+        const name = String(item?.servicio || '').trim();
+        if (!name) return '';
+        return qty > 0 ? `${qty} ${name}` : name;
+      })
+      .filter(Boolean)
+      .join(' + ');
+    if (summary) return `REF. N° ${ref || deal?.reference || ''} / ${summary}`;
+    return `REF. N° ${ref || deal?.reference || ''}`;
+  }
+
+  async function exportFormalPdf(mode = 'download') {
+    const source = document.getElementById('quote-formal-print');
+    if (!source) return;
+
+    const mount = document.createElement('div');
+    mount.style.position = 'fixed';
+    mount.style.left = '0';
+    mount.style.top = '0';
+    mount.style.width = `${FORMAL_PAGE_W_MM}mm`;
+    mount.style.background = '#ffffff';
+    mount.style.visibility = 'hidden';
+    mount.style.pointerEvents = 'none';
+    mount.style.zIndex = '999999';
+    mount.style.overflow = 'hidden';
+
+    const el = source.cloneNode(true);
+    el.id = 'quote-formal-print-export';
+    mount.appendChild(el);
+    document.body.appendChild(mount);
+
+    try {
+      const html2pdf = await ensureHtml2Pdf();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      await Promise.all(
+        Array.from(el.querySelectorAll('img')).map(
+          (img) =>
+            new Promise((resolve) => {
+              if (img.complete) return resolve();
+              img.onload = () => resolve();
+              img.onerror = () => resolve();
+            })
+        )
+      );
+      const exportWidth = Math.ceil(el.getBoundingClientRect().width || el.scrollWidth || 794);
+
+      const filename = `${(ref || deal?.reference || 'cotizacion').replace(/[^\w.-]+/g, '_')}-formal.pdf`;
+      const opt = {
+        margin: [0, 0, 0, 0],
+        filename,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: {
+          scale: 2.4,
+          useCORS: true,
+          backgroundColor: '#ffffff',
+          width: exportWidth,
+          windowWidth: exportWidth,
+          scrollX: 0,
+          scrollY: 0,
+          x: 0,
+          y: 0,
+        },
+        jsPDF: { unit: 'mm', format: [FORMAL_PAGE_W_MM, FORMAL_PAGE_H_MM], orientation: 'portrait' },
+        pagebreak: { mode: ['css', 'legacy'] },
+      };
+
+      const worker = html2pdf().from(el).set(opt);
+      if (mode === 'download') {
+        await worker.save();
+        return;
+      }
+
+      await worker.toPdf();
+      const pdf = await worker.get('pdf');
+      pdf.output('dataurlnewwindow');
+    } catch (e) {
+      console.error('No se pudo generar el PDF formal:', e);
+      alert('No se pudo generar el PDF formal.');
+    } finally {
+      document.body.removeChild(mount);
+    }
+  }
+  const formalLogoUrl = quoteBranding.logoUrl;
+  const formalDateLabel = formatFormalDate(fecha, quoteBranding.city);
+  const formalCustomerName = cliente || deal?.org_name || 'CLIENTE';
+  const formalContactName = contacto || deal?.contact_name || '';
+  const formalSubject = buildFormalSubject();
+  const formalDeliveryAddress = [ciudadDestino, paisDestino].filter(Boolean).join(', ');
+  const formalComment = tagsToText(observacionesProductoTags);
+  const formalDeliveryType = incoterm || 'DDP';
+  const formalFooterWeb = quoteBranding.footerWeb || 'www.atmcargo.com.py';
+  const formalFooterAddress = quoteBranding.footerAddress || '';
+  const formalFooterPhone = quoteBranding.footerPhone || '';
+  const formalDocProps = {
+    logoUrl: formalLogoUrl,
+    dateLabel: formalDateLabel,
+    customerName: formalCustomerName,
+    contactName: formalContactName,
+    subject: formalSubject,
+    saleCondition: terminos.condicionVenta || '-',
+    creditTerm: terminos.plazoCredito || '-',
+    paymentMethod: terminos.formaPago || '-',
+    offerValidity: terminos.validez || '-',
+    comment: formalComment || '-',
+    items: displayItems,
+    currencyCode: opCurrency || 'USD',
+    currencyLabel,
+    totalCurrency,
+    totalCurrencyDecimals,
+    observations: observaciones,
+    installationType: tagsToText(tipoInstalacionTags),
+    paymentCondition: tagsToText(condicionPagoTags),
+    deliveryType: formalDeliveryType,
+    deliveryAddress: formalDeliveryAddress,
+    deliveryTerm: tagsToText(plazosEntregaTags),
+    footerWeb: formalFooterWeb,
+    footerAddress: formalFooterAddress,
+    footerPhone: formalFooterPhone,
+    warrantyText: tagsToText(garantiaTags),
+    customerResponsibility: tagsToText(responsabilidadClienteTags),
+    includesText: tagsToText(incluyeTags),
+    excludesText: tagsToText(noIncluyeTags),
+  };
+
   if (loading) return <div className="p-4 text-sm text-slate-600">Cargando…</div>;
 
   if (!deal) return <div className="p-4 text-sm text-slate-600">Operación no encontrada.</div>;
@@ -1701,6 +2017,337 @@ CORDIALES SALUDOS`,
 
           height: 0;
 
+        }
+
+        .formal-print-shell{
+          display: none;
+        }
+
+        .formal-page{
+          width: ${FORMAL_PAGE_W_MM}mm;
+          min-height: 0;
+          padding: 6mm 8mm 8mm;
+          box-sizing: border-box;
+          background: #fff;
+          color: #111827;
+          font-family: Arial, Helvetica, sans-serif;
+          position: relative;
+          overflow: visible;
+          break-after: auto;
+          page-break-after: auto;
+        }
+
+        .formal-header{
+          display: flex;
+          align-items: stretch;
+          justify-content: space-between;
+          gap: 10mm;
+          margin-bottom: 3mm;
+        }
+
+        .formal-logo-box{
+          width: 58mm;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding-top: 1mm;
+        }
+
+        .formal-logo-box img{
+          max-width: 100%;
+          max-height: 24mm;
+          object-fit: contain;
+        }
+
+        .formal-logo-fallback{
+          font-size: 18pt;
+          font-weight: 700;
+          letter-spacing: .3px;
+        }
+
+        .formal-logo-fallback .grupo{ color: #111827; }
+        .formal-logo-fallback .atm{ color: #ef5a2f; margin-left: 4px; }
+
+        .formal-title-box{
+          flex: 1;
+          position: relative;
+          height: 26mm;
+          overflow: hidden;
+          margin-top: 0;
+        }
+
+        .formal-title-orange{
+          position: absolute;
+          left: 0;
+          top: 0;
+          width: 30%;
+          height: 100%;
+          background: #ef5a2f;
+          border-top-right-radius: 32mm;
+          border-bottom-right-radius: 32mm;
+        }
+
+        .formal-title-blue{
+          position: absolute;
+          right: 0;
+          top: 0;
+          width: 84%;
+          height: 100%;
+          background: #445f84;
+          border-top-left-radius: 32mm;
+          border-bottom-left-radius: 32mm;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-style: italic;
+          font-weight: 700;
+          font-size: 14pt;
+          letter-spacing: .4px;
+        }
+
+        .formal-date-line{
+          text-align: right;
+          font-size: 8.5pt;
+          margin-bottom: 8mm;
+        }
+
+        .formal-customer{
+          font-size: 9.5pt;
+          margin-bottom: 1mm;
+        }
+
+        .formal-customer strong{
+          display: block;
+          font-size: 11.5pt;
+          text-transform: uppercase;
+        }
+
+        .formal-ref-title{
+          text-align: center;
+          font-weight: 700;
+          font-size: 6.2mm;
+          margin: 0 0 1mm;
+          text-transform: uppercase;
+          line-height: 1.12;
+        }
+
+        .formal-main-title{
+          text-align: center;
+          font-size: 5.6mm;
+          font-weight: 700;
+          text-decoration: underline;
+          margin-bottom: 5mm;
+          text-transform: uppercase;
+        }
+
+        .formal-intro{
+          font-size: 8.5pt;
+          line-height: 1.28;
+          margin-bottom: 4mm;
+          text-transform: uppercase;
+        }
+
+        .formal-conditions{
+          border: 1px solid #9ea6af;
+          padding: 2.2mm 3mm 2mm;
+          margin-bottom: 3mm;
+        }
+
+        .formal-conditions-grid{
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 1.2mm 8mm;
+          font-size: 8.7pt;
+        }
+
+        .formal-conditions-row{
+          display: grid;
+          grid-template-columns: 34mm 1fr;
+          gap: 2mm;
+          min-height: 5mm;
+        }
+
+        .formal-conditions-label{
+          font-weight: 700;
+          text-transform: uppercase;
+        }
+
+        .formal-section-title{
+          text-align: center;
+          font-size: 10pt;
+          font-weight: 700;
+          text-decoration: underline;
+          margin: 1.5mm 0;
+          text-transform: uppercase;
+        }
+
+        .formal-products{
+          width: 100%;
+          border-collapse: collapse;
+        }
+
+        .formal-products th{
+          background: #445f84;
+          color: #fff;
+          font-size: 7.7pt;
+          padding: 1.4mm 1.4mm;
+          text-transform: uppercase;
+          border: 1px solid #7a8796;
+        }
+
+        .formal-products td{
+          border-bottom: 1px solid #c7cdd4;
+          font-size: 7.8pt;
+          padding: 1.2mm 1.4mm;
+          vertical-align: top;
+        }
+
+        .formal-products .small{
+          font-size: 7.2pt;
+          line-height: 1.16;
+        }
+
+        .rich-text-content{
+          white-space: normal;
+        }
+
+        .rich-text-content p,
+        .rich-text-content div{
+          margin: 0 0 1mm;
+        }
+
+        .rich-text-content p:last-child,
+        .rich-text-content div:last-child{
+          margin-bottom: 0;
+        }
+
+        .rich-text-content ul,
+        .rich-text-content ol{
+          margin: 0 0 1mm 4mm;
+          padding: 0;
+        }
+
+        .formal-center{ text-align: center; }
+        .formal-right{ text-align: right; }
+
+        .formal-total-box{
+          border: 1px solid #9ea6af;
+          display: grid;
+          grid-template-columns: 1fr 32mm 34mm;
+          margin-top: 2.2mm;
+        }
+
+        .formal-total-box div{
+          padding: 1.6mm 2.2mm;
+          font-size: 9pt;
+          font-weight: 700;
+          text-transform: uppercase;
+        }
+
+        .formal-total-label{ text-align: center; }
+
+        .formal-block{
+          margin-bottom: 2mm;
+          page-break-inside: avoid;
+        }
+
+        .formal-block h3{
+          margin: 0 0 0.8mm;
+          font-size: 9pt;
+          font-weight: 700;
+          text-transform: uppercase;
+          text-decoration: underline;
+          font-style: italic;
+        }
+
+        .formal-lines p{
+          margin: 0 0 0.7mm;
+          font-size: 8.4pt;
+          line-height: 1.22;
+          text-transform: uppercase;
+        }
+
+        .formal-footer{
+          display: flex;
+          align-items: flex-end;
+          justify-content: space-between;
+          gap: 5mm;
+          width: 100%;
+        }
+
+        .formal-footer-web{
+          font-size: 10pt;
+          font-weight: 700;
+          color: #111827;
+        }
+
+        .formal-footer-bar{
+          flex: 1;
+          position: relative;
+          height: 13mm;
+          overflow: hidden;
+        }
+
+        .formal-footer-orange{
+          position: absolute;
+          left: 0;
+          top: 0;
+          width: 26%;
+          height: 100%;
+          background: #ef5a2f;
+          border-top-right-radius: 22mm;
+          border-bottom-right-radius: 22mm;
+        }
+
+        .formal-footer-blue{
+          position: absolute;
+          right: 0;
+          top: 0;
+          width: 76%;
+          height: 100%;
+          background: #445f84;
+          border-top-left-radius: 22mm;
+          border-bottom-left-radius: 22mm;
+          color: #fff;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          padding: 0 6mm;
+          font-size: 7.8pt;
+          text-align: center;
+        }
+
+        .formal-acceptance{
+          margin-top: 8mm;
+          padding-left: 2mm;
+        }
+
+        .formal-acceptance h2{
+          font-size: 11pt;
+          font-weight: 700;
+          text-transform: uppercase;
+          text-decoration: underline;
+          margin-bottom: 6mm;
+        }
+
+        .formal-acceptance-row{
+          display: flex;
+          align-items: center;
+          gap: 4mm;
+          margin: 6mm 0;
+          font-size: 9.5pt;
+          text-transform: uppercase;
+        }
+
+        .formal-acceptance-row strong{
+          min-width: 28mm;
+        }
+
+        .formal-acceptance-line{
+          flex: 1;
+          border-bottom: 1px dotted #333;
+          height: 0;
         }
 
         /* tabla de especificaciones: columna 1 = etiqueta+":" , columna 2 = valor */
@@ -1925,6 +2572,23 @@ CORDIALES SALUDOS`,
       <div className={"flex items-center justify-between " + (isEmbed ? "hidden" : "")}>
         <h1 className="text-xl font-semibold">Generar Presupuesto - REF {deal.reference}</h1>
         <div className="space-x-2 flex items-center">
+          <div
+            className={
+              "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs " +
+              (hasUnsavedChanges
+                ? "border-amber-300 bg-amber-50 text-amber-800"
+                : "border-emerald-300 bg-emerald-50 text-emerald-700")
+            }
+            title={hasUnsavedChanges ? "Hay cambios pendientes de guardar en la operación" : "Todos los cambios ya están guardados"}
+          >
+            <span
+              className={
+                "inline-block h-2 w-2 rounded-full " +
+                (hasUnsavedChanges ? "bg-amber-500" : "bg-emerald-500")
+              }
+            />
+            {hasUnsavedChanges ? "Cambios sin guardar" : "Guardado"}
+          </div>
           <button
             onClick={saveToCustomFields}
             disabled={saving}
@@ -1935,6 +2599,12 @@ CORDIALES SALUDOS`,
           <button onClick={downloadPdf} className="px-3 py-2 rounded bg-black text-white">
             Descargar PDF
           </button>
+          <button onClick={() => exportFormalPdf('open')} className="px-3 py-2 rounded bg-slate-800 text-white">
+            Ver PDF formal
+          </button>
+          <button onClick={() => exportFormalPdf('download')} className="px-3 py-2 rounded border border-slate-300 bg-white text-slate-800">
+            Descargar PDF formal
+          </button>
           <Link to={`/operations/${id}`} className="px-3 py-2 rounded bg-slate-200 hover:bg-slate-300">
             ← Volver a la operacion
           </Link>
@@ -1943,7 +2613,6 @@ CORDIALES SALUDOS`,
 
       {/* Panel editable */}
       <div className={"grid grid-cols-1 lg:grid-cols-2 gap-4 " + (isEmbed ? "hidden" : "")}>
-      <div className={"grid grid-cols-1 lg:grid-cols-2 gap-4 " + (isEmbed ? "hidden" : "")}>
 
         {/* Cabecera */}
 
@@ -1951,7 +2620,7 @@ CORDIALES SALUDOS`,
 
           <div className="text-sm font-semibold">Cabecera</div>
 
-          <div className="grid grid-cols-2 gap-2 text-sm">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
 
             <label className="block">Cliente
 
@@ -1995,7 +2664,7 @@ CORDIALES SALUDOS`,
 
           <div className="text-sm font-semibold">Operación</div>
 
-          <div className="grid grid-cols-3 gap-2 text-sm">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
 
             <label className="block">Tipo de Operación
 
@@ -2017,7 +2686,7 @@ CORDIALES SALUDOS`,
 
           </div>
 
-          <div className="grid grid-cols-2 gap-2 text-sm">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
 
             <label className="block">País Origen
 
@@ -2067,7 +2736,7 @@ CORDIALES SALUDOS`,
 
           <div className="text-sm font-semibold">Medidas y mercancía</div>
 
-          <div className="grid grid-cols-3 gap-2 text-sm">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
 
             <label className="block">Volumen (m³)
 
@@ -2099,7 +2768,7 @@ CORDIALES SALUDOS`,
 
           <div className="text-sm font-semibold">Seguro</div>
 
-          <div className="grid grid-cols-3 gap-2 text-sm">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
 
             <label className="block">Tipo de seguro
 
@@ -2164,7 +2833,7 @@ CORDIALES SALUDOS`,
 
           />
 
-          <div className="grid grid-cols-2 gap-2 text-sm">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-2 text-sm">
 
             <ParamWithInput
 
@@ -2364,7 +3033,7 @@ CORDIALES SALUDOS`,
               className="w-full mt-1 border rounded px-2 py-1"
               rows={3}
               placeholder="Ej: 60% anticipo / 30% entrega / 10% puesta en marcha"
-              value={tagsToText(condicionPagoTags)}
+              value={tagsToTextareaValue(condicionPagoTags)}
               onChange={(e)=>setCondicionPagoTags([e.target.value])}
             />
           </label>
@@ -2377,7 +3046,7 @@ CORDIALES SALUDOS`,
               className="w-full mt-1 border rounded px-2 py-1"
               rows={3}
               placeholder="Describe el tipo de instalación..."
-              value={tagsToText(tipoInstalacionTags)}
+              value={tagsToTextareaValue(tipoInstalacionTags)}
               onChange={(e)=>setTipoInstalacionTags([e.target.value])}
             />
           </label>
@@ -2390,7 +3059,7 @@ CORDIALES SALUDOS`,
               className="w-full mt-1 border rounded px-2 py-1"
               rows={3}
               placeholder="Condiciones de garantía..."
-              value={tagsToText(garantiaTags)}
+              value={tagsToTextareaValue(garantiaTags)}
               onChange={(e)=>setGarantiaTags([e.target.value])}
             />
           </label>
@@ -2413,7 +3082,15 @@ CORDIALES SALUDOS`,
 
         </div>
 
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <div className="px-4 py-3 border-b bg-slate-50 text-sm font-semibold">
+          Vista previa formato formal
+        </div>
+        <div className="overflow-auto bg-slate-100 p-4">
+          <FormalQuoteDocument {...formalDocProps} />
+        </div>
       </div>
+
       {/* ================= PREVIEW / PDF (A4) ================= */}
 
       <div id="quote-print" className="bg-white p-0">
@@ -2576,6 +3253,8 @@ CORDIALES SALUDOS`,
 
                 <tr className="text-white uppercase" style={{ backgroundColor: BRAND_BLUE }}>
 
+                  <th className="text-left px-2 py-2">Item</th>
+
                   <th className="text-left px-2 py-2">Cantidad</th>
 
                   <th className="text-left px-2 py-2">Servicio</th>
@@ -2598,11 +3277,15 @@ CORDIALES SALUDOS`,
 
                   <tr key={i} className="border-t" style={{ borderColor: '#e5e7eb' }}>
 
+                    <td className="px-2 py-1">{i + 1}</td>
+
                     <td className="px-2 py-1">{it.cantidad || 1}</td>
 
                     <td className="px-2 py-1">{it.servicio}</td>
 
-                    <td className="px-2 py-1">{it.observacion}</td>
+                    <td className="px-2 py-1">
+                      <RichTextContent html={it.observacion_html || it.observacion} />
+                    </td>
 
                     <td className="px-2 py-1">{it.moneda}</td>
 
@@ -2954,6 +3637,10 @@ CORDIALES SALUDOS`,
 
       </div>
 
+      <div className="formal-print-shell">
+        <FormalQuoteDocument {...formalDocProps} containerId="quote-formal-print" />
+      </div>
+
     </div>
 
   );
@@ -3020,7 +3707,9 @@ function ItemsTable({ items, setItems, totalCurrency, totalDecimals, currencyCod
 
         servicio: '',
 
-        Observacion: '',
+        observacion: '',
+
+        observacion_html: '',
 
         moneda: currencyCode,
 
@@ -3088,7 +3777,16 @@ function ItemsTable({ items, setItems, totalCurrency, totalDecimals, currencyCod
 
               <td><input className="w-full border rounded px-1" value={it.servicio} onChange={e=>updateItem(idx, { servicio: e.target.value })} /></td>
 
-              <td><input className="w-full border rounded px-1" placeholder="Descripción / observación" value={it.observacion} onChange={e=>updateItem(idx, { observacion: e.target.value })} /></td>
+              <td className="w-[240px]">
+                <RichTextDialogField
+                  value={it.observacion_html || it.observacion || it.Observacion || it.observation || ''}
+                  placeholder="Descripción / observación con formato"
+                  dialogTitle={`Descripción del item ${idx + 1}`}
+                  minHeightClass="min-h-[220px]"
+                  widthClass="w-[220px] max-w-[220px]"
+                  onChange={({ html, text }) => updateItem(idx, { observacion_html: html, observacion: text })}
+                />
+              </td>
 
               <td>
 
@@ -3143,13 +3841,17 @@ function ParamWithInput({ label, value, onChange, options = [] }) {
 
   return (
 
-    <label className="block">
+    <label className="block min-w-0">
 
       {label}
 
-      <div className="flex gap-2">
+      <div className="mt-1 flex flex-col xl:flex-row gap-2 min-w-0">
 
-        <select className="border rounded px-2 py-1" onChange={(e)=>e.target.value && onChange(e.target.value)} value="">
+        <select
+          className="w-full xl:w-[240px] border rounded px-2 py-1 min-w-0"
+          onChange={(e)=>e.target.value && onChange(e.target.value)}
+          value=""
+        >
 
           <option value="">— Elegir de parámetros —</option>
 
@@ -3157,7 +3859,11 @@ function ParamWithInput({ label, value, onChange, options = [] }) {
 
         </select>
 
-        <input value={value} onChange={e=>onChange(e.target.value)} className="flex-1 border rounded px-2 py-1" />
+        <input
+          value={value}
+          onChange={e=>onChange(e.target.value)}
+          className="w-full min-w-0 flex-1 border rounded px-2 py-1"
+        />
 
       </div>
 
@@ -3353,6 +4059,362 @@ function ListFromText({ text }) {
 
 }
 
+function FormalLines({ text }) {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (!lines.length) {
+    return (
+      <div className="formal-lines">
+        <p>-</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="formal-lines">
+      {lines.map((line, index) => (
+        <p key={`formal-line-${index}`}>{line}</p>
+      ))}
+    </div>
+  );
+}
+
+function getFormalLines(text = '') {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function estimateFormalLineUnits(line = '') {
+  return Math.max(1, Math.ceil(String(line || '').length / 115));
+}
+
+function splitFormalSection(title, text, maxUnits = 24) {
+  const lines = getFormalLines(text);
+  if (!lines.length) return [];
+
+  const chunks = [];
+  let current = [];
+  let units = 0;
+
+  for (const line of lines) {
+    const lineUnits = estimateFormalLineUnits(line);
+    if (current.length && units + lineUnits > maxUnits) {
+      chunks.push(current);
+      current = [line];
+      units = lineUnits;
+    } else {
+      current.push(line);
+      units += lineUnits;
+    }
+  }
+
+  if (current.length) chunks.push(current);
+
+  return chunks.map((chunk, index) => ({
+    type: 'section',
+    title: index === 0 ? title : `${title} (cont.)`,
+    text: chunk.join('\n'),
+    units: 2 + chunk.reduce((sum, line) => sum + estimateFormalLineUnits(line), 0),
+  }));
+}
+
+function buildFormalFlowPages(sectionDefs = []) {
+  const blocks = sectionDefs.flatMap((section) => splitFormalSection(section.title, section.text));
+  blocks.push({ type: 'acceptance', units: 14 });
+
+  const pages = [];
+  const capacity = 42;
+  let current = [];
+  let used = 0;
+
+  for (const block of blocks) {
+    if (current.length && used + block.units > capacity) {
+      pages.push(current);
+      current = [];
+      used = 0;
+    }
+    current.push(block);
+    used += block.units;
+  }
+
+  if (current.length) pages.push(current);
+  return pages;
+}
+
+function FormalHeader({ logoUrl }) {
+  return (
+    <div className="formal-header">
+      <div className="formal-logo-box">
+        {logoUrl ? (
+          <img src={logoUrl} alt="Logo" />
+        ) : (
+          <div className="formal-logo-fallback">
+            <span className="grupo">grupo</span>
+            <span className="atm">atm</span>
+          </div>
+        )}
+      </div>
+      <div className="formal-title-box">
+        <div className="formal-title-orange"></div>
+        <div className="formal-title-blue">COTIZACION</div>
+      </div>
+    </div>
+  );
+}
+
+function FormalFooter({ footerWeb, footerAddress, footerPhone }) {
+  return (
+    <div className="formal-footer">
+      <div className="formal-footer-web">{footerWeb}</div>
+      <div className="formal-footer-bar">
+        <div className="formal-footer-orange"></div>
+        <div className="formal-footer-blue">
+          <div>{footerAddress}</div>
+          <div>{footerPhone}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FormalAcceptanceBlock() {
+  return (
+    <div className="formal-acceptance">
+      <h2>Firma de aceptacion</h2>
+      <div className="formal-acceptance-row">
+        <strong>Nombre:</strong>
+        <div className="formal-acceptance-line"></div>
+      </div>
+      <div className="formal-acceptance-row">
+        <strong>Documento nro.:</strong>
+        <div className="formal-acceptance-line"></div>
+      </div>
+      <div className="formal-acceptance-row">
+        <strong>Fecha:</strong>
+        <div className="formal-acceptance-line"></div>
+      </div>
+      <div className="formal-acceptance-row">
+        <strong>Sello:</strong>
+        <div className="formal-acceptance-line"></div>
+      </div>
+    </div>
+  );
+}
+
+function FormalQuoteDocument({
+  containerId,
+  logoUrl,
+  dateLabel,
+  customerName,
+  contactName,
+  subject,
+  saleCondition,
+  creditTerm,
+  paymentMethod,
+  offerValidity,
+  comment,
+  items = [],
+  currencyCode = 'USD',
+  currencyLabel = 'USD',
+  totalCurrency = 0,
+  totalCurrencyDecimals = 0,
+  observations,
+  installationType,
+  paymentCondition,
+  deliveryType,
+  deliveryAddress,
+  deliveryTerm,
+  footerWeb,
+  footerAddress,
+  footerPhone,
+  warrantyText,
+  customerResponsibility,
+  includesText,
+  excludesText,
+}) {
+  return (
+    <div id={containerId}>
+      <div className="formal-page">
+        <FormalHeader logoUrl={logoUrl} />
+
+        <div className="formal-date-line">{dateLabel}</div>
+        <div className="formal-customer">
+          <strong>{customerName}</strong>
+          {contactName ? <div>Atn. {contactName}</div> : null}
+        </div>
+        <div className="formal-ref-title">{subject}</div>
+        <div className="formal-main-title">COTIZACION</div>
+
+        <div className="formal-intro">
+          CON GUSTO LE PRESENTAMOS NUESTRO PRESUPUESTO PARA LOS PRODUCTOS QUE ESTA CONSIDERANDO ADQUIRIR. NOS COMPLACE
+          OFRECERLE SOLUCIONES QUE SE ADAPTEN PERFECTAMENTE A SUS NECESIDADES. A CONTINUACION, DETALLAMOS LOS PRODUCTOS
+          Y LOS COSTOS SEGUN LOS DETALLES DE SU PEDIDO.
+        </div>
+
+        <div className="formal-conditions">
+          <div className="formal-conditions-grid">
+            <div className="formal-conditions-row">
+              <div className="formal-conditions-label">Condicion de venta:</div>
+              <div>{saleCondition}</div>
+            </div>
+            <div className="formal-conditions-row">
+              <div className="formal-conditions-label">Plazo de credito:</div>
+              <div>{creditTerm}</div>
+            </div>
+            <div className="formal-conditions-row">
+              <div className="formal-conditions-label">Forma de pago:</div>
+              <div>{paymentMethod}</div>
+            </div>
+            <div className="formal-conditions-row">
+              <div className="formal-conditions-label">Validez de la oferta:</div>
+              <div>{offerValidity}</div>
+            </div>
+            <div className="formal-conditions-row" style={{ gridColumn: '1 / span 2' }}>
+              <div className="formal-conditions-label">Comentario:</div>
+              <div>{comment}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="formal-section-title">Productos y servicios</div>
+        <table className="formal-products">
+          <thead>
+            <tr>
+              <th style={{ width: '12mm' }}>Item</th>
+              <th style={{ width: '25mm' }}>Producto</th>
+              <th style={{ width: '15mm' }}>Cantidad</th>
+              <th style={{ width: '22mm' }}>Unidad de medida</th>
+              <th>Descripcion</th>
+              <th style={{ width: '18mm' }}>Moneda</th>
+              <th style={{ width: '24mm' }}>Precio unitario</th>
+              <th style={{ width: '24mm' }}>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.length ? items.map((it, index) => {
+              const qty = Number(it?.cantidad || 0) || 1;
+              const unitPrice = num(it?.precio);
+              const total = qty * unitPrice;
+              return (
+                <tr key={`formal-item-${index}`}>
+                  <td className="formal-center">{index + 1}</td>
+                  <td>{it?.servicio || '-'}</td>
+                  <td className="formal-center">{qty}</td>
+                  <td className="formal-center">UNIDAD</td>
+                  <td className="small">
+                    <RichTextContent html={it?.observacion_html || it?.observacion} />
+                  </td>
+                  <td className="formal-center">{it?.moneda || currencyCode}</td>
+                  <td className="formal-right">{money(unitPrice, decimalsFrom(it?.precio))}</td>
+                  <td className="formal-right">{money(total, Math.max(decimalsFrom(it?.precio), decimalsFrom(it?.cantidad)))}</td>
+                </tr>
+              );
+            }) : (
+              <tr>
+                <td colSpan={8} className="formal-center">Sin items</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+
+        <div className="formal-total-box">
+          <div className="formal-total-label">Total</div>
+          <div className="formal-center">{currencyLabel}</div>
+          <div className="formal-right">{money(totalCurrency, totalCurrencyDecimals)}</div>
+        </div>
+
+        {String(observations || '').trim() ? (
+          <div className="formal-block" style={{ marginTop: '4mm' }}>
+            <h3>Observaciones</h3>
+            <FormalLines text={observations} />
+          </div>
+        ) : null}
+
+        {String(installationType || '').trim() ? (
+          <div className="formal-block">
+            <h3>Tipo de instalacion</h3>
+            <FormalLines text={installationType} />
+          </div>
+        ) : null}
+
+        {String(paymentCondition || '').trim() ? (
+          <div className="formal-block">
+            <h3>Condicion de pago</h3>
+            <FormalLines text={paymentCondition} />
+          </div>
+        ) : null}
+
+        {String(deliveryType || '').trim() ? (
+          <div className="formal-block">
+            <h3>Tipo de entrega</h3>
+            <FormalLines text={deliveryType} />
+          </div>
+        ) : null}
+
+        {String(deliveryAddress || '').trim() ? (
+          <div className="formal-block">
+            <h3>Direccion</h3>
+            <FormalLines text={deliveryAddress} />
+          </div>
+        ) : null}
+
+        {String(deliveryTerm || '').trim() ? (
+          <div className="formal-block">
+            <h3>Plazo de entrega</h3>
+            <FormalLines text={deliveryTerm} />
+          </div>
+        ) : null}
+
+        {String(warrantyText || '').trim() ? (
+          <div className="formal-block">
+            <h3>Asistencia y garantia</h3>
+            <FormalLines text={warrantyText} />
+          </div>
+        ) : null}
+
+        {String(customerResponsibility || '').trim() ? (
+          <div className="formal-block">
+            <h3>Responsabilidad del cliente</h3>
+            <FormalLines text={customerResponsibility} />
+          </div>
+        ) : null}
+
+        {String(includesText || '').trim() ? (
+          <div className="formal-block">
+            <h3>El presupuesto incluye</h3>
+            <FormalLines text={includesText} />
+          </div>
+        ) : null}
+
+        {String(excludesText || '').trim() ? (
+          <div className="formal-block">
+            <h3>El presupuesto no incluye</h3>
+            <FormalLines text={excludesText} />
+          </div>
+        ) : null}
+
+        {(footerWeb || footerAddress || footerPhone) ? (
+          <div className="formal-block" style={{ marginTop: '5mm' }}>
+            <FormalFooter
+              footerWeb={footerWeb}
+              footerAddress={footerAddress}
+              footerPhone={footerPhone}
+            />
+          </div>
+        ) : null}
+
+        <FormalAcceptanceBlock />
+      </div>
+    </div>
+  );
+}
+
+
 
 
 /* Fila etiqueta ":" valor para la grilla de especificaciones (valores alineados) */
@@ -3374,6 +4436,7 @@ function KVRow({ label, value }) {
   );
 
 }
+
 
 
 

@@ -1,11 +1,13 @@
 // server/src/routes/quotes.js
 import { Router } from "express";
 import db from "../services/db.js";
+import { requireAuth } from '../middlewares/auth.js';
 
 // ✅ Soporta export named o default (evita el error: "does not provide an export named")
 import computeQuoteDefault, { computeQuote as computeQuoteNamed } from "../services/quoteEngine.js";
 
 import { buildQuoteXlsxBuffer } from "../services/quoteXlsxTemplate.js";
+import { buildFormalQuotePdfBuffer } from '../services/formalQuotePdf.js';
 
 const router = Router();
 
@@ -210,6 +212,18 @@ router.post("/quotes/preview", async (req, res) => {
   } catch (e) {
     // preview debe avisar error (para que UI lo muestre)
     res.status(400).json({ error: e?.message || "No se pudo previsualizar" });
+  }
+});
+
+router.post('/quotes/formal-pdf', requireAuth, async (req, res) => {
+  try {
+    const pdf = await buildFormalQuotePdfBuffer(req.body || {});
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="cotizacion-formal.pdf"');
+    res.send(pdf);
+  } catch (e) {
+    console.error('[quotes][formal-pdf] error:', e);
+    res.status(500).json({ error: e?.message || 'No se pudo generar el PDF formal' });
   }
 });
 

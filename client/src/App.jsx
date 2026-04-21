@@ -30,6 +30,7 @@ import AdminExpenses from './pages/AdminExpenses.jsx';
 import AdminFinance from './pages/AdminFinance.jsx';
 import OperationalPurchases from './pages/admin/OperationalPurchases.jsx';
 import PaymentOrders from './pages/admin/PaymentOrders.jsx';
+import AccountsPayable from './pages/admin/AccountsPayable.jsx';
 
 // ?? NUEVO: Workspace de Administración (Ops)
 import AdminWorkspace from './pages/admin/AdminWorkspace.jsx';
@@ -55,6 +56,7 @@ import FollowUp from './pages/FollowUp.jsx';
 import InvoiceDetail from './pages/InvoiceDetail.jsx';
 import PurchaseOrders from './pages/PurchaseOrders.jsx';
 import PurchaseOrderDetail from './pages/PurchaseOrderDetail.jsx';
+import PurchaseInvoiceDetail from './pages/PurchaseInvoiceDetail.jsx';
 
 // ?? NUEVO: Editor de Pipeline (pantalla completa)
 import PipelineEditorPage from './pages/PipelineEditorPage.jsx';
@@ -219,6 +221,11 @@ function Layout({ children }) {
                     to="/admin-ops/payment-orders"
                     icon={sidebarIcons.payments}
                     label="Ordenes de pago"
+                  />
+                  <SideLink
+                    to="/admin-ops/accounts-payable"
+                    icon={sidebarIcons.account}
+                    label="Ctas a pagar proveedores"
                   />
                   <SideLink
                     to="/payments"
@@ -415,6 +422,14 @@ export default function App() {
                   }
                 />
                 <Route
+                  path="/admin-ops/accounts-payable"
+                  element={
+                    <RequireRole allow={['admin', 'manager']}>
+                      <AccountsPayable />
+                    </RequireRole>
+                  }
+                />
+                <Route
                   path="/payments"
                   element={
                     <RequireRole allow={['admin', 'manager']}>
@@ -529,6 +544,7 @@ export default function App() {
                 <Route path="/invoices/:id" element={<InvoiceDetail />} />
                 <Route path="/purchase-orders" element={<PurchaseOrders />} />
                 <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />
+                <Route path="/purchase-invoices/:id" element={<PurchaseInvoiceDetail />} />
 
                 {/* Seguimiento */}
                 <Route path="/followup" element={<FollowUp />} />
