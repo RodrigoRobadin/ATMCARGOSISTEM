@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 
-const ROLES = ['admin', 'venta', 'ops', 'viewer'];
+const ROLES = ['admin', 'venta', 'ops', 'service', 'viewer'];
 
 export default function UsersAdmin() {
   const { user, loading } = useAuth(); // 👈 usamos loading, no authReady

@@ -6,6 +6,52 @@ import { requireAuth, signToken } from '../middlewares/auth.js';
 
 const router = Router();
 
+ensureUsersSchema().catch((err) => {
+  console.error('[users] ensure schema error:', err?.message || err);
+});
+
+async function ensureUsersSchema() {
+  try {
+    const [cols] = await pool.query(
+      `SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT
+         FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'users'
+          AND COLUMN_NAME IN ('role', 'password_hash')`
+    );
+
+    if (!Array.isArray(cols) || !cols.length) return;
+
+    const byName = new Map(cols.map((col) => [String(col.COLUMN_NAME || '').toLowerCase(), col]));
+
+    const roleCol = byName.get('role');
+    if (roleCol) {
+      const columnType = String(roleCol.COLUMN_TYPE || '').toLowerCase();
+      const defaultValue = String(roleCol.COLUMN_DEFAULT || '').toLowerCase();
+      if (!columnType.startsWith('varchar(32)') || defaultValue !== 'viewer') {
+        await pool.query(
+          `ALTER TABLE users
+             MODIFY COLUMN role VARCHAR(32) NOT NULL DEFAULT 'viewer'`
+        );
+      }
+    }
+
+    const passwordCol = byName.get('password_hash');
+    if (passwordCol) {
+      const isNullable = String(passwordCol.IS_NULLABLE || '').toUpperCase() === 'YES';
+      const passwordType = String(passwordCol.COLUMN_TYPE || '').toLowerCase();
+      if (!isNullable || !passwordType.startsWith('varchar(')) {
+        await pool.query(
+          `ALTER TABLE users
+             MODIFY COLUMN password_hash VARCHAR(255) NULL DEFAULT NULL`
+        );
+      }
+    }
+  } catch (err) {
+    console.error('[users] ensureUsersSchema failed:', err?.message || err);
+  }
+}
+
 /**
  * POST /api/users/login
  * Login JWT (alias de /auth/login)

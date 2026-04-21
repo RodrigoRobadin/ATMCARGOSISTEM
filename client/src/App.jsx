@@ -113,7 +113,11 @@ function SideLink({ to, icon, label }) {
 
 function Layout({ children }) {
   const { logout, user } = useAuth();
-  const role = user?.role || '';
+  const role = String(user?.role || '').toLowerCase();
+  const isServiceRole = role === 'service';
+  const canSeeAdminBlock = role !== 'venta' && !isServiceRole;
+  const canSeeContactsModules = true;
+  const canSeeCommercialModules = !isServiceRole;
   const [darkMode, setDarkMode] = useState(false);
 
   useEffect(() => {
@@ -185,14 +189,12 @@ function Layout({ children }) {
               />
             </div>
           </div>
-          {/* Workspace industrial unico */}
           <SideLink to="/workspace/atm-industrial" icon={sidebarIcons.industrial} label="ATM INDUSTRIAL" />
           {(role === 'admin' || role === 'service') && (
             <SideLink to="/service" icon={sidebarIcons.service} label="Reparación y mantenimiento" />
           )}
 
-          {/* Bloque administrativo visible SOLO si NO es "venta" */}
-          {role !== 'venta' && (
+          {canSeeAdminBlock && (
             <>
               <hr className="my-2 dark:border-slate-800" />
               <SideLink to="/admin" icon={sidebarIcons.admin} label="Administraci\u00f3n" />
@@ -244,14 +246,22 @@ function Layout({ children }) {
             </>
           )}
 
-          <hr className="my-2 dark:border-slate-800" />
-          <SideLink to="/contacts" icon={sidebarIcons.contacts} label="Contactos" />
-          <SideLink to="/organizations" icon={sidebarIcons.orgs} label="Organizaciones" />
+          {canSeeContactsModules && (
+            <>
+              <hr className="my-2 dark:border-slate-800" />
+              <SideLink to="/contacts" icon={sidebarIcons.contacts} label="Contactos" />
+              <SideLink to="/organizations" icon={sidebarIcons.orgs} label="Organizaciones" />
+            </>
+          )}
 
-          <hr className="my-2 dark:border-slate-800" />
-          <SideLink to="/purchase-orders" icon={sidebarIcons.orders} label="\u00d3rdenes de compra" />
-          <SideLink to="/followup" icon={sidebarIcons.followup} label="Seguimiento" />
-          <SideLink to="/quotes" icon={sidebarIcons.quotes} label="Cotizaciones" />
+          {canSeeCommercialModules && (
+            <>
+              <hr className="my-2 dark:border-slate-800" />
+              <SideLink to="/purchase-orders" icon={sidebarIcons.orders} label="\u00d3rdenes de compra" />
+              <SideLink to="/followup" icon={sidebarIcons.followup} label="Seguimiento" />
+              <SideLink to="/quotes" icon={sidebarIcons.quotes} label="Cotizaciones" />
+            </>
+          )}
 
           <hr className="my-3 dark:border-slate-800" />
           <div className="px-3">
