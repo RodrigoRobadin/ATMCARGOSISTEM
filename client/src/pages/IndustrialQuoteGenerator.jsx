@@ -1417,18 +1417,19 @@ CORDIALES SALUDOS`,
           [];
         const ofertaItems = quoteRes?.data?.computed?.oferta?.items || [];
         const resultadoItems = quoteRes?.data?.computed?.resultado?.items || [];
+        const pricingItems = ofertaItems.length ? ofertaItems : resultadoItems;
+        const pricingByLine = new Map(
+          pricingItems.map((it, idx) => [String(it?.line_no ?? idx + 1), it])
+        );
         const sourceItems = rawItems.length
           ? rawItems
-          : (ofertaItems.length ? ofertaItems : resultadoItems);
-        const sourceType = rawItems.length
-          ? 'raw'
-          : (ofertaItems.length || resultadoItems.length ? 'computed' : 'raw');
+          : (pricingItems.length ? pricingItems : resultadoItems);
         const hasSourceItems = sourceItems.some(
           (it) => Number(it.qty || 0) > 0 || String(it.description || it.servicio || it.descripcion || "").trim()
         );
         const isPyg = cur === 'PYG' || cur === 'GS';
         const rateValue = Number(rate || 1) || 1;
-        const conv = (v) => (isPyg && sourceType === 'computed' ? Number(v || 0) * rateValue : Number(v || 0));
+        const conv = (v) => (isPyg ? Number(v || 0) * rateValue : Number(v || 0));
 
         if (hasSourceItems) {
 
@@ -1441,18 +1442,56 @@ CORDIALES SALUDOS`,
             .filter((it) => Number(it.qty || 0) > 0 || String(it.description || it.servicio || it.descripcion || "").trim())
 
             .map((it, idx) => {
+              const pricingItem =
+                pricingByLine.get(String(it.line_no ?? idx + 1)) ||
+                pricingItems[idx] ||
+                null;
 
-              const qty = Number(it.qty || it.quantity || it.cantidad || 0) || 1;
+              const qty = Number(
+                it.qty ??
+                it.quantity ??
+                it.cantidad ??
+                pricingItem?.qty ??
+                pricingItem?.quantity ??
+                pricingItem?.cantidad ??
+                0
+              ) || 1;
               const totalSales = Number(
-                it.total_sales ?? it.total_ventas ?? it.total_sales_usd ?? it.total_venta ?? 0
+                pricingItem?.total_sales ??
+                pricingItem?.total_ventas ??
+                pricingItem?.total_sales_usd ??
+                pricingItem?.total_venta ??
+                it.total_sales ??
+                it.total_ventas ??
+                it.total_sales_usd ??
+                it.total_venta ??
+                0
               );
               const pvUnit = Number(
-                it.pv_unit ?? it.pv_unit_usd ?? it.pv ?? it.precio_venta_unit ?? 0
+                pricingItem?.pv_unit ??
+                pricingItem?.pv_unit_usd ??
+                pricingItem?.pv ??
+                pricingItem?.precio_venta_unit ??
+                pricingItem?.unit_price ??
+                it.pv_unit ??
+                it.pv_unit_usd ??
+                it.pv ??
+                it.precio_venta_unit ??
+                0
               );
-              const door = Number(it.door_value_usd || 0);
-              const extra = Number(it.additional_usd || 0);
+              const manualSale = Number(
+                it.sale_price ??
+                pricingItem?.sale_price ??
+                pricingItem?.sale_price_input ??
+                0
+              );
+              const door = Number(it.door_value_usd ?? pricingItem?.door_value_usd ?? 0);
+              const extra = Number(it.additional_usd ?? pricingItem?.additional_usd ?? 0);
               const unitBase =
                 pvUnit ||
+                (totalSales && qty ? totalSales / qty : 0) ||
+                (manualSale && qty ? manualSale / qty : 0) ||
+                pricingItem?.unit_price ||
                 it.unit_price ||
                 (totalSales && qty ? totalSales / qty : 0) ||
                 it.precio ||
