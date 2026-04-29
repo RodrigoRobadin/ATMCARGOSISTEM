@@ -25,6 +25,15 @@ function visibleNameOf(f) {
   return f.display_name || f.custom_name || f.filename || "archivo";
 }
 
+function getRevisionShortLabel(revision, fallbackIndex = 0) {
+  const rawName = String(revision?.name || "").trim();
+  const match = rawName.match(/^REV\s+(\d+)/i);
+  const seq = match?.[1]
+    ? String(Number(match[1])).padStart(2, "0")
+    : String(Number(fallbackIndex || 0)).padStart(2, "0");
+  return `REV ${seq}`;
+}
+
 /* === Profit desde cost-sheet (robusto a nombres de campos) === */
 function computeProfitFromCostSheet(cs) {
   if (!cs) return null;
@@ -439,6 +448,10 @@ export default function OperationDetailIndustrial() {
   const [notesList, setNotesList] = useState([]);
   const [notesLoading, setNotesLoading] = useState(false);
   const [note, setNote] = useState("");
+  const [noteEntryType, setNoteEntryType] = useState("note");
+  const [noteTitle, setNoteTitle] = useState("");
+  const [noteDueAt, setNoteDueAt] = useState("");
+  const [notePriority, setNotePriority] = useState("medium");
   const [noteAttachmentsMap, setNoteAttachmentsMap] = useState({});
   const [notePendingFiles, setNotePendingFiles] = useState([]);
   const noteAttachInputRef = useRef(null);
@@ -768,19 +781,31 @@ export default function OperationDetailIndustrial() {
   async function loadNotes() {
     setNotesLoading(true);
     try {
-      const { data } = await api.get("/activities", {
-        params: {
-          deal_id: Number(id),
-          type: "note",
-          sort: "created_at",
-          order: "desc",
-        },
-      });
-      setNotesList(Array.isArray(data) ? data : []);
+      const { data } = await api.get(`/operations/${id}/followup-feed`);
+      setNotesList(Array.isArray(data?.items) ? data.items : []);
     } catch {
       setNotesList([]);
     } finally {
       setNotesLoading(false);
+    }
+  }
+
+  async function markFollowupDone(entry) {
+    const sourceType =
+      entry?.entry_type === "task"
+        ? "task"
+        : entry?.entry_type === "reminder"
+        ? "reminder"
+        : "activity";
+    const itemId = entry?.source_id;
+    if (!itemId) return;
+
+    try {
+      await api.patch(`/operations/${id}/followup-feed/${sourceType}/${itemId}/done`);
+      await loadNotes();
+    } catch (err) {
+      console.error("No se pudo marcar seguimiento como hecho", err);
+      alert("No se pudo marcar como hecho.");
     }
   }
 
@@ -1177,10 +1202,11 @@ export default function OperationDetailIndustrial() {
       label: "Detalle de oferta",
     },
     ...docTabs,
-    ...quoteRevisions.map((r) => ({
+    ...quoteRevisions.map((r, idx) => ({
       id: `rev-${r.id}`,
       kind: "revision",
-      label: r.name || `Rev ${r.id}`,
+      label: getRevisionShortLabel(r, quoteRevisions.length - idx),
+      fullLabel: r.name || getRevisionShortLabel(r, quoteRevisions.length - idx),
       revisionId: r.id,
     })),
     ...flatUploadingTabs,
@@ -1221,6 +1247,7 @@ export default function OperationDetailIndustrial() {
   }
 
   const [selectedQuoteRevisionId, setSelectedQuoteRevisionId] = useState(() => getStoredIndustrialRevisionId());
+  const [revisionNameDraft, setRevisionNameDraft] = useState("");
 
   useEffect(() => {
     setSelectedQuoteRevisionId(getStoredIndustrialRevisionId());
@@ -1239,9 +1266,29 @@ export default function OperationDetailIndustrial() {
   const currentIndustrialRevisionId = isRevisionTab(activeTab)
     ? getRevisionIdFromTab(activeTab)
     : selectedQuoteRevisionId;
+  const activeIndustrialRevision = useMemo(
+    () => quoteRevisions.find((r) => Number(r.id) === Number(currentIndustrialRevisionId)) || null,
+    [quoteRevisions, currentIndustrialRevisionId]
+  );
   const industrialQuoteHref = currentIndustrialRevisionId
     ? `/operations/${id}/industrial-quote?revision_id=${currentIndustrialRevisionId}`
     : `/operations/${id}/industrial-quote`;
+
+  useEffect(() => {
+    setRevisionNameDraft(activeIndustrialRevision?.name || "");
+  }, [activeIndustrialRevision?.id, activeIndustrialRevision?.name]);
+
+  async function renameActiveRevision() {
+    if (!quoteId || !activeIndustrialRevision?.id) return;
+    const cleaned = String(revisionNameDraft || "").trim();
+    if (!cleaned) return;
+    try {
+      await api.put(`/quotes/${quoteId}/revisions/${activeIndustrialRevision.id}`, { name: cleaned });
+      await fetchQuoteRevisions(quoteId);
+    } catch (e) {
+      alert("No se pudo actualizar el nombre de la revisión.");
+    }
+  }
 
   function getFileFromTab(id) {
     const sid = String(id);
@@ -1351,45 +1398,35 @@ export default function OperationDetailIndustrial() {
 
   async function addNote() {
     const txt = (note || "").trim();
-    if (!txt) return;
+    const cleanTitle = (noteTitle || "").trim();
+    const dueAt = (noteDueAt || "").trim();
+    const entryType = noteEntryType;
+    const attachedIds = (notePendingFiles || []).map((f) => f.id).filter(Boolean);
 
-    const me = getCurrentUserFromStorage();
-    const tempId = `tmp-${Date.now()}`;
-    const nowIso = new Date().toISOString();
-
-    const attachedIds = (notePendingFiles || [])
-      .map((f) => f.id)
-      .filter(Boolean);
-
-    setNotesList((prev) => [
-      {
-        id: tempId,
-        type: "note",
-        subject: `Nota en ${deal?.reference || "operación"}`,
-        notes: txt,
-        deal_id: Number(id),
-        created_at: nowIso,
-        created_by: me.id,
-        created_by_name: me.name,
-        created_by_email: me.email,
-      },
-      ...prev,
-    ]);
-
-    setNote("");
+    if (entryType === "note" && !txt) {
+      alert("Escribe una nota.");
+      return;
+    }
+    if (entryType !== "note" && !cleanTitle && !txt) {
+      alert("Completa el titulo o el contenido.");
+      return;
+    }
+    if ((entryType === "reminder" || entryType === "task") && !dueAt) {
+      alert("Completa la fecha y hora.");
+      return;
+    }
 
     try {
-      const { data: created } = await api.post("/activities", {
-        type: "note",
-        subject: `Nota en ${deal?.reference || "operación"}`,
-        notes: txt,
-        deal_id: Number(id),
-        done: 1,
-        ...(me.id ? { created_by: me.id } : {}),
+      const { data: created } = await api.post(`/operations/${id}/followup-feed`, {
+        entry_type: entryType,
+        title: cleanTitle,
+        content: txt,
+        due_at: dueAt || null,
+        priority: notePriority,
       });
 
-      const activityId = created?.id;
-      if (activityId && attachedIds.length) {
+      const activityId = created?.source_type === "activity" ? created?.id : null;
+      if (entryType === "note" && activityId && attachedIds.length) {
         const nextMap = {
           ...(noteAttachmentsMap || {}),
           [activityId]: attachedIds,
@@ -1402,22 +1439,24 @@ export default function OperationDetailIndustrial() {
             "json",
             nextMap
           );
+          setNoteAttachmentsMap(nextMap);
         } catch (e) {
           console.warn(
             "[addNote] No se pudo guardar note_attachments_json",
             e?.response?.data || e.message
           );
         }
-
-        setNoteAttachmentsMap(nextMap);
       }
 
+      setNote("");
+      setNoteTitle("");
+      setNoteDueAt("");
+      setNotePriority("medium");
       setNotePendingFiles([]);
       await loadNotes();
     } catch (err) {
-      console.error("No se pudo crear la nota", err);
-      setNotesList((prev) => prev.filter((x) => x.id !== tempId));
-      alert("No se pudo crear la nota.");
+      console.error("No se pudo crear el seguimiento", err);
+      alert("No se pudo crear el seguimiento.");
     }
   }
 
@@ -1941,7 +1980,7 @@ export default function OperationDetailIndustrial() {
                 : "bg-white"
                 }`}
               onClick={() => handleTabChange(t.id)}
-              title={t.label}
+              title={t.fullLabel || t.label}
             >
               {t.label}
             </button>
@@ -2000,6 +2039,25 @@ export default function OperationDetailIndustrial() {
             )
           ) : isRevisionTab(activeTab) ? (
             <div className="bg-white rounded-2xl shadow p-3">
+              <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <div className="text-sm text-slate-600">
+                  {activeIndustrialRevision?.name || `Revisión ${getRevisionIdFromTab(activeTab)}`}
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    className="w-[280px] rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    value={revisionNameDraft}
+                    onChange={(e) => setRevisionNameDraft(e.target.value)}
+                    placeholder="Nombre de la revisión"
+                  />
+                  <button
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm hover:bg-slate-50"
+                    onClick={renameActiveRevision}
+                  >
+                    Guardar nombre
+                  </button>
+                </div>
+              </div>
               <iframe
                 title="Presupuesto revision"
                 className="w-full h-[900px] border rounded-lg"
@@ -2611,17 +2669,60 @@ export default function OperationDetailIndustrial() {
               {/* Puertas Industriales */}
               <IndustrialDoorList dealId={id} editMode={editMode} />
 
-              {/* Notas */}
+              {/* Seguimiento */}
               <div className="bg-white rounded-2xl shadow p-4">
-                <h3 className="font-medium mb-3">
-                  Notas / Comentarios
-                </h3>
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <h3 className="font-medium">Seguimiento de la operacion</h3>
+                  <div className="text-xs text-slate-500">
+                    Actividades, notas, recordatorios y tareas
+                  </div>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-2 mb-2">
+                  <select
+                    className="border rounded-lg px-3 py-2 text-sm"
+                    value={noteEntryType}
+                    onChange={(e) => {
+                      const nextType = e.target.value;
+                      setNoteEntryType(nextType);
+                      if (nextType !== "note") setNotePendingFiles([]);
+                    }}
+                  >
+                    <option value="note">Nota</option>
+                    <option value="activity">Actividad</option>
+                    <option value="reminder">Recordatorio</option>
+                    <option value="task">Tarea</option>
+                  </select>
+
+                  <input
+                    className="border rounded-lg px-3 py-2 text-sm"
+                    placeholder={
+                      noteEntryType === "note"
+                        ? "Titulo opcional"
+                        : noteEntryType === "activity"
+                        ? "Titulo de la actividad"
+                        : noteEntryType === "reminder"
+                        ? "Titulo del recordatorio"
+                        : "Titulo de la tarea"
+                    }
+                    value={noteTitle}
+                    onChange={(e) => setNoteTitle(e.target.value)}
+                  />
+                </div>
 
                 <div className="flex gap-2">
                   <textarea
                     className="w-full border rounded-lg px-3 py-2 text-sm"
                     rows={3}
-                    placeholder="Añadí una nota…"
+                    placeholder={
+                      noteEntryType === "note"
+                        ? "Escribe la nota..."
+                        : noteEntryType === "activity"
+                        ? "Detalle de la actividad..."
+                        : noteEntryType === "reminder"
+                        ? "Que se debe recordar..."
+                        : "Detalle de la tarea..."
+                    }
                     value={note}
                     onChange={(e) => setNote(e.target.value)}
                   />
@@ -2633,131 +2734,179 @@ export default function OperationDetailIndustrial() {
                   </button>
                 </div>
 
-                <input
-                  type="file"
-                  multiple
-                  className="hidden"
-                  ref={noteAttachInputRef}
-                  onChange={handleNoteAttachmentChange}
-                />
-
-                <div className="mt-2 flex items-center justify-between text-xs text-slate-600">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      className="px-2 py-1 rounded-lg border text-xs"
-                      onClick={() =>
-                        noteAttachInputRef.current?.click()
-                      }
-                    >
-                      📎 Adjuntar documento a esta nota
-                    </button>
-                    <span>
-                      Los archivos se vincularán a la nota cuando
-                      hagas clic en <b>Guardar</b>.
-                    </span>
+                {(noteEntryType === "reminder" || noteEntryType === "task") && (
+                  <div className="grid md:grid-cols-2 gap-2 mt-2">
+                    <input
+                      type="datetime-local"
+                      className="border rounded-lg px-3 py-2 text-sm"
+                      value={noteDueAt}
+                      onChange={(e) => setNoteDueAt(e.target.value)}
+                    />
+                    {noteEntryType === "task" ? (
+                      <select
+                        className="border rounded-lg px-3 py-2 text-sm"
+                        value={notePriority}
+                        onChange={(e) => setNotePriority(e.target.value)}
+                      >
+                        <option value="low">Prioridad baja</option>
+                        <option value="medium">Prioridad media</option>
+                        <option value="high">Prioridad alta</option>
+                      </select>
+                    ) : (
+                      <div className="text-xs text-slate-500 flex items-center px-2">
+                        El recordatorio quedara pendiente hasta marcarlo como hecho.
+                      </div>
+                    )}
                   </div>
-                </div>
+                )}
 
-                {notePendingFiles.length > 0 && (
-                  <div className="mt-3 border-t pt-3 text-xs">
-                    <div className="font-semibold mb-1">
-                      Adjuntos para esta nota (sin guardar aún)
-                    </div>
-                    <ul className="space-y-1">
-                      {notePendingFiles.map((f) => (
-                        <li
-                          key={f.id}
-                          className="flex items-center justify-between gap-2"
+                {noteEntryType === "note" && (
+                  <>
+                    <input
+                      type="file"
+                      multiple
+                      className="hidden"
+                      ref={noteAttachInputRef}
+                      onChange={handleNoteAttachmentChange}
+                    />
+
+                    <div className="mt-2 flex items-center justify-between text-xs text-slate-600">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          className="px-2 py-1 rounded-lg border text-xs"
+                          onClick={() => noteAttachInputRef.current?.click()}
                         >
-                          <span className="truncate">
-                            {labelOfFile(f, fileLabels)}
-                          </span>
-                          <div className="flex gap-1">
-                            <a
-                              href={resolveUploadUrl(f.url)}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="underline"
+                          Adjuntar documento a esta nota
+                        </button>
+                        <span>
+                          Los archivos se vincularan a la nota cuando hagas clic en <b>Guardar</b>.
+                        </span>
+                      </div>
+                    </div>
+
+                    {notePendingFiles.length > 0 && (
+                      <div className="mt-3 border-t pt-3 text-xs">
+                        <div className="font-semibold mb-1">
+                          Adjuntos para esta nota (sin guardar aun)
+                        </div>
+                        <ul className="space-y-1">
+                          {notePendingFiles.map((f) => (
+                            <li
+                              key={f.id}
+                              className="flex items-center justify-between gap-2"
                             >
-                              Ver
-                            </a>
-                            <button
-                              type="button"
-                              className="text-[11px] px-2 py-0.5 border rounded"
-                              onClick={() =>
-                                removePendingAttachment(f.id)
-                              }
-                            >
-                              Quitar
-                            </button>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                              <span className="truncate">{labelOfFile(f, fileLabels)}</span>
+                              <div className="flex gap-1">
+                                <a
+                                  href={resolveUploadUrl(f.url)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="underline"
+                                >
+                                  Ver
+                                </a>
+                                <button
+                                  type="button"
+                                  className="text-[11px] px-2 py-0.5 border rounded"
+                                  onClick={() => removePendingAttachment(f.id)}
+                                >
+                                  Quitar
+                                </button>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </>
                 )}
 
                 <div className="mt-4 space-y-2">
                   {notesLoading ? (
-                    <div className="text-sm text-slate-600">
-                      Cargando notas…
-                    </div>
+                    <div className="text-sm text-slate-600">Cargando seguimiento...</div>
                   ) : notesList.length ? (
                     notesList.map((a) => {
                       const author = authorOf(a);
-                      const when = a.created_at
-                        ? new Date(
-                          a.created_at
-                        ).toLocaleString()
-                        : "—";
-
+                      const when = a.created_at ? new Date(a.created_at).toLocaleString() : "-";
                       const attachIds =
-                        (noteAttachmentsMap &&
-                          noteAttachmentsMap[a.id]) ||
-                        [];
-                      const attachFiles = (attachIds || [])
-                        .map((fid) => fileById[fid])
-                        .filter(Boolean);
+                        a.entry_type === "note" && a.source_type === "activity"
+                          ? (noteAttachmentsMap && noteAttachmentsMap[a.source_id]) || []
+                          : [];
+                      const attachFiles = (attachIds || []).map((fid) => fileById[fid]).filter(Boolean);
+                      const typeLabel =
+                        a.entry_type === "note"
+                          ? "Nota"
+                          : a.entry_type === "activity"
+                          ? "Actividad"
+                          : a.entry_type === "reminder"
+                          ? "Recordatorio"
+                          : "Tarea";
+                      const typeClass =
+                        a.entry_type === "note"
+                          ? "bg-slate-100 text-slate-700"
+                          : a.entry_type === "activity"
+                          ? "bg-blue-100 text-blue-700"
+                          : a.entry_type === "reminder"
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-emerald-100 text-emerald-700";
+                      const tooltip =
+                        a.entry_type === "note"
+                          ? "Nota interna de la operacion"
+                          : a.entry_type === "activity"
+                          ? "Actividad registrada en la operacion"
+                          : a.entry_type === "reminder"
+                          ? `Recordatorio pendiente${a.due_at ? ` hasta ${new Date(a.due_at).toLocaleString()}` : ""}`
+                          : `Tarea ${a.status || "pending"}${a.due_at ? ` con vencimiento ${new Date(a.due_at).toLocaleString()}` : ""}`;
 
                       return (
-                        <div
-                          key={a.id}
-                          className="border rounded-xl p-3"
-                        >
-                          <div className="text-sm font-medium">
-                            {a.subject || "Nota"}
+                        <div key={a.id} className="border rounded-xl p-3">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="text-sm font-medium">{a.title || typeLabel}</div>
+                              <div className="text-xs text-slate-600">{when} • por {author}</div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className={`text-[11px] px-2 py-1 rounded-full ${typeClass}`} title={tooltip}>
+                                {typeLabel}
+                              </span>
+                              {((a.entry_type === "reminder" && !a.done) ||
+                                (a.entry_type === "task" && a.status !== "done")) && (
+                                <button
+                                  type="button"
+                                  className="text-[11px] px-2 py-1 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                                  onClick={() => markFollowupDone(a)}
+                                >
+                                  Marcar hecho
+                                </button>
+                              )}
+                            </div>
                           </div>
-                          <div className="text-xs text-slate-600">
-                            {when} • por {author}
-                          </div>
-                          {a.notes && (
-                            <div className="text-sm mt-1 whitespace-pre-wrap">
-                              {a.notes}
+
+                          {a.content ? <div className="text-sm mt-1 whitespace-pre-wrap">{a.content}</div> : null}
+
+                          {(a.due_at || a.priority || a.status) && (
+                            <div className="mt-2 text-xs text-slate-600 flex flex-wrap gap-2">
+                              {a.due_at ? <span>Vence: {new Date(a.due_at).toLocaleString()}</span> : null}
+                              {a.priority ? <span>Prioridad: {a.priority}</span> : null}
+                              {a.status ? <span>Estado: {a.status}</span> : null}
                             </div>
                           )}
 
                           {attachFiles.length > 0 && (
                             <div className="mt-2 text-xs text-slate-700">
-                              <div className="font-semibold mb-1">
-                                Adjuntos:
-                              </div>
+                              <div className="font-semibold mb-1">Adjuntos:</div>
                               <ul className="space-y-1">
                                 {attachFiles.map((f) => (
                                   <li key={f.id}>
                                     <a
-                                      href={resolveUploadUrl(
-                                        f.url
-                                      )}
+                                      href={resolveUploadUrl(f.url)}
                                       target="_blank"
                                       rel="noreferrer"
                                       className="underline text-blue-600 truncate"
                                       title={visibleNameOf(f)}
                                     >
-                                      {labelOfFile(
-                                        f,
-                                        fileLabels
-                                      )}
+                                      {labelOfFile(f, fileLabels)}
                                     </a>
                                   </li>
                                 ))}
@@ -2768,9 +2917,7 @@ export default function OperationDetailIndustrial() {
                       );
                     })
                   ) : (
-                    <div className="text-sm text-slate-500">
-                      Sin notas todavía.
-                    </div>
+                    <div className="text-sm text-slate-500">Sin seguimiento todavia.</div>
                   )}
                 </div>
               </div>

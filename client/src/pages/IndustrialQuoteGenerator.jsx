@@ -676,6 +676,27 @@ function normalizeIndustrialItem(item = {}, idx = 0, fallbackCurrency = 'USD') {
   };
 }
 
+function snapshotToCustomFieldMap(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return {};
+  const map = {};
+  Object.entries(snapshot).forEach(([key, value]) => {
+    if (value == null) {
+      map[key] = '';
+      return;
+    }
+    if (Array.isArray(value)) {
+      map[key] = key === 'industrial_items_json' ? JSON.stringify(value) : value.map((v) => String(v ?? '')).join('\n');
+      return;
+    }
+    if (typeof value === 'object') {
+      map[key] = JSON.stringify(value);
+      return;
+    }
+    map[key] = String(value);
+  });
+  return map;
+}
+
 
 
 function parseTemplateValue(raw) {
@@ -728,6 +749,7 @@ export default function QuoteGenerator(){
   const [deal, setDeal] = useState(null);
 
   const [cf, setCf] = useState({});
+  const [quoteRecordId, setQuoteRecordId] = useState(null);
   const [opCurrency, setOpCurrency] = useState('USD');
   const [opRate, setOpRate] = useState(1);
   const currencyLabel = (opCurrency === 'PYG' || opCurrency === 'GS') ? 'Gs' : 'USD';
@@ -1036,6 +1058,7 @@ CORDIALES SALUDOS`,
     (async () => {
 
       setLoading(true);
+      setQuoteRecordId(null);
 
       try {
 
@@ -1061,6 +1084,8 @@ CORDIALES SALUDOS`,
           setDeal(detail.deal);
         }
 
+        setQuoteRecordId(quoteRes?.data?.quote?.id || quoteRes?.data?.id || null);
+
         const qInputs = quoteRes?.data?.quote?.inputs || quoteRes?.data?.inputs || {};
         const cur = String(qInputs.operation_currency || 'USD').toUpperCase();
         const rate = Number(qInputs.exchange_rate_operation_sell_usd || 1) || 1;
@@ -1073,6 +1098,11 @@ CORDIALES SALUDOS`,
 
         (cfRes.data || []).forEach((r) => (cfMap[r.key] = r.value ?? ''));
 
+        const snapshotCfMap = snapshotToCustomFieldMap(
+          quoteRes?.data?.document_snapshot || quoteRes?.data?.meta?.document_snapshot || null
+        );
+        const effectiveCfMap = { ...cfMap, ...snapshotCfMap };
+
         setCf(cfMap);
 
 
@@ -1083,7 +1113,7 @@ CORDIALES SALUDOS`,
 
         const merged = {
 
-          ...buildNormalizedMap(cfMap, 'cf'),
+          ...buildNormalizedMap(effectiveCfMap, 'cf'),
 
           ...buildNormalizedMap(header, 'hdr'),
 
@@ -1385,7 +1415,7 @@ CORDIALES SALUDOS`,
 
         // Ítems: si hay guardados en CF, usarlos; si no, usar los de la cotización
 
-        const savedItemsRaw = cfMap['industrial_items_json'];
+        const savedItemsRaw = effectiveCfMap['industrial_items_json'];
 
         let mapped = [];
         let savedItems = [];
@@ -1704,6 +1734,11 @@ CORDIALES SALUDOS`,
     [customFieldEntries]
   );
 
+  const documentSnapshot = useMemo(
+    () => Object.fromEntries(customFieldEntries),
+    [customFieldEntries]
+  );
+
 
 
   // =================== Guardar en CF ===================
@@ -1751,6 +1786,18 @@ CORDIALES SALUDOS`,
         });
 
       }));
+
+      if (quoteRecordId) {
+        const quotePath = isService
+          ? `/service/quotes/${quoteRecordId}`
+          : `/quotes/${quoteRecordId}`;
+        const revisionPath = revisionId
+          ? `${quotePath}/revisions/${revisionId}`
+          : quotePath;
+        await api.put(revisionPath, {
+          document_snapshot: documentSnapshot,
+        });
+      }
 
 
 

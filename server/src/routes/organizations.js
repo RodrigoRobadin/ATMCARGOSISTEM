@@ -7,6 +7,8 @@ import { logAudit } from '../services/audit.js';
 
 const router = Router();
 const toNull = (v) => (v === '' || typeof v === 'undefined' ? null : v);
+const toUpperText = (v) =>
+  v === null || typeof v === 'undefined' ? v : String(v).trim().toUpperCase();
 
 /* ========= Auto-migración: asegurar columna hoja_ruta ========= */
 (async () => {
@@ -32,6 +34,14 @@ const toNull = (v) => (v === '' || typeof v === 'undefined' ? null : v);
         ADD COLUMN created_by_user_id BIGINT NULL AFTER owner_user_id
       `);
       console.log('[organizations] Columna created_by_user_id agregada');
+    }
+
+    if (!have.has('default_customs_broker_org_id')) {
+      await db.query(`
+        ALTER TABLE organizations
+        ADD COLUMN default_customs_broker_org_id INT NULL AFTER hoja_ruta
+      `);
+      console.log('[organizations] Columna default_customs_broker_org_id agregada');
     }
   } catch (e) {
     console.error('[organizations] No se pudo asegurar columna hoja_ruta:', e?.message || e);
@@ -73,6 +83,7 @@ router.get('/', requireAuth, async (req, res) => {
     const offset = Number(req.query.offset) || 0;
     const includeTotal = String(req.query.include_total || '') === '1';
     const q = (req.query.q || '').trim();
+    const tipoOrg = (req.query.tipo_org || '').trim();
 
     const where = [];
     const params = [];
@@ -80,6 +91,10 @@ router.get('/', requireAuth, async (req, res) => {
       const like = `%${q}%`;
       where.push('(o.name LIKE ? OR o.razon_social LIKE ? OR o.ruc LIKE ? OR o.industry LIKE ?)');
       params.push(like, like, like, like);
+    }
+    if (tipoOrg) {
+      where.push('LOWER(COALESCE(o.tipo_org, \'\')) = LOWER(?)');
+      params.push(tipoOrg);
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -92,7 +107,7 @@ router.get('/', requireAuth, async (req, res) => {
         o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.country,
         o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
         o.is_agent, o.modalities_supported,
-        o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta,
+        o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta, o.default_customs_broker_org_id,
         o.zone_id, o.department,
         o.latitude, o.longitude,
         o.created_at, o.updated_at,
@@ -100,9 +115,13 @@ router.get('/', requireAuth, async (req, res) => {
         o.budget_profit AS budget_profit_value,
         u.name AS owner_user_name,
         u.email AS owner_user_email,
+        broker.name AS default_customs_broker_name,
+        broker.razon_social AS default_customs_broker_razon_social,
+        broker.ruc AS default_customs_broker_ruc,
         NULL AS advisor_name
       FROM organizations o
       LEFT JOIN users u ON u.id = o.owner_user_id
+      LEFT JOIN organizations broker ON broker.id = o.default_customs_broker_org_id
       ${whereSql}
       ORDER BY o.name ASC
       LIMIT ? OFFSET ?
@@ -153,10 +172,12 @@ router.post('/', requireAuth, async (req, res) => {
       tipo_org = null,
       operacion = null,
       hoja_ruta = null,
+      default_customs_broker_org_id = null,
       branches = null,
     } = req.body || {};
 
-    const rs = String(razon_social || '').trim() || String(name || '').trim();
+    const rs =
+      toUpperText(razon_social || '') || toUpperText(name || '');
     if (!rs) return res.status(400).json({ error: 'razon_social es requerido' });
 
     const [ins] = await db.query(
@@ -164,12 +185,12 @@ router.post('/', requireAuth, async (req, res) => {
       INSERT INTO organizations
         (razon_social, name, industry, phone, website, ruc, address, city, country, notes,
          label, owner_user_id, created_by_user_id, visibility, is_agent, modalities_supported,
-         email, rubro, tipo_org, operacion, hoja_ruta,
+         email, rubro, tipo_org, operacion, hoja_ruta, default_customs_broker_org_id,
          budget_status, budget_profit, created_at, updated_at)
       VALUES
         (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?, ?,
-         ?, ?, ?, ?, ?,
+         ?, ?, ?, ?, ?, ?,
          'borrador', NULL, NOW(), NOW())
       `,
       [
@@ -194,6 +215,7 @@ router.post('/', requireAuth, async (req, res) => {
         tipo_org,
         operacion,
         hoja_ruta,
+        toNull(default_customs_broker_org_id),
       ]
     );
 
@@ -205,14 +227,18 @@ router.post('/', requireAuth, async (req, res) => {
         o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.country,
         o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
         o.is_agent, o.modalities_supported,
-        o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta,
+        o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta, o.default_customs_broker_org_id,
         o.created_at, o.updated_at,
         o.budget_status, o.budget_profit AS budget_profit_value,
         u.name AS owner_user_name,
         u.email AS owner_user_email,
+        broker.name AS default_customs_broker_name,
+        broker.razon_social AS default_customs_broker_razon_social,
+        broker.ruc AS default_customs_broker_ruc,
         NULL AS advisor_name
       FROM organizations o
       LEFT JOIN users u ON u.id = o.owner_user_id
+      LEFT JOIN organizations broker ON broker.id = o.default_customs_broker_org_id
       WHERE o.id = ?
       `,
       [ins.insertId]
@@ -244,8 +270,12 @@ router.post('/', requireAuth, async (req, res) => {
       console.error('[organizations:post] No se pudieron guardar sucursales:', e?.message || e);
     }
 
-    // Crear tarjeta de Prospecto en ATM INDUSTRIAL (pipeline 1) al crear organización
-    try {
+    // Crear tarjeta de Prospecto en ATM INDUSTRIAL (pipeline 1) solo para clientes/prospectos
+    const orgTypeLc = String(tipo_org || '').trim().toLowerCase();
+    const shouldCreateProspect =
+      !orgTypeLc ||
+      !['despachante', 'proveedor', 'flete'].includes(orgTypeLc);
+    if (shouldCreateProspect) try {
       const pipelineId = 1;
       const stageName = 'Prospecto';
       const buKey = 'atm-industrial';
@@ -681,16 +711,20 @@ router.get('/:id', requireAuth, async (req, res) => {
         o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.country,
         o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
         o.is_agent, o.modalities_supported,
-        o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta,
+        o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta, o.default_customs_broker_org_id,
         o.zone_id, o.department,
         o.latitude, o.longitude,
         o.created_at, o.updated_at,
         o.budget_status, o.budget_profit AS budget_profit_value,
         u.name AS owner_user_name,
         u.email AS owner_user_email,
+        broker.name AS default_customs_broker_name,
+        broker.razon_social AS default_customs_broker_razon_social,
+        broker.ruc AS default_customs_broker_ruc,
         NULL AS advisor_name
       FROM organizations o
       LEFT JOIN users u ON u.id = o.owner_user_id
+      LEFT JOIN organizations broker ON broker.id = o.default_customs_broker_org_id
       WHERE o.id = ?
       LIMIT 1
       `,
@@ -737,6 +771,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
       'tipo_org',
       'operacion',
       'hoja_ruta',
+      'default_customs_broker_org_id',
       'zone_id',
       'department',
       'latitude',
@@ -748,7 +783,9 @@ router.patch('/:id', requireAuth, async (req, res) => {
     for (const k of allowed) {
       if (Object.prototype.hasOwnProperty.call(req.body, k)) {
         sets.push(`\`${k}\` = ?`);
-        params.push(toNull(req.body[k]));
+        let value = req.body[k];
+        if (k === 'name' || k === 'razon_social') value = toUpperText(value);
+        params.push(toNull(value));
       }
     }
     if (!sets.length) return res.status(400).json({ error: 'Nada para actualizar' });
@@ -771,16 +808,20 @@ router.patch('/:id', requireAuth, async (req, res) => {
         o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.country,
         o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
         o.is_agent, o.modalities_supported,
-        o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta,
+        o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta, o.default_customs_broker_org_id,
         o.zone_id, o.department,
         o.latitude, o.longitude,
         o.created_at, o.updated_at,
         o.budget_status, o.budget_profit AS budget_profit_value,
         u.name AS owner_user_name,
         u.email AS owner_user_email,
+        broker.name AS default_customs_broker_name,
+        broker.razon_social AS default_customs_broker_razon_social,
+        broker.ruc AS default_customs_broker_ruc,
         NULL AS advisor_name
       FROM organizations o
       LEFT JOIN users u ON u.id = o.owner_user_id
+      LEFT JOIN organizations broker ON broker.id = o.default_customs_broker_org_id
       WHERE o.id = ?
       `,
       [id]

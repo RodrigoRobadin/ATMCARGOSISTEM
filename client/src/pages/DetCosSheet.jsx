@@ -21,6 +21,30 @@ const formatMoney = (n, currency = "USD") => {
   });
 };
 
+const formatRevisionDateTime = (value) => {
+  if (!value) return "";
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return "";
+  return dt.toLocaleString("es-PY", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
+const fallbackRevisionName = (versionNumber, createdAt) => {
+  const seq = String(Number(versionNumber || 0)).padStart(2, "0");
+  const stamp = formatRevisionDateTime(createdAt);
+  return stamp ? `REV ${seq} - ${stamp}` : `REV ${seq}`;
+};
+
+const getRevisionDisplayName = (version) => {
+  if (!version) return "";
+  return String(version.revision_name || "").trim() || fallbackRevisionName(version.version_number, version.created_at);
+};
+
 const num = (v) => {
   if (v === "" || v === null || v === undefined) return 0;
   const s = String(v).trim();
@@ -74,6 +98,49 @@ const TAX_OPTIONS = [
   { value: 0, label: 'Exento' },
 ];
 
+const normalizeCatalogModalities = (value) => {
+  if (Array.isArray(value)) return value.map((it) => String(it || "").trim().toUpperCase()).filter(Boolean);
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return normalizeCatalogModalities(parsed);
+  } catch { }
+  return String(value).split(",").map((it) => it.trim().toUpperCase()).filter(Boolean);
+};
+
+function buildCargoPresetGroups(items = [], currentMode = "") {
+  const mode = String(currentMode || "").trim().toUpperCase();
+  const unique = [];
+  const seen = new Set();
+
+  (items || []).forEach((item) => {
+    const name = String(item.name || "").trim();
+    if (!name) return;
+    const key = name.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+
+    const category = String(item.category || "").trim() || "Sin categoría";
+    const modalities = normalizeCatalogModalities(item.applies_to_modalities);
+    const matchesMode = !mode || modalities.length === 0 || modalities.includes(mode);
+    unique.push({ name, category, matchesMode });
+  });
+
+  unique.sort((a, b) => {
+    if (Number(b.matchesMode) !== Number(a.matchesMode)) return Number(b.matchesMode) - Number(a.matchesMode);
+    if (a.category !== b.category) return a.category.localeCompare(b.category);
+    return a.name.localeCompare(b.name);
+  });
+
+  const grouped = new Map();
+  unique.forEach((item) => {
+    const label = item.matchesMode ? `${item.category} · sugeridos` : item.category;
+    if (!grouped.has(label)) grouped.set(label, []);
+    grouped.get(label).push(item);
+  });
+  return Array.from(grouped.entries()).map(([label, options]) => ({ label, options }));
+}
+
 /* ===================== tablas ===================== */
 function CargoTable({
   title,
@@ -87,10 +154,13 @@ function CargoTable({
   usedKg,
   compraRows = null,
   disabled = false,
-  presets = [],
+  presetItems = [],
+  currentMode = "",
 }) {
   const ignoredLinksRef = useRef(new Set());
   const currencyLabel = String(currency || "USD").toUpperCase();
+  const presetGroups = useMemo(() => buildCargoPresetGroups(presetItems, currentMode), [presetItems, currentMode]);
+  const presetNames = useMemo(() => presetGroups.flatMap((group) => group.options.map((item) => item.name)), [presetGroups]);
 
   const addRow = (presetName) => {
     if (disabled) return;
@@ -239,7 +309,7 @@ function CargoTable({
                         title={disabled ? titleLock : ""}
                         className={`border border-gray-300 rounded px-2 py-1 text-sm max-w-[180px] focus:outline-none focus:ring-1 focus:ring-blue-500 ${disabled ? notAllowedCls : ""
                           }`}
-                        value={presets.includes(r.concepto) ? r.concepto : ""}
+                        value={presetNames.includes(r.concepto) ? r.concepto : ""}
                         onChange={(e) => {
                           if (disabled) return;
                           const v = e.target.value;
@@ -247,8 +317,12 @@ function CargoTable({
                         }}
                       >
                         <option value="">preset…</option>
-                        {presets.map((p) => (
-                          <option key={p} value={p}>{p}</option>
+                        {presetGroups.map((group) => (
+                          <optgroup key={group.label} label={group.label}>
+                            {group.options.map((item) => (
+                              <option key={`${group.label}-${item.name}`} value={item.name}>{item.name}</option>
+                            ))}
+                          </optgroup>
                         ))}
                       </select>
                       <Input
@@ -377,7 +451,13 @@ function CargoTable({
                     }}
                   >
                     <option value="">—</option>
-                    {presets.map((p) => <option key={p} value={p}>{p}</option>)}
+                    {presetGroups.map((group) => (
+                      <optgroup key={group.label} label={group.label}>
+                        {group.options.map((item) => (
+                          <option key={`${group.label}-${item.name}-footer`} value={item.name}>{item.name}</option>
+                        ))}
+                      </optgroup>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -651,7 +731,7 @@ function SeguroTable({ title, rows, setRows, showProfit = false, costosRows = nu
 }
 
 /* ===================== pagina ===================== */
-export default function DetCosSheet() {
+export default function DetCosSheet({ onVersionSelectionChange } = {}) {
   const { id } = useParams();
   const { user } = useAuth();
 
@@ -665,6 +745,13 @@ export default function DetCosSheet() {
   const [versions, setVersions] = useState([]);
   const [currentVersion, setCurrentVersion] = useState(null);
   const [selectedVersionNum, setSelectedVersionNum] = useState(null);
+  const [revisionNameDraft, setRevisionNameDraft] = useState("");
+
+  const notifyVersionSelection = (versionNumber, versionRow = null) => {
+    if (typeof onVersionSelectionChange === "function") {
+      onVersionSelectionChange(versionNumber || null, versionRow || null);
+    }
+  };
 
   // cabecera / parametros
   const [modo, setModo] = useState("");
@@ -678,6 +765,7 @@ export default function DetCosSheet() {
 
   // presets desde catálogo
   const [catalogServices, setCatalogServices] = useState([]);
+  const [catalogItems, setCatalogItems] = useState([]);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
 
   // All-in
@@ -817,12 +905,19 @@ export default function DetCosSheet() {
           }
 
           const SERVICES = new Set(["SERVICE", "PRODUCT", "SERVICIO", "PRODUCTO"]);
-          const names = (items || [])
+          const normalizedItems = (items || [])
             .filter((it) => SERVICES.has(String(it.type || "").toUpperCase()))
-            .map((it) => String(it.name || "").trim())
-            .filter(Boolean)
-            .sort((a, b) => a.localeCompare(b));
+            .map((it) => ({
+              name: String(it.name || "").trim(),
+              category: String(it.category || "").trim(),
+              applies_to_modalities: normalizeCatalogModalities(it.applies_to_modalities),
+            }))
+            .filter((it) => it.name);
 
+          const presetGroups = buildCargoPresetGroups(normalizedItems, map["modalidad_carga"] || "");
+          const names = presetGroups.flatMap((group) => group.options.map((item) => item.name));
+
+          setCatalogItems(normalizedItems);
           setCatalogServices([...new Set(names)]);
           setCatalogLoaded(true);
         }
@@ -976,9 +1071,13 @@ export default function DetCosSheet() {
     try {
       const { data } = await api.get(`/deals/${id}/cost-sheet/current-version`);
       setCurrentVersion(data || null);
+      setRevisionNameDraft(getRevisionDisplayName(data));
+      notifyVersionSelection(data?.version_number || null, data || null);
     } catch (err) {
       console.error("Error al cargar versión actual:", err);
       setCurrentVersion(null);
+      setRevisionNameDraft("");
+      notifyVersionSelection(null, null);
     }
   }
 
@@ -1006,17 +1105,43 @@ export default function DetCosSheet() {
       setSegCostoRows(Array.isArray(d.segCostoRows) ? d.segCostoRows : []);
       setSegVentaRows(Array.isArray(d.segVentaRows) ? d.segVentaRows : []);
       setSelectedVersionNum(versionNum);
+      setRevisionNameDraft(getRevisionDisplayName(v));
+      notifyVersionSelection(versionNum, v || null);
     } catch (err) {
       console.error("Error al cargar versión:", err);
       alert("No se pudo cargar la versión");
     }
   }
 
-  // === NUEVO: Crear nueva revisión ===
-  async function createNewRevision() {
-    const reason = prompt("Razón de la nueva revisión:");
-    if (!reason) return;
+    async function saveRevisionName() {
+    const targetVersion = selectedVersionNum
+      ? versions.find((v) => Number(v.version_number) === Number(selectedVersionNum))
+      : currentVersion;
+    if (!targetVersion?.id) return;
 
+    const cleanedName = String(revisionNameDraft || "").trim();
+    if (!cleanedName) {
+      alert("El nombre de la revisi?n no puede quedar vac?o.");
+      return;
+    }
+
+    try {
+      await api.put(`/deals/${id}/cost-sheet/versions/${targetVersion.id}`, {
+        revision_name: cleanedName,
+        change_reason: targetVersion.change_reason || null,
+      });
+      await loadVersions();
+      if (selectedVersionNum) await loadVersion(selectedVersionNum);
+      else await loadCurrentVersion();
+      alert("Nombre de revisi?n actualizado.");
+    } catch (err) {
+      console.error("Error al actualizar nombre de revisi?n:", err);
+      alert("No se pudo actualizar el nombre de la revisi?n");
+    }
+  }
+
+  // === Guardado: cada vez crea una nueva revisi?n autom?ticamente ===
+  async function saveCostSheet() {
     const payload = {
       header: {
         modo,
@@ -1042,63 +1167,13 @@ export default function DetCosSheet() {
     try {
       await api.post(`/deals/${id}/cost-sheet/versions`, {
         data: payload,
-        change_reason: reason,
+        change_reason: "Guardado autom?tico de revisi?n",
       });
       await updateDealValue(profitGeneral);
       await loadVersions();
       await loadCurrentVersion();
       setSelectedVersionNum(null);
-      alert("Nueva revisión creada ✓");
-    } catch (err) {
-      console.error("Error al crear revisión:", err);
-      alert("Error al crear nueva revisión");
-    }
-  }
-
-  // === REEMPLAZADO: guardar usando sistema de versiones ===
-  async function saveCostSheet() {
-    const payload = {
-      header: {
-        modo,
-        clase,
-        pesoKg,
-        awb,
-        hbl,
-        mercaderia,
-        gsRate,
-        allInEnabled,
-        allInServiceName,
-        operationCurrency,
-      },
-      compraRows,
-      ventaRows, // guardamos “crudo” (incluye ventaInt)
-      locRows,
-      locCliRows,
-      segCostoRows,
-      segVentaRows,
-      totals: { totalCostos, totalVentas, profitGeneral },
-    };
-
-    try {
-      if (currentVersion?.status === "borrador") {
-        // Actualizar versión actual si es borrador
-        await api.put(
-          `/deals/${id}/cost-sheet/versions/${currentVersion.id}`,
-          { data: payload }
-        );
-        alert("Versión actualizada ✓");
-      } else {
-        // Crear nueva versión
-        const reason = prompt("Razón del cambio (opcional):");
-        await api.post(`/deals/${id}/cost-sheet/versions`, {
-          data: payload,
-          change_reason: reason || "Actualización de presupuesto",
-        });
-        alert("Nueva versión creada ✓");
-      }
-      await updateDealValue(profitGeneral);
-      await loadVersions();
-      await loadCurrentVersion();
+      alert("Nueva revisi?n creada.");
     } catch (err) {
       console.error("Error al guardar:", err);
       alert("Error al guardar presupuesto");
@@ -1157,6 +1232,7 @@ export default function DetCosSheet() {
                   loadVersion(numV);
                 } else {
                   setSelectedVersionNum(null);
+                  notifyVersionSelection(currentVersion?.version_number || null, currentVersion || null);
                   if (currentVersion?.version_number) {
                     loadVersion(currentVersion.version_number);
                   } else {
@@ -1168,22 +1244,35 @@ export default function DetCosSheet() {
               <option value="">Versión actual</option>
               {versions.map((v) => (
                 <option key={v.id} value={v.version_number}>
-                  v{v.version_number} - {v.status} ({new Date(v.created_at).toLocaleDateString()})
+                  {getRevisionDisplayName(v)} - {v.status}
                 </option>
               ))}
             </select>
           )}
 
-          {/* === NUEVO: Botón Nueva Revisión - SIEMPRE VISIBLE === */}
-          {canEdit && (
-            <button
-              onClick={createNewRevision}
-              className="px-3 py-2 text-sm bg-green-600 text-white rounded hover:bg-green-700"
-              title="Crear nueva revisión del presupuesto"
-            >
-              ➕ Nueva Revisión
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            <input
+              className="w-[260px] border rounded px-3 py-2 text-sm"
+              value={revisionNameDraft}
+              onChange={(e) => setRevisionNameDraft(e.target.value)}
+              placeholder="Nombre de la revisi?n"
+            />
+            {canEdit && (selectedVersionNum || currentVersion?.id) ? (
+              <button
+                onClick={saveRevisionName}
+                className="px-3 py-2 text-sm bg-white border rounded hover:bg-slate-50"
+              >
+                Guardar nombre
+              </button>
+            ) : null}
+          </div>
+
+          <Link
+            to={`/operations/${id}/quote${selectedVersionNum || currentVersion?.version_number ? `?cost_sheet_version=${selectedVersionNum || currentVersion?.version_number}` : ''}`}
+            className="px-3 py-2 text-sm bg-slate-700 text-white rounded hover:bg-slate-800"
+          >
+            Ver presupuesto de esta revisi?n
+          </Link>
 
           <Link to={-1} className="px-4 py-2 text-sm bg-gray-200 rounded hover:bg-gray-300 transition-colors">
             ← Volver
@@ -1196,7 +1285,7 @@ export default function DetCosSheet() {
         <div className="mx-4 mt-4 bg-blue-50 border border-blue-200 rounded p-3">
           <div className="flex items-center justify-between">
             <div>
-              <strong>Viendo versión {selectedVersionNum}</strong>
+              <strong>{getRevisionDisplayName(versions.find((v) => v.version_number === selectedVersionNum) || currentVersion || { version_number: selectedVersionNum })}</strong>
               {versions.find((v) => v.version_number === selectedVersionNum)?.change_reason && (
                 <span className="ml-3 text-sm text-slate-600">
                   Razón: {versions.find((v) => v.version_number === selectedVersionNum).change_reason}
@@ -1206,6 +1295,7 @@ export default function DetCosSheet() {
             <button
               onClick={() => {
                 setSelectedVersionNum(null);
+                notifyVersionSelection(currentVersion?.version_number || null, currentVersion || null);
                 if (currentVersion?.version_number) {
                   loadVersion(currentVersion.version_number);
                 } else {
@@ -1447,7 +1537,8 @@ export default function DetCosSheet() {
             setRows={setCompraRows}
             usedKg={pesoKg}
             disabled={!canEdit}
-            presets={catalogServices}
+            presetItems={catalogItems}
+            currentMode={modo}
           />
           <CargoTable
             title="VENTA AL CLIENTE"
@@ -1461,7 +1552,8 @@ export default function DetCosSheet() {
             usedKg={pesoKg}
             compraRows={compraRows}
             disabled={!canEdit}
-            presets={catalogServices}
+            presetItems={catalogItems}
+            currentMode={modo}
           />
         </div>
 

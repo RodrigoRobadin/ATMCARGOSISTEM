@@ -476,7 +476,7 @@ function NewOrganizationModal({
             <input
               className="w-full border rounded-lg px-3 py-2"
               value={razonSocial}
-              onChange={(e) => setRazonSocial(e.target.value)}
+              onChange={(e) => setRazonSocial(e.target.value.toUpperCase())}
             />
           </label>
           <label className="block text-sm">

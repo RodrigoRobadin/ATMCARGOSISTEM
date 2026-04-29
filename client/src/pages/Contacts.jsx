@@ -263,7 +263,7 @@ function NewContactModal({ onClose, onCreated, owners = [], labelOptions = [] })
         </div>
 
         <label className="block text-sm">Nombre
-          <input className="w-full border rounded-lg px-3 py-2" value={name} onChange={e=>setName(e.target.value)} />
+          <input className="w-full border rounded-lg px-3 py-2" value={name} onChange={e=>setName(e.target.value.toUpperCase())} />
         </label>
 
         <div className="grid grid-cols-2 gap-2">

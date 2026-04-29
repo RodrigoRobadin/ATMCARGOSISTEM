@@ -3,6 +3,14 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { api } from '../api';
 
+function formatApiError(err, fallback) {
+  const data = err?.response?.data;
+  if (Array.isArray(data?.details) && data.details.length) {
+    return `${data.error || fallback}\n\n- ${data.details.join('\n- ')}`;
+  }
+  return data?.error || fallback;
+}
+
 const statusStyles = {
   borrador: { label: 'Borrador', cls: 'bg-gray-100 text-gray-700' },
   emitida: { label: 'Emitida', cls: 'bg-blue-100 text-blue-700' },
@@ -121,7 +129,7 @@ export default function InvoiceDetail() {
       alert('Factura emitida');
     } catch (e) {
       console.error('Error issuing invoice', e);
-      alert(e.response?.data?.error || 'No se pudo emitir');
+      alert(formatApiError(e, 'No se pudo emitir'));
     }
   }
 

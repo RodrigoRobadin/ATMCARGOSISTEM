@@ -627,7 +627,16 @@ export default function QuoteEditor({
     if (!enableRevisions) return;
     if (isLocked) return;
     if (!quoteId) return;
-    const name = window.prompt("Nombre de la revisión:", "Rev " + new Date().toLocaleDateString());
+    const nextSeq = String((revisions?.length || 0) + 1).padStart(2, "0");
+    const now = new Date();
+    const stamp = now.toLocaleString("es-PY", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const name = window.prompt("Nombre de la revisión:", `REV ${nextSeq} - ${stamp}`);
     if (!name) return;
     try {
       const { data } = await api.post(`${quoteBase}/${quoteId}/revisions`, { name });

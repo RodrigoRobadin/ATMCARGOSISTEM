@@ -661,7 +661,7 @@ function EditContactModal({ contact, onClose, onSaved }) {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <label className="block text-sm">Nombre
-            <input className="w-full border rounded-lg px-3 py-2" value={form.name} onChange={e=>upd('name', e.target.value)} />
+            <input className="w-full border rounded-lg px-3 py-2" value={form.name} onChange={e=>upd('name', e.target.value.toUpperCase())} />
           </label>
           <label className="block text-sm">Email
             <input className="w-full border rounded-lg px-3 py-2" value={form.email} onChange={e=>upd('email', e.target.value)} />

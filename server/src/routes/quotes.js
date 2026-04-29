@@ -14,6 +14,17 @@ const router = Router();
 // Usa el que exista
 const computeQuote = computeQuoteNamed || computeQuoteDefault;
 
+function formatQuoteRevisionName(seq, createdAt = new Date()) {
+  const n = String(Number(seq || 0)).padStart(2, "0");
+  const dt = createdAt instanceof Date ? createdAt : new Date(createdAt);
+  const dd = String(dt.getDate()).padStart(2, "0");
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const yyyy = dt.getFullYear();
+  const hh = String(dt.getHours()).padStart(2, "0");
+  const mi = String(dt.getMinutes()).padStart(2, "0");
+  return `REV ${n} - ${dd}/${mm}/${yyyy} ${hh}:${mi}`;
+}
+
 async function isDealInvoiced(dealId) {
   if (!dealId) return false;
   try {
@@ -54,6 +65,7 @@ async function assertDealUnlocked(dealId, res) {
         client_name VARCHAR(255),
         status VARCHAR(50) DEFAULT 'draft',
         inputs_json JSON,
+        document_snapshot_json JSON,
         computed_json JSON,
         created_by VARCHAR(100),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -69,6 +81,9 @@ async function assertDealUnlocked(dealId, res) {
     try {
       await db.query("ALTER TABLE quotes ADD UNIQUE INDEX uq_quotes_deal (deal_id)");
     } catch (_) {}
+    try {
+      await db.query("ALTER TABLE quotes ADD COLUMN document_snapshot_json JSON NULL AFTER inputs_json");
+    } catch (_) {}
 
     // Tabla de revisiones (snapshots)
     await db.query(`
@@ -77,11 +92,15 @@ async function assertDealUnlocked(dealId, res) {
         quote_id INT NOT NULL,
         name VARCHAR(100) NOT NULL,
         inputs_json JSON,
+        document_snapshot_json JSON,
         computed_json JSON,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_quote (quote_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+    try {
+      await db.query("ALTER TABLE quote_revisions ADD COLUMN document_snapshot_json JSON NULL AFTER inputs_json");
+    } catch (_) {}
   } catch (e) {
     console.error("[quotes] no se pudo crear tabla:", e?.message || e);
   }
@@ -115,6 +134,15 @@ function asJson(v) {
   return null;
 }
 
+function normalizeDocumentSnapshot(value) {
+  const parsed = asJson(value);
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+}
+
+function hasOwn(obj, key) {
+  return !!obj && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
 async function getRevisionById(quoteId, revisionId) {
   const [[rev]] = await db.query(
     "SELECT * FROM quote_revisions WHERE id = ? AND quote_id = ? LIMIT 1",
@@ -125,6 +153,7 @@ async function getRevisionById(quoteId, revisionId) {
     id: rev.id,
     name: rev.name,
     inputs: asJson(rev.inputs_json) || {},
+    document_snapshot: normalizeDocumentSnapshot(rev.document_snapshot_json),
     computed: asJson(rev.computed_json) || null,
     created_at: rev.created_at,
   };
@@ -246,12 +275,14 @@ router.get("/deals/:dealId/quote", async (req, res) => {
       if (revisionId) rev = await getRevisionById(row.id, revisionId);
 
       const inputs = rev?.inputs || asJson(row.inputs_json) || {};
+      const document_snapshot = rev?.document_snapshot || normalizeDocumentSnapshot(row.document_snapshot_json);
       const computed = rev?.computed || asJson(row.computed_json) || null;
 
       return res.json({
         id: row.id,
         deal_id: row.deal_id,
         inputs,
+        document_snapshot,
         computed,
         meta: {
           revision_id: rev?.id || null,
@@ -278,11 +309,12 @@ router.get("/deals/:dealId/quote", async (req, res) => {
       org_branch_id: dealRow?.org_branch_id || null,
     };
 
+    const document_snapshot = null;
     const { computed, compute_error } = safeCompute(inputs);
 
     const [result] = await db.query(
-      `INSERT INTO quotes (deal_id, ref_code, revision, client_name, status, created_by, inputs_json, computed_json)
-       VALUES (?,?,?,?,?,?,?,?)`,
+      `INSERT INTO quotes (deal_id, ref_code, revision, client_name, status, created_by, inputs_json, document_snapshot_json, computed_json)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
       [
         dealId,
         null,
@@ -291,6 +323,7 @@ router.get("/deals/:dealId/quote", async (req, res) => {
         "draft",
         null,
         JSON.stringify(inputs),
+        document_snapshot ? JSON.stringify(document_snapshot) : null,
         computed ? JSON.stringify(computed) : null,
       ]
     );
@@ -299,6 +332,7 @@ router.get("/deals/:dealId/quote", async (req, res) => {
       id: result.insertId,
       deal_id: dealId,
       inputs,
+      document_snapshot,
       computed,
       compute_error,
       meta: {
@@ -321,6 +355,7 @@ router.get("/deals/:dealId/quote", async (req, res) => {
 router.post("/quotes", async (req, res) => {
   try {
     const inputs = normalizeInputs(req.body);
+    const document_snapshot = normalizeDocumentSnapshot(req.body?.document_snapshot);
     if (!(await assertDealUnlocked(inputs.deal_id, res))) return;
 
     // ✅ NO romper si no se puede calcular (draft)
@@ -329,8 +364,8 @@ router.post("/quotes", async (req, res) => {
     const { ref_code, revision, client_name, status, created_by, deal_id } = inputs;
 
     const [result] = await db.query(
-      `INSERT INTO quotes (deal_id, ref_code, revision, client_name, status, created_by, inputs_json, computed_json)
-       VALUES (?,?,?,?,?,?,?,?)`,
+      `INSERT INTO quotes (deal_id, ref_code, revision, client_name, status, created_by, inputs_json, document_snapshot_json, computed_json)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
       [
         deal_id || null,
         ref_code || null,
@@ -339,6 +374,7 @@ router.post("/quotes", async (req, res) => {
         status || "draft",
         created_by || null,
         JSON.stringify(inputs),
+        document_snapshot ? JSON.stringify(document_snapshot) : null,
         computed ? JSON.stringify(computed) : null,
       ]
     );
@@ -347,7 +383,7 @@ router.post("/quotes", async (req, res) => {
       await syncDealBranch(deal_id, inputs.org_branch_id);
     }
 
-    res.status(201).json({ id: result.insertId, inputs, computed, compute_error });
+    res.status(201).json({ id: result.insertId, inputs, document_snapshot, computed, compute_error });
   } catch (e) {
     console.error("[quotes][POST] error:", e);
     res.status(500).json({ error: e?.message || "No se pudo crear la cotizacion" });
@@ -373,12 +409,14 @@ router.get("/quotes/:id", async (req, res) => {
     }
 
     const inputs = rev?.inputs || asJson(row.inputs_json) || {};
+    const document_snapshot = rev?.document_snapshot || normalizeDocumentSnapshot(row.document_snapshot_json);
     const computed = rev?.computed || asJson(row.computed_json) || null;
 
     res.json({
       id: row.id,
       deal_id: row.deal_id,
       inputs,
+      document_snapshot,
       computed,
       meta: {
         revision_id: rev?.id || null,
@@ -404,19 +442,27 @@ router.put("/quotes/:id", async (req, res) => {
       return res.status(400).json({ error: "id inválido" });
     }
 
-    const inputs = normalizeInputs(req.body);
-    const [[existing]] = await db.query("SELECT deal_id FROM quotes WHERE id = ? LIMIT 1", [id]);
-    const dealId = inputs.deal_id || existing?.deal_id || null;
+    const [[row]] = await db.query("SELECT * FROM quotes WHERE id = ? LIMIT 1", [id]);
+    if (!row) return res.status(404).json({ error: "No encontrada" });
+    const hasInputsPayload = hasOwn(req.body, "inputs");
+    const hasDocumentSnapshotPayload = hasOwn(req.body, "document_snapshot");
+    const inputs = hasInputsPayload ? normalizeInputs(req.body) : (asJson(row.inputs_json) || {});
+    const document_snapshot = hasDocumentSnapshotPayload
+      ? normalizeDocumentSnapshot(req.body?.document_snapshot)
+      : normalizeDocumentSnapshot(row.document_snapshot_json);
+    const dealId = inputs.deal_id || row.deal_id || null;
     if (!(await assertDealUnlocked(dealId, res))) return;
 
     // ✅ NO romper si no se puede calcular (guardar igual)
-    const { computed, compute_error } = safeCompute(inputs);
+    const { computed, compute_error } = hasInputsPayload
+      ? safeCompute(inputs)
+      : { computed: asJson(row.computed_json) || null, compute_error: null };
 
     const { ref_code, revision, client_name, status, created_by, deal_id } = inputs;
 
     await db.query(
       `UPDATE quotes
-       SET deal_id=?, ref_code=?, revision=?, client_name=?, status=?, created_by=?, inputs_json=?, computed_json=?
+       SET deal_id=?, ref_code=?, revision=?, client_name=?, status=?, created_by=?, inputs_json=?, document_snapshot_json=?, computed_json=?
        WHERE id=?`,
       [
         deal_id || null,
@@ -426,6 +472,7 @@ router.put("/quotes/:id", async (req, res) => {
         status || "draft",
         created_by || null,
         JSON.stringify(inputs),
+        document_snapshot ? JSON.stringify(document_snapshot) : null,
         computed ? JSON.stringify(computed) : null,
         id,
       ]
@@ -435,7 +482,7 @@ router.put("/quotes/:id", async (req, res) => {
       await syncDealBranch(deal_id, inputs.org_branch_id);
     }
 
-    res.json({ id, inputs, computed, compute_error });
+    res.json({ id, inputs, document_snapshot, computed, compute_error });
   } catch (e) {
     console.error("[quotes][PUT] error:", e);
     res.status(500).json({ error: e?.message || "No se pudo actualizar la cotizacion" });
@@ -503,19 +550,25 @@ router.post("/quotes/:id/revisions", async (req, res) => {
     if (!Number.isFinite(id) || id <= 0) {
       return res.status(400).json({ error: "id inv??lido" });
     }
-    const name = String(req.body?.name || "").trim() || `Rev ${Date.now()}`;
-
     const [[row]] = await db.query("SELECT * FROM quotes WHERE id = ?", [id]);
     if (!row) return res.status(404).json({ error: "No encontrada" });
     if (!(await assertDealUnlocked(row.deal_id, res))) return;
 
+    const [[meta]] = await db.query(
+      "SELECT COUNT(*) AS total FROM quote_revisions WHERE quote_id = ?",
+      [id]
+    );
+    const nextSeq = Number(meta?.total || 0) + 1;
+    const name = String(req.body?.name || "").trim() || formatQuoteRevisionName(nextSeq);
+
     const inputs = asJson(row.inputs_json) || {};
+    const document_snapshot = normalizeDocumentSnapshot(row.document_snapshot_json);
     const computed = asJson(row.computed_json) || null;
 
     const [result] = await db.query(
-      `INSERT INTO quote_revisions (quote_id, name, inputs_json, computed_json)
-       VALUES (?,?,?,?)`,
-      [id, name, JSON.stringify(inputs), computed ? JSON.stringify(computed) : null]
+      `INSERT INTO quote_revisions (quote_id, name, inputs_json, document_snapshot_json, computed_json)
+       VALUES (?,?,?,?,?)`,
+      [id, name, JSON.stringify(inputs), document_snapshot ? JSON.stringify(document_snapshot) : null, computed ? JSON.stringify(computed) : null]
     );
 
     const rows = await listRevisions(id);
@@ -548,24 +601,32 @@ router.put("/quotes/:id/revisions/:revisionId", async (req, res) => {
     );
     if (!rev) return res.status(404).json({ error: "Revision no encontrada" });
 
-    const inputs = normalizeInputs(req.body);
-    const { computed, compute_error } = safeCompute(inputs);
-    const name = String(req.body?.name || rev.name || "").trim() || `Rev ${revisionId}`;
+    const hasInputsPayload = hasOwn(req.body, "inputs");
+    const hasDocumentSnapshotPayload = hasOwn(req.body, "document_snapshot");
+    const inputs = hasInputsPayload ? normalizeInputs(req.body) : (asJson(rev.inputs_json) || {});
+    const document_snapshot = hasDocumentSnapshotPayload
+      ? normalizeDocumentSnapshot(req.body?.document_snapshot)
+      : normalizeDocumentSnapshot(rev.document_snapshot_json);
+    const { computed, compute_error } = hasInputsPayload
+      ? safeCompute(inputs)
+      : { computed: asJson(rev.computed_json) || null, compute_error: null };
+    const name = String(req.body?.name || rev.name || "").trim() || formatQuoteRevisionName(revisionId, rev.created_at);
 
     await db.query(
       `UPDATE quote_revisions
-         SET name = ?, inputs_json = ?, computed_json = ?
+         SET name = ?, inputs_json = ?, document_snapshot_json = ?, computed_json = ?
        WHERE id = ? AND quote_id = ?`,
       [
         name,
         JSON.stringify(inputs),
+        document_snapshot ? JSON.stringify(document_snapshot) : null,
         computed ? JSON.stringify(computed) : null,
         revisionId,
         id,
       ]
     );
 
-    res.json({ id, revision_id: revisionId, inputs, computed, compute_error: compute_error || null, name });
+    res.json({ id, revision_id: revisionId, inputs, document_snapshot, computed, compute_error: compute_error || null, name });
   } catch (e) {
     console.error("[quotes][revisions][update] error:", e);
     res.status(500).json({ error: "No se pudo actualizar la revision" });
@@ -585,6 +646,7 @@ router.post("/quotes/:id/duplicate", async (req, res) => {
 
     // ✅ Parse seguro
     const origInputs = asJson(row.inputs_json) || {};
+    const origDocumentSnapshot = normalizeDocumentSnapshot(row.document_snapshot_json);
     const origComputed = asJson(row.computed_json) || null;
 
     // ✅ Importante: la copia NO debe quedar ligada a deal_id ni dentro del JSON
@@ -592,8 +654,8 @@ router.post("/quotes/:id/duplicate", async (req, res) => {
     delete inputs.deal_id;
 
     const [result] = await db.query(
-      `INSERT INTO quotes (deal_id, ref_code, revision, client_name, status, created_by, inputs_json, computed_json)
-       VALUES (?,?,?,?,?,?,?,?)`,
+      `INSERT INTO quotes (deal_id, ref_code, revision, client_name, status, created_by, inputs_json, document_snapshot_json, computed_json)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
       [
         null, // la copia no se vincula automáticamente a un deal
         `${row.ref_code || "REF"}-COPY`,
@@ -602,11 +664,12 @@ router.post("/quotes/:id/duplicate", async (req, res) => {
         "draft",
         row.created_by,
         JSON.stringify(inputs),
+        origDocumentSnapshot ? JSON.stringify(origDocumentSnapshot) : null,
         origComputed ? JSON.stringify(origComputed) : null,
       ]
     );
 
-    res.status(201).json({ id: result.insertId, inputs, computed: origComputed });
+    res.status(201).json({ id: result.insertId, inputs, document_snapshot: origDocumentSnapshot, computed: origComputed });
   } catch (e) {
     console.error("[quotes][duplicate] error:", e);
     res.status(500).json({ error: e?.message || "No se pudo duplicar la cotizacion" });

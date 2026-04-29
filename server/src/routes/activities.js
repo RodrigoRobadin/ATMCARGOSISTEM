@@ -15,6 +15,40 @@ function getUserId(req) {
   return req?.user?.id || req?.auth?.user?.id || req?.session?.user?.id || null;
 }
 
+(async () => {
+  try {
+    const [cols] = await pool.query(`
+      SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'activities'
+    `);
+
+    const byName = Object.fromEntries((cols || []).map((row) => [row.COLUMN_NAME, row]));
+    const typeCol = byName.type;
+
+    if (typeCol) {
+      const columnType = String(typeCol.COLUMN_TYPE || '').toLowerCase();
+      if (typeCol.DATA_TYPE === 'enum' || columnType.includes('enum(')) {
+        await pool.query(`
+          ALTER TABLE activities
+          MODIFY COLUMN type VARCHAR(32) NOT NULL
+        `);
+        console.log('[activities] Columna type ampliada a VARCHAR(32).');
+      }
+    }
+
+    if (!byName.created_by) {
+      await pool.query(`
+        ALTER TABLE activities
+        ADD COLUMN created_by BIGINT NULL AFTER created_at
+      `);
+      console.log('[activities] Columna created_by agregada.');
+    }
+  } catch (err) {
+    console.error('[activities] No se pudo asegurar esquema:', err?.message || err);
+  }
+})();
+
 /**
  * GET /api/activities/mine
  * Filtros: done, type
@@ -157,7 +191,7 @@ router.get('/count', requireAuth, async (req, res) => {
  */
 router.post('/', requireAuth, async (req, res) => {
   try {
-    const ALLOWED_TYPES = new Set(['task', 'call', 'meeting', 'email', 'note']);
+    const ALLOWED_TYPES = new Set(['task', 'call', 'meeting', 'email', 'note', 'activity', 'reminder']);
     const rawType = String(req.body.type || '').trim().toLowerCase();
     const type = ALLOWED_TYPES.has(rawType) ? rawType : 'task';
 

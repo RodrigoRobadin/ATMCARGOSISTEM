@@ -524,6 +524,293 @@ router.get('/:id/timeline', requireAuth, async (req, res) => {
   }
 });
 
+router.get('/:id/followup-feed', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [[deal]] = await db.query(
+      `
+      SELECT d.id, d.reference, d.org_id, d.contact_id
+      FROM deals d
+      WHERE d.id = ?
+      LIMIT 1
+      `,
+      [id]
+    );
+
+    if (!deal) {
+      return res.status(404).json({ error: 'Operacion no encontrada' });
+    }
+
+    const [activities] = await db.query(
+      `
+      SELECT
+        a.id,
+        a.type,
+        a.subject,
+        a.notes,
+        a.due_date,
+        a.done,
+        a.created_at,
+        a.created_by,
+        u.name AS created_by_name,
+        u.email AS created_by_email
+      FROM activities a
+      LEFT JOIN users u ON u.id = a.created_by
+      WHERE a.deal_id = ?
+      ORDER BY a.created_at DESC, a.id DESC
+      `,
+      [id]
+    );
+
+    const [tasks] = await db.query(
+      `
+      SELECT
+        t.id,
+        t.title,
+        t.priority,
+        t.status,
+        t.due_at,
+        t.completed_at,
+        t.created_at,
+        t.user_id,
+        u.name AS user_name
+      FROM followup_tasks t
+      LEFT JOIN users u ON u.id = t.user_id
+      WHERE t.deal_id = ?
+      ORDER BY t.created_at DESC, t.id DESC
+      `,
+      [id]
+    );
+
+    const feed = [
+      ...activities.map((row) => ({
+        id: `activity-${row.id}`,
+        source_id: row.id,
+        source_type: 'activity',
+        entry_type:
+          row.type === 'note'
+            ? 'note'
+            : row.type === 'reminder' || (row.due_date && Number(row.done || 0) === 0)
+            ? 'reminder'
+            : 'activity',
+        type: row.type,
+        title: row.subject || (row.type === 'note' ? 'Nota' : 'Actividad'),
+        content: row.notes || '',
+        due_at: row.due_date || null,
+        done: Number(row.done || 0) === 1,
+        created_at: row.created_at,
+        created_by: row.created_by,
+        created_by_name: row.created_by_name,
+        created_by_email: row.created_by_email,
+      })),
+      ...tasks.map((row) => ({
+        id: `task-${row.id}`,
+        source_id: row.id,
+        source_type: 'followup_task',
+        entry_type: 'task',
+        type: 'task',
+        title: row.title,
+        content: '',
+        due_at: row.due_at || null,
+        done: String(row.status || '').toLowerCase() === 'done',
+        status: row.status || 'pending',
+        priority: row.priority || 'medium',
+        created_at: row.created_at,
+        created_by: row.user_id,
+        created_by_name: row.user_name,
+        completed_at: row.completed_at || null,
+      })),
+    ]
+      .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+
+    res.json({
+      deal: {
+        id: deal.id,
+        reference: deal.reference,
+        org_id: deal.org_id,
+        contact_id: deal.contact_id,
+      },
+      items: feed,
+    });
+  } catch (e) {
+    console.error('[operations:followup-feed]', e?.message || e);
+    res.status(500).json({ error: 'No se pudo cargar el seguimiento de la operacion' });
+  }
+});
+
+router.post('/:id/followup-feed', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const entryType = String(req.body?.entry_type || 'note').trim().toLowerCase();
+    const title = String(req.body?.title || '').trim();
+    const content = String(req.body?.content || '').trim();
+    const dueAt = String(req.body?.due_at || '').trim();
+    const priority = String(req.body?.priority || 'medium').trim().toLowerCase();
+    const userId = Number(req.user?.id) || null;
+
+    const [[deal]] = await db.query(
+      `
+      SELECT d.id, d.reference, d.org_id, d.contact_id
+      FROM deals d
+      WHERE d.id = ?
+      LIMIT 1
+      `,
+      [id]
+    );
+
+    if (!deal) {
+      return res.status(404).json({ error: 'Operacion no encontrada' });
+    }
+
+    if (entryType === 'task') {
+      if (!title) return res.status(400).json({ error: 'title es requerido' });
+      if (!dueAt) return res.status(400).json({ error: 'due_at es requerido' });
+
+      const dueSql = dueAt.length === 16 ? `${dueAt}:00` : dueAt;
+      const [ins] = await db.query(
+        `
+        INSERT INTO followup_tasks
+          (user_id, org_id, contact_id, deal_id, title, priority, status, due_at)
+        VALUES (?,?,?,?,?,?, 'pending', ?)
+        `,
+        [
+          userId,
+          deal.org_id || null,
+          deal.contact_id || null,
+          deal.id,
+          title,
+          ['low', 'medium', 'high'].includes(priority) ? priority : 'medium',
+          dueSql,
+        ]
+      );
+
+      return res.status(201).json({ ok: true, source_type: 'followup_task', id: ins.insertId });
+    }
+
+    const activityType =
+      entryType === 'note' ? 'note' : entryType === 'reminder' ? 'reminder' : 'activity';
+    const subject =
+      title ||
+      (entryType === 'note'
+        ? `Nota en ${deal.reference || 'operacion'}`
+        : entryType === 'reminder'
+        ? `Recordatorio en ${deal.reference || 'operacion'}`
+        : `Actividad en ${deal.reference || 'operacion'}`);
+
+    if (!content && entryType === 'note') {
+      return res.status(400).json({ error: 'content es requerido' });
+    }
+    if (entryType === 'reminder' && !dueAt) {
+      return res.status(400).json({ error: 'due_at es requerido' });
+    }
+
+    const dueSql = dueAt ? (dueAt.length === 16 ? `${dueAt}:00` : dueAt) : null;
+
+    const [ins] = await db.query(
+      `
+      INSERT INTO activities
+        (type, subject, due_date, done, org_id, person_id, deal_id, notes, created_by)
+      VALUES (?,?,?,?,?,?,?,?,?)
+      `,
+      [
+        activityType,
+        subject,
+        dueSql,
+        0,
+        deal.org_id || null,
+        deal.contact_id || null,
+        deal.id,
+        content || null,
+        userId,
+      ]
+    );
+
+    return res.status(201).json({ ok: true, source_type: 'activity', id: ins.insertId });
+  } catch (e) {
+    console.error('[operations:create-followup-feed]', e?.message || e);
+    res.status(500).json({ error: 'No se pudo registrar el elemento de seguimiento' });
+  }
+});
+
+router.patch('/:id/followup-feed/:sourceType/:itemId/done', requireAuth, async (req, res) => {
+  try {
+    const { id, sourceType, itemId } = req.params;
+    const normalizedType = String(sourceType || '').trim().toLowerCase();
+    const numericDealId = Number(id);
+    const numericItemId = Number(itemId);
+
+    if (!numericDealId || !numericItemId) {
+      return res.status(400).json({ error: 'Parametros invalidos' });
+    }
+
+    if (normalizedType === 'task') {
+      const [[task]] = await db.query(
+        `
+        SELECT id, deal_id, status
+        FROM followup_tasks
+        WHERE id = ? AND deal_id = ?
+        LIMIT 1
+        `,
+        [numericItemId, numericDealId]
+      );
+
+      if (!task) {
+        return res.status(404).json({ error: 'Tarea no encontrada' });
+      }
+
+      await db.query(
+        `
+        UPDATE followup_tasks
+        SET status = 'done', completed_at = NOW()
+        WHERE id = ? AND deal_id = ?
+        `,
+        [numericItemId, numericDealId]
+      );
+
+      return res.json({ ok: true, source_type: 'task', id: numericItemId, status: 'done' });
+    }
+
+    if (normalizedType === 'activity' || normalizedType === 'reminder') {
+      const [[activity]] = await db.query(
+        `
+        SELECT id, deal_id, done, type
+        FROM activities
+        WHERE id = ? AND deal_id = ?
+        LIMIT 1
+        `,
+        [numericItemId, numericDealId]
+      );
+
+      if (!activity) {
+        return res.status(404).json({ error: 'Actividad no encontrada' });
+      }
+
+      await db.query(
+        `
+        UPDATE activities
+        SET done = 1
+        WHERE id = ? AND deal_id = ?
+        `,
+        [numericItemId, numericDealId]
+      );
+
+      return res.json({
+        ok: true,
+        source_type: 'activity',
+        id: numericItemId,
+        status: 'done',
+        type: activity.type,
+      });
+    }
+
+    return res.status(400).json({ error: 'Tipo de origen no soportado' });
+  } catch (e) {
+    console.error('[operations:followup-feed:done]', e?.message || e);
+    res.status(500).json({ error: 'No se pudo marcar como hecho' });
+  }
+});
+
 /* ===================== DETALLE ===================== */
 router.get('/:id', requireAuth, async (req, res) => {
   try {

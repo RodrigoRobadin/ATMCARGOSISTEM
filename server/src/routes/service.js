@@ -240,6 +240,7 @@ async function ensureServiceTables() {
       client_name VARCHAR(255),
       status VARCHAR(50) DEFAULT 'draft',
       inputs_json JSON,
+      document_snapshot_json JSON,
       computed_json JSON,
       created_by VARCHAR(100),
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -255,11 +256,18 @@ async function ensureServiceTables() {
       quote_id INT NOT NULL,
       name VARCHAR(100) NOT NULL,
       inputs_json JSON,
+      document_snapshot_json JSON,
       computed_json JSON,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_quote (quote_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+  try {
+    await pool.query('ALTER TABLE service_quotes ADD COLUMN document_snapshot_json JSON NULL AFTER inputs_json');
+  } catch (_) {}
+  try {
+    await pool.query('ALTER TABLE service_quote_revisions ADD COLUMN document_snapshot_json JSON NULL AFTER inputs_json');
+  } catch (_) {}
 
 
   await pool.query(`
@@ -520,6 +528,15 @@ function asJson(v) {
     }
   }
   return null;
+}
+
+function normalizeDocumentSnapshot(value) {
+  const parsed = asJson(value);
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+}
+
+function hasOwn(obj, key) {
+  return !!obj && Object.prototype.hasOwnProperty.call(obj, key);
 }
 
 function normalizeCurrency(code) {
@@ -783,6 +800,7 @@ async function getServiceQuoteById(quoteId) {
     id: row.id,
     service_case_id: row.service_case_id,
     inputs: asJson(row.inputs_json) || {},
+    document_snapshot: normalizeDocumentSnapshot(row.document_snapshot_json),
     computed: asJson(row.computed_json) || null,
     meta: {
       ref_code: row.ref_code,
@@ -804,6 +822,7 @@ async function getServiceRevisionById(quoteId, revisionId) {
     id: rev.id,
     name: rev.name,
     inputs: asJson(rev.inputs_json) || {},
+    document_snapshot: normalizeDocumentSnapshot(rev.document_snapshot_json),
     computed: asJson(rev.computed_json) || null,
     created_at: rev.created_at,
   };
@@ -1826,11 +1845,13 @@ router.get('/cases/:caseId/quote', requireAuth, requireAnyRole('admin', 'service
       let rev = null;
       if (revisionId) rev = await getServiceRevisionById(row.id, revisionId);
       const inputs = rev?.inputs || asJson(row.inputs_json) || {};
+      const document_snapshot = rev?.document_snapshot || normalizeDocumentSnapshot(row.document_snapshot_json);
       const computed = rev?.computed || asJson(row.computed_json) || null;
       return res.json({
         id: row.id,
         service_case_id: row.service_case_id,
         inputs,
+        document_snapshot,
         computed,
         meta: {
           revision_id: rev?.id || null,
@@ -1861,10 +1882,11 @@ router.get('/cases/:caseId/quote', requireAuth, requireAnyRole('admin', 'service
       client_name: caseRow.org_name || '',
       org_branch_id: caseRow.org_branch_id || null,
     };
+    const document_snapshot = null;
     const { computed } = safeCompute(inputs);
     const [result] = await pool.query(
-      `INSERT INTO service_quotes (service_case_id, ref_code, revision, client_name, status, created_by, inputs_json, computed_json)
-       VALUES (?,?,?,?,?,?,?,?)`,
+      `INSERT INTO service_quotes (service_case_id, ref_code, revision, client_name, status, created_by, inputs_json, document_snapshot_json, computed_json)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
       [
         caseId,
         inputs.ref_code || null,
@@ -1873,18 +1895,20 @@ router.get('/cases/:caseId/quote', requireAuth, requireAnyRole('admin', 'service
         'draft',
         null,
         JSON.stringify(inputs),
+        document_snapshot ? JSON.stringify(document_snapshot) : null,
         computed ? JSON.stringify(computed) : null,
       ]
     );
 
-    if (serviceCaseId) {
-      await syncServiceCaseBranch(serviceCaseId, inputs.org_branch_id);
+    if (caseId) {
+      await syncServiceCaseBranch(caseId, inputs.org_branch_id);
     }
 
     res.json({
       id: result.insertId,
       service_case_id: caseId,
       inputs,
+      document_snapshot,
       computed,
       meta: { ref_code: inputs.ref_code, client_name: inputs.client_name, status: 'draft' },
     });
@@ -1904,11 +1928,13 @@ router.get('/quotes/:id', requireAuth, requireAnyRole('admin', 'service'), async
     let rev = null;
     if (revisionId) rev = await getServiceRevisionById(row.id, revisionId);
     const inputs = rev?.inputs || asJson(row.inputs_json) || {};
+    const document_snapshot = rev?.document_snapshot || normalizeDocumentSnapshot(row.document_snapshot_json);
     const computed = rev?.computed || asJson(row.computed_json) || null;
     res.json({
       id: row.id,
       service_case_id: row.service_case_id,
       inputs,
+      document_snapshot,
       computed,
       meta: {
         revision_id: rev?.id || null,
@@ -2067,14 +2093,15 @@ router.post('/additional-quotes/:id/recalculate', requireAuth, requireAnyRole('a
 router.post('/quotes', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
   try {
     const inputs = normalizeInputs(req.body);
+    const document_snapshot = normalizeDocumentSnapshot(req.body?.document_snapshot);
     const { computed, compute_error } = safeCompute(inputs);
     if (compute_error && !computed) return res.status(400).json({ error: compute_error });
 
     const serviceCaseId = Number(inputs.service_case_id || 0) || null;
     if (serviceCaseId && !(await assertServiceCaseUnlocked(serviceCaseId, res))) return;
     const [result] = await pool.query(
-      `INSERT INTO service_quotes (service_case_id, ref_code, revision, client_name, status, created_by, inputs_json, computed_json)
-       VALUES (?,?,?,?,?,?,?,?)`,
+      `INSERT INTO service_quotes (service_case_id, ref_code, revision, client_name, status, created_by, inputs_json, document_snapshot_json, computed_json)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
       [
         serviceCaseId,
         inputs.ref_code || null,
@@ -2083,11 +2110,12 @@ router.post('/quotes', requireAuth, requireAnyRole('admin', 'service'), async (r
         inputs.status || 'draft',
         inputs.created_by || null,
         JSON.stringify(inputs),
+        document_snapshot ? JSON.stringify(document_snapshot) : null,
         computed ? JSON.stringify(computed) : null,
       ]
     );
 
-    res.status(201).json({ id: result.insertId, inputs, computed });
+    res.status(201).json({ id: result.insertId, inputs, document_snapshot, computed });
   } catch (e) {
     console.error('[service][quote][POST] error:', e);
     res.status(500).json({ error: e?.message || 'No se pudo crear la cotizacion' });
@@ -2098,15 +2126,23 @@ router.put('/quotes/:id', requireAuth, requireAnyRole('admin', 'service'), async
   try {
     const id = Number(req.params.id || 0);
     if (!id) return res.status(400).json({ error: 'id invalido' });
-    const inputs = normalizeInputs(req.body);
-    const [[existing]] = await pool.query('SELECT service_case_id FROM service_quotes WHERE id = ? LIMIT 1', [id]);
-    const serviceCaseId = Number(inputs.service_case_id || existing?.service_case_id || 0) || null;
+    const [[row]] = await pool.query('SELECT * FROM service_quotes WHERE id = ? LIMIT 1', [id]);
+    if (!row) return res.status(404).json({ error: 'No encontrada' });
+    const hasInputsPayload = hasOwn(req.body, 'inputs');
+    const hasDocumentSnapshotPayload = hasOwn(req.body, 'document_snapshot');
+    const inputs = hasInputsPayload ? normalizeInputs(req.body) : (asJson(row.inputs_json) || {});
+    const document_snapshot = hasDocumentSnapshotPayload
+      ? normalizeDocumentSnapshot(req.body?.document_snapshot)
+      : normalizeDocumentSnapshot(row.document_snapshot_json);
+    const serviceCaseId = Number(inputs.service_case_id || row.service_case_id || 0) || null;
     if (serviceCaseId && !(await assertServiceCaseUnlocked(serviceCaseId, res))) return;
-    const { computed, compute_error } = safeCompute(inputs);
+    const { computed, compute_error } = hasInputsPayload
+      ? safeCompute(inputs)
+      : { computed: asJson(row.computed_json) || null, compute_error: null };
 
     await pool.query(
       `UPDATE service_quotes
-          SET ref_code=?, revision=?, client_name=?, status=?, created_by=?, inputs_json=?, computed_json=?
+          SET ref_code=?, revision=?, client_name=?, status=?, created_by=?, inputs_json=?, document_snapshot_json=?, computed_json=?
         WHERE id=?`,
       [
         inputs.ref_code || null,
@@ -2115,6 +2151,7 @@ router.put('/quotes/:id', requireAuth, requireAnyRole('admin', 'service'), async
         inputs.status || 'draft',
         inputs.created_by || null,
         JSON.stringify(inputs),
+        document_snapshot ? JSON.stringify(document_snapshot) : null,
         computed ? JSON.stringify(computed) : null,
         id,
       ]
@@ -2124,7 +2161,7 @@ router.put('/quotes/:id', requireAuth, requireAnyRole('admin', 'service'), async
       await syncServiceCaseBranch(serviceCaseId, inputs.org_branch_id);
     }
 
-    res.json({ id, inputs, computed, compute_error: compute_error || null });
+    res.json({ id, inputs, document_snapshot, computed, compute_error: compute_error || null });
   } catch (e) {
     res.status(500).json({ error: e?.message || 'No se pudo actualizar la cotizacion' });
   }
@@ -2185,21 +2222,37 @@ router.get('/quotes/:id/revisions', requireAuth, requireAnyRole('admin', 'servic
   }
 });
 
+function formatServiceQuoteRevisionName(seq, createdAt = new Date()) {
+  const n = String(Number(seq || 0)).padStart(2, '0');
+  const dt = createdAt instanceof Date ? createdAt : new Date(createdAt);
+  const dd = String(dt.getDate()).padStart(2, '0');
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const yyyy = dt.getFullYear();
+  const hh = String(dt.getHours()).padStart(2, '0');
+  const mi = String(dt.getMinutes()).padStart(2, '0');
+  return `REV ${n} - ${dd}/${mm}/${yyyy} ${hh}:${mi}`;
+}
+
 router.post('/quotes/:id/revisions', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
   try {
     const id = Number(req.params.id || 0);
-    const name = String(req.body?.name || '').trim();
     if (!id) return res.status(400).json({ error: 'id invalido' });
-    if (!name) return res.status(400).json({ error: 'name requerido' });
     const [[row]] = await pool.query('SELECT * FROM service_quotes WHERE id = ?', [id]);
     if (!row) return res.status(404).json({ error: 'No encontrada' });
     if (!(await assertServiceCaseUnlocked(row.service_case_id, res))) return;
+    const [[meta]] = await pool.query(
+      'SELECT COUNT(*) AS total FROM service_quote_revisions WHERE quote_id = ?',
+      [id]
+    );
+    const nextSeq = Number(meta?.total || 0) + 1;
+    const name = String(req.body?.name || '').trim() || formatServiceQuoteRevisionName(nextSeq);
     const inputs = asJson(row.inputs_json) || {};
+    const document_snapshot = normalizeDocumentSnapshot(row.document_snapshot_json);
     const computed = asJson(row.computed_json) || null;
     const [result] = await pool.query(
-      `INSERT INTO service_quote_revisions (quote_id, name, inputs_json, computed_json)
-       VALUES (?,?,?,?)`,
-      [id, name, JSON.stringify(inputs), computed ? JSON.stringify(computed) : null]
+      `INSERT INTO service_quote_revisions (quote_id, name, inputs_json, document_snapshot_json, computed_json)
+       VALUES (?,?,?,?,?)`,
+      [id, name, JSON.stringify(inputs), document_snapshot ? JSON.stringify(document_snapshot) : null, computed ? JSON.stringify(computed) : null]
     );
     const rows = await listServiceRevisions(id);
     res.status(201).json({ id: result.insertId, name, revisions: rows });
@@ -2225,25 +2278,33 @@ router.put('/quotes/:id/revisions/:revisionId', requireAuth, requireAnyRole('adm
     );
     if (!rev) return res.status(404).json({ error: 'Revision no encontrada' });
 
-    const inputs = normalizeInputs(req.body);
-    const { computed, compute_error } = safeCompute(inputs);
-    if (compute_error && !computed) return res.status(400).json({ error: compute_error });
-    const name = String(req.body?.name || rev.name || '').trim() || `Rev ${revisionId}`;
+    const hasInputsPayload = hasOwn(req.body, 'inputs');
+    const hasDocumentSnapshotPayload = hasOwn(req.body, 'document_snapshot');
+    const inputs = hasInputsPayload ? normalizeInputs(req.body) : (asJson(rev.inputs_json) || {});
+    const document_snapshot = hasDocumentSnapshotPayload
+      ? normalizeDocumentSnapshot(req.body?.document_snapshot)
+      : normalizeDocumentSnapshot(rev.document_snapshot_json);
+    const { computed, compute_error } = hasInputsPayload
+      ? safeCompute(inputs)
+      : { computed: asJson(rev.computed_json) || null, compute_error: null };
+    if (hasInputsPayload && compute_error && !computed) return res.status(400).json({ error: compute_error });
+    const name = String(req.body?.name || rev.name || '').trim() || formatServiceQuoteRevisionName(revisionId, rev.created_at);
 
     await pool.query(
       `UPDATE service_quote_revisions
-          SET name = ?, inputs_json = ?, computed_json = ?
+          SET name = ?, inputs_json = ?, document_snapshot_json = ?, computed_json = ?
         WHERE id = ? AND quote_id = ?`,
       [
         name,
         JSON.stringify(inputs),
+        document_snapshot ? JSON.stringify(document_snapshot) : null,
         computed ? JSON.stringify(computed) : null,
         revisionId,
         id,
       ]
     );
 
-    res.json({ id, revision_id: revisionId, inputs, computed, compute_error: compute_error || null, name });
+    res.json({ id, revision_id: revisionId, inputs, document_snapshot, computed, compute_error: compute_error || null, name });
   } catch (e) {
     res.status(500).json({ error: e?.message || 'No se pudo actualizar la revision' });
   }
@@ -2257,13 +2318,14 @@ router.post('/quotes/:id/duplicate', requireAuth, requireAnyRole('admin', 'servi
     if (!row) return res.status(404).json({ error: 'No encontrada' });
 
     const origInputs = asJson(row.inputs_json) || {};
+    const origDocumentSnapshot = normalizeDocumentSnapshot(row.document_snapshot_json);
     const origComputed = asJson(row.computed_json) || null;
     const inputs = { ...origInputs };
     delete inputs.service_case_id;
 
     const [result] = await pool.query(
-      `INSERT INTO service_quotes (service_case_id, ref_code, revision, client_name, status, created_by, inputs_json, computed_json)
-       VALUES (?,?,?,?,?,?,?,?)`,
+      `INSERT INTO service_quotes (service_case_id, ref_code, revision, client_name, status, created_by, inputs_json, document_snapshot_json, computed_json)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
       [
         null,
         `${row.ref_code || 'REF'}-COPY`,
@@ -2272,10 +2334,11 @@ router.post('/quotes/:id/duplicate', requireAuth, requireAnyRole('admin', 'servi
         'draft',
         row.created_by,
         JSON.stringify(inputs),
+        origDocumentSnapshot ? JSON.stringify(origDocumentSnapshot) : null,
         origComputed ? JSON.stringify(origComputed) : null,
       ]
     );
-    res.status(201).json({ id: result.insertId, inputs, computed: origComputed });
+    res.status(201).json({ id: result.insertId, inputs, document_snapshot: origDocumentSnapshot, computed: origComputed });
   } catch (e) {
     res.status(500).json({ error: e?.message || 'No se pudo duplicar la cotizacion' });
   }

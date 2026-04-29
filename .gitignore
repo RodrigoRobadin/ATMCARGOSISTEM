@@ -3,6 +3,8 @@
 .env.*
 **/.env
 **/.env.*
+.assistant.local.json
+**/.assistant.local.json
 
 # node / build
 node_modules/

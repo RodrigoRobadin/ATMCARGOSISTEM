@@ -122,7 +122,7 @@ export default function Invoices() {
       loadInvoices();
     } catch (e) {
       console.error('Error issuing invoice:', e);
-      alert(e.response?.data?.error || 'Error al emitir factura');
+      alert(formatApiError(e, 'Error al emitir factura'));
     }
   }
 

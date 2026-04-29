@@ -84,7 +84,11 @@ function OperationDocViewer({ doc }) {
           {doc.number ? ` — ${doc.number}` : ""}
         </div>
         {pdfUrl && (
-          <button className="text-sm underline" onClick={() => window.open(pdfUrl, "_blank")}>
+          <button
+            type="button"
+            className="text-sm underline"
+            onClick={() => window.open(pdfUrl, "_blank")}
+          >
             Abrir en pestaña nueva
           </button>
         )}

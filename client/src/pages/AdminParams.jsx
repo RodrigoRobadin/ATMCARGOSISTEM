@@ -62,23 +62,32 @@ const PARAM_GROUPS = [
     ],
   },
   {
-    title: "Facturación",
+    title: "Facturaci?n",
     description:
-      "Timbrado, vigencia y numeración de facturas (por unidad de negocio).",
+      "Timbrado, vigencia y numeraci?n de facturas por unidad de negocio. Las claves legacy viejas quedan ocultas y solo se usan como compatibilidad interna.",
     keys: [
-      "invoice_timbre_number",
-      "invoice_timbre_valid_from",
-      "invoice_timbre_valid_to",
+      "invoice_timbre_number_cargo",
+      "invoice_timbre_valid_from_cargo",
+      "invoice_timbre_valid_to_cargo",
       "invoice_exp_industrial",
       "invoice_exp_cargo",
-      "invoice_next_number",
+      "invoice_next_number_cargo",
+      "invoice_timbre_number_industrial",
+      "invoice_timbre_valid_from_industrial",
+      "invoice_timbre_valid_to_industrial",
+      "invoice_next_number_industrial",
     ],
   },
   {
-    title: "Notas de crédito",
+    title: "Notas de cr?dito",
     description:
-      "Punto de expedición único y correlativo independiente para NC.",
-    keys: ["credit_exp", "credit_next_number"],
+      "Serie fiscal de notas de cr?dito por unidad de negocio. El correlativo administrativo solo se usa como semilla si la serie todav?a no tiene emitidos. Las claves legacy viejas quedan ocultas en la UI.",
+    keys: [
+      "credit_exp_cargo",
+      "credit_next_number_cargo",
+      "credit_exp_industrial",
+      "credit_next_number_industrial",
+    ],
   },
 ];
 
@@ -88,11 +97,50 @@ function buildKeysParam() {
   return all.join(",");
 }
 
+function slugify(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+}
+
 export default function AdminParams() {
   const [loading, setLoading] = useState(true);
   const [map, setMap] = useState({}); // { key: [{id,value,ord,active}, ...] }
+  const [invoiceNumbering, setInvoiceNumbering] = useState(null);
+  const [creditNumbering, setCreditNumbering] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [search, setSearch] = useState("");
+  const [openSections, setOpenSections] = useState(() => new Set([slugify(PARAM_GROUPS[0]?.title), slugify("Facturaci?n")]));
   const keysParam = useMemo(buildKeysParam, []);
+  const groupedSections = useMemo(
+    () =>
+      PARAM_GROUPS.map((group) => ({
+        ...group,
+        sectionId: slugify(group.title),
+      })),
+    []
+  );
+
+  async function loadInvoiceNumberingStatus() {
+    try {
+      const { data } = await api.get("/invoices/numbering-status");
+      setInvoiceNumbering(data || null);
+    } catch {
+      setInvoiceNumbering(null);
+    }
+  }
+
+  async function loadCreditNumberingStatus() {
+    try {
+      const { data } = await api.get("/invoices/credit-numbering-status");
+      setCreditNumbering(data || null);
+    } catch {
+      setCreditNumbering(null);
+    }
+  }
 
   // Carga inicial
   useEffect(() => {
@@ -118,6 +166,11 @@ export default function AdminParams() {
       }
     })();
   }, [keysParam]);
+
+  useEffect(() => {
+    loadInvoiceNumberingStatus();
+    loadCreditNumberingStatus();
+  }, []);
 
   async function createParam(key, payload) {
     const body = {
@@ -163,6 +216,8 @@ export default function AdminParams() {
         next.sort((a, b) => (a.ord || 0) - (b.ord || 0));
         return next;
       });
+      if (key.startsWith("invoice_")) await loadInvoiceNumberingStatus();
+      if (key.startsWith("credit_")) await loadCreditNumberingStatus();
     } finally {
       setSaving(false);
     }
@@ -173,6 +228,8 @@ export default function AdminParams() {
     setSaving(true);
     try {
       await updateParam(row);
+      if (key.startsWith("invoice_")) await loadInvoiceNumberingStatus();
+      if (key.startsWith("credit_")) await loadCreditNumberingStatus();
     } finally {
       setSaving(false);
     }
@@ -186,54 +243,169 @@ export default function AdminParams() {
     try {
       await deleteParam(row.id);
       setKeyList(key, (list) => list.filter((_, i) => i !== idx));
+      if (key.startsWith("invoice_")) await loadInvoiceNumberingStatus();
+      if (key.startsWith("credit_")) await loadCreditNumberingStatus();
     } finally {
       setSaving(false);
     }
   }
 
-  if (loading) return <div className="text-sm text-slate-600">Cargando…</div>;
+  const searchTerm = search.trim().toLowerCase();
+  const visibleSections = groupedSections
+    .map((group) => ({
+      ...group,
+      visibleKeys: group.keys.filter((key) => {
+        if (!searchTerm) return true;
+        return [group.title, group.description, prettyLabel(key), key]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(searchTerm));
+      }),
+    }))
+    .filter((group) => group.visibleKeys.length > 0)
+    .map((group) => ({
+      ...group,
+      isOpen: searchTerm ? true : openSections.has(group.sectionId),
+    }));
+
+  function toggleSection(sectionId) {
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(sectionId)) next.delete(sectionId);
+      else next.add(sectionId);
+      return next;
+    });
+  }
+
+  if (loading) return <div className="text-sm text-slate-600">Cargando?</div>;
 
   return (
     <div className="space-y-4">
-      <div className="bg-white rounded-2xl shadow p-4">
-        <h1 className="text-xl font-semibold">Administración de Parámetros</h1>
-        <p className="text-sm text-slate-600">
-          Agregá, ordená y activá/desactivá valores. Los cambios impactan en los
-          selectores del sistema (organizaciones, operación y presupuesto).
-        </p>
+      <div className="rounded-2xl bg-white p-5 shadow">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div className="space-y-2">
+            <div className="inline-flex w-fit rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
+              Parametros del sistema
+            </div>
+            <div>
+              <h1 className="text-2xl font-semibold text-slate-900">Administraci?n de Par?metros</h1>
+              <p className="max-w-3xl text-sm text-slate-600">
+                Agrupa la configuraci?n por bloque funcional para que puedas ubicar y editar m?s r?pido cada secci?n del sistema.
+              </p>
+            </div>
+          </div>
+
+          <div className="w-full xl:max-w-sm">
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Buscar par?metro o secci?n
+            </label>
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Ej.: timbrado, logo, incoterm"
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+            />
+          </div>
+        </div>
       </div>
 
-      {PARAM_GROUPS.map((group) => (
-        <section key={group.title} className="bg-white rounded-2xl shadow p-4">
-          <div className="mb-3">
-            <h2 className="text-lg font-semibold">{group.title}</h2>
-            {group.description && (
-              <p className="text-sm text-slate-600">{group.description}</p>
-            )}
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {group.keys.map((key) => (
-              <ParamCard
-                key={key}
-                label={key}
-                keyName={key}
-                rows={map[key] || []}
-                onReplaceRows={(nextRows) => setKeyList(key, () => nextRows)}
-                onChangeRow={(idx, patch) =>
-                  setKeyList(key, (list) =>
-                    list.map((r, i) => (i === idx ? { ...r, ...patch } : r))
-                  )
-                }
-                onClickSave={(idx) => saveRow(key, idx)}
-                onClickRemove={(idx) => removeRow(key, idx)}
-                onAdd={(val) => addRow(key, val)}
-                saving={saving}
-              />
+      <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
+        <aside className="rounded-2xl bg-white p-4 shadow xl:sticky xl:top-4 xl:h-fit">
+          <div className="mb-3 text-sm font-semibold text-slate-900">Bloques</div>
+          <div className="space-y-2">
+            {visibleSections.map((group) => (
+              <button
+                key={group.sectionId}
+                type="button"
+                onClick={() => {
+                  document.getElementById(group.sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  if (!group.isOpen) toggleSection(group.sectionId);
+                }}
+                className="flex w-full items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-left text-sm text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+              >
+                <span>{group.title}</span>
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
+                  {group.visibleKeys.length}
+                </span>
+              </button>
             ))}
           </div>
-        </section>
-      ))}
+        </aside>
+
+        <div className="space-y-4">
+          {!visibleSections.length && (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-500 shadow">
+              No hay coincidencias para la b?squeda actual.
+            </div>
+          )}
+
+          {visibleSections.map((group) => (
+            <section
+              key={group.sectionId}
+              id={group.sectionId}
+              className="rounded-2xl bg-white shadow"
+            >
+              <button
+                type="button"
+                onClick={() => toggleSection(group.sectionId)}
+                className="flex w-full flex-col gap-3 rounded-2xl p-4 text-left lg:flex-row lg:items-start lg:justify-between"
+              >
+                <div>
+                  <div className="flex items-center gap-3">
+                    <h2 className="text-lg font-semibold text-slate-900">{group.title}</h2>
+                    <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      {group.visibleKeys.length} campo{group.visibleKeys.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  {group.description && (
+                    <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                      {group.description}
+                    </p>
+                  )}
+                </div>
+                <span className="text-sm font-semibold text-slate-500">
+                  {group.isOpen ? "Ocultar" : "Mostrar"}
+                </span>
+              </button>
+
+              {group.isOpen && (
+                <div className="border-t border-slate-100 p-4 pt-4">
+                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    {group.title === "Facturaci?n" && (
+                      <div className="lg:col-span-2">
+                        <InvoiceNumberingStatusPanel status={invoiceNumbering} />
+                  </div>
+                )}
+                {group.title === "Notas de cr?dito" && (
+                  <div className="lg:col-span-2">
+                    <CreditNoteNumberingStatusPanel status={creditNumbering} />
+                      </div>
+                    )}
+                    {group.visibleKeys.map((key) => (
+                      <ParamCard
+                        key={key}
+                        label={key}
+                        keyName={key}
+                        rows={map[key] || []}
+                        onReplaceRows={(nextRows) => setKeyList(key, () => nextRows)}
+                        onChangeRow={(idx, patch) =>
+                          setKeyList(key, (list) =>
+                            list.map((r, i) => (i === idx ? { ...r, ...patch } : r))
+                          )
+                        }
+                        onClickSave={(idx) => saveRow(key, idx)}
+                        onClickRemove={(idx) => removeRow(key, idx)}
+                        onAdd={(val) => addRow(key, val)}
+                        saving={saving}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -268,8 +440,10 @@ function ParamCard({
   const isTemplate = keyName === "quote_template";
   const isLogo = keyName === "quote_brand_logo_url";
   const isDate =
-    keyName === "invoice_timbre_valid_from" ||
-    keyName === "invoice_timbre_valid_to";
+    keyName === "invoice_timbre_valid_from_cargo" ||
+    keyName === "invoice_timbre_valid_to_cargo" ||
+    keyName === "invoice_timbre_valid_from_industrial" ||
+    keyName === "invoice_timbre_valid_to_industrial";
   const logoPreviewSrc =
     isLogo && rows[0]?.value
       ? String(rows[0].value).startsWith("/uploads/")
@@ -593,6 +767,22 @@ function prettyLabel(key) {
     quote_brand_footer_address: "Direccion pie de pagina",
     quote_brand_footer_phone: "Telefono pie de pagina",
 
+    // Facturacion
+    invoice_timbre_number_cargo: "Timbrado ATM CARGO",
+    invoice_timbre_valid_from_cargo: "Vigencia desde ATM CARGO",
+    invoice_timbre_valid_to_cargo: "Vigencia hasta ATM CARGO",
+    invoice_exp_cargo: "Punto de expedicion ATM CARGO",
+    invoice_next_number_cargo: "Correlativo administrativo ATM CARGO",
+    invoice_timbre_number_industrial: "Timbrado ATM INDUSTRIAL",
+    invoice_timbre_valid_from_industrial: "Vigencia desde ATM INDUSTRIAL",
+    invoice_timbre_valid_to_industrial: "Vigencia hasta ATM INDUSTRIAL",
+    invoice_exp_industrial: "Punto de expedicion ATM INDUSTRIAL",
+    invoice_next_number_industrial: "Correlativo administrativo ATM INDUSTRIAL",
+    credit_exp_cargo: "Punto de expedici?n NC ATM CARGO",
+    credit_next_number_cargo: "Correlativo administrativo NC ATM CARGO",
+    credit_exp_industrial: "Punto de expedici?n NC ATM INDUSTRIAL",
+    credit_next_number_industrial: "Correlativo administrativo NC ATM INDUSTRIAL",
+
     // Kanban
     kanban_pipeline: "Pipeline (por nombre)",
     kanban_pipeline_id: "Pipeline (por ID) opcional",
@@ -602,4 +792,110 @@ function prettyLabel(key) {
     kanban_hide_stages: "Ocultar columnas",
   };
   return map[key] || key;
+}
+
+function InvoiceNumberingStatusPanel({ status }) {
+  const sections = [
+    { key: "cargo", label: "ATM CARGO" },
+    { key: "industrial", label: "ATM INDUSTRIAL" },
+  ];
+
+  return (
+    <div className="rounded-xl border bg-slate-50 p-3">
+      <div className="mb-3">
+        <div className="font-medium">Estado actual de numeración</div>
+        <div className="text-sm text-slate-600">
+          Muestra la serie fiscal activa, el siguiente número real según facturas emitidas y el correlativo administrativo configurado en parámetros.
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+        {sections.map((section) => {
+          const row = status?.[section.key];
+          return (
+            <div key={section.key} className="rounded-xl border bg-white p-3">
+              <div className="mb-2 font-semibold">{section.label}</div>
+              {!row ? (
+                <div className="text-sm text-slate-500">Sin datos disponibles.</div>
+              ) : (
+                <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-2">
+                  <StatusItem label="Punto de expedición" value={row.point_of_issue} />
+                  <StatusItem label="Establecimiento" value={row.establishment} />
+                  <StatusItem label="Código expedición" value={row.expedition_code} />
+                  <StatusItem label="Próximo correlativo real" value={row.next_number_padded} />
+                  <StatusItem label="Próximo número real" value={row.next_invoice_number} wide />
+                  <StatusItem label="Correlativo administrativo" value={row.configured_next_number_padded} />
+                  <StatusItem label="Número administrativo" value={row.configured_invoice_number} wide />
+                  <StatusItem
+                    label="Origen del siguiente número"
+                    value={row.sequence_source === "param_seed" ? "Parámetros (serie sin emitidos)" : "Base de datos"}
+                  />
+                  <StatusItem label="Timbrado" value={row.timbrado_number} />
+                  <StatusItem label="Vigencia desde" value={row.timbrado_start_date} />
+                  <StatusItem label="Vigencia hasta" value={row.timbrado_expires_at} />
+                  <StatusItem label="Última factura emitida" value={row.last_issued_invoice_number} wide />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CreditNoteNumberingStatusPanel({ status }) {
+  const sections = [
+    { key: "cargo", label: "ATM CARGO" },
+    { key: "industrial", label: "ATM INDUSTRIAL" },
+  ];
+
+  return (
+    <div className="rounded-xl border bg-slate-50 p-3">
+      <div className="mb-3">
+        <div className="font-medium">Estado actual de numeraci?n de notas de cr?dito</div>
+        <div className="text-sm text-slate-600">
+          Muestra la serie activa de NC, el siguiente n?mero real seg?n notas emitidas y el correlativo administrativo configurado en par?metros.
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+        {sections.map((section) => {
+          const row = status?.[section.key];
+          return (
+            <div key={section.key} className="rounded-xl border bg-white p-3">
+              <div className="mb-2 font-semibold">{section.label}</div>
+              {!row ? (
+                <div className="text-sm text-slate-500">Sin datos disponibles.</div>
+              ) : (
+                <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-2">
+                  <StatusItem label="Punto de expedici?n" value={row.point_of_issue} />
+                  <StatusItem label="Establecimiento" value={row.establishment} />
+                  <StatusItem label="C?digo expedici?n" value={row.expedition_code} />
+                  <StatusItem label="Pr?ximo correlativo real" value={row.next_number_padded} />
+                  <StatusItem label="Pr?ximo n?mero real" value={row.next_credit_note_number} wide />
+                  <StatusItem label="Correlativo administrativo" value={row.configured_next_number_padded} />
+                  <StatusItem label="N?mero administrativo" value={row.configured_credit_note_number} wide />
+                  <StatusItem
+                    label="Origen del siguiente n?mero"
+                    value={row.sequence_source === "param_seed" ? "Par?metros (serie sin emitidos)" : "Base de datos"}
+                  />
+                  <StatusItem label="?ltima NC emitida" value={row.last_issued_credit_note_number} wide />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function StatusItem({ label, value, wide = false }) {
+  return (
+    <div className={wide ? "md:col-span-2" : ""}>
+      <div className="text-xs uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="font-medium text-slate-800">{value || "—"}</div>
+    </div>
+  );
 }

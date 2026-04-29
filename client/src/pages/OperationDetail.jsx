@@ -7,6 +7,7 @@ import DetCosSheet from "./DetCosSheet";
 import ReportPreview from "../components/op-details/ReportPreview";
 import OperationExpenseInvoices from "../components/OperationExpenseInvoices.jsx";
 import AdminOpsPanel from "../components/op-details/AdminOpsPanel.jsx";
+import OrganizationLookupField from "../components/OrganizationLookupField.jsx";
 
 // 👇 Ajustá la ruta real según tu backend
 const PROVIDERS_ENDPOINT = "/organizations";
@@ -521,6 +522,10 @@ export default function OperationDetail() {
   const [editMode, setEditMode] = useState(false);
   const [dirtyCF, setDirtyCF] = useState(new Set());
   const [note, setNote] = useState("");
+  const [noteEntryType, setNoteEntryType] = useState("note");
+  const [noteTitle, setNoteTitle] = useState("");
+  const [noteDueAt, setNoteDueAt] = useState("");
+  const [notePriority, setNotePriority] = useState("medium");
 
   const [profitUSD, setProfitUSD] = useState(null);
 
@@ -532,6 +537,9 @@ export default function OperationDetail() {
   const [filesRefreshKey, setFilesRefreshKey] = useState(0);
   const [uploadingFiles, setUploadingFiles] = useState([]);
   const [expenseOpenKey, setExpenseOpenKey] = useState(0);
+  const [costSheetVersions, setCostSheetVersions] = useState([]);
+  const [currentCostSheetVersion, setCurrentCostSheetVersion] = useState(null);
+  const [selectedCostSheetVersionNumber, setSelectedCostSheetVersionNumber] = useState(null);
 
   // NUEVO: adjuntos por nota (ya guardados) y adjuntos de la nota en edición
   const [noteAttachmentsMap, setNoteAttachmentsMap] = useState({}); // { [activityId]: [fileId, ...] }
@@ -551,6 +559,7 @@ export default function OperationDetail() {
   const [ocean, setOcean] = useState({});
   const [road, setRoad] = useState({});
   const [multi, setMulti] = useState({});
+  const [selectedCustomsBroker, setSelectedCustomsBroker] = useState(null);
   const setAirF = (k, v) => setAir((s) => ({ ...s, [k]: v }));
   const setOceanF = (k, v) => setOcean((s) => ({ ...s, [k]: v }));
   const setRoadF = (k, v) => setRoad((s) => ({ ...s, [k]: v }));
@@ -709,15 +718,8 @@ useEffect(() => {
   async function loadNotes() {
     setNotesLoading(true);
     try {
-      const { data } = await api.get("/activities", {
-        params: {
-          deal_id: Number(id),
-          type: "note",
-          sort: "created_at",
-          order: "desc",
-        },
-      });
-      setNotesList(Array.isArray(data) ? data : []);
+      const { data } = await api.get(`/operations/${id}/followup-feed`);
+      setNotesList(Array.isArray(data?.items) ? data.items : []);
     } catch {
       setNotesList([]);
     } finally {
@@ -725,19 +727,50 @@ useEffect(() => {
     }
   }
 
+  async function markFollowupDone(entry) {
+    const sourceType =
+      entry?.entry_type === "task"
+        ? "task"
+        : entry?.entry_type === "reminder"
+        ? "reminder"
+        : "activity";
+    const itemId = entry?.source_id;
+    if (!itemId) return;
+
+    try {
+      await api.patch(`/operations/${id}/followup-feed/${sourceType}/${itemId}/done`);
+      await loadNotes();
+    } catch (err) {
+      console.error("No se pudo marcar seguimiento como hecho", err);
+      alert("No se pudo marcar como hecho.");
+    }
+  }
+
   async function reload() {
     setLoading(true);
     try {
-      const [{ data: detail }, cfRes, opRes] = await Promise.all([
+      const [{ data: detail }, cfRes, opRes, costVersionsRes, currentCostVersionRes] = await Promise.all([
         api.get(`/deals/${id}`),
         api.get(`/deals/${id}/custom-fields`).catch(() => ({ data: null })),
         api.get(`/operations/${id}`).catch(() => ({ data: null })),
+        api.get(`/deals/${id}/cost-sheet/versions`).catch(() => ({ data: [] })),
+        api.get(`/deals/${id}/cost-sheet/current-version`).catch(() => ({ data: null })),
       ]);
 
       const op = opRes?.data || {};
 
       setDeal(detail.deal);
       setDesc(detail.deal?.title || "");
+      setCostSheetVersions(Array.isArray(costVersionsRes?.data) ? costVersionsRes.data : []);
+      setCurrentCostSheetVersion(currentCostVersionRes?.data || null);
+      setSelectedCostSheetVersionNumber(currentCostVersionRes?.data?.version_number || null);
+
+      const orgRes = detail?.deal?.org_id
+        ? await api
+            .get(`/organizations/${detail.deal.org_id}`)
+            .catch(() => ({ data: null }))
+        : { data: null };
+      const clientOrg = orgRes?.data || null;
 
       let cfMapLocal = {};
       if (Array.isArray(cfRes?.data)) {
@@ -760,6 +793,31 @@ useEffect(() => {
         Object.prototype.hasOwnProperty.call(cfMapLocal, k)
           ? cfMapLocal[k].value
           : "";
+
+      const brokerFallbackId =
+        Number(
+          cfVal("customs_broker_org_id") ||
+            clientOrg?.default_customs_broker_org_id ||
+            0
+        ) || null;
+      const brokerFallbackName =
+        cfVal("ag_aduanera") ||
+        clientOrg?.default_customs_broker_name ||
+        clientOrg?.default_customs_broker_razon_social ||
+        "";
+      const brokerFallbackRuc =
+        clientOrg?.default_customs_broker_ruc || "";
+
+      setSelectedCustomsBroker(
+        brokerFallbackId || brokerFallbackName
+          ? {
+              id: brokerFallbackId,
+              name: brokerFallbackName,
+              ruc: brokerFallbackRuc,
+              tipo_org: "Despachante",
+            }
+          : null
+      );
 
       // Cargar rótulos desde CF JSON
       try {
@@ -834,7 +892,7 @@ useEffect(() => {
         shpr_cnee: op.air?.shpr_cnee ?? cfVal("shpr_cnee") ?? "",
         agent: op.air?.agent ?? cfVal("agente") ?? "",
         customs_broker:
-          op.air?.customs_broker ?? cfVal("ag_aduanera") ?? "",
+          op.air?.customs_broker ?? brokerFallbackName ?? "",
         provider: op.air?.provider ?? cfVal("proveedor") ?? "",
         origin_airport: op.air?.origin_airport ?? "",
         transshipment_airport:
@@ -1023,6 +1081,40 @@ useEffect(() => {
       s.add(key);
       return s;
     });
+  }
+
+  function applyCustomsBrokerSelection(row, { useDirty = true } = {}) {
+    const nextRow = row?.id
+      ? {
+          id: Number(row.id),
+          name: row.name || row.razon_social || "",
+          ruc: row.ruc || "",
+          tipo_org: row.tipo_org || "Despachante",
+        }
+      : null;
+
+    setSelectedCustomsBroker(nextRow);
+
+    const brokerId = nextRow?.id ? String(nextRow.id) : "";
+    const brokerName = nextRow?.name || "";
+
+    setCFLocal("customs_broker_org_id", {
+      label: "Despachante org id",
+      type: "number",
+      value: brokerId,
+    });
+    setCFLocal("ag_aduanera", {
+      label: "Ag Aduanera",
+      type: "text",
+      value: brokerName,
+    });
+
+    if (useDirty) {
+      markDirty("customs_broker_org_id");
+      markDirty("ag_aduanera");
+    }
+
+    setAir((prev) => ({ ...prev, customs_broker: brokerName }));
   }
 
   // Reemplazar COMPLETO por esta versión
@@ -1647,56 +1739,42 @@ useEffect(() => {
     }
   }
 
-    async function addNote() {
+  async function addNote() {
     const txt = (note || "").trim();
-    if (!txt) return;
+    const cleanTitle = (noteTitle || "").trim();
+    const dueAt = (noteDueAt || "").trim();
+    const entryType = noteEntryType;
+    const attachedIds = (notePendingFiles || []).map((f) => f.id).filter(Boolean);
 
-    const me = getCurrentUserFromStorage();
-    const tempId = `tmp-${Date.now()}`;
-    const nowIso = new Date().toISOString();
-
-    // ids de archivos que se adjuntaron a ESTA nota
-    const attachedIds = (notePendingFiles || [])
-      .map((f) => f.id)
-      .filter(Boolean);
-
-    // Nota optimista (sin adjuntos aún, solo texto)
-    setNotesList((prev) => [
-      {
-        id: tempId,
-        type: "note",
-        subject: `Nota en ${deal?.reference || "operación"}`,
-        notes: txt,
-        deal_id: Number(id),
-        created_at: nowIso,
-        created_by: me.id,
-        created_by_name: me.name,
-        created_by_email: me.email,
-      },
-      ...prev,
-    ]);
-
-    setNote(""); // vaciar textarea
+    if (entryType === "note" && !txt) {
+      alert("Escribe una nota.");
+      return;
+    }
+    if (entryType !== "note" && !cleanTitle && !txt) {
+      alert("Completa el titulo o el contenido.");
+      return;
+    }
+    if ((entryType === "reminder" || entryType === "task") && !dueAt) {
+      alert("Completa la fecha y hora.");
+      return;
+    }
 
     try {
-      const { data: created } = await api.post("/activities", {
-        type: "note",
-        subject: `Nota en ${deal?.reference || "operación"}`,
-        notes: txt,
-        deal_id: Number(id),
-        done: 1,
-        ...(me.id ? { created_by: me.id } : {}),
+      const { data: created } = await api.post(`/operations/${id}/followup-feed`, {
+        entry_type: entryType,
+        title: cleanTitle,
+        content: txt,
+        due_at: dueAt || null,
+        priority: notePriority,
       });
 
-      const activityId = created?.id;
-      if (activityId && attachedIds.length) {
-        // armamos nuevo mapa: activityId -> [fileIds]
+      const activityId = created?.source_type === "activity" ? created?.id : null;
+      if (entryType === "note" && activityId && attachedIds.length) {
         const nextMap = {
           ...(noteAttachmentsMap || {}),
           [activityId]: attachedIds,
         };
 
-        // lo guardamos en CF usando el helper upsertCF
         try {
           await upsertCF(
             "note_attachments_json",
@@ -1704,27 +1782,24 @@ useEffect(() => {
             "json",
             nextMap
           );
+          setNoteAttachmentsMap(nextMap);
         } catch (e) {
           console.warn(
             "[addNote] No se pudo guardar note_attachments_json",
             e?.response?.data || e.message
           );
         }
-
-        // actualizamos mapa en memoria
-        setNoteAttachmentsMap(nextMap);
       }
 
-      // limpiamos adjuntos pendientes (esta nota ya quedó grabada)
+      setNote("");
+      setNoteTitle("");
+      setNoteDueAt("");
+      setNotePriority("medium");
       setNotePendingFiles([]);
-
-      // recargamos notas desde el servidor (para tener ids reales, etc.)
       await loadNotes();
     } catch (err) {
-      console.error("No se pudo crear la nota", err);
-      // revertimos la nota temporal
-      setNotesList((prev) => prev.filter((x) => x.id !== tempId));
-      alert("No se pudo crear la nota.");
+      console.error("No se pudo crear el seguimiento", err);
+      alert("No se pudo crear el seguimiento.");
     }
   }
 
@@ -1970,12 +2045,32 @@ useEffect(() => {
     doc: d,
   }));
 
+  const budgetRevisionTabs = [...costSheetVersions]
+    .sort((a, b) => Number(b.version_number || 0) - Number(a.version_number || 0))
+    .map((v) => ({
+      id: `budget-rev-${v.version_number}`,
+      kind: "budget-revision",
+      label: `REV ${String(Number(v.version_number || 0)).padStart(2, "0")}`,
+      version: v,
+    }));
+
+  const currentBudgetTab = currentCostSheetVersion?.version_number
+    ? [{
+        id: "budget-current",
+        kind: "budget-current",
+        label: "Revision Actual",
+        version: currentCostSheetVersion,
+      }]
+    : [];
+
   const topTabs = [
     { id: "detalle", kind: "base", label: "Detalle" },
     { id: "documentos", kind: "base", label: "Documentos" },
     { id: "gastos", kind: "base", label: "Gastos" },
     ...(isAdmin ? [{ id: "administracion", kind: "base", label: "Administración" }] : []),
     { id: "detcos", kind: "base", label: "Planilla de costos (DET COS)" },
+    ...currentBudgetTab,
+    ...budgetRevisionTabs,
     ...docTabs,
     ...flatUploadingTabs,
     ...flatFileTabs,
@@ -1991,6 +2086,12 @@ useEffect(() => {
     String(id).startsWith("f-") || String(id).startsWith("up-");
 
   const isDocTab = (id) => String(id).startsWith("doc-");
+  const isBudgetRevisionTab = (tabId) => String(tabId).startsWith("budget-rev-");
+  const getBudgetVersionFromTab = (tabId) => {
+    const sid = String(tabId || "");
+    if (!sid.startsWith("budget-rev-")) return null;
+    return Number(sid.slice("budget-rev-".length)) || null;
+  };
 
   function getDocFromTab(id) {
     const sid = String(id);
@@ -2553,16 +2654,42 @@ function providerHasFreightTag(p = {}) {
       <div className="bg-white rounded-2xl shadow px-4 pt-3 pb-0">
         <div className="flex gap-1 flex-wrap overflow-x-auto">
           {topTabs.map((t) => (
-            <button
-              key={t.id}
-              className={`px-3 py-2 text-sm rounded-t-lg border-b-0 border whitespace-nowrap ${
-                activeTab === t.id ? "bg-black text-white" : "bg-white"
-              }`}
-              onClick={() => handleTabChange(t.id)}
-              title={t.label}
-            >
-              {t.label}
-            </button>
+            (() => {
+              const budgetVersionNumber = t.kind === "budget-revision" || t.kind === "budget-current"
+                ? Number(t.version?.version_number || 0) || null
+                : null;
+              const isCurrentBudgetVersion =
+                budgetVersionNumber != null &&
+                Number(currentCostSheetVersion?.version_number || 0) === budgetVersionNumber;
+              const isSelectedBudgetVersion =
+                budgetVersionNumber != null &&
+                Number(selectedCostSheetVersionNumber || 0) === budgetVersionNumber;
+              const isActive = activeTab === t.id;
+              const showCurrentMarker =
+                isCurrentBudgetVersion && t.kind === "budget-revision";
+              const buttonClass = isActive
+                ? "bg-black text-white border-black"
+                : activeTab === "detcos" && isSelectedBudgetVersion && t.kind === "budget-revision"
+                  ? "bg-sky-50 text-sky-900 border-sky-300"
+                  : "bg-white";
+              const label = showCurrentMarker ? `${t.label} (actual)` : t.label;
+              const title = isSelectedBudgetVersion && activeTab === "detcos"
+                ? `${t.label} (revisi?n seleccionada en DET COS)`
+                : isCurrentBudgetVersion
+                  ? `${t.label} (revisi?n actual de DET COS)`
+                  : t.label;
+
+              return (
+                <button
+                  key={t.id}
+                  className={`px-3 py-2 text-sm rounded-t-lg border-b-0 border whitespace-nowrap ${buttonClass}`}
+                  onClick={() => handleTabChange(t.id)}
+                  title={title}
+                >
+                  {label}
+                </button>
+              );
+            })()
           ))}
         </div>
       </div>
@@ -2572,6 +2699,9 @@ function providerHasFreightTag(p = {}) {
         <section className="space-y-4">
           {activeTab === "detcos" ? (
             <DetCosSheet
+              onVersionSelectionChange={(versionNumber) => {
+                setSelectedCostSheetVersionNumber(versionNumber || currentCostSheetVersion?.version_number || null);
+              }}
               deal={deal}
               cf={{
                 modalidad_carga: (cf["modalidad_carga"] || {}).value,
@@ -2581,6 +2711,35 @@ function providerHasFreightTag(p = {}) {
                 mercaderia: (cf["mercaderia"] || {}).value,
               }}
             />
+          ) : activeTab === "budget-current" ? (
+            <div className="bg-white rounded-2xl shadow p-4">
+              <div className="text-sm text-slate-600 mb-2">
+                Vista de la revisión actual del presupuesto
+                {currentCostSheetVersion?.version_number
+                  ? ` (DET COS ${currentCostSheetVersion.version_number})`
+                  : ""}
+              </div>
+              <div className="h-[78vh]">
+                <iframe
+                  src={`/operations/${id}/quote-embed?embed=1&preview=1${currentCostSheetVersion?.version_number ? `&cost_sheet_version=${currentCostSheetVersion.version_number}` : ""}`}
+                  title={`quote-current-${id}`}
+                  className="w-full h-full border rounded"
+                />
+              </div>
+            </div>
+          ) : isBudgetRevisionTab(activeTab) ? (
+            <div className="bg-white rounded-2xl shadow p-4">
+              <div className="text-sm text-slate-600 mb-2">
+                Vista de la revisión {getBudgetVersionFromTab(activeTab)} del presupuesto
+              </div>
+              <div className="h-[78vh]">
+                <iframe
+                  src={`/operations/${id}/quote-embed?embed=1&preview=1&cost_sheet_version=${getBudgetVersionFromTab(activeTab)}`}
+                  title={`quote-rev-${getBudgetVersionFromTab(activeTab)}`}
+                  className="w-full h-full border rounded"
+                />
+              </div>
+            </div>
           ) : activeTab === "gastos" ? (
             <div />
           ) : activeTab === "administracion" ? (
@@ -2775,6 +2934,22 @@ function providerHasFreightTag(p = {}) {
 
                   <Field label="Ejecutivo de cuenta">
                     <Input readOnly value={executiveName} />
+                  </Field>
+                </div>
+                <div className="mt-3 grid grid-cols-1 gap-x-6 gap-y-3 md:grid-cols-2">
+                  <Field label="Despachante">
+                    <OrganizationLookupField
+                      value={selectedCustomsBroker}
+                      onSelect={(row) => applyCustomsBrokerSelection(row)}
+                      tipoOrg="Despachante"
+                      placeholder="Buscar despachante..."
+                      disabled={!editMode}
+                      allowCreate={editMode}
+                      createLabel="Crear despachante"
+                    />
+                  </Field>
+                  <Field label="RUC despachante">
+                    <Input value={selectedCustomsBroker?.ruc || ""} readOnly />
                   </Field>
                 </div>
               </div>
@@ -3107,16 +3282,62 @@ function providerHasFreightTag(p = {}) {
                 )}
                 </div>
 
-                          {/* Notas */}
+                          {/* Seguimiento */}
                         <div className="bg-white rounded-2xl shadow p-4">
-                          <h3 className="font-medium mb-3">Notas / Comentarios</h3>
+                          <div className="flex items-center justify-between gap-3 mb-3">
+                            <h3 className="font-medium">Seguimiento de la operacion</h3>
+                            <div className="text-xs text-slate-500">
+                              Actividades, notas, recordatorios y tareas
+                            </div>
+                          </div>
 
-                          {/* textarea + botón guardar */}
+                          <div className="grid md:grid-cols-2 gap-2 mb-2">
+                            <select
+                              className="border rounded-lg px-3 py-2 text-sm"
+                              value={noteEntryType}
+                              onChange={(e) => {
+                                const nextType = e.target.value;
+                                setNoteEntryType(nextType);
+                                if (nextType !== "note") {
+                                  setNotePendingFiles([]);
+                                }
+                              }}
+                            >
+                              <option value="note">Nota</option>
+                              <option value="activity">Actividad</option>
+                              <option value="reminder">Recordatorio</option>
+                              <option value="task">Tarea</option>
+                            </select>
+
+                            <input
+                              className="border rounded-lg px-3 py-2 text-sm"
+                              placeholder={
+                                noteEntryType === "note"
+                                  ? "Titulo opcional"
+                                  : noteEntryType === "activity"
+                                  ? "Titulo de la actividad"
+                                  : noteEntryType === "reminder"
+                                  ? "Titulo del recordatorio"
+                                  : "Titulo de la tarea"
+                              }
+                              value={noteTitle}
+                              onChange={(e) => setNoteTitle(e.target.value)}
+                            />
+                          </div>
+
                           <div className="flex gap-2">
                             <textarea
                               className="w-full border rounded-lg px-3 py-2 text-sm"
                               rows={3}
-                              placeholder="Añadí una nota…"
+                              placeholder={
+                                noteEntryType === "note"
+                                  ? "Escribe la nota..."
+                                  : noteEntryType === "activity"
+                                  ? "Detalle de la actividad..."
+                                  : noteEntryType === "reminder"
+                                  ? "Que se debe recordar..."
+                                  : "Detalle de la tarea..."
+                              }
                               value={note}
                               onChange={(e) => setNote(e.target.value)}
                             />
@@ -3128,132 +3349,201 @@ function providerHasFreightTag(p = {}) {
                             </button>
                           </div>
 
-                          {/* input oculto para adjuntos de la nota */}
-                          <input
-                            type="file"
-                            multiple
-                            className="hidden"
-                            ref={noteAttachInputRef}
-                            onChange={handleNoteAttachmentChange}
-                          />
-
-                          {/* Botón para adjuntar documentos a la nota en edición */}
-                          <div className="mt-2 flex items-center justify-between text-xs text-slate-600">
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                className="px-2 py-1 rounded-lg border text-xs"
-                                onClick={() => noteAttachInputRef.current?.click()}
-                              >
-                                📎 Adjuntar documento a esta nota
-                              </button>
-                              <span>
-                                Los archivos se vincularán a la nota cuando hagas clic en{" "}
-                                <b>Guardar</b>.
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Adjuntos de la nota en edición (todavía sin guardar) */}
-                          {notePendingFiles.length > 0 && (
-                            <div className="mt-3 border-t pt-3 text-xs">
-                              <div className="font-semibold mb-1">
-                                Adjuntos para esta nota (sin guardar aún)
-                              </div>
-                              <ul className="space-y-1">
-                                {notePendingFiles.map((f) => (
-                                  <li
-                                    key={f.id}
-                                    className="flex items-center justify-between gap-2"
-                                  >
-                                    <span className="truncate">
-                                      {labelOfFile(f, fileLabels)}
-                                    </span>
-                                    <div className="flex gap-1">
-                                      <a
-                                        href={resolveUploadUrl(f.url)}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="underline"
-                                      >
-                                        Ver
-                                      </a>
-                                      <button
-                                        type="button"
-                                        className="text-[11px] px-2 py-0.5 border rounded"
-                                        onClick={() => removePendingAttachment(f.id)}
-                                      >
-                                        Quitar
-                                      </button>
-                                    </div>
-                                  </li>
-                                ))}
-                              </ul>
+                          {(noteEntryType === "reminder" || noteEntryType === "task") && (
+                            <div className="grid md:grid-cols-2 gap-2 mt-2">
+                              <input
+                                type="datetime-local"
+                                className="border rounded-lg px-3 py-2 text-sm"
+                                value={noteDueAt}
+                                onChange={(e) => setNoteDueAt(e.target.value)}
+                              />
+                              {noteEntryType === "task" ? (
+                                <select
+                                  className="border rounded-lg px-3 py-2 text-sm"
+                                  value={notePriority}
+                                  onChange={(e) => setNotePriority(e.target.value)}
+                                >
+                                  <option value="low">Prioridad baja</option>
+                                  <option value="medium">Prioridad media</option>
+                                  <option value="high">Prioridad alta</option>
+                                </select>
+                              ) : (
+                                <div className="text-xs text-slate-500 flex items-center px-2">
+                                  El recordatorio quedara pendiente hasta marcarlo como hecho.
+                                </div>
+                              )}
                             </div>
                           )}
 
-  {/* Listado de notas con sus adjuntos ya vinculados */}
-  <div className="mt-4 space-y-2">
-    {notesLoading ? (
-      <div className="text-sm text-slate-600">
-        Cargando notas…
-      </div>
-    ) : notesList.length ? (
-      notesList.map((a) => {
-        const author = authorOf(a);
-        const when = a.created_at
-          ? new Date(a.created_at).toLocaleString()
-          : "—";
+                          {noteEntryType === "note" && (
+                            <>
+                              <input
+                                type="file"
+                                multiple
+                                className="hidden"
+                                ref={noteAttachInputRef}
+                                onChange={handleNoteAttachmentChange}
+                              />
 
-        const attachIds = (noteAttachmentsMap && noteAttachmentsMap[a.id]) || [];
-        const attachFiles = (attachIds || [])
-          .map((fid) => fileById[fid])
-          .filter(Boolean);
+                              <div className="mt-2 flex items-center justify-between text-xs text-slate-600">
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    className="px-2 py-1 rounded-lg border text-xs"
+                                    onClick={() => noteAttachInputRef.current?.click()}
+                                  >
+                                    Adjuntar documento a esta nota
+                                  </button>
+                                  <span>
+                                    Los archivos se vincularan a la nota cuando hagas clic en <b>Guardar</b>.
+                                  </span>
+                                </div>
+                              </div>
 
-        return (
-          <div key={a.id} className="border rounded-xl p-3">
-            <div className="text-sm font-medium">
-              {a.subject || "Nota"}
-            </div>
-            <div className="text-xs text-slate-600">
-              {when} • por {author}
-            </div>
-            {a.notes && (
-              <div className="text-sm mt-1 whitespace-pre-wrap">
-                {a.notes}
-              </div>
-            )}
+                              {notePendingFiles.length > 0 && (
+                                <div className="mt-3 border-t pt-3 text-xs">
+                                  <div className="font-semibold mb-1">
+                                    Adjuntos para esta nota (sin guardar aun)
+                                  </div>
+                                  <ul className="space-y-1">
+                                    {notePendingFiles.map((f) => (
+                                      <li
+                                        key={f.id}
+                                        className="flex items-center justify-between gap-2"
+                                      >
+                                        <span className="truncate">
+                                          {labelOfFile(f, fileLabels)}
+                                        </span>
+                                        <div className="flex gap-1">
+                                          <a
+                                            href={resolveUploadUrl(f.url)}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="underline"
+                                          >
+                                            Ver
+                                          </a>
+                                          <button
+                                            type="button"
+                                            className="text-[11px] px-2 py-0.5 border rounded"
+                                            onClick={() => removePendingAttachment(f.id)}
+                                          >
+                                            Quitar
+                                          </button>
+                                        </div>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </>
+                          )}
 
-            {attachFiles.length > 0 && (
-              <div className="mt-2 text-xs text-slate-700">
-                <div className="font-semibold mb-1">Adjuntos:</div>
-                <ul className="space-y-1">
-                  {attachFiles.map((f) => (
-                    <li key={f.id}>
-                      <a
-                        href={resolveUploadUrl(f.url)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="underline text-blue-600 truncate"
-                        title={visibleNameOf(f)}
-                      >
-                        {labelOfFile(f, fileLabels)}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        );
-      })
-    ) : (
-      <div className="text-sm text-slate-500">
-        Sin notas todavía.
-      </div>
-    )}
-  </div>
-</div>
+                          <div className="mt-4 space-y-2">
+                            {notesLoading ? (
+                              <div className="text-sm text-slate-600">Cargando seguimiento...</div>
+                            ) : notesList.length ? (
+                              notesList.map((a) => {
+                                const author = authorOf(a);
+                                const when = a.created_at
+                                  ? new Date(a.created_at).toLocaleString()
+                                  : "-";
+                                const attachIds =
+                                  a.entry_type === "note" && a.source_type === "activity"
+                                    ? (noteAttachmentsMap && noteAttachmentsMap[a.source_id]) || []
+                                    : [];
+                                const attachFiles = (attachIds || [])
+                                  .map((fid) => fileById[fid])
+                                  .filter(Boolean);
+                                const typeLabel =
+                                  a.entry_type === "note"
+                                    ? "Nota"
+                                    : a.entry_type === "activity"
+                                    ? "Actividad"
+                                    : a.entry_type === "reminder"
+                                    ? "Recordatorio"
+                                    : "Tarea";
+                                const typeClass =
+                                  a.entry_type === "note"
+                                    ? "bg-slate-100 text-slate-700"
+                                    : a.entry_type === "activity"
+                                    ? "bg-blue-100 text-blue-700"
+                                    : a.entry_type === "reminder"
+                                    ? "bg-amber-100 text-amber-700"
+                                    : "bg-emerald-100 text-emerald-700";
+                                const tooltip =
+                                  a.entry_type === "note"
+                                    ? "Nota interna de la operacion"
+                                    : a.entry_type === "activity"
+                                    ? "Actividad registrada en la operacion"
+                                    : a.entry_type === "reminder"
+                                    ? `Recordatorio pendiente${a.due_at ? ` hasta ${new Date(a.due_at).toLocaleString()}` : ""}`
+                                    : `Tarea ${a.status || "pending"}${a.due_at ? ` con vencimiento ${new Date(a.due_at).toLocaleString()}` : ""}`;
+
+                                return (
+                                  <div key={a.id} className="border rounded-xl p-3">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div>
+                                        <div className="text-sm font-medium">{a.title || typeLabel}</div>
+                                        <div className="text-xs text-slate-600">{when} • por {author}</div>
+                                      </div>
+                                      <div className="flex items-center gap-2">
+                                        <span className={`text-[11px] px-2 py-1 rounded-full ${typeClass}`} title={tooltip}>
+                                          {typeLabel}
+                                        </span>
+                                        {((a.entry_type === "reminder" && !a.done) ||
+                                          (a.entry_type === "task" && a.status !== "done")) && (
+                                          <button
+                                            type="button"
+                                            className="text-[11px] px-2 py-1 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                                            onClick={() => markFollowupDone(a)}
+                                          >
+                                            Marcar hecho
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {a.content ? (
+                                      <div className="text-sm mt-1 whitespace-pre-wrap">{a.content}</div>
+                                    ) : null}
+
+                                    {(a.due_at || a.priority || a.status) && (
+                                      <div className="mt-2 text-xs text-slate-600 flex flex-wrap gap-2">
+                                        {a.due_at ? <span>Vence: {new Date(a.due_at).toLocaleString()}</span> : null}
+                                        {a.priority ? <span>Prioridad: {a.priority}</span> : null}
+                                        {a.status ? <span>Estado: {a.status}</span> : null}
+                                      </div>
+                                    )}
+
+                                    {attachFiles.length > 0 && (
+                                      <div className="mt-2 text-xs text-slate-700">
+                                        <div className="font-semibold mb-1">Adjuntos:</div>
+                                        <ul className="space-y-1">
+                                          {attachFiles.map((f) => (
+                                            <li key={f.id}>
+                                              <a
+                                                href={resolveUploadUrl(f.url)}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="underline text-blue-600 truncate"
+                                                title={visibleNameOf(f)}
+                                              >
+                                                {labelOfFile(f, fileLabels)}
+                                              </a>
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })
+                            ) : (
+                              <div className="text-sm text-slate-500">Sin seguimiento todavia.</div>
+                            )}
+                          </div>
+                        </div>
 
             </>
           )}
@@ -3308,7 +3598,7 @@ function providerHasFreightTag(p = {}) {
                 📄 Informe de estado (vista previa)
               </button>
               <Link
-                to={`/operations/${id}/quote`}
+                to={`/operations/${id}/quote${selectedCostSheetVersionNumber ? `?cost_sheet_version=${selectedCostSheetVersionNumber}` : ""}`}
                 className="px-3 py-2 text-sm rounded-lg bg-blue-600 text-white text-center hover:opacity-90"
               >
                 🧾 Presupuesto (nuevo)

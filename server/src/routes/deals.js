@@ -265,6 +265,17 @@ router.get('/', requireAuth, async (req, res) => {
        c.name  AS contact_name, c.email AS contact_email,
        o.name  AS org_name,
        COALESCE(oa.has_activity, 0) AS org_has_activity,
+       COALESCE(da.total_activities, 0) AS deal_activity_count,
+       da.last_activity_at,
+       COALESCE(da.pending_reminders_count, 0) AS pending_reminders_count,
+       da.next_reminder_at,
+       COALESCE(fn.total_notes, 0) AS followup_note_count,
+       fn.last_note_at,
+       COALESCE(ft.pending_tasks_count, 0) AS pending_followup_tasks_count,
+       COALESCE(ft.overdue_tasks_count, 0) AS overdue_followup_tasks_count,
+       ft.next_task_due_at,
+       COALESCE(qs.has_quote, 0) AS has_quote,
+       qs.last_quote_at,
 
        bu.name AS business_unit_name, bu.key_slug AS business_unit_key,
 
@@ -282,6 +293,45 @@ router.get('/', requireAuth, async (req, res) => {
        WHERE org_id IS NOT NULL
        GROUP BY org_id
      ) oa ON oa.org_id = d.org_id
+     LEFT JOIN (
+       SELECT
+         deal_id,
+         COUNT(*) AS total_activities,
+         MAX(created_at) AS last_activity_at,
+         SUM(CASE WHEN done = 0 AND due_date IS NOT NULL THEN 1 ELSE 0 END) AS pending_reminders_count,
+         MIN(CASE WHEN done = 0 AND due_date IS NOT NULL THEN due_date ELSE NULL END) AS next_reminder_at
+       FROM activities
+       WHERE deal_id IS NOT NULL
+       GROUP BY deal_id
+     ) da ON da.deal_id = d.id
+     LEFT JOIN (
+       SELECT
+         deal_id,
+         COUNT(*) AS total_notes,
+         MAX(created_at) AS last_note_at
+       FROM followup_notes
+       WHERE deal_id IS NOT NULL
+       GROUP BY deal_id
+     ) fn ON fn.deal_id = d.id
+     LEFT JOIN (
+       SELECT
+         deal_id,
+         SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_tasks_count,
+         SUM(CASE WHEN status = 'pending' AND due_at < NOW() THEN 1 ELSE 0 END) AS overdue_tasks_count,
+         MIN(CASE WHEN status = 'pending' THEN due_at ELSE NULL END) AS next_task_due_at
+       FROM followup_tasks
+       WHERE deal_id IS NOT NULL
+       GROUP BY deal_id
+     ) ft ON ft.deal_id = d.id
+     LEFT JOIN (
+       SELECT
+         deal_id,
+         1 AS has_quote,
+         MAX(updated_at) AS last_quote_at
+       FROM quotes
+       WHERE deal_id IS NOT NULL
+       GROUP BY deal_id
+     ) qs ON qs.deal_id = d.id
      LEFT JOIN users          u  ON u.id  = o.advisor_user_id
      LEFT JOIN users          du ON du.id = d.advisor_user_id
      LEFT JOIN users          cu ON cu.id = d.created_by_user_id

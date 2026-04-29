@@ -3,6 +3,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api';
 import AccountExecutiveSelect from '../components/AccountExecutiveSelect.jsx';
+import OrganizationLookupField from '../components/OrganizationLookupField.jsx';
 
 function FieldRow({ label, value, children }) {
   return (
@@ -754,6 +755,13 @@ export default function OrganizationDetail() {
                 <FieldRow label="Rubro" value={org.rubro} />
                 <FieldRow label="Tipo org" value={org.tipo_org} />
                 <FieldRow label="Operación" value={org.operacion} />
+                <FieldRow
+                  label="Despachante habitual"
+                  value={
+                    org.default_customs_broker_name ||
+                    org.default_customs_broker_razon_social
+                  }
+                />
                 <FieldRow label="Latitud" value={org.latitude} />
                 <FieldRow label="Longitud" value={org.longitude} />
                 <FieldRow label="Notas" value={org.notes} />
@@ -1479,11 +1487,26 @@ function EditOrgModal({ org, onClose, onSaved }) {
     is_agent: Number(org.is_agent) ? 1 : 0,
     modalities_supported: org.modalities_supported || null,
     hoja_ruta: org.hoja_ruta || '',
+    default_customs_broker_org_id:
+      org.default_customs_broker_org_id || null,
     zone_id: org.zone_id || null,
     department: org.department || '',
     latitude: org.latitude || '',
     longitude: org.longitude || '',
   });
+  const [selectedBroker, setSelectedBroker] = useState(
+    org.default_customs_broker_org_id
+      ? {
+          id: Number(org.default_customs_broker_org_id),
+          name:
+            org.default_customs_broker_name ||
+            org.default_customs_broker_razon_social ||
+            '',
+          ruc: org.default_customs_broker_ruc || '',
+          tipo_org: 'Despachante',
+        }
+      : null
+  );
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
   const [zones, setZones] = useState([]);
@@ -1566,6 +1589,9 @@ function EditOrgModal({ org, onClose, onSaved }) {
         payload.owner_user_id =
           Number.isFinite(n) && n > 0 ? n : null;
       }
+      payload.default_customs_broker_org_id = selectedBroker?.id
+        ? Number(selectedBroker.id)
+        : null;
       console.log('Payload antes de enviar:', payload);
       payload.is_agent = payload.is_agent ? 1 : 0;
       await api.patch(`/organizations/${org.id}`, payload);
@@ -1604,7 +1630,7 @@ function EditOrgModal({ org, onClose, onSaved }) {
             <input
               className="w-full border rounded-lg px-3 py-2"
               value={form.name}
-              onChange={(e) => upd('name', e.target.value)}
+              onChange={(e) => upd('name', e.target.value.toUpperCase())}
             />
           </label>
           <label className="block text-sm">
@@ -1777,8 +1803,31 @@ function EditOrgModal({ org, onClose, onSaved }) {
               onChange={(v) => upd('owner_user_id', v)}
               onlyActive={false}
               label="Ejecutivo / Owner"
-              placeholder="— Sin asignar —"
+              placeholder="- Sin asignar -"
             />
+          </div>
+
+          <div className="md:col-span-2">
+            <div className="block text-sm">
+              <span className="mb-2 block">Despachante habitual</span>
+              <OrganizationLookupField
+                value={selectedBroker}
+                onSelect={(row) => {
+                  setSelectedBroker(row);
+                  upd(
+                    'default_customs_broker_org_id',
+                    row?.id ? Number(row.id) : null
+                  );
+                }}
+                tipoOrg="Despachante"
+                placeholder="Buscar despachante..."
+                allowCreate
+                createLabel="Crear despachante"
+              />
+              <div className="mt-1 text-xs text-slate-500">
+                Se usara como valor por defecto en las operaciones del cliente.
+              </div>
+            </div>
           </div>
 
           <label className="block text-sm">

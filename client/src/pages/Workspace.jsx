@@ -67,6 +67,57 @@ function openInNewTab(url) {
   document.body.removeChild(link);
 }
 
+function formatShortDate(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleDateString("es-PY");
+}
+
+function getOperationSignalMeta(deal, isProspectStage) {
+  const activityCount = Number(deal.deal_activity_count || 0);
+  const noteCount = Number(deal.followup_note_count || 0);
+  const reminderCount = Number(deal.pending_reminders_count || 0);
+  const taskCount = Number(deal.pending_followup_tasks_count || 0);
+  const overdueTaskCount = Number(deal.overdue_followup_tasks_count || 0);
+  const hasQuote = Number(deal.has_quote || 0) === 1;
+  const hasFollowup = activityCount > 0 || noteCount > 0 || reminderCount > 0 || taskCount > 0;
+
+  let tone = "red";
+  let label = "Sin seguimiento";
+
+  if (isProspectStage) {
+    if (hasFollowup) {
+      tone = "green";
+      label = "Con seguimiento";
+    }
+  } else if (hasQuote && hasFollowup) {
+    tone = "green";
+    label = "Operacion al dia";
+  } else if (hasQuote || hasFollowup) {
+    tone = "yellow";
+    label = hasQuote ? "Tiene cotizacion, falta seguimiento" : "Tiene seguimiento, falta cotizacion";
+  }
+
+  const dotClass =
+    tone === "green"
+      ? "bg-emerald-500"
+      : tone === "yellow"
+      ? "bg-amber-400"
+      : "bg-red-500";
+
+  const tooltip = [
+    label,
+    `Actividades: ${activityCount}${deal.last_activity_at ? ` | Ultima: ${formatShortDate(deal.last_activity_at)}` : ""}`,
+    `Notas: ${noteCount}${deal.last_note_at ? ` | Ultima: ${formatShortDate(deal.last_note_at)}` : ""}`,
+    `Recordatorios: ${reminderCount}${deal.next_reminder_at ? ` | Proximo: ${formatShortDate(deal.next_reminder_at)}` : ""}`,
+    `Tareas: ${taskCount}${overdueTaskCount > 0 ? ` | Vencidas: ${overdueTaskCount}` : ""}${deal.next_task_due_at ? ` | Proxima: ${formatShortDate(deal.next_task_due_at)}` : ""}`,
+    `Cotizacion: ${hasQuote ? `Si | Ultima: ${formatShortDate(deal.last_quote_at)}` : "No"}`,
+  ].join("\n");
+
+  return { dotClass, tooltip };
+}
+
 export default function Workspace() {
   const { key } = useParams(); // ej: "atm-cargo", "atm-industrial"
   const nav = useNavigate();
@@ -403,7 +454,7 @@ export default function Workspace() {
                           ? getOrganizationUrl(deal.org_id)
                           : getOperationUrl(deal.id);
 
-                      const hasActivity = Number(deal.org_has_activity || 0) === 1;
+                      const signalMeta = getOperationSignalMeta(deal, isProspectStage);
 
                       return (
                         <Draggable
@@ -430,14 +481,10 @@ export default function Workspace() {
                               }`}
                               title="Doble clic para abrir"
                             >
-                              {isProspectStage && (
-                                <span
-                                  className={`absolute top-2 right-2 h-2.5 w-2.5 rounded-full ${
-                                    hasActivity ? "bg-emerald-500" : "bg-red-500"
-                                  }`}
-                                  title={hasActivity ? "Con actividad" : "Sin actividad"}
-                                />
-                              )}
+                              <span
+                                className={`absolute top-2 right-2 h-2.5 w-2.5 rounded-full ${signalMeta.dotClass}`}
+                                title={signalMeta.tooltip}
+                              />
                               <div className="text-sm font-semibold truncate">
                                 {titleText}
                               </div>

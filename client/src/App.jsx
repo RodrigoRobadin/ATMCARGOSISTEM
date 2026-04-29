@@ -332,6 +332,14 @@ export default function App() {
         }
       />
       <Route
+        path="/operations/:id/quote-embed"
+        element={
+          <RequireAuth>
+            <QuoteGenerator />
+          </RequireAuth>
+        }
+      />
+      <Route
         path="/operations/:id/industrial-quote-embed"
         element={
           <RequireAuth>

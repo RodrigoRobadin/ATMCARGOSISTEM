@@ -431,14 +431,14 @@ export default function ReportPreview({
   };
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/50 flex items-center justify-center p-4 print:p-0">
-      <div className="w-[980px] max-w-full bg-white rounded-2xl shadow-xl print:shadow-none print:rounded-none">
+    <div className="fixed inset-0 z-[100] bg-black/50 flex items-center justify-center p-2 sm:p-4 print:p-0">
+      <div className="flex max-h-[calc(100vh-1rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl print:max-h-none print:overflow-visible print:shadow-none print:rounded-none">
         {/* HEADER */}
-        <div className="flex items-center justify-between px-4 py-3 border-b print:hidden">
-          <div className="font-medium">
+        <div className="flex flex-col gap-3 border-b px-3 py-3 sm:px-4 print:hidden lg:flex-row lg:items-center lg:justify-between">
+          <div className="font-medium leading-tight">
             Previsualización — Status de Embarque
           </div>
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex flex-wrap gap-2">
             <button
               className="px-3 py-1.5 text-sm rounded-lg border disabled:opacity-60"
               onClick={handleSendEmailSystem}
@@ -468,11 +468,11 @@ export default function ReportPreview({
         </div>
 
         {/* CUERPO */}
-        <div className="p-6 text-sm leading-6 print:p-8">
+        <div className="overflow-y-auto p-3 text-sm leading-6 sm:p-6 print:overflow-visible print:p-8">
           {/* Campos de correo (solo en pantalla, no en impresión) */}
           <div className="mb-4 space-y-2 print:hidden">
-            <div className="grid grid-cols-[70px_1fr] gap-2 items-center">
-              <span className="text-right text-slate-500 text-xs">Para</span>
+            <div className="grid gap-2 items-center sm:grid-cols-[70px_1fr]">
+              <span className="text-xs text-slate-500 sm:text-right">Para</span>
               <input
                 className="border rounded px-2 py-1 text-sm w-full"
                 value={emailTo}
@@ -480,8 +480,8 @@ export default function ReportPreview({
                 placeholder="cliente@empresa.com; otro@dominio.com"
               />
             </div>
-            <div className="grid grid-cols-[70px_1fr] gap-2 items-center">
-              <span className="text-right text-slate-500 text-xs">
+            <div className="grid gap-2 items-center sm:grid-cols-[70px_1fr]">
+              <span className="text-xs text-slate-500 sm:text-right">
                 Asunto
               </span>
               <input
@@ -531,9 +531,11 @@ export default function ReportPreview({
 
 function TableRow({ label, value }) {
   return (
-    <div className="grid grid-cols-[320px_1fr] items-center border-b last:border-b-0">
-      <div className="bg-slate-100 px-3 py-2 font-medium">{label}</div>
-      <div className="px-3 py-2">{value || "—"}</div>
+    <div className="grid border-b last:border-b-0 sm:grid-cols-[280px_1fr] sm:items-center lg:grid-cols-[320px_1fr]">
+      <div className="bg-slate-100 px-3 py-2 font-medium break-words">
+        {label}
+      </div>
+      <div className="px-3 py-2 break-words">{value || "-"}</div>
     </div>
   );
 }

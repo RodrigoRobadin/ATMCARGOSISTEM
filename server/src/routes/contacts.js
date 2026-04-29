@@ -5,6 +5,8 @@ import { requireAuth } from '../middlewares/auth.js';
 import { logAudit } from '../services/audit.js';
 
 const router = Router();
+const toUpperText = (v) =>
+  v === null || typeof v === 'undefined' ? v : String(v).trim().toUpperCase();
 
 /** LISTAR */
 router.get('/', async (req, res) => {
@@ -168,7 +170,7 @@ router.post('/', requireAuth, async (req, res) => {
     `INSERT INTO contacts(name, email, phone, title, org_id, label, owner_user_id, visibility, notes)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      name || null, email || null, phone || null, title || null,
+      toUpperText(name) || null, email || null, phone || null, title || null,
       org_id || null, label || null, owner_user_id || null,
       visibility || 'company', notes || null
     ]
@@ -176,7 +178,7 @@ router.post('/', requireAuth, async (req, res) => {
 
   await logAudit({
     req, action: 'create', entity: 'contact', entityId: ins.insertId,
-    description: `Creó contacto ${name || email || ins.insertId}`, meta: { payload: req.body }
+      description: `Creó contacto ${toUpperText(name) || email || ins.insertId}`, meta: { payload: req.body }
   });
 
   res.status(201).json({ id: ins.insertId });
@@ -195,7 +197,8 @@ router.patch('/:id', requireAuth, async (req, res) => {
   for (const k of allowed) {
     if (Object.prototype.hasOwnProperty.call(req.body, k)) {
       fields.push(`${k} = ?`);
-      params.push(toDb(req.body[k]));
+      const value = k === 'name' ? toUpperText(req.body[k]) : req.body[k];
+      params.push(toDb(value));
     }
   }
 

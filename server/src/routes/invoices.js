@@ -923,45 +923,99 @@ async function generateReceiptNumber(forcePoint, forceEst) {
   return { receiptNumber, point, establishment };
 }
 
-async function generateCreditNoteNumber(forcePoint, forceEst) {
-  await ensureCreditNoteTables();
-  const defaultExp = '001-004';
-  let expRaw = defaultExp;
-  try {
-    expRaw =
-      (await getParamValue('credit_exp', pool))?.value ||
-      (await getParamValue('credit_exp_industrial', pool))?.value ||
-      (await getParamValue('credit_exp_cargo', pool))?.value ||
-      defaultExp;
-  } catch (_) {
-    expRaw = defaultExp;
-  }
+function getCreditParamConfig({ buKey = '', pipelineName = '' } = {}) {
+  const isIndustrial = isIndustrialContext({ buKey, pipelineName });
+  const suffix = isIndustrial ? 'industrial' : 'cargo';
+  const defaultExp = isIndustrial ? '001-005' : '001-004';
+
+  return {
+    isIndustrial,
+    suffix,
+    defaultExp,
+    expKey: `credit_exp_${suffix}`,
+    legacyExpKeys: ['credit_exp', `credit_exp_${suffix}`],
+    nextKey: `credit_next_number_${suffix}`,
+    legacyNextKeys: ['credit_next_number', `credit_next_number_${suffix}`],
+  };
+}
+
+async function resolveCreditNoteSequence(
+  { buKey = '', pipelineName = '', forcePoint = '', forceEst = '' } = {},
+  conn = pool
+) {
+  const cfg = getCreditParamConfig({ buKey, pipelineName });
+  const expRaw =
+    (await getFirstParamValue([cfg.expKey, ...cfg.legacyExpKeys], conn))?.value || cfg.defaultExp;
   let { point, establishment } = parseExpedition(expRaw, {
-    point: defaultExp.split('-')[0] || '001',
-    establishment: defaultExp.split('-')[1] || '004',
+    point: cfg.defaultExp.split('-')[0] || '001',
+    establishment: cfg.defaultExp.split('-')[1] || '004',
   });
 
   if (forcePoint && String(forcePoint).trim()) point = String(forcePoint).padStart(3, '0');
   if (forceEst && String(forceEst).trim()) establishment = String(forceEst).padStart(3, '0');
 
   const lastSeq =
-    (await fetchLastSeq(point, establishment, pool, 'credit_note_number', 'credit_notes')) || 0;
-
+    (await fetchLastSeq(point, establishment, conn, 'credit_note_number', 'credit_notes')) || 0;
+  const configuredRaw = (await getFirstParamValue([cfg.nextKey, ...cfg.legacyNextKeys], conn))?.value;
+  const configuredNext = parseInt(configuredRaw || 'NaN', 10);
   let next = lastSeq + 1;
-  try {
-    const paramVal =
-      parseInt((await getParamValue('credit_next_number', pool))?.value || 'NaN', 10);
-    if (Number.isFinite(paramVal)) next = Math.max(next, paramVal);
-  } catch (_) {
-    next = lastSeq + 1;
-  }
-  if (!Number.isFinite(next) || next < lastSeq + 1) next = lastSeq + 1;
+  let sequenceSource = 'database';
 
-  const creditNoteNumber = `${point}-${establishment}-${String(next).padStart(7, '0')}`;
-  try {
-    await upsertParam('credit_next_number', String(next + 1), pool);
-  } catch (_) {}
-  return { creditNoteNumber, point, establishment };
+  if (lastSeq <= 0 && Number.isFinite(configuredNext) && configuredNext >= 1) {
+    next = configuredNext;
+    sequenceSource = 'param_seed';
+  }
+
+  if (!Number.isFinite(next) || next < 1) next = 1;
+
+  return {
+    cfg,
+    point,
+    establishment,
+    lastSeq,
+    next,
+    configuredNext: Number.isFinite(configuredNext) ? configuredNext : null,
+    sequenceSource,
+  };
+}
+
+async function resolveCreditNoteContext(invoice = {}) {
+  if (Number(invoice?.service_case_id || 0) > 0) {
+    return { buKey: 'atm-industrial', pipelineName: 'ATM INDUSTRIAL' };
+  }
+  if (Number(invoice?.deal_id || 0) > 0) {
+    try {
+      const dealInfo = await getDealInfo(invoice.deal_id);
+      return {
+        buKey: dealInfo?.business_unit_key || '',
+        pipelineName: dealInfo?.pipeline_name || '',
+      };
+    } catch (_) {
+      return { buKey: '', pipelineName: '' };
+    }
+  }
+  return { buKey: '', pipelineName: '' };
+}
+
+async function generateCreditNoteNumber(
+  forcePoint,
+  forceEst,
+  { buKey = '', pipelineName = '' } = {},
+  conn = pool
+) {
+  await ensureCreditNoteTables();
+  const sequence = await resolveCreditNoteSequence(
+    { buKey, pipelineName, forcePoint, forceEst },
+    conn
+  );
+  const creditNoteNumber = `${sequence.point}-${sequence.establishment}-${String(sequence.next).padStart(7, '0')}`;
+  return {
+    creditNoteNumber,
+    point: sequence.point,
+    establishment: sequence.establishment,
+    sequenceSource: sequence.sequenceSource,
+    configuredNextNumber: sequence.configuredNext,
+  };
 }
 
 async function getParamValue(key, conn = pool) {
@@ -986,6 +1040,17 @@ async function getParamValue(key, conn = pool) {
     if (err?.code === 'ER_NO_SUCH_TABLE') return null;
     throw err;
   }
+}
+
+async function getFirstParamValue(keys = [], conn = pool) {
+  for (const key of keys) {
+    if (!key) continue;
+    const row = await getParamValue(key, conn);
+    if (row?.value !== undefined && row?.value !== null && String(row.value) !== '') {
+      return row;
+    }
+  }
+  return null;
 }
 
 async function upsertParam(key, value, conn = pool) {
@@ -1049,99 +1114,219 @@ async function fetchLastSeq(point, establishment, conn = pool, numberField = 'in
 }
 
 function parseExpedition(raw = '', fallback = { point: '001', establishment: '000' }) {
-  // ✅ FIX: antes /d+/g (mal). Debe ser /\d+/g
+  // ? FIX: antes /d+/g (mal). Debe ser /\d+/g
   const matches = String(raw).match(/\d+/g) || [];
   const point = (matches[0] || fallback.point || '001').padStart(3, '0');
   const establishment = (matches[1] || fallback.establishment || '000').padStart(3, '0');
   return { point, establishment };
 }
 
-async function peekInvoiceDefaults({ buKey = '', pipelineName = '' } = {}, conn = pool) {
-  const isIndustrial = isIndustrialContext({ buKey, pipelineName });
-  const expKey = isIndustrial ? 'invoice_exp_industrial' : 'invoice_exp_cargo';
-  const sharedNumKey = 'invoice_next_number';
-  const unitNumKey = isIndustrial
-    ? 'invoice_next_number_industrial'
-    : 'invoice_next_number_cargo';
-
-  const timbKey = 'invoice_timbre_number';
-  const vigFromKey = 'invoice_timbre_valid_from';
-  const vigToKey = 'invoice_timbre_valid_to';
-
-  const defaultExp = isIndustrial ? '001-005' : '001-004';
-  let expRaw = defaultExp;
+async function getConfiguredInvoiceNextNumber(cfg, conn = pool) {
   try {
-    expRaw = (await getParamValue(expKey, conn))?.value || defaultExp;
+    const raw = (await getFirstParamValue([cfg.nextKey, cfg.legacyNextKey], conn))?.value;
+    const parsed = parseInt(raw || 'NaN', 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   } catch (_) {
-    expRaw = defaultExp;
+    return null;
   }
+}
+
+async function resolveInvoiceSequence({ buKey = '', pipelineName = '' } = {}, conn = pool) {
+  const cfg = getInvoiceParamConfig({ buKey, pipelineName });
+  const expRaw = (await getParamValue(cfg.expKey, conn))?.value || cfg.defaultExp;
   const { point, establishment } = parseExpedition(expRaw, {
-    point: defaultExp.split('-')[0] || '001',
-    establishment: defaultExp.split('-')[1] || '000',
+    point: cfg.defaultExp.split('-')[0] || '001',
+    establishment: cfg.defaultExp.split('-')[1] || '000',
   });
   const lastSeq = (await fetchLastSeq(point, establishment, conn)) || 0;
+  const configuredNext = await getConfiguredInvoiceNextNumber(cfg, conn);
   let next = lastSeq + 1;
-  try {
-    const unitVal =
-      parseInt((await getParamValue(unitNumKey, conn))?.value || 'NaN', 10);
-    const sharedVal =
-      parseInt((await getParamValue(sharedNumKey, conn))?.value || 'NaN', 10);
-    const chosen =
-      Number.isFinite(unitVal) ? unitVal : Number.isFinite(sharedVal) ? sharedVal : NaN;
-    if (Number.isFinite(chosen)) next = Math.max(next, chosen);
-  } catch (_) {
-    next = lastSeq + 1;
-  }
-  if (!Number.isFinite(next) || next < lastSeq + 1) next = lastSeq + 1;
+  let sequenceSource = 'database';
 
-  const invoice_number = `${point}-${establishment}-${String(next).padStart(7, '0')}`;
+  if (lastSeq <= 0 && Number.isFinite(configuredNext) && configuredNext >= 1) {
+    next = configuredNext;
+    sequenceSource = 'param_seed';
+  }
+
+  if (!Number.isFinite(next) || next < 1) next = 1;
+
+  return {
+    cfg,
+    point,
+    establishment,
+    lastSeq,
+    next,
+    configuredNext,
+    sequenceSource,
+  };
+}
+
+function getInvoiceParamConfig({ buKey = '', pipelineName = '' } = {}) {
+  const isIndustrial = isIndustrialContext({ buKey, pipelineName });
+  const suffix = isIndustrial ? 'industrial' : 'cargo';
+  const defaultExp = isIndustrial ? '001-005' : '001-004';
+
+  return {
+    isIndustrial,
+    suffix,
+    defaultExp,
+    expKey: `invoice_exp_${suffix}`,
+    nextKey: `invoice_next_number_${suffix}`,
+    legacyNextKey: 'invoice_next_number',
+    timbradoKey: `invoice_timbre_number_${suffix}`,
+    legacyTimbradoKey: 'invoice_timbre_number',
+    validFromKey: `invoice_timbre_valid_from_${suffix}`,
+    legacyValidFromKey: 'invoice_timbre_valid_from',
+    validToKey: `invoice_timbre_valid_to_${suffix}`,
+    legacyValidToKey: 'invoice_timbre_valid_to',
+  };
+}
+
+async function peekInvoiceDefaults({ buKey = '', pipelineName = '' } = {}, conn = pool) {
+  const sequence = await resolveInvoiceSequence({ buKey, pipelineName }, conn);
+  const cfg = sequence.cfg;
+  const invoice_number = `${sequence.point}-${sequence.establishment}-${String(sequence.next).padStart(7, '0')}`;
+  const configured_invoice_number = Number.isFinite(sequence.configuredNext)
+    ? `${sequence.point}-${sequence.establishment}-${String(sequence.configuredNext).padStart(7, '0')}`
+    : '';
 
   return {
     invoice_number,
-    point_of_issue: point,
-    establishment,
-    timbrado_number: (await getParamValue(timbKey, conn))?.value || '',
-    timbrado_start_date: (await getParamValue(vigFromKey, conn))?.value || '',
-    timbrado_expires_at: (await getParamValue(vigToKey, conn))?.value || '',
+    point_of_issue: sequence.point,
+    establishment: sequence.establishment,
+    next_number: sequence.next,
+    configured_next_number: sequence.configuredNext,
+    configured_invoice_number,
+    last_issued_seq: sequence.lastSeq,
+    sequence_source: sequence.sequenceSource,
+    timbrado_number:
+      (await getFirstParamValue([cfg.timbradoKey, cfg.legacyTimbradoKey], conn))?.value || '',
+    timbrado_start_date:
+      (await getFirstParamValue([cfg.validFromKey, cfg.legacyValidFromKey], conn))?.value || '',
+    timbrado_expires_at:
+      (await getFirstParamValue([cfg.validToKey, cfg.legacyValidToKey], conn))?.value || '',
+  };
+}
+
+async function fetchInvoiceNumberingStatus({ buKey = '', pipelineName = '' } = {}, conn = pool) {
+  const cfg = getInvoiceParamConfig({ buKey, pipelineName });
+  const defaults = await peekInvoiceDefaults({ buKey, pipelineName }, conn);
+  const [[lastIssued]] = await conn.query(
+    `SELECT id, invoice_number, issue_date, created_at
+       FROM invoices
+      WHERE point_of_issue = ? AND establishment = ?
+      ORDER BY id DESC
+      LIMIT 1`,
+    [defaults.point_of_issue, defaults.establishment]
+  );
+  const nextSeq = Number(defaults.next_number || 0) || 0;
+  const configuredSeq = Number(defaults.configured_next_number || 0) || 0;
+  return {
+    business_unit: cfg.suffix,
+    point_of_issue: defaults.point_of_issue,
+    establishment: defaults.establishment,
+    expedition_code: `${defaults.point_of_issue}-${defaults.establishment}`,
+    next_number: nextSeq,
+    next_number_padded: String(nextSeq).padStart(7, '0'),
+    next_invoice_number: defaults.invoice_number,
+    configured_next_number: configuredSeq || null,
+    configured_next_number_padded: configuredSeq ? String(configuredSeq).padStart(7, '0') : '',
+    configured_invoice_number: defaults.configured_invoice_number || '',
+    sequence_source: defaults.sequence_source || 'database',
+    last_issued_seq: Number(defaults.last_issued_seq || 0) || 0,
+    timbrado_number: defaults.timbrado_number || '',
+    timbrado_start_date: defaults.timbrado_start_date || '',
+    timbrado_expires_at: defaults.timbrado_expires_at || '',
+    last_issued_invoice_id: lastIssued?.id || null,
+    last_issued_invoice_number: lastIssued?.invoice_number || null,
+    last_issued_invoice_date: lastIssued?.issue_date || lastIssued?.created_at || null,
+  };
+}
+
+async function fetchCreditNoteNumberingStatus({ buKey = '', pipelineName = '' } = {}, conn = pool) {
+  const cfg = getCreditParamConfig({ buKey, pipelineName });
+  const sequence = await resolveCreditNoteSequence({ buKey, pipelineName }, conn);
+  const credit_note_number = `${sequence.point}-${sequence.establishment}-${String(sequence.next).padStart(7, '0')}`;
+  const configured_number = Number.isFinite(sequence.configuredNext)
+    ? `${sequence.point}-${sequence.establishment}-${String(sequence.configuredNext).padStart(7, '0')}`
+    : '';
+  const [[lastIssued]] = await conn.query(
+    `SELECT id, credit_note_number, issue_date, created_at
+       FROM credit_notes
+      WHERE point_of_issue = ? AND establishment = ?
+      ORDER BY id DESC
+      LIMIT 1`,
+    [sequence.point, sequence.establishment]
+  );
+
+  return {
+    business_unit: cfg.suffix,
+    point_of_issue: sequence.point,
+    establishment: sequence.establishment,
+    expedition_code: `${sequence.point}-${sequence.establishment}`,
+    next_number: sequence.next,
+    next_number_padded: String(sequence.next).padStart(7, '0'),
+    next_credit_note_number: credit_note_number,
+    configured_next_number: sequence.configuredNext,
+    configured_next_number_padded: Number.isFinite(sequence.configuredNext)
+      ? String(sequence.configuredNext).padStart(7, '0')
+      : '',
+    configured_credit_note_number: configured_number,
+    sequence_source: sequence.sequenceSource,
+    last_issued_seq: sequence.lastSeq,
+    last_issued_credit_note_id: lastIssued?.id || null,
+    last_issued_credit_note_number: lastIssued?.credit_note_number || null,
+    last_issued_credit_note_date: lastIssued?.issue_date || lastIssued?.created_at || null,
+  };
+}
+
+function normalizeDateOnly(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function validateInvoiceFiscalConfig(defaults, issueDate = new Date()) {
+  const problems = [];
+  const point = String(defaults?.point_of_issue || '').trim();
+  const establishment = String(defaults?.establishment || '').trim();
+  const timbrado = String(defaults?.timbrado_number || '').trim();
+  const validFrom = normalizeDateOnly(defaults?.timbrado_start_date);
+  const validTo = normalizeDateOnly(defaults?.timbrado_expires_at);
+  const issue = normalizeDateOnly(issueDate);
+
+  if (!/^\d{3}$/.test(point)) problems.push('Punto de expedici?n inv?lido o incompleto.');
+  if (!/^\d{3}$/.test(establishment)) problems.push('Establecimiento inv?lido o incompleto.');
+  if (!timbrado) problems.push('Timbrado no configurado.');
+  if (!validFrom) problems.push('Vigencia desde no configurada.');
+  if (!validTo) problems.push('Vigencia hasta no configurada.');
+  if (validFrom && validTo && validFrom > validTo) {
+    problems.push('La vigencia del timbrado es inconsistente.');
+  }
+  if (issue && validFrom && issue < validFrom) {
+    problems.push('La fecha de emisi?n es anterior al inicio de vigencia del timbrado.');
+  }
+  if (issue && validTo && issue > validTo) {
+    problems.push('El timbrado est? vencido para la fecha de emisi?n.');
+  }
+
+  return {
+    ok: problems.length === 0,
+    problems,
   };
 }
 
 async function nextInvoiceNumber(buKey = '', conn) {
-  const isIndustrial = isIndustrialContext({ buKey });
-  const expKey = isIndustrial ? 'invoice_exp_industrial' : 'invoice_exp_cargo';
-  const sharedNumKey = 'invoice_next_number';
-  const unitNumKey = isIndustrial
-    ? 'invoice_next_number_industrial'
-    : 'invoice_next_number_cargo';
+  const sequence = await resolveInvoiceSequence({ buKey }, conn);
+  const invoice_number = `${sequence.point}-${sequence.establishment}-${String(sequence.next).padStart(7, '0')}`;
 
-  const defaultExp = isIndustrial ? '001-005' : '001-004';
-  const expRaw = (await getParamValue(expKey, conn))?.value || defaultExp;
-  const { point, establishment } = parseExpedition(expRaw, {
-    point: defaultExp.split('-')[0] || '001',
-    establishment: defaultExp.split('-')[1] || '000',
-  });
-
-  const lastSeq = (await fetchLastSeq(point, establishment, conn)) || 0;
-  let next = lastSeq + 1;
-  try {
-    const unitVal =
-      parseInt((await getParamValue(unitNumKey, conn))?.value || 'NaN', 10);
-    const sharedVal =
-      parseInt((await getParamValue(sharedNumKey, conn))?.value || 'NaN', 10);
-    const chosen =
-      Number.isFinite(unitVal) ? unitVal : Number.isFinite(sharedVal) ? sharedVal : NaN;
-    if (Number.isFinite(chosen)) next = Math.max(next, chosen);
-  } catch (_) {
-    next = lastSeq + 1;
-  }
-  if (!Number.isFinite(next) || next < lastSeq + 1) next = lastSeq + 1;
-
-  const invoice_number = `${point}-${establishment}-${String(next).padStart(7, '0')}`;
-  try {
-    await upsertParam(unitNumKey, String(next + 1), conn);
-  } catch (_) {}
-
-  return { invoice_number, point_of_issue: point, establishment };
+  return {
+    invoice_number,
+    point_of_issue: sequence.point,
+    establishment: sequence.establishment,
+  };
 }
 
 async function recomputeInvoicePayments(invoiceId) {
@@ -1481,6 +1666,29 @@ router.get('/lock-status', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('[invoices] lock-status error:', e);
     res.status(500).json({ error: 'No se pudo obtener el estado de bloqueo' });
+  }
+});
+
+// GET /api/invoices/numbering-status
+router.get('/numbering-status', requireAuth, async (req, res) => {
+  try {
+    const cargo = await fetchInvoiceNumberingStatus({ buKey: 'atm-cargo', pipelineName: 'ATM CARGO' });
+    const industrial = await fetchInvoiceNumberingStatus({ buKey: 'atm-industrial', pipelineName: 'ATM INDUSTRIAL' });
+    res.json({ cargo, industrial });
+  } catch (e) {
+    console.error('[invoices] Error getting numbering status:', e);
+    res.status(500).json({ error: 'No se pudo obtener el estado de numeracion' });
+  }
+});
+
+router.get('/credit-numbering-status', requireAuth, async (req, res) => {
+  try {
+    const cargo = await fetchCreditNoteNumberingStatus({ buKey: 'atm-cargo', pipelineName: 'ATM CARGO' });
+    const industrial = await fetchCreditNoteNumberingStatus({ buKey: 'atm-industrial', pipelineName: 'ATM INDUSTRIAL' });
+    res.json({ cargo, industrial });
+  } catch (e) {
+    console.error('[invoices] Error getting credit numbering status:', e);
+    res.status(500).json({ error: 'No se pudo obtener el estado de numeracion de notas de credito' });
   }
 });
 
@@ -1867,6 +2075,16 @@ router.post('/', requireAuth, async (req, res) => {
       }
       buKey = 'atm-industrial';
     }
+    const numberingDefaults = await peekInvoiceDefaults({ buKey }, conn);
+    const fiscalValidation = validateInvoiceFiscalConfig(numberingDefaults, new Date());
+    if (!fiscalValidation.ok) {
+      await conn.rollback();
+      return res.status(400).json({
+        error: 'La configuraci?n fiscal de facturaci?n est? incompleta o inv?lida.',
+        details: fiscalValidation.problems,
+      });
+    }
+
     const { invoice_number, point_of_issue: poi, establishment: est } = await nextInvoiceNumber(
       buKey,
       conn
@@ -2838,9 +3056,11 @@ router.post('/credit-notes', requireAuth, async (req, res) => {
       return res.status(400).json({ error: `Excede lo disponible exentas (disp: ${availability.disponible.base0})` });
     }
 
+    const creditContext = await resolveCreditNoteContext(invoice);
     const { creditNoteNumber, point, establishment } = await generateCreditNoteNumber(
       invoice.point_of_issue,
-      invoice.establishment
+      invoice.establishment,
+      creditContext
     );
     const [result] = await pool.query(
       `INSERT INTO credit_notes 

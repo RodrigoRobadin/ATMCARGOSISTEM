@@ -272,16 +272,42 @@ function parseTags(raw='') {
 }
 const tagsToText = (tags=[]) => tags.map(t => t.trim()).filter(Boolean).join('\n');
 
+function snapshotToCustomFieldMap(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return {};
+  const map = {};
+  Object.entries(snapshot).forEach(([key, value]) => {
+    if (value == null) {
+      map[key] = '';
+      return;
+    }
+    if (Array.isArray(value)) {
+      map[key] = value.map((v) => String(v ?? '')).join('\n');
+      return;
+    }
+    if (typeof value === 'object') {
+      map[key] = JSON.stringify(value);
+      return;
+    }
+    map[key] = String(value);
+  });
+  return map;
+}
+
 export default function QuoteGenerator(){
   const { id } = useParams();
   const [searchParams] = useSearchParams();
   const revisionId = searchParams.get('revision_id');
+  const costSheetVersionParam = Number(searchParams.get('cost_sheet_version') || 0) || null;
+  const isEmbed = searchParams.get('embed') === '1';
+  const previewOnly = searchParams.get('preview') === '1';
   const { user } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState(null);
   const [cf, setCf] = useState({});
   const [cs, setCs] = useState(null);
+  const [loadedCostSheetVersionId, setLoadedCostSheetVersionId] = useState(null);
+  const [loadedCostSheetVersionNumber, setLoadedCostSheetVersionNumber] = useState(null);
 
   // Cabecera
   const [cliente, setCliente] = useState('');
@@ -348,7 +374,11 @@ export default function QuoteGenerator(){
         const [{ data: detail }, cfRes, csMaybe] = await Promise.all([
           api.get(`/deals/${id}`),
           api.get(`/deals/${id}/custom-fields`).catch(() => ({ data: [] })),
-          api.get(`/deals/${id}/cost-sheet`).then(r => r.data).catch(() => null),
+          (
+            costSheetVersionParam
+              ? api.get(`/deals/${id}/cost-sheet/versions/${costSheetVersionParam}`).then(r => r.data)
+              : api.get(`/deals/${id}/cost-sheet`).then(r => r.data)
+          ).catch(() => null),
         ]);
         setDeal(detail.deal);
 
@@ -358,9 +388,13 @@ export default function QuoteGenerator(){
 
         const header = csMaybe?.data?.header || {};
         setCs(csMaybe?.data || null);
+        setLoadedCostSheetVersionId(csMaybe?.id || null);
+        setLoadedCostSheetVersionNumber(csMaybe?.version_number || costSheetVersionParam || null);
+        const snapshotCfMap = snapshotToCustomFieldMap(csMaybe?.data?.document_snapshot || null);
+        const effectiveCfMap = { ...cfMap, ...snapshotCfMap };
 
         const merged = {
-          ...buildNormalizedMap(cfMap, 'cf'),
+          ...buildNormalizedMap(effectiveCfMap, 'cf'),
           ...buildNormalizedMap(header, 'hdr'),
         };
 
@@ -606,7 +640,7 @@ export default function QuoteGenerator(){
         setLoading(false);
       }
     })();
-  }, [id]);
+  }, [id, costSheetVersionParam]);
 
   const totalAmount = useMemo(
     () => items.reduce((acc, it) => acc + (num(it.precio) * (num(it.cantidad) || 1)), 0),
@@ -657,6 +691,7 @@ export default function QuoteGenerator(){
         ['que_incluye',      tagsToText(incluyeTags)],
         ['que_no_incluye',   tagsToText(noIncluyeTags)],
       ];
+      const documentSnapshot = Object.fromEntries(entries);
 
       await Promise.all(entries.map(async ([key, value]) => {
         const def = CF_SCHEMA[key] || { label: key, type: 'text' };
@@ -667,6 +702,11 @@ export default function QuoteGenerator(){
           value: value === '' ? null : value,
         });
       }));
+
+      await api.put(`/deals/${id}/cost-sheet/document-snapshot`, {
+        document_snapshot: documentSnapshot,
+        version_id: loadedCostSheetVersionId || undefined,
+      });
 
       const { data: cfs } = await api.get(`/deals/${id}/custom-fields`).catch(() => ({ data: [] }));
       const map = {};
@@ -768,11 +808,115 @@ export default function QuoteGenerator(){
           letter-spacing: .02em;
           color: #334155; /* slate-700 */
         }
+        .quote-header{
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 10px 8px 8px 8px;
+          column-gap: 16px;
+          flex-wrap: nowrap;
+        }
+        .quote-logo{
+          display: inline-flex;
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 4px;
+          font-family: "Georgia", "Times New Roman", serif;
+          font-size: 26px;
+          letter-spacing: .6px;
+          line-height: 1.05;
+          font-weight: 600;
+          flex: 0 0 auto;
+        }
+        .quote-logo-text{
+          display: inline-flex;
+          align-items: flex-end;
+          gap: 2px;
+          text-transform: uppercase;
+        }
+        .quote-logo-grupo{
+          color: #0f172a;
+          font-weight: 600;
+        }
+        .quote-logo-atm{
+          color: #ef4444;
+          font-weight: 600;
+          letter-spacing: .2px;
+        }
+        .quote-logo-swoosh{
+          position: relative;
+          width: 150px;
+          height: 12px;
+          margin-top: 6px;
+        }
+        .quote-logo-swoosh::before{
+          content: "";
+          position: absolute;
+          left: 0;
+          right: 0;
+          top: 3px;
+          height: 9px;
+          background: #ef4444;
+          border-radius: 0 0 90px 90px;
+          transform: skewX(-12deg);
+        }
+        .quote-logo-swoosh::after{
+          content: "";
+          position: absolute;
+          left: 20px;
+          top: 1px;
+          width: 86px;
+          height: 6px;
+          background: #ffffff;
+          border-radius: 0 0 40px 40px;
+          transform: skewX(-12deg);
+          opacity: .9;
+        }
+        .quote-banner{
+          position: relative;
+          height: 48px;
+          width: 520px;
+          max-width: none;
+          flex: 0 0 auto;
+        }
+        .quote-banner-orange{
+          position: absolute;
+          left: 0;
+          top: 0;
+          height: 48px;
+          width: 160px;
+          background: #c62828;
+          border-top-right-radius: 40px;
+          border-bottom-right-radius: 40px;
+        }
+        .quote-banner-blue{
+          position: absolute;
+          right: 0;
+          top: 0;
+          height: 48px;
+          width: 360px;
+          background: #b71c1c;
+          border-top-left-radius: 40px;
+          border-bottom-left-radius: 40px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #ffffff;
+          font-weight: 700;
+          letter-spacing: .08em;
+        }
       `}</style>
 
       {/* Header actions */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Generar Presupuesto — REF {deal.reference}</h1>
+      <div className={"flex items-center justify-between " + (isEmbed ? "hidden" : "")}>
+        <div>
+          <h1 className="text-xl font-semibold">Generar Presupuesto — REF {deal.reference}</h1>
+          {loadedCostSheetVersionNumber ? (
+            <div className="text-sm text-slate-500">
+              Revisión DET COS: {loadedCostSheetVersionNumber}
+            </div>
+          ) : null}
+        </div>
         <div className="space-x-2">
           <button
             onClick={saveToCustomFields}
@@ -791,6 +935,7 @@ export default function QuoteGenerator(){
       </div>
 
       {/* Panel editable */}
+      {!previewOnly && (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Cabecera */}
         <div className="bg-white rounded-xl border p-3 space-y-2">
@@ -947,13 +1092,27 @@ export default function QuoteGenerator(){
           />
         </div>
       </div>
+      )}
 
       {/* ================= PREVIEW / PDF (A4) ================= */}
       <div id="quote-print" className="bg-white border rounded-xl p-0">
-        <div className="mx-auto text-[15px] leading-6" style={{ width: `${CONTENT_W_MM}mm` }}>
-          <img src={HEADER_SRC} crossOrigin="anonymous" alt="Cabecera presupuesto" className="w-full h-auto" />
+        <div className="mx-auto text-[14px] leading-6" style={{ width: `${CONTENT_W_MM}mm`, paddingRight: '3mm', boxSizing: 'border-box' }}>
+          <div className="quote-header">
+            <div className="quote-logo">
+              <div className="quote-logo-text">
+                <span className="quote-logo-grupo">grupo</span>
+                <span className="quote-logo-atm">atm</span>
+              </div>
+              <div className="quote-logo-swoosh" aria-hidden="true"></div>
+            </div>
 
-          <div className="flex justify-between items-start px-4 mt-3 avoid-break">
+            <div className="quote-banner">
+              <div className="quote-banner-orange"></div>
+              <div className="quote-banner-blue">COTIZACION</div>
+            </div>
+          </div>
+
+          <div className="flex justify-between items-start px-1 mt-3 avoid-break">
             <div className="text-[16px]">
               <div className="font-semibold">{cliente || deal.org_name}</div>
               <div className="text-slate-600">Atn. {contacto || deal.contact_name || '—'}</div>
@@ -964,85 +1123,108 @@ export default function QuoteGenerator(){
             </div>
           </div>
 
-          {/* COTIZACIÓN */}
-          <div className="px-4 mt-3 avoid-break">
-            <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
-              Cotización de Flete
+          <div className="px-1 mt-3 avoid-break">
+            <div className="text-center font-bold underline">COTIZACION</div>
+
+            <div className="mt-3 text-[11px] text-slate-800">
+              <div>
+                CON GUSTO LE PRESENTAMOS NUESTRO PRESUPUESTO PARA EL SERVICIO DE CARGA QUE
+                ESTA CONSIDERANDO CONTRATAR.
+              </div>
+              <div>
+                A CONTINUACION, DETALLAMOS LAS CONDICIONES OPERATIVAS Y LOS COSTOS SEGUN LOS
+                DETALLES DE SU OPERACION.
+              </div>
             </div>
 
-            {/* Dos columnas simétricas; los valores quedan alineados */}
-            <div className="grid grid-cols-2 gap-x-8 border-x border-b p-3 rounded-b" style={{ borderColor: '#d1d5db' }}>
-              {/* Columna izquierda */}
+            <div className="mt-3 border rounded" style={{ borderColor: '#9ca3af' }}>
+              <div className="grid grid-cols-2 gap-x-8 p-3 text-[11px]">
+                <div className="space-y-1">
+                  <div><span className="font-semibold">CONDICION DE VENTA:</span> {terminos.condicionVenta || '-'}</div>
+                  <div><span className="font-semibold">FORMA DE PAGO:</span> {terminos.formaPago || '-'}</div>
+                  <div><span className="font-semibold">INCOTERMS:</span> {incoterm || '-'}</div>
+                  <div><span className="font-semibold">COMENTARIO:</span> {observaciones || '-'}</div>
+                </div>
+                <div className="space-y-1">
+                  <div><span className="font-semibold">PLAZO DE CREDITO:</span> {terminos.plazoCredito || '-'}</div>
+                  <div><span className="font-semibold">VALIDEZ DE LA OFERTA:</span> {terminos.validez || '-'}</div>
+                  <div><span className="font-semibold">TIPO DE TRANSPORTE:</span> {tipoTransporte || '-'}</div>
+                  <div><span className="font-semibold">TIPO DE ENVIO:</span> {tipoEnvio || '-'}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="px-1 mt-4 avoid-break">
+            <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
+              Detalle Operativo
+            </div>
+            <div className="grid grid-cols-2 gap-x-8 border-x border-b p-3 rounded-b text-[12px]" style={{ borderColor: '#d1d5db' }}>
               <div className="kv-grid">
                 <KVRow label="Tipo de Operación" value={tipoOperacion} />
-                <KVRow label="Tipo de Envío" value={tipoEnvio} />
                 <KVRow label="País de Origen" value={paisOrigen} />
                 <KVRow label="Ciudad de Origen" value={ciudadOrigen} />
-                <KVRow label="Aeropuerto de Origen" value={aeropuertoOrigen} />
+                <KVRow label="Aeropuerto/Puerto Origen" value={aeropuertoOrigen} />
                 <KVRow label="Volumen (m³)" value={volumenM3} />
                 <KVRow label="Mercadería" value={mercaderia} />
                 <KVRow label="Seguro de Carga" value={seguroTipo} />
               </div>
-
-              {/* Columna derecha */}
               <div className="kv-grid">
                 <KVRow label="Tipo de Transporte" value={tipoTransporte} />
-                <KVRow label="Incoterms" value={incoterm} />
                 <KVRow label="País de Destino" value={paisDestino} />
                 <KVRow label="Ciudad de Destino" value={ciudadDestino} />
-                <KVRow label="Aeropuerto de Destino" value={aeropuertoDestino} />
+                <KVRow label="Aeropuerto/Puerto Destino" value={aeropuertoDestino} />
                 <KVRow label="Peso Bruto (kg)" value={pesoBrutoKg} />
-                {/* Ocultamos "Aseguradora" y dejamos solo "Monto asegurado" */}
                 <KVRow label="Monto asegurado" value={montoAsegurado} />
+                <KVRow label="Aseguradora" value={aseguradora} />
               </div>
             </div>
           </div>
 
           {/* DETALLE DE COSTOS */}
-          <div className="px-4 mt-4 avoid-break">
+          <div className="px-1 mt-4 avoid-break">
             <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
               Detalle de Costos
             </div>
             <table className="w-full border-collapse border-x border-b rounded-b" style={{ borderColor: '#d1d5db' }}>
               <thead>
                 <tr className="text-white uppercase" style={{ backgroundColor: BRAND_BLUE }}>
+                  <th className="text-left px-2 py-2">Item</th>
                   <th className="text-left px-2 py-2">Cantidad</th>
                   <th className="text-left px-2 py-2">Servicio</th>
-                  <th className="text-left px-2 py-2">Observación</th>
+                  <th className="text-left px-2 py-2">Descripción</th>
                   <th className="text-left px-2 py-2">Moneda</th>
                   <th className="text-right px-2 py-2">Precio unit</th>
-                  <th className="text-right px-2 py-2">Valor</th>
-                  <th className="text-left px-2 py-2">Impuesto</th>
+                  <th className="text-right px-2 py-2">Total</th>
                 </tr>
               </thead>
               <tbody>
                 {items.map((it, i) => (
                   <tr key={i} className="border-t" style={{ borderColor: '#e5e7eb' }}>
+                    <td className="px-2 py-1">{i + 1}</td>
                     <td className="px-2 py-1">{it.cantidad || 1}</td>
                     <td className="px-2 py-1">{it.servicio}</td>
                     <td className="px-2 py-1">{it.observacion}</td>
-                  <td className="px-2 py-1">{it.moneda}</td>
-                  <td className="px-2 py-1 text-right">
-                    {formatByCurrency(num(it.precio), it.moneda, decimalsFrom(it.precio))}
-                  </td>
-                  <td className="px-2 py-1 text-right">
-                    {formatByCurrency(
-                      (num(it.cantidad) || 1) * num(it.precio),
-                      it.moneda,
-                      Math.max(decimalsFrom(it.precio), decimalsFrom(it.cantidad))
-                    )}
-                  </td>
-                    <td className="px-2 py-1">{it.impuesto}</td>
+                    <td className="px-2 py-1">{it.moneda}</td>
+                    <td className="px-2 py-1 text-right">
+                      {formatByCurrency(num(it.precio), it.moneda, decimalsFrom(it.precio))}
+                    </td>
+                    <td className="px-2 py-1 text-right">
+                      {formatByCurrency(
+                        (num(it.cantidad) || 1) * num(it.precio),
+                        it.moneda,
+                        Math.max(decimalsFrom(it.precio), decimalsFrom(it.cantidad))
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
                 <tr className="border-t" style={{ borderColor: '#e5e7eb' }}>
-                  <td colSpan={5} className="px-2 py-2 font-semibold text-right">TOTAL</td>
-                  <td className="px-2 py-2 font-extrabold text-right">
+                  <td colSpan={5} className="px-2 py-2 font-semibold text-right">TOTAL {operationCurrency}</td>
+                  <td colSpan={2} className="px-2 py-2 font-extrabold text-right">
                     {formatByCurrency(totalAmount, operationCurrency, totalDecimals)}
                   </td>
-                  <td className="px-2 py-2 font-semibold">{operationCurrency}</td>
                 </tr>
               </tfoot>
             </table>
@@ -1050,7 +1232,7 @@ export default function QuoteGenerator(){
 
           {/* ✨ Qué incluye */}
           {incluyeTags.length > 0 && (
-            <div className="px-4 mt-4 avoid-break">
+            <div className="px-1 mt-4 avoid-break">
               <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
                 Qué incluye
               </div>
@@ -1062,7 +1244,7 @@ export default function QuoteGenerator(){
 
           {/* ✨ Qué no incluye */}
           {noIncluyeTags.length > 0 && (
-            <div className="px-4 mt-4 avoid-break">
+            <div className="px-1 mt-4 avoid-break">
               <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
                 Qué no incluye
               </div>
@@ -1074,7 +1256,7 @@ export default function QuoteGenerator(){
 
           {/* OBSERVACIONES */}
           {observaciones && (
-            <div className="px-4 mt-4 avoid-break">
+            <div className="px-1 mt-4 avoid-break">
               <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
                 Observaciones
               </div>
@@ -1086,7 +1268,7 @@ export default function QuoteGenerator(){
 
           {/* TÉRMINOS Y CONDICIONES */}
           {(terminos?.validez || terminos?.condicionVenta || terminos?.plazoCredito || terminos?.formaPago) && (
-            <div className="px-4 mt-4 avoid-break">
+            <div className="px-1 mt-4 avoid-break">
               <div
                 className="uppercase font-bold text-white px-3 py-2 rounded-t"
                 style={{ backgroundColor: BRAND_BLUE }}
@@ -1122,15 +1304,29 @@ export default function QuoteGenerator(){
 
           {/* FIRMA */}
           <div className="px-4 mt-8 mb-8 grid grid-cols-2 gap-6 avoid-break">
-            <div></div>
-            <div>
-              <div className="uppercase">{(user?.name || 'LIDER GONZALEZ')}</div>
-              <div className="text-slate-500">FIRMA DE ACEPTACIÓN</div>
-              <div className="mt-6 border-t pt-2 text-slate-400 text-sm">DOCUMENTO NRO.: ___________________</div>
-              <div className="text-slate-400 text-sm">NOMBRE: _____________________________</div>
-              <div className="text-slate-400 text-sm">FECHA: ______________________________</div>
-              <div className="text-slate-400 text-sm">SELLO: ______________________________</div>
+            <div className="text-[12px] text-slate-900">
+              <div className="font-semibold uppercase underline">Firma de aceptacion</div>
+              <div className="mt-2 uppercase">{(user?.name || 'LIDER GONZALEZ')}</div>
+              <div className="mt-3 space-y-2">
+                <div className="flex items-center gap-3">
+                  <div className="min-w-[90px] font-semibold uppercase">Nombre:</div>
+                  <div className="flex-1 border-b border-dotted border-slate-700"></div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="min-w-[90px] font-semibold uppercase">Documento nro.:</div>
+                  <div className="flex-1 border-b border-dotted border-slate-700"></div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="min-w-[90px] font-semibold uppercase">Fecha:</div>
+                  <div className="flex-1 border-b border-dotted border-slate-700"></div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="min-w-[90px] font-semibold uppercase">Sello:</div>
+                  <div className="flex-1 border-b border-dotted border-slate-700"></div>
+                </div>
+              </div>
             </div>
+            <div></div>
           </div>
         </div>
       </div>
