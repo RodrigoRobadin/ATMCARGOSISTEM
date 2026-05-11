@@ -3,7 +3,6 @@ import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api";
 import Chatbox from "./Chatbox.jsx";
-import AssistantBubble from "./AssistantBubble.jsx";
 
 export default function GlobalSearchBar() {
   const [q, setQ] = useState("");
@@ -190,7 +189,6 @@ export default function GlobalSearchBar() {
     0;
   return (
     <>
-      <AssistantBubble />
       <div className="flex items-center gap-3">
         <Chatbox />
       <div

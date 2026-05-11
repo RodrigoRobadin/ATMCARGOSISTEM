@@ -4,6 +4,7 @@ import { useParams, Link } from 'react-router-dom';
 import { api } from '../api';
 import AccountExecutiveSelect from '../components/AccountExecutiveSelect.jsx';
 import OrganizationLookupField from '../components/OrganizationLookupField.jsx';
+import { attachOrganizationToAssistant } from '../utils/assistantContext';
 
 function FieldRow({ label, value, children }) {
   return (
@@ -733,12 +734,41 @@ export default function OrganizationDetail() {
           <section className="bg-white rounded-2xl shadow">
             <header className="px-4 py-3 border-b font-medium flex items-center justify-between">
               <span>Detalles</span>
-              <button
-                className="text-sm text-blue-600 hover:underline"
-                onClick={() => setOpenEdit(true)}
-              >
-                Editar
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  draggable
+                  className="text-sm text-slate-600 hover:underline"
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData(
+                      "application/x-assistant-context",
+                      JSON.stringify({
+                        type: "organization",
+                        id: org.id,
+                        label: org.name || org.razon_social || `Organizacion ${org.id}`,
+                        meta: {
+                          href: `/organizations/${org.id}`,
+                        },
+                      })
+                    );
+                  }}
+                  onClick={() =>
+                    attachOrganizationToAssistant({
+                      id: org.id,
+                      name: org.name,
+                      razon_social: org.razon_social,
+                    })
+                  }
+                >
+                  Enviar a IA
+                </button>
+                <button
+                  className="text-sm text-blue-600 hover:underline"
+                  onClick={() => setOpenEdit(true)}
+                >
+                  Editar
+                </button>
+              </div>
             </header>
             <div className="p-4">
               <div className="space-y-2">

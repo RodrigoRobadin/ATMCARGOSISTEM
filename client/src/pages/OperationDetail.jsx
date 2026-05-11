@@ -8,6 +8,7 @@ import ReportPreview from "../components/op-details/ReportPreview";
 import OperationExpenseInvoices from "../components/OperationExpenseInvoices.jsx";
 import AdminOpsPanel from "../components/op-details/AdminOpsPanel.jsx";
 import OrganizationLookupField from "../components/OrganizationLookupField.jsx";
+import { attachOperationToAssistant } from "../utils/assistantContext";
 
 // 👇 Ajustá la ruta real según tu backend
 const PROVIDERS_ENDPOINT = "/organizations";
@@ -3603,6 +3604,34 @@ function providerHasFreightTag(p = {}) {
               >
                 🧾 Presupuesto (nuevo)
               </Link>
+              <button
+                type="button"
+                draggable
+                className="px-3 py-2 text-sm rounded-lg border text-left"
+                onDragStart={(event) =>
+                  event.dataTransfer.setData(
+                    "application/x-assistant-context",
+                    JSON.stringify({
+                      type: "operation",
+                      id: Number(id),
+                      label: deal.reference || `Operacion ${id}`,
+                      meta: {
+                        title: desc || deal.title || "",
+                        href: `/operations/${id}`,
+                      },
+                    })
+                  )
+                }
+                onClick={() =>
+                  attachOperationToAssistant({
+                    id: Number(id),
+                    reference: deal.reference,
+                    title: desc || deal.title || "",
+                  })
+                }
+              >
+                Enviar operacion a IA
+              </button>
               <button
                 className="px-3 py-2 text-sm rounded-lg border"
                 onClick={() => openEmailModal("general")}

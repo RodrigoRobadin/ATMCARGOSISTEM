@@ -14,6 +14,7 @@ import ReportPreview from "../components/op-details/ReportPreview";
 import OperationExpenseInvoices from "../components/OperationExpenseInvoices.jsx";
 import IndustrialDoorList from "../components/op-details/IndustrialDoorList";
 import AdminOpsPanel from "../components/op-details/AdminOpsPanel.jsx";
+import { attachOperationToAssistant } from "../utils/assistantContext";
 import {
   buildQuoteEmailPlainText,
   buildQuoteEmailHtml,
@@ -2992,6 +2993,35 @@ export default function OperationDetailIndustrial() {
               >
                 Presupuesto (Industrial)
               </Link>
+
+              <button
+                type="button"
+                draggable
+                className="px-3 py-2 text-sm rounded-lg border text-left"
+                onDragStart={(event) =>
+                  event.dataTransfer.setData(
+                    "application/x-assistant-context",
+                    JSON.stringify({
+                      type: "operation",
+                      id: Number(id),
+                      label: deal.reference || `Operacion ${id}`,
+                      meta: {
+                        title: desc || deal.title || "",
+                        href: `/operations/${id}/industrial`,
+                      },
+                    })
+                  )
+                }
+                onClick={() =>
+                  attachOperationToAssistant({
+                    id: Number(id),
+                    reference: deal.reference,
+                    title: desc || deal.title || "",
+                  })
+                }
+              >
+                Enviar operacion a IA
+              </button>
 
               <button
                 className="px-3 py-2 text-sm rounded-lg border"

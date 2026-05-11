@@ -7,6 +7,7 @@ import QuoteEditor from "../QuoteEditor.jsx";
 import InvoiceCreateModal from "../../components/InvoiceCreateModal.jsx";
 import OperationExpenseInvoices from "../../components/OperationExpenseInvoices.jsx";
 import AdminOpsPanel from "../../components/op-details/AdminOpsPanel.jsx";
+import { attachServiceCaseToAssistant } from "../../utils/assistantContext";
 
 function safeJsonArray(v) {
   if (!v) return [];
@@ -1570,6 +1571,32 @@ export default function ServiceCaseDetail() {
           <div className="bg-white border rounded-lg p-3">
             <div className="text-sm font-semibold mb-2">Acciones</div>
             <div className="space-y-2">
+              <button
+                type="button"
+                draggable
+                className="w-full px-3 py-2 rounded border bg-white hover:bg-slate-50 text-sm text-left"
+                onDragStart={(event) => {
+                  event.dataTransfer.setData(
+                    "application/x-assistant-context",
+                    JSON.stringify({
+                      type: "service_case",
+                      id: caseId,
+                      label: data.reference || `Servicio ${caseId}`,
+                      meta: {
+                        href: `/service/cases/${caseId}`,
+                      },
+                    })
+                  );
+                }}
+                onClick={() =>
+                  attachServiceCaseToAssistant({
+                    id: caseId,
+                    reference: data.reference,
+                  })
+                }
+              >
+                Enviar caso a IA
+              </button>
               <button
                 className="w-full px-3 py-2 rounded border bg-white hover:bg-slate-50 text-sm"
                 onClick={() => window.open(`/api/service/cases/${caseId}/report`, "_blank")}

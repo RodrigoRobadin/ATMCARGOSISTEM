@@ -19,6 +19,7 @@ import Login from './pages/Login.jsx';
 import Quotes from './pages/Quotes.jsx';
 import QuoteEditor from './pages/QuoteEditor.jsx';
 import GlobalSearchBar from './components/GlobalSearchBar.jsx';
+import AssistantBubble from './components/AssistantBubble.jsx';
 
 // Admin
 import UsersAdmin from './pages/UsersAdmin.jsx';
@@ -303,6 +304,7 @@ function Layout({ children }) {
         </div>
         <div className="p-4">{children}</div>
       </main>
+      <AssistantBubble />
     </div>
   );
 }

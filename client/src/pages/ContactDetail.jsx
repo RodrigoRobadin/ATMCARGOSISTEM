@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api';
+import { attachContactToAssistant } from '../utils/assistantContext';
 
 function FieldRow({ label, value, children }) {
   return (
@@ -192,7 +193,37 @@ export default function ContactDetail() {
           <section className="bg-white rounded-2xl shadow">
             <header className="px-4 py-3 border-b font-medium flex items-center justify-between">
               <span>Detalles</span>
-              <button className="text-sm text-blue-600 hover:underline" onClick={()=>setOpenEdit(true)}>Editar</button>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  draggable
+                  className="text-sm text-slate-600 hover:underline"
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData(
+                      "application/x-assistant-context",
+                      JSON.stringify({
+                        type: "contact",
+                        id: contact.id,
+                        label: contact.name || `Contacto ${contact.id}`,
+                        meta: {
+                          href: `/contacts/${contact.id}`,
+                          org_name: contact.org_name || "",
+                        },
+                      })
+                    );
+                  }}
+                  onClick={() =>
+                    attachContactToAssistant({
+                      id: contact.id,
+                      name: contact.name,
+                      org_name: contact.org_name,
+                    })
+                  }
+                >
+                  Enviar a IA
+                </button>
+                <button className="text-sm text-blue-600 hover:underline" onClick={()=>setOpenEdit(true)}>Editar</button>
+              </div>
             </header>
             <div className="p-4 space-y-2">
               <FieldRow label="Email">

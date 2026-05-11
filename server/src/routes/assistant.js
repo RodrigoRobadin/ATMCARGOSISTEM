@@ -59,7 +59,7 @@ function canUseTool(name, access) {
   return true;
 }
 
-function buildAssistantInstructions(access) {
+function buildAssistantBaseInstructions(access) {
   const nowInAsuncion = new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'America/Asuncion',
     year: 'numeric',
@@ -78,7 +78,7 @@ function buildAssistantInstructions(access) {
   ].filter(Boolean);
 
   return [
-    ASSISTANT_INSTRUCTIONS,
+    ASSISTANT_BASE_INSTRUCTIONS,
     `La fecha y hora actual en America/Asuncion es ${nowInAsuncion}.`,
     `El rol del usuario autenticado es "${access.role}".`,
     `Solo puedes responder con informacion de estos modulos permitidos: ${allowed.join(', ') || 'ninguno'}.`,
@@ -104,6 +104,55 @@ function safeJsonParse(value, fallback = null) {
 
 function cleanText(value, maxLen = 4000) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLen);
+}
+
+function normalizeAssistantContextItem(item) {
+  if (!item || typeof item !== 'object') return null;
+  const type = cleanText(item.type, 40).toLowerCase();
+  const label = cleanText(item.label, 160);
+  const id = Number(item.id);
+  const meta = item.meta && typeof item.meta === 'object' ? item.meta : {};
+  if (!type || !label) return null;
+  if (!['operation', 'organization', 'contact', 'service_case'].includes(type)) return null;
+  return {
+    type,
+    id: Number.isFinite(id) && id > 0 ? id : null,
+    label,
+    meta: {
+      href: cleanText(meta.href, 200),
+      title: cleanText(meta.title, 160),
+      org_name: cleanText(meta.org_name, 160),
+    },
+  };
+}
+
+function normalizeAssistantContextItems(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const raw of list) {
+    const item = normalizeAssistantContextItem(raw);
+    if (!item) continue;
+    const key = `${item.type}:${item.id || item.label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out.slice(0, 8);
+}
+
+function buildContextInstructionText(contextItems) {
+  if (!contextItems.length) return '';
+  const lines = contextItems.map((item) => {
+    const typeLabel = {
+      operation: 'Operacion',
+      organization: 'Cliente',
+      contact: 'Contacto',
+      service_case: 'Caso de servicio',
+    }[item.type] || 'Contexto';
+    return `${typeLabel}: ${item.label}${item.id ? ` (id ${item.id})` : ''}`;
+  });
+  return `Contexto adjunto por la interfaz: ${lines.join(' | ')}. Prioriza este contexto si el usuario dice "esta", "este", "esto" o hace referencias cortas.`;
 }
 
 function parseOptionalBoolean(value) {
@@ -343,6 +392,31 @@ function buildOperationSummaryAnswer(result) {
   return lines.join('\n');
 }
 
+function buildOperationSummaryCard(result) {
+  const op = result?.operation;
+  if (!op) return null;
+  const fields = [
+    { label: 'Estado', value: op.status || '-' },
+    { label: 'Cliente', value: op.org_name || '-' },
+    { label: 'Contacto', value: op.contact_name || '-' },
+    { label: 'Unidad', value: op.business_unit_name || op.business_unit_slug || '-' },
+    { label: 'Cotizacion', value: Number(op.has_quote || 0) ? 'si' : 'no' },
+  ];
+  if (op.operation_sale_value_usd !== null && op.operation_sale_value_usd !== undefined) {
+    fields.push({ label: 'Valor de venta USD', value: String(op.operation_sale_value_usd) });
+  }
+  if (result?.followup) {
+    fields.push({
+      label: 'Seguimiento pendiente',
+      value: `${Number(result.followup.pending_followup_tasks || 0)} tarea(s), ${Number(result.followup.overdue_followup_tasks || 0)} vencida(s)`,
+    });
+  }
+  return {
+    title: `Operacion ${op.reference || `#${op.id}`}`,
+    fields,
+  };
+}
+
 function buildResolvedOperationInstruction(result) {
   const op = result?.operation;
   if (!op) return '';
@@ -356,6 +430,12 @@ function buildResolvedOperationInstruction(result) {
     `Valor de venta USD: ${op.operation_sale_value_usd ?? 0}.`,
     `Tareas pendientes: ${Number(result?.followup?.pending_followup_tasks || 0)}.`,
   ].join(' ');
+}
+
+function shouldAutoResolveAttachedContextMessage(message) {
+  const text = cleanText(message, 240).toLowerCase();
+  if (!text) return false;
+  return /(esta|este|esto|resum|detalle|mostra|mostrar|ver|decime|decir|como esta|c[oó]mo est[aá]|que tiene|qu[eé] tiene|seguimiento|cotiza|cotizacion|presupuesto|estado)/i.test(text);
 }
 
 function detectOperationIntent(message) {
@@ -389,6 +469,21 @@ function detectFollowupActionIntent(message) {
   if (/(nota|anota|comentario)/i.test(text)) return 'note';
   if (/(actividad|registrar actividad)/i.test(text)) return 'activity';
   return 'activity';
+}
+
+function detectSystemQueryIntent(message) {
+  const text = cleanText(message, 260).toLowerCase();
+  if (!text) return false;
+  if (/\[contexto adjunto\]/i.test(text)) return true;
+  return /(operacion|operación|cliente|contacto|servicio|mantenimiento|caso|seguimiento|cotizacion|cotización|presupuesto|factura|estado|resumen|buscar|buscame|mostrame|mu[eé]strame|cu[aá]nt[oa]s?)/i.test(text);
+}
+
+function detectAssistantMode({ message, followupActionIntent, normalizedMessageRef, crmEntityType, operationIntent, contextItems }) {
+  if (followupActionIntent) return 'assisted_action';
+  if ((contextItems && contextItems.length) || normalizedMessageRef || crmEntityType || operationIntent || detectSystemQueryIntent(message)) {
+    return 'system_query';
+  }
+  return 'conversation';
 }
 
 function buildFollowupActionInstruction(entryType, resolvedOperation) {
@@ -518,6 +613,39 @@ function buildOrganizationSummaryAnswer(result) {
   ].join('\n');
 }
 
+function buildOrganizationSummaryCard(result) {
+  const org = result?.organization;
+  if (!org) return null;
+  const ops = result?.summaries?.operations || {};
+  const contacts = result?.summaries?.contacts || {};
+  const service = result?.summaries?.service_cases || {};
+  return {
+    title: `Cliente ${org.name || org.razon_social || `#${org.id}`}`,
+    fields: [
+      { label: 'RUC', value: org.ruc || '-' },
+      { label: 'Operaciones abiertas', value: String(Number(ops.open_operations || 0)) },
+      { label: 'Valor abierto USD', value: String(Number(ops.open_operations_sale_value_usd || 0)) },
+      { label: 'Contactos', value: String(Number(contacts.total_contacts || 0)) },
+      { label: 'Servicios abiertos', value: String(Number(service.open_service_cases || 0)) },
+    ],
+  };
+}
+
+function buildResolvedOrganizationInstruction(result) {
+  const org = result?.organization;
+  if (!org) return '';
+  const ops = result?.summaries?.operations || {};
+  const contacts = result?.summaries?.contacts || {};
+  return [
+    `El cliente adjunto ya fue resuelto en backend: ${org.name || org.razon_social || `cliente ${org.id}`}.`,
+    `ID interno: ${org.id}.`,
+    `RUC: ${org.ruc || '-'}.`,
+    `Operaciones abiertas: ${Number(ops.open_operations || 0)}.`,
+    `Valor abierto USD: ${Number(ops.open_operations_sale_value_usd || 0)}.`,
+    `Contactos: ${Number(contacts.total_contacts || 0)}.`,
+  ].join(' ');
+}
+
 function buildContactSummaryAnswer(result) {
   const contact = result?.contact;
   if (!contact) return '';
@@ -530,6 +658,36 @@ function buildContactSummaryAnswer(result) {
     `Operaciones recientes: ${Number(summary.total_operations || 0)}`,
     `Actividades recientes: ${Number(summary.total_activities || 0)}`,
   ].join('\n');
+}
+
+function buildContactSummaryCard(result) {
+  const contact = result?.contact;
+  if (!contact) return null;
+  const summary = result?.summary || {};
+  return {
+    title: `Contacto ${contact.name || `#${contact.id}`}`,
+    fields: [
+      { label: 'Cliente', value: contact.org_name || '-' },
+      { label: 'Email', value: contact.email || '-' },
+      { label: 'Telefono', value: contact.phone || '-' },
+      { label: 'Operaciones recientes', value: String(Number(summary.total_operations || 0)) },
+      { label: 'Actividades recientes', value: String(Number(summary.total_activities || 0)) },
+    ],
+  };
+}
+
+function buildResolvedContactInstruction(result) {
+  const contact = result?.contact;
+  if (!contact) return '';
+  const summary = result?.summary || {};
+  return [
+    `El contacto adjunto ya fue resuelto en backend: ${contact.name || `contacto ${contact.id}`}.`,
+    `ID interno: ${contact.id}.`,
+    `Cliente: ${contact.org_name || '-'}.`,
+    `Email: ${contact.email || '-'}.`,
+    `Telefono: ${contact.phone || '-'}.`,
+    `Operaciones recientes: ${Number(summary.total_operations || 0)}.`,
+  ].join(' ');
 }
 
 function extractServiceReferenceHint(text) {
@@ -633,6 +791,31 @@ function buildServiceCaseSummaryAnswer(result) {
     `Cliente: ${item.org_name || '-'}`,
     `Programado: ${item.scheduled_date || '-'}`,
   ].join('\n');
+}
+
+function buildServiceCaseSummaryCard(result) {
+  const item = result?.service_case;
+  if (!item) return null;
+  return {
+    title: `Caso de servicio ${item.reference || `#${item.id}`}`,
+    fields: [
+      { label: 'Estado', value: item.status || '-' },
+      { label: 'Cliente', value: item.org_name || '-' },
+      { label: 'Programado', value: item.scheduled_date || '-' },
+    ],
+  };
+}
+
+function buildResolvedServiceCaseInstruction(result) {
+  const item = result?.service_case;
+  if (!item) return '';
+  return [
+    `El caso de servicio adjunto ya fue resuelto en backend: ${item.reference || `caso ${item.id}`}.`,
+    `ID interno: ${item.id}.`,
+    `Estado: ${item.status || '-'}.`,
+    `Cliente: ${item.org_name || '-'}.`,
+    `Programado: ${item.scheduled_date || '-'}.`,
+  ].join(' ');
 }
 
 function buildOperationIntentAnswer(result, intent) {
@@ -1842,23 +2025,44 @@ async function getFollowupSummary(args) {
   return { summary, items };
 }
 
-const ASSISTANT_INSTRUCTIONS = [
+const ASSISTANT_BASE_INSTRUCTIONS = [
   'Eres el asistente interno de GRUPO ATM.',
-  'Trabajas en fase 2.1: consultas y acciones asistidas con confirmacion.',
-  'Puedes proponer crear notas, actividades, recordatorios y tareas dentro de operaciones, pero nunca ejecutarlas sin confirmacion explicita del usuario.',
-  'No puedes aprobar, eliminar ni sugerir que ya ejecutaste una accion sobre el sistema antes de confirmar.',
-  'Si el usuario pide datos del sistema, primero usa las tools internas antes de responder.',
   'No inventes operaciones, montos, estados, clientes ni fechas.',
-  'Cuando hables del valor de una operacion usa operation_sale_value_usd o total_open_sales_value_usd; esos campos salen de la venta del presupuesto/cotizacion.',
-  'No uses deal_value como valor de venta; deal_value es solo dato interno/fallback.',
-  'Si el usuario pide una busqueda especifica de operaciones con filtros, usa search_operations_advanced.',
-  'Si el usuario pide una operacion puntual por numero o referencia, usa get_operation_summary.',
-  'Si el usuario pide crear seguimiento en una operacion, usa prepare_operation_followup_action y luego pide confirmacion.',
-  'Cuando una accion requiera fecha y hora, usa formato YYYY-MM-DD HH:mm si la fecha es clara.',
   'Si la busqueda es ambigua, pide una aclaracion corta.',
   'Responde en espanol, claro y directo.',
   'Cuando listes registros, prioriza resumen y luego los items mas relevantes.',
 ].join(' ');
+
+function buildAssistantInstructionsForMode(mode) {
+  if (mode === 'conversation') {
+    return [
+      'Estas en modo conversacion.',
+      'Responde de forma natural y util.',
+      'No necesitas usar tools salvo que el usuario pida datos reales del sistema.',
+      'Si la consulta requiere datos reales, dilo y usa las tools internas en la siguiente respuesta si hace falta.',
+    ].join(' ');
+  }
+
+  if (mode === 'assisted_action') {
+    return [
+      'Estas en modo accion asistida.',
+      'Puedes proponer crear notas, actividades, recordatorios y tareas dentro de operaciones, pero nunca ejecutarlas sin confirmacion explicita del usuario.',
+      'No puedes aprobar, eliminar ni sugerir que ya ejecutaste una accion sobre el sistema antes de confirmar.',
+      'Si el usuario pide crear seguimiento en una operacion, usa prepare_operation_followup_action y luego pide confirmacion.',
+      'Cuando una accion requiera fecha y hora, usa formato YYYY-MM-DD HH:mm si la fecha es clara.',
+      'Si faltan datos obligatorios, pide solo la aclaracion minima necesaria.',
+    ].join(' ');
+  }
+
+  return [
+    'Estas en modo consulta del sistema.',
+    'Si el usuario pide datos del sistema, primero usa las tools internas antes de responder.',
+    'Cuando hables del valor de una operacion usa operation_sale_value_usd o total_open_sales_value_usd; esos campos salen de la venta del presupuesto/cotizacion.',
+    'No uses deal_value como valor de venta; deal_value es solo dato interno/fallback.',
+    'Si el usuario pide una busqueda especifica de operaciones con filtros, usa search_operations_advanced.',
+    'Si el usuario pide una operacion puntual por numero o referencia, usa get_operation_summary.',
+  ].join(' ');
+}
 
 const TOOL_DEFINITIONS = [
   {
@@ -2051,6 +2255,11 @@ function getToolDefinitionsForAccess(access) {
   return TOOL_DEFINITIONS.filter((tool) => canUseTool(tool.name, access));
 }
 
+function getToolDefinitionsForMode(mode, access) {
+  if (mode === 'conversation') return [];
+  return getToolDefinitionsForAccess(access);
+}
+
 function linkKey(type, id) {
   return `${type}:${id}`;
 }
@@ -2126,6 +2335,23 @@ function collectAssistantLinksFromToolOutput(name, output, map, access) {
   if (output.service_case) addService(output.service_case);
   if (output.operation) addDeal(output.operation);
   if (output.pending_action?.target) addPendingOperation(output.pending_action.target);
+}
+
+function collectAssistantLinksFromContextItems(contextItems, map, access) {
+  for (const item of contextItems || []) {
+    if (item.type === 'operation' && access.canViewOperations && item.id) {
+      addAssistantLink(map, 'deal', item.id, item.label, item.meta?.href || `/operations/${item.id}`);
+    }
+    if (item.type === 'organization' && access.canViewOrganizations && item.id) {
+      addAssistantLink(map, 'organization', item.id, item.label, item.meta?.href || `/organizations/${item.id}`);
+    }
+    if (item.type === 'contact' && access.canViewContacts && item.id) {
+      addAssistantLink(map, 'contact', item.id, item.label, item.meta?.href || `/contacts/${item.id}`);
+    }
+    if (item.type === 'service_case' && access.canViewService && item.id) {
+      addAssistantLink(map, 'service_case', item.id, item.label, item.meta?.href || `/service/cases/${item.id}`);
+    }
+  }
 }
 
 const TOOL_HANDLERS = {
@@ -2326,11 +2552,13 @@ async function callOpenAI(payload, apiKey) {
   return data;
 }
 
-function toOpenAIInput(history, message) {
+function toOpenAIInput(history, message, contextInstruction = '') {
   const items = [];
   for (const row of history || []) {
     const role = row?.role === 'assistant' ? 'assistant' : 'user';
-    const text = cleanText(row?.content, 3000);
+    const contextText =
+      role === 'user' ? buildContextInstructionText(normalizeAssistantContextItems(row?.context_items)) : '';
+    const text = cleanText(`${contextText ? `${contextText}\n` : ''}${row?.content || ''}`, 3000);
     if (!text) continue;
     items.push({
       type: 'message',
@@ -2348,7 +2576,7 @@ function toOpenAIInput(history, message) {
   items.push({
     type: 'message',
     role: 'user',
-    content: [{ type: 'input_text', text: userMessage }],
+    content: [{ type: 'input_text', text: cleanText(`${contextInstruction ? `${contextInstruction}\n` : ''}${userMessage}`, 4000) }],
   });
   return items;
 }
@@ -2359,6 +2587,7 @@ router.get('/status', requireAuth, async (_req, res) => {
   res.json({
     enabled: true,
     phase: 'assisted-actions',
+    modes: ['conversation', 'system_query', 'assisted_action'],
     provider: 'openai',
     configured: assistantConfig.configured,
     model: assistantConfig.model,
@@ -2449,6 +2678,7 @@ router.post('/confirm-action', requireAuth, async (req, res) => {
 
 router.post('/respond', requireAuth, async (req, res) => {
   const message = cleanText(req.body?.message, 4000);
+  const contextItems = normalizeAssistantContextItems(req.body?.context_items);
   const rawHistory = Array.isArray(req.body?.history) ? req.body.history : [];
   const history = rawHistory
     .filter((row) => row && (row.role === 'user' || row.role === 'assistant'))
@@ -2456,6 +2686,7 @@ router.post('/respond', requireAuth, async (req, res) => {
     .map((row) => ({
       role: row.role,
       content: cleanText(row.content, 3000),
+      context_items: normalizeAssistantContextItems(row.context_items),
     }))
     .filter((row) => row.content);
 
@@ -2489,14 +2720,35 @@ router.post('/respond', requireAuth, async (req, res) => {
     operationReferenceHint || (/^\s*op[\s-]*\d{1,6}\s*$/i.test(message) || /^\s*\d{3,6}\s*$/.test(message)
       ? normalizeOperationReferenceCandidates(message).formatted
       : null);
-  const tools = getToolDefinitionsForAccess(access);
+  const assistantMode = detectAssistantMode({
+    message,
+    followupActionIntent,
+    normalizedMessageRef,
+    crmEntityType,
+    operationIntent,
+    contextItems,
+  });
+  const tools = getToolDefinitionsForMode(assistantMode, access);
   const linkMap = new Map();
   let pendingAction = null;
+  const contextInstruction = buildContextInstructionText(contextItems);
 
   try {
     incrementAssistantInFlight(rateLimit.key);
+    collectAssistantLinksFromContextItems(contextItems, linkMap, access);
     let hintedOperationResult = null;
-    if (normalizedMessageRef && access.canViewOperations) {
+    const operationContext = contextItems.find((item) => item.type === 'operation' && item.id);
+    const organizationContext = contextItems.find((item) => item.type === 'organization' && item.id);
+    const contactContext = contextItems.find((item) => item.type === 'contact' && item.id);
+    const serviceCaseContext = contextItems.find((item) => item.type === 'service_case' && item.id);
+    if (!normalizedMessageRef && operationContext && access.canViewOperations) {
+      hintedOperationResult = await getOperationSummary({ operation_id: operationContext.id });
+      collectAssistantLinksFromToolOutput('get_operation_summary', hintedOperationResult, linkMap, access);
+      if (hintedOperationResult?.operation?.id) {
+        toolNamesUsed.push('get_operation_summary:context');
+      }
+    }
+    if (!hintedOperationResult && normalizedMessageRef && access.canViewOperations) {
       hintedOperationResult = await getOperationSummary({ reference: normalizedMessageRef });
       collectAssistantLinksFromToolOutput('get_operation_summary', hintedOperationResult, linkMap, access);
       if (hintedOperationResult?.operation?.id) {
@@ -2515,21 +2767,25 @@ router.post('/respond', requireAuth, async (req, res) => {
           action: 'assistant_query',
           entity: 'assistant',
           description: 'Consulta al asistente IA',
-          meta: {
-            phase: 'assisted-actions',
-            model,
-            role: access.role,
-            message,
-            tools_used: Array.from(new Set(toolNamesUsed)),
-            auto_resolved_reference: normalizedMessageRef,
-            auto_resolved_intent: operationIntent || 'summary',
-          },
-        });
+            meta: {
+              phase: 'assisted-actions',
+              model,
+              role: access.role,
+              message,
+              tools_used: Array.from(new Set(toolNamesUsed)),
+              auto_resolved_reference: normalizedMessageRef,
+              auto_resolved_intent: operationIntent || 'summary',
+              mode: assistantMode,
+            },
+          });
 
         return res.json({
           ok: true,
           phase: 'assisted-actions',
+          mode: assistantMode,
           answer: buildOperationIntentAnswer(hintedOperationResult, operationIntent || 'summary') || finalText,
+          response_kind: 'operation_summary',
+          response_card: buildOperationSummaryCard(hintedOperationResult),
           tools_used: Array.from(new Set(toolNamesUsed)),
           links: Array.from(linkMap.values()).slice(0, 12),
           model,
@@ -2544,6 +2800,132 @@ router.post('/respond', requireAuth, async (req, res) => {
     let hintedOrganizationResult = null;
     let hintedContactResult = null;
     let hintedServiceCaseResult = null;
+    if (!normalizedMessageRef && !crmEntityLookup && organizationContext && access.canViewOrganizations) {
+      hintedOrganizationResult = await getOrganizationSummary({ organization_id: organizationContext.id });
+      collectAssistantLinksFromToolOutput('get_organization_summary', hintedOrganizationResult, linkMap, access);
+      if (hintedOrganizationResult?.organization?.id) toolNamesUsed.push('get_organization_summary:context');
+      if (
+        hintedOrganizationResult?.organization?.id &&
+        !followupActionIntent &&
+        shouldAutoResolveAttachedContextMessage(message)
+      ) {
+        await logAudit({
+          req,
+          action: 'assistant_query',
+          entity: 'assistant',
+          description: 'Consulta al asistente IA',
+          meta: {
+            phase: 'assisted-actions',
+            model,
+            role: access.role,
+            message,
+            tools_used: Array.from(new Set(toolNamesUsed)),
+            auto_resolved_entity: 'organization_context',
+            mode: assistantMode,
+          },
+        });
+
+        return res.json({
+          ok: true,
+          phase: 'assisted-actions',
+          mode: assistantMode,
+          answer: buildOrganizationSummaryAnswer(hintedOrganizationResult),
+          response_kind: 'organization_summary',
+          response_card: buildOrganizationSummaryCard(hintedOrganizationResult),
+          tools_used: Array.from(new Set(toolNamesUsed)),
+          links: Array.from(linkMap.values()).slice(0, 12),
+          model,
+          rate_limit: {
+            remaining: rateLimit.remaining,
+            reset_at: new Date(rateLimit.resetAt).toISOString(),
+          },
+        });
+      }
+    }
+    if (!normalizedMessageRef && !crmEntityLookup && contactContext && access.canViewContacts) {
+      hintedContactResult = await getContactSummary({ contact_id: contactContext.id });
+      collectAssistantLinksFromToolOutput('get_contact_summary', hintedContactResult, linkMap, access);
+      if (hintedContactResult?.contact?.id) toolNamesUsed.push('get_contact_summary:context');
+      if (
+        hintedContactResult?.contact?.id &&
+        !followupActionIntent &&
+        shouldAutoResolveAttachedContextMessage(message)
+      ) {
+        await logAudit({
+          req,
+          action: 'assistant_query',
+          entity: 'assistant',
+          description: 'Consulta al asistente IA',
+          meta: {
+            phase: 'assisted-actions',
+            model,
+            role: access.role,
+            message,
+            tools_used: Array.from(new Set(toolNamesUsed)),
+            auto_resolved_entity: 'contact_context',
+            mode: assistantMode,
+          },
+        });
+
+        return res.json({
+          ok: true,
+          phase: 'assisted-actions',
+          mode: assistantMode,
+          answer: buildContactSummaryAnswer(hintedContactResult),
+          response_kind: 'contact_summary',
+          response_card: buildContactSummaryCard(hintedContactResult),
+          tools_used: Array.from(new Set(toolNamesUsed)),
+          links: Array.from(linkMap.values()).slice(0, 12),
+          model,
+          rate_limit: {
+            remaining: rateLimit.remaining,
+            reset_at: new Date(rateLimit.resetAt).toISOString(),
+          },
+        });
+      }
+    }
+    if (!normalizedMessageRef && !crmEntityLookup && serviceCaseContext && access.canViewService) {
+      hintedServiceCaseResult = await getServiceCaseSummary({ service_case_id: serviceCaseContext.id });
+      collectAssistantLinksFromToolOutput('get_service_case_summary', hintedServiceCaseResult, linkMap, access);
+      if (hintedServiceCaseResult?.service_case?.id) toolNamesUsed.push('get_service_case_summary:context');
+      if (
+        hintedServiceCaseResult?.service_case?.id &&
+        !followupActionIntent &&
+        shouldAutoResolveAttachedContextMessage(message)
+      ) {
+        await logAudit({
+          req,
+          action: 'assistant_query',
+          entity: 'assistant',
+          description: 'Consulta al asistente IA',
+          meta: {
+            phase: 'assisted-actions',
+            model,
+            role: access.role,
+            message,
+            tools_used: Array.from(new Set(toolNamesUsed)),
+            auto_resolved_entity: 'service_case_context',
+            mode: assistantMode,
+          },
+        });
+
+        return res.json({
+          ok: true,
+          phase: 'assisted-actions',
+          mode: assistantMode,
+          answer: buildServiceCaseSummaryAnswer(hintedServiceCaseResult),
+          response_kind: 'service_case_summary',
+          response_card: buildServiceCaseSummaryCard(hintedServiceCaseResult),
+          tools_used: Array.from(new Set(toolNamesUsed)),
+          links: Array.from(linkMap.values()).slice(0, 12),
+          model,
+          rate_limit: {
+            remaining: rateLimit.remaining,
+            reset_at: new Date(rateLimit.resetAt).toISOString(),
+          },
+        });
+      }
+    }
     if (!normalizedMessageRef && crmEntityLookup) {
       if (crmEntityType === 'service_case' && access.canViewService) {
         hintedServiceCaseResult = await getServiceCaseSummary({
@@ -2566,13 +2948,17 @@ router.post('/respond', requireAuth, async (req, res) => {
               tools_used: Array.from(new Set(toolNamesUsed)),
               auto_resolved_entity: 'service_case',
               auto_resolved_lookup: extractServiceReferenceHint(message) || crmEntityLookup,
+              mode: assistantMode,
             },
           });
 
           return res.json({
             ok: true,
             phase: 'assisted-actions',
+            mode: assistantMode,
             answer: buildServiceCaseSummaryAnswer(hintedServiceCaseResult),
+            response_kind: 'service_case_summary',
+            response_card: buildServiceCaseSummaryCard(hintedServiceCaseResult),
             tools_used: Array.from(new Set(toolNamesUsed)),
             links: Array.from(linkMap.values()).slice(0, 12),
             model,
@@ -2602,13 +2988,17 @@ router.post('/respond', requireAuth, async (req, res) => {
               tools_used: Array.from(new Set(toolNamesUsed)),
               auto_resolved_entity: 'organization',
               auto_resolved_lookup: crmEntityLookup,
+              mode: assistantMode,
             },
           });
 
           return res.json({
             ok: true,
             phase: 'assisted-actions',
+            mode: assistantMode,
             answer: buildOrganizationSummaryAnswer(hintedOrganizationResult),
+            response_kind: 'organization_summary',
+            response_card: buildOrganizationSummaryCard(hintedOrganizationResult),
             tools_used: Array.from(new Set(toolNamesUsed)),
             links: Array.from(linkMap.values()).slice(0, 12),
             model,
@@ -2638,13 +3028,17 @@ router.post('/respond', requireAuth, async (req, res) => {
               tools_used: Array.from(new Set(toolNamesUsed)),
               auto_resolved_entity: 'contact',
               auto_resolved_lookup: crmEntityLookup,
+              mode: assistantMode,
             },
           });
 
           return res.json({
             ok: true,
             phase: 'assisted-actions',
+            mode: assistantMode,
             answer: buildContactSummaryAnswer(hintedContactResult),
+            response_kind: 'contact_summary',
+            response_card: buildContactSummaryCard(hintedContactResult),
             tools_used: Array.from(new Set(toolNamesUsed)),
             links: Array.from(linkMap.values()).slice(0, 12),
             model,
@@ -2658,7 +3052,9 @@ router.post('/respond', requireAuth, async (req, res) => {
     }
 
     const instructions = [
-      buildAssistantInstructions(access),
+      buildAssistantBaseInstructions(access),
+      buildAssistantInstructionsForMode(assistantMode),
+      `Modo interno actual: ${assistantMode}.`,
       normalizedMessageRef
         ? `La consulta actual menciona una posible referencia de operacion: "${normalizedMessageRef}". Si el pedido apunta a una operacion puntual, prioriza get_operation_summary usando esa referencia.`
         : null,
@@ -2674,9 +3070,13 @@ router.post('/respond', requireAuth, async (req, res) => {
         : null,
       crmEntityType ? `La entidad sugerida en la consulta es "${crmEntityType}".` : null,
       crmEntityLookup ? `El texto principal a resolver en la consulta es "${crmEntityLookup}".` : null,
+      contextInstruction || null,
       hintedServiceCaseResult?.service_case?.id
         ? `El caso de servicio ya fue resuelto en backend: ${hintedServiceCaseResult.service_case.reference}.`
         : null,
+      hintedOrganizationResult?.organization?.id ? buildResolvedOrganizationInstruction(hintedOrganizationResult) : null,
+      hintedContactResult?.contact?.id ? buildResolvedContactInstruction(hintedContactResult) : null,
+      hintedServiceCaseResult?.service_case?.id ? buildResolvedServiceCaseInstruction(hintedServiceCaseResult) : null,
       hintedOperationResult?.operation?.id ? buildResolvedOperationInstruction(hintedOperationResult) : null,
     ]
       .filter(Boolean)
@@ -2686,7 +3086,7 @@ router.post('/respond', requireAuth, async (req, res) => {
       model,
       instructions,
       tools,
-      input: toOpenAIInput(history, message),
+      input: toOpenAIInput(history, message, contextInstruction),
     }, assistantConfig.apiKey);
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
@@ -2733,6 +3133,7 @@ router.post('/respond', requireAuth, async (req, res) => {
       description: 'Consulta al asistente IA',
       meta: {
         phase: pendingAction ? 'assisted-actions' : 'read-only',
+        mode: assistantMode,
         model,
         role: access.role,
         message,
@@ -2750,7 +3151,10 @@ router.post('/respond', requireAuth, async (req, res) => {
     return res.json({
       ok: true,
       phase: pendingAction ? 'assisted-actions' : 'read-only',
+      mode: assistantMode,
       answer: finalText,
+      response_kind: null,
+      response_card: null,
       tools_used: Array.from(new Set(toolNamesUsed)),
       links: Array.from(linkMap.values()).slice(0, 12),
       pending_action: pendingAction,
