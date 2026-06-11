@@ -1,5 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api';
+import {
+  companyBankAccountLabel,
+  companyBankAccountValue,
+  filterCompanyBankAccounts,
+  parseCompanyBankAccounts,
+} from '../../utils/companyBankAccounts';
 
 const PAYMENT_METHODS = ['Transferencia', 'Efectivo', 'Cheque', 'Tarjeta', 'Otro'];
 
@@ -90,6 +96,27 @@ function getPaymentOrderMeta(row) {
   return { label: 'Con OP', tone: 'amber' };
 }
 
+function hasSupplierBankAccount(row) {
+  return Boolean(
+    row?.supplier_bank_name ||
+      row?.supplier_bank_account ||
+      row?.supplier_bank_holder ||
+      row?.supplier_bank_cci_iban
+  );
+}
+
+function supplierBankAccountLabel(row) {
+  const main = [
+    row?.supplier_bank_name,
+    row?.supplier_bank_account,
+    row?.supplier_bank_currency,
+  ].filter(Boolean);
+  const holder = [row?.supplier_bank_holder, row?.supplier_bank_holder_ruc]
+    .filter(Boolean)
+    .join(' - ');
+  return [main.join(' - '), holder].filter(Boolean).join(' | ');
+}
+
 export default function AccountsPayableVendorDrawer({
   open,
   supplierKey,
@@ -127,6 +154,8 @@ export default function AccountsPayableVendorDrawer({
     description: '',
     observations: '',
   });
+  const [companyAccounts, setCompanyAccounts] = useState([]);
+  const [supplierOrg, setSupplierOrg] = useState(null);
 
   useEffect(() => {
     setFilters((prev) => ({
@@ -165,9 +194,54 @@ export default function AccountsPayableVendorDrawer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, supplierKey, currencyCode]);
 
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    api.get('/params', { params: { keys: 'company_bank_account', only_active: 1 } })
+      .then(({ data }) => {
+        if (!live) return;
+        setCompanyAccounts(parseCompanyBankAccounts(data?.company_bank_account || []));
+      })
+      .catch(() => {
+        if (live) setCompanyAccounts([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    let live = true;
+    setSupplierOrg(null);
+    const key = String(supplierKey || '');
+    if (!open || !key.startsWith('org:')) {
+      return () => {
+        live = false;
+      };
+    }
+    const orgId = Number(key.slice(4));
+    if (!orgId) {
+      return () => {
+        live = false;
+      };
+    }
+    api
+      .get(`/organizations/${orgId}`)
+      .then(({ data }) => {
+        if (live) setSupplierOrg(data || null);
+      })
+      .catch(() => {
+        if (live) setSupplierOrg(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [open, supplierKey]);
+
   if (!open) return null;
 
   const supplier = data.supplier || {};
+  const supplierBank = supplierOrg || supplier;
   const summary = data.summary || {};
   const allRows = data.rows || [];
   const rows = (data.rows || []).filter((row) => {
@@ -185,6 +259,7 @@ export default function AccountsPayableVendorDrawer({
     }
     return true;
   });
+  const paymentAccountOptions = filterCompanyBankAccounts(companyAccounts, supplier.currency_code || currencyCode);
 
   const lastPayment = allRows
     .filter((row) => row.movement_kind === 'payment')
@@ -350,6 +425,7 @@ export default function AccountsPayableVendorDrawer({
           payment_date: paymentForm.payment_date || null,
           amount,
           payment_method: paymentForm.method || null,
+          account: paymentForm.account || null,
           reference_number: paymentForm.reference_number || null,
           notes: paymentForm.notes || null,
         });
@@ -690,7 +766,40 @@ export default function AccountsPayableVendorDrawer({
                   <option value="">Metodo</option>
                   {PAYMENT_METHODS.map((item) => <option key={item} value={item}>{item}</option>)}
                 </select>
-                <input className="border rounded px-3 py-2" placeholder="Cuenta" value={paymentForm.account} onChange={(e) => setPaymentForm((f) => ({ ...f, account: e.target.value }))} />
+                <select className="border rounded px-3 py-2" value={paymentForm.account} onChange={(e) => setPaymentForm((f) => ({ ...f, account: e.target.value }))}>
+                  <option value="">Cuenta origen de empresa</option>
+                  {paymentForm.account && !paymentAccountOptions.some((account) => companyBankAccountValue(account) === paymentForm.account) ? (
+                    <option value={paymentForm.account}>{paymentForm.account}</option>
+                  ) : null}
+                  {paymentAccountOptions.map((account) => (
+                    <option key={account.id || companyBankAccountValue(account)} value={companyBankAccountValue(account)}>
+                      {companyBankAccountLabel(account)}
+                    </option>
+                  ))}
+                </select>
+                <div className="rounded-lg border bg-slate-50 p-3 text-sm">
+                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                    Cuenta destino del proveedor
+                  </div>
+                  {hasSupplierBankAccount(supplierBank) ? (
+                    <div className="mt-2 space-y-1">
+                      <select className="w-full border rounded px-3 py-2 bg-white" value="supplier-bank" disabled>
+                        <option value="supplier-bank">{supplierBankAccountLabel(supplierBank)}</option>
+                      </select>
+                      {(supplierBank.supplier_bank_account_type || supplierBank.supplier_bank_cci_iban || supplierBank.supplier_bank_swift) && (
+                        <div className="text-xs text-slate-600">
+                          {[supplierBank.supplier_bank_account_type, supplierBank.supplier_bank_cci_iban, supplierBank.supplier_bank_swift]
+                            .filter(Boolean)
+                            .join(' | ')}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-slate-500">
+                      Este proveedor no tiene cuenta bancaria cargada en su organización.
+                    </div>
+                  )}
+                </div>
                 <input className="border rounded px-3 py-2" placeholder="Referencia" value={paymentForm.reference_number} onChange={(e) => setPaymentForm((f) => ({ ...f, reference_number: e.target.value }))} />
                 <textarea className="border rounded px-3 py-2 min-h-[84px]" placeholder="Notas" value={paymentForm.notes} onChange={(e) => setPaymentForm((f) => ({ ...f, notes: e.target.value }))} />
               </div>

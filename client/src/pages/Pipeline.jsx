@@ -59,6 +59,49 @@ function openInNewTab(url) {
   document.body.removeChild(link);
 }
 
+function getSelectedIndustrialRevisionId(dealId) {
+  try {
+    const key = `industrial-quote-revision:deal:${Number(dealId)}`;
+    const raw = window.localStorage.getItem(key) || window.sessionStorage.getItem(key);
+    const parsed = Number(raw || 0);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function getSelectedCargoCostSheetVersion(dealId) {
+  try {
+    const raw = window.sessionStorage.getItem(`cargo-cost-sheet-version:deal:${Number(dealId)}`);
+    const parsed = Number(raw || 0);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function pickQuoteProfitSummary(row) {
+  const selectedRevisionId = getSelectedIndustrialRevisionId(row?.deal_id);
+  const selectedCostSheetVersion = getSelectedCargoCostSheetVersion(row?.deal_id);
+  const revisions = Array.isArray(row?.revisions) ? row.revisions : [];
+  const costSheetVersions = Array.isArray(row?.cost_sheet_versions) ? row.cost_sheet_versions : [];
+  const selectedCostSheet = selectedCostSheetVersion
+    ? costSheetVersions.find((version) => Number(version.version_number) === Number(selectedCostSheetVersion))
+    : null;
+  const selectedRevision = selectedRevisionId
+    ? revisions.find((revision) => Number(revision.id) === Number(selectedRevisionId))
+    : null;
+  const latestRevision = revisions[0] || null;
+  const latestCostSheet = costSheetVersions[0] || null;
+  const source = selectedCostSheet || selectedRevision || latestRevision || latestCostSheet || row || {};
+  return {
+    total_sales_usd: source.total_sales_usd,
+    profit_total_usd: source.profit_total_usd,
+    profit_total_display: source.profit_total_display,
+    profit_total_currency: source.profit_total_currency || row?.profit_total_currency || "USD",
+  };
+}
+
 export default function Pipeline() {
   const nav = useNavigate();
   const location = useLocation();
@@ -68,7 +111,6 @@ export default function Pipeline() {
   const [deals, setDeals] = useState([]);
   const [dealCFMap, setDealCFMap] = useState({});
   const [quoteTotals, setQuoteTotals] = useState({});
-  const [quoteProfitTotals, setQuoteProfitTotals] = useState({});
   const [openModal, setOpenModal] = useState(false);
 
   const [stageAliasMap, setStageAliasMap] = useState({});
@@ -133,15 +175,12 @@ export default function Pipeline() {
       try {
         const { data } = await api.get("/quotes");
         const map = {};
-        const profitMap = {};
         for (const row of data || []) {
-          if (row?.deal_id == null || row?.total_sales_usd == null) continue;
+          if (row?.deal_id == null) continue;
           if (map[row.deal_id] !== undefined) continue;
-          map[row.deal_id] = row.total_sales_usd;
-          if (row?.profit_total_usd != null) profitMap[row.deal_id] = row.profit_total_usd;
+          map[row.deal_id] = pickQuoteProfitSummary(row);
         }
         if (!cancelled) setQuoteTotals(map);
-        if (!cancelled) setQuoteProfitTotals(profitMap);
       } catch {}
     })();
     return () => {
@@ -165,7 +204,7 @@ export default function Pipeline() {
   function stageProfit(stageId) {
     const list = grouped[stageId] || [];
     return list.reduce((sum, deal) => {
-      const v = Number(quoteProfitTotals[deal.id] ?? 0);
+      const v = Number(quoteTotals[deal.id]?.profit_total_display ?? 0);
       return sum + (Number.isFinite(v) ? v : 0);
     }, 0);
   }
@@ -178,8 +217,14 @@ export default function Pipeline() {
     if (from === to) return;
 
     const id = Number(draggableId);
-    await api.patch(`/deals/${id}`, { stage_id: Number(to) });
-    setDeals((prev) => prev.map((d) => (d.id === id ? { ...d, stage_id: Number(to) } : d)));
+    const { data } = await api.patch(`/deals/${id}`, { stage_id: Number(to) });
+    setDeals((prev) =>
+      prev.map((d) =>
+        d.id === id
+          ? { ...d, stage_id: Number(to), ...(data?.reference ? { reference: data.reference } : {}) }
+          : d
+      )
+    );
   }
 
   async function refreshDeals(pid) {
@@ -256,6 +301,7 @@ export default function Pipeline() {
                           warnClass = "text-xs px-2 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-200";
                         }
                       }
+                      const hasOverBudget = String(deal.expense_control_status || "") === "over_budget";
 
                       return (
                         <Draggable draggableId={String(deal.id)} index={idx} key={deal.id}>
@@ -273,8 +319,12 @@ export default function Pipeline() {
                                 event.stopPropagation();
                                 openInNewTab(getOperationUrl(deal.id));
                               }}
-                              className="block w-full border rounded-xl p-3 hover:shadow transition bg-white dark:bg-slate-900 dark:border-slate-800 cursor-pointer"
-                              title="Doble clic para abrir"
+                              className={`block w-full border rounded-xl p-3 hover:shadow transition cursor-pointer ${
+                                hasOverBudget
+                                  ? "border-red-300 bg-red-50 dark:bg-red-950/30 dark:border-red-800"
+                                  : "bg-white dark:bg-slate-900 dark:border-slate-800"
+                              }`}
+                              title={hasOverBudget ? "Sobrecosto" : "Doble clic para abrir"}
                             >
                               <div className="text-sm font-semibold truncate">
                                 {deal.reference || deal.title}
@@ -285,7 +335,7 @@ export default function Pipeline() {
 
                               <div className="flex items-center gap-2 flex-wrap mt-2">
                                 <span className="text-xs bg-slate-100 dark:bg-slate-800 rounded px-2 py-0.5">
-                                  $ {Number(quoteTotals[deal.id] ?? (deal.value || 0)).toLocaleString()}
+                                  $ {Number(quoteTotals[deal.id]?.profit_total_display ?? (deal.value || 0)).toLocaleString()}
                                 </span>
                                 {typeof createdDays === "number" && (
                                   <span className="text-xs bg-slate-100 dark:bg-slate-800 rounded px-2 py-0.5">

@@ -385,6 +385,17 @@ function NewOrganizationModal({
   const [operacion, setOperacion] = useState('');
   const [notes, setNotes] = useState('');
   const [branches, setBranches] = useState([]);
+  const [supplierBank, setSupplierBank] = useState({
+    supplier_bank_name: '',
+    supplier_bank_account: '',
+    supplier_bank_currency: 'PYG',
+    supplier_bank_account_type: '',
+    supplier_bank_holder: '',
+    supplier_bank_holder_ruc: '',
+    supplier_bank_cci_iban: '',
+    supplier_bank_swift: '',
+    supplier_bank_notes: '',
+  });
 
   // Hoja de ruta para flete
   const [hojaRuta, setHojaRuta] = useState('');
@@ -404,6 +415,9 @@ function NewOrganizationModal({
   const isFreightOrg =
     (tipoOrg || '').toLowerCase().includes('flete') ||
     (rubro || '').toLowerCase().includes('flete');
+  const isSupplierOrg = (tipoOrg || '').toLowerCase().includes('proveedor');
+  const setSupplierBankField = (key, value) =>
+    setSupplierBank((prev) => ({ ...prev, [key]: value }));
 
   async function submit(e) {
     e.preventDefault();
@@ -429,6 +443,7 @@ function NewOrganizationModal({
         operacion: operacion || null,
         notes: notes || null,
         hoja_ruta: hojaRuta || null,
+        ...(isSupplierOrg ? supplierBank : {}),
         branches: (branches || []).filter((b) => b?.name || b?.address),
 
         // Asignación comercial tolerante
@@ -680,6 +695,97 @@ function NewOrganizationModal({
             ))}
           </select>
         </label>
+
+        {isSupplierOrg && (
+          <div className="border rounded-xl p-3 bg-slate-50 space-y-3">
+            <div>
+              <div className="text-sm font-medium">Cuenta bancaria del proveedor</div>
+              <div className="text-xs text-slate-500">
+                Estos datos se usan como cuenta destino al registrar pagos a proveedores.
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <label className="block text-sm">
+                Banco
+                <input
+                  className="w-full border rounded-lg px-3 py-2"
+                  value={supplierBank.supplier_bank_name}
+                  onChange={(e) => setSupplierBankField('supplier_bank_name', e.target.value)}
+                />
+              </label>
+              <label className="block text-sm">
+                Nro. de cuenta
+                <input
+                  className="w-full border rounded-lg px-3 py-2"
+                  value={supplierBank.supplier_bank_account}
+                  onChange={(e) => setSupplierBankField('supplier_bank_account', e.target.value)}
+                />
+              </label>
+              <label className="block text-sm">
+                Moneda
+                <select
+                  className="w-full border rounded-lg px-3 py-2"
+                  value={supplierBank.supplier_bank_currency}
+                  onChange={(e) => setSupplierBankField('supplier_bank_currency', e.target.value)}
+                >
+                  <option value="PYG">PYG</option>
+                  <option value="USD">USD</option>
+                  <option value="EUR">EUR</option>
+                </select>
+              </label>
+              <label className="block text-sm">
+                Tipo de cuenta
+                <input
+                  className="w-full border rounded-lg px-3 py-2"
+                  placeholder="Corriente, ahorro, etc."
+                  value={supplierBank.supplier_bank_account_type}
+                  onChange={(e) => setSupplierBankField('supplier_bank_account_type', e.target.value)}
+                />
+              </label>
+              <label className="block text-sm">
+                Titular
+                <input
+                  className="w-full border rounded-lg px-3 py-2"
+                  value={supplierBank.supplier_bank_holder}
+                  onChange={(e) => setSupplierBankField('supplier_bank_holder', e.target.value)}
+                />
+              </label>
+              <label className="block text-sm">
+                RUC titular
+                <input
+                  className="w-full border rounded-lg px-3 py-2"
+                  value={supplierBank.supplier_bank_holder_ruc}
+                  onChange={(e) => setSupplierBankField('supplier_bank_holder_ruc', e.target.value)}
+                />
+              </label>
+              <label className="block text-sm">
+                CCI / IBAN
+                <input
+                  className="w-full border rounded-lg px-3 py-2"
+                  value={supplierBank.supplier_bank_cci_iban}
+                  onChange={(e) => setSupplierBankField('supplier_bank_cci_iban', e.target.value)}
+                />
+              </label>
+              <label className="block text-sm">
+                SWIFT
+                <input
+                  className="w-full border rounded-lg px-3 py-2"
+                  value={supplierBank.supplier_bank_swift}
+                  onChange={(e) => setSupplierBankField('supplier_bank_swift', e.target.value)}
+                />
+              </label>
+              <label className="block text-sm md:col-span-2">
+                Notas bancarias
+                <textarea
+                  className="w-full border rounded-lg px-3 py-2"
+                  rows={2}
+                  value={supplierBank.supplier_bank_notes}
+                  onChange={(e) => setSupplierBankField('supplier_bank_notes', e.target.value)}
+                />
+              </label>
+            </div>
+          </div>
+        )}
 
         {/* Ejecutivo de cuenta */}
         <ExecSelect

@@ -1,6 +1,7 @@
 // client/src/pages/AdminParams.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { API_BASE, api } from "../api";
+import { parseCompanyBankAccountRow } from "../utils/companyBankAccounts";
 
 // === Grupos de parametros administrables ===
 const PARAM_GROUPS = [
@@ -88,6 +89,12 @@ const PARAM_GROUPS = [
       "credit_exp_industrial",
       "credit_next_number_industrial",
     ],
+  },
+  {
+    title: "Cuentas de empresa",
+    description:
+      "Cuentas bancarias propias para registrar cobros de clientes y pagos a proveedores.",
+    keys: ["company_bank_account"],
   },
 ];
 
@@ -437,7 +444,21 @@ function ParamCard({
     garantia: "",
     observaciones_producto: "",
   });
+  const [accountForm, setAccountForm] = useState({
+    alias: "",
+    bank_name: "",
+    account_holder: "",
+    holder_ruc: "",
+    account_number: "",
+    currency_code: "PYG",
+    account_type: "",
+    cci_iban: "",
+    swift: "",
+    notes: "",
+    active: true,
+  });
   const isTemplate = keyName === "quote_template";
+  const isCompanyBankAccount = keyName === "company_bank_account";
   const isLogo = keyName === "quote_brand_logo_url";
   const isDate =
     keyName === "invoice_timbre_valid_from_cargo" ||
@@ -493,6 +514,20 @@ function ParamCard({
   return (
     <div className="border rounded-xl p-3">
       <div className="font-medium mb-2">{prettyLabel(label)}</div>
+
+      {isCompanyBankAccount ? (
+        <CompanyBankAccountCard
+          rows={rows}
+          form={accountForm}
+          setForm={setAccountForm}
+          saving={saving}
+          onChangeRow={onChangeRow}
+          onClickSave={onClickSave}
+          onClickRemove={onClickRemove}
+          onAdd={onAdd}
+        />
+      ) : (
+        <>
 
       {isLogo && (
         <div className="mb-3 rounded-lg border bg-slate-50 p-3">
@@ -736,6 +771,163 @@ function ParamCard({
           </button>
         )}
       </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function accountToParamValue(account) {
+  return JSON.stringify({
+    alias: String(account.alias || "").trim(),
+    bank_name: String(account.bank_name || "").trim(),
+    account_holder: String(account.account_holder || "").trim(),
+    holder_ruc: String(account.holder_ruc || "").trim(),
+    account_number: String(account.account_number || "").trim(),
+    currency_code: String(account.currency_code || "PYG").toUpperCase(),
+    account_type: String(account.account_type || "").trim(),
+    cci_iban: String(account.cci_iban || "").trim(),
+    swift: String(account.swift || "").trim(),
+    notes: String(account.notes || "").trim(),
+    active: account.active !== false && account.active !== 0,
+  });
+}
+
+function CompanyBankAccountCard({
+  rows,
+  form,
+  setForm,
+  saving,
+  onChangeRow,
+  onClickSave,
+  onClickRemove,
+  onAdd,
+}) {
+  const emptyForm = {
+    alias: "",
+    bank_name: "",
+    account_holder: "",
+    holder_ruc: "",
+    account_number: "",
+    currency_code: "PYG",
+    account_type: "",
+    cci_iban: "",
+    swift: "",
+    notes: "",
+    active: true,
+  };
+
+  function patchRow(idx, patch) {
+    const current = parseCompanyBankAccountRow(rows[idx]);
+    onChangeRow(idx, {
+      value: accountToParamValue({ ...current, ...patch }),
+      active: patch.active === undefined ? rows[idx]?.active : patch.active ? 1 : 0,
+    });
+  }
+
+  function addAccount() {
+    if (!String(form.alias || "").trim() || !String(form.bank_name || "").trim()) {
+      alert("Alias y banco son requeridos.");
+      return;
+    }
+    onAdd(accountToParamValue(form));
+    setForm(emptyForm);
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left border-b">
+              <th className="py-1 pr-2">Alias</th>
+              <th className="py-1 pr-2">Banco</th>
+              <th className="py-1 pr-2">Nro cuenta</th>
+              <th className="py-1 pr-2">Moneda</th>
+              <th className="py-1 pr-2">Activa</th>
+              <th className="py-1 w-24"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length ? (
+              rows.map((row, idx) => {
+                const account = parseCompanyBankAccountRow(row);
+                return (
+                  <tr key={row.id || idx} className="border-b last:border-0 align-top">
+                    <td className="py-1 pr-2">
+                      <input className="w-full border rounded px-2 py-1" value={account.alias} onChange={(e) => patchRow(idx, { alias: e.target.value })} />
+                    </td>
+                    <td className="py-1 pr-2">
+                      <input className="w-full border rounded px-2 py-1" value={account.bank_name} onChange={(e) => patchRow(idx, { bank_name: e.target.value })} />
+                      <input className="mt-1 w-full border rounded px-2 py-1 text-xs" placeholder="Titular" value={account.account_holder} onChange={(e) => patchRow(idx, { account_holder: e.target.value })} />
+                      <input className="mt-1 w-full border rounded px-2 py-1 text-xs" placeholder="RUC titular" value={account.holder_ruc} onChange={(e) => patchRow(idx, { holder_ruc: e.target.value })} />
+                    </td>
+                    <td className="py-1 pr-2">
+                      <input className="w-full border rounded px-2 py-1" value={account.account_number} onChange={(e) => patchRow(idx, { account_number: e.target.value })} />
+                      <input className="mt-1 w-full border rounded px-2 py-1 text-xs" placeholder="CCI / IBAN" value={account.cci_iban} onChange={(e) => patchRow(idx, { cci_iban: e.target.value })} />
+                      <input className="mt-1 w-full border rounded px-2 py-1 text-xs" placeholder="SWIFT" value={account.swift} onChange={(e) => patchRow(idx, { swift: e.target.value })} />
+                    </td>
+                    <td className="py-1 pr-2">
+                      <select className="w-full border rounded px-2 py-1" value={account.currency_code} onChange={(e) => patchRow(idx, { currency_code: e.target.value })}>
+                        <option value="PYG">PYG</option>
+                        <option value="USD">USD</option>
+                        <option value="BRL">BRL</option>
+                        <option value="ARS">ARS</option>
+                      </select>
+                      <input className="mt-1 w-full border rounded px-2 py-1 text-xs" placeholder="Tipo de cuenta" value={account.account_type} onChange={(e) => patchRow(idx, { account_type: e.target.value })} />
+                      <textarea className="mt-1 w-full border rounded px-2 py-1 text-xs" rows={2} placeholder="Observaciones" value={account.notes} onChange={(e) => patchRow(idx, { notes: e.target.value })} />
+                    </td>
+                    <td className="py-1 pr-2">
+                      <select className="border rounded px-2 py-1 w-full" value={account.active ? 1 : 0} onChange={(e) => patchRow(idx, { active: Number(e.target.value) === 1 })}>
+                        <option value={1}>Si</option>
+                        <option value={0}>No</option>
+                      </select>
+                    </td>
+                    <td className="py-1">
+                      <div className="flex gap-2">
+                        <button className="px-2 py-1 text-xs rounded border" onClick={() => onClickSave(idx)} disabled={saving}>Guardar</button>
+                        <button className="px-2 py-1 text-xs rounded border text-red-600" onClick={() => onClickRemove(idx)} disabled={saving}>Eliminar</button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            ) : (
+              <tr>
+                <td className="py-2 text-slate-500" colSpan={6}>Sin cuentas cargadas.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="rounded-lg border bg-slate-50 p-3">
+        <div className="mb-2 font-semibold text-sm">Nueva cuenta</div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          <input className="border rounded px-2 py-1 text-sm" placeholder="Alias" value={form.alias} onChange={(e) => setForm((f) => ({ ...f, alias: e.target.value }))} />
+          <input className="border rounded px-2 py-1 text-sm" placeholder="Banco" value={form.bank_name} onChange={(e) => setForm((f) => ({ ...f, bank_name: e.target.value }))} />
+          <input className="border rounded px-2 py-1 text-sm" placeholder="Nro de cuenta" value={form.account_number} onChange={(e) => setForm((f) => ({ ...f, account_number: e.target.value }))} />
+          <input className="border rounded px-2 py-1 text-sm" placeholder="Titular" value={form.account_holder} onChange={(e) => setForm((f) => ({ ...f, account_holder: e.target.value }))} />
+          <input className="border rounded px-2 py-1 text-sm" placeholder="RUC titular" value={form.holder_ruc} onChange={(e) => setForm((f) => ({ ...f, holder_ruc: e.target.value }))} />
+          <select className="border rounded px-2 py-1 text-sm" value={form.currency_code} onChange={(e) => setForm((f) => ({ ...f, currency_code: e.target.value }))}>
+            <option value="PYG">PYG</option>
+            <option value="USD">USD</option>
+            <option value="BRL">BRL</option>
+            <option value="ARS">ARS</option>
+          </select>
+          <input className="border rounded px-2 py-1 text-sm" placeholder="Tipo de cuenta" value={form.account_type} onChange={(e) => setForm((f) => ({ ...f, account_type: e.target.value }))} />
+          <input className="border rounded px-2 py-1 text-sm" placeholder="CCI / IBAN" value={form.cci_iban} onChange={(e) => setForm((f) => ({ ...f, cci_iban: e.target.value }))} />
+          <input className="border rounded px-2 py-1 text-sm" placeholder="SWIFT" value={form.swift} onChange={(e) => setForm((f) => ({ ...f, swift: e.target.value }))} />
+          <textarea className="border rounded px-2 py-1 text-sm md:col-span-2" rows={2} placeholder="Observaciones" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={form.active !== false} onChange={(e) => setForm((f) => ({ ...f, active: e.target.checked }))} />
+            Activa
+          </label>
+        </div>
+        <button className="mt-3 px-3 py-1.5 text-sm rounded bg-blue-600 text-white disabled:opacity-60" onClick={addAccount} disabled={saving}>
+          Agregar cuenta
+        </button>
+      </div>
     </div>
   );
 }
@@ -782,6 +974,7 @@ function prettyLabel(key) {
     credit_next_number_cargo: "Correlativo administrativo NC ATM CARGO",
     credit_exp_industrial: "Punto de expedici?n NC ATM INDUSTRIAL",
     credit_next_number_industrial: "Correlativo administrativo NC ATM INDUSTRIAL",
+    company_bank_account: "Cuentas bancarias de la empresa",
 
     // Kanban
     kanban_pipeline: "Pipeline (por nombre)",

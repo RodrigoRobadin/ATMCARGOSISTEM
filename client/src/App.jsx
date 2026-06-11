@@ -116,10 +116,14 @@ function Layout({ children }) {
   const { logout, user } = useAuth();
   const role = String(user?.role || '').toLowerCase();
   const isServiceRole = role === 'service';
-  const canSeeAdminBlock = role !== 'venta' && !isServiceRole;
+  const canSeeAdminCore = role === 'admin' || role === 'manager';
+  const canSeeFinanceBlock = canSeeAdminCore || role === 'finanzas';
+  const canSeeAdminBlock = canSeeAdminCore || canSeeFinanceBlock;
   const canSeeContactsModules = true;
   const canSeeCommercialModules = !isServiceRole;
   const [darkMode, setDarkMode] = useState(false);
+  const [containerMenuOpen, setContainerMenuOpen] = useState(false);
+  const [adminOpsMenuOpen, setAdminOpsMenuOpen] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem('theme');
@@ -165,9 +169,28 @@ function Layout({ children }) {
             Workspaces
           </div>
           <SideLink to="/workspace/atm-cargo" icon={sidebarIcons.cargo} label="ATM CARGO" />
-          <div className="relative group/container-nav">
-            <SideLink to="/workspace/atm-container" icon={sidebarIcons.container} label="ATM CONTAINER" />
-            <div className="hidden group-hover/container-nav:block ml-8 mt-1 space-y-1">
+          <div>
+            <button
+              type="button"
+              onClick={() => setContainerMenuOpen((open) => !open)}
+              className="w-full flex items-center rounded-lg text-sm px-3 py-2 transition-all
+                         justify-center group-hover:justify-start
+                         gap-0 group-hover:gap-2
+                         hover:bg-slate-100 dark:hover:bg-slate-800 dark:text-slate-200"
+              title="ATM CONTAINER"
+            >
+              <span className="text-base w-6 text-center">{sidebarIcons.container}</span>
+              <span className="hidden group-hover:inline flex-1 text-left">ATM CONTAINER</span>
+              <span className="hidden group-hover:inline text-[10px] text-slate-500">
+                {containerMenuOpen ? '▲' : '▼'}
+              </span>
+            </button>
+            <div className={`${containerMenuOpen ? 'block' : 'hidden'} ml-8 mt-1 space-y-1`}>
+              <SideLink
+                to="/workspace/atm-container"
+                icon={sidebarIcons.container}
+                label="Workspace container"
+              />
               <SideLink
                 to="/container/master"
                 icon={sidebarIcons.container}
@@ -198,52 +221,83 @@ function Layout({ children }) {
           {canSeeAdminBlock && (
             <>
               <hr className="my-2 dark:border-slate-800" />
-              <SideLink to="/admin" icon={sidebarIcons.admin} label="Administraci\u00f3n" />
-              <SideLink to="/admin/users" icon={sidebarIcons.user} label="Usuarios" />
-              <SideLink to="/admin/params" icon={sidebarIcons.params} label="Par\u00e1metros" />
-              <SideLink to="/admin/finance" icon={sidebarIcons.finance} label="Gerencia" />
-              <div className="relative group/admin-ops">
-                <SideLink to="/admin-ops" icon={sidebarIcons.adminOps} label="Administraci\u00f3n (Ops)" />
-                <div className="hidden group-hover/admin-ops:block ml-8 mt-1 space-y-1">
-                  <SideLink
-                    to="/account-statement"
-                    icon={sidebarIcons.account}
-                    label="Estado de cuenta de clientes"
-                  />
-                  <SideLink
-                    to="/invoices"
-                    icon={sidebarIcons.invoices}
-                    label="Facturas"
-                  />
-                  <SideLink
-                    to="/admin-ops/purchases"
-                    icon={sidebarIcons.expenses}
-                    label="Compras operativas"
-                  />
-                  <SideLink
-                    to="/admin-ops/payment-orders"
-                    icon={sidebarIcons.payments}
-                    label="Ordenes de pago"
-                  />
-                  <SideLink
-                    to="/admin-ops/accounts-payable"
-                    icon={sidebarIcons.account}
-                    label="Ctas a pagar proveedores"
-                  />
-                  <SideLink
-                    to="/payments"
-                    icon={sidebarIcons.payments}
-                    label="Pagos / Recibos"
-                  />
-                  <SideLink
-                    to="/admin-expenses"
-                    icon={sidebarIcons.expenses}
-                    label="Gastos administrativos"
-                  />
-                </div>
-              </div>
-              <hr className="my-2 dark:border-slate-800" />
-              <SideLink to="/catalog" icon={sidebarIcons.catalog} label="Productos y servicios" />
+              {canSeeAdminCore && (
+                <>
+                  <SideLink to="/admin" icon={sidebarIcons.admin} label="Administraci\u00f3n" />
+                  <SideLink to="/admin/users" icon={sidebarIcons.user} label="Usuarios" />
+                  <SideLink to="/admin/params" icon={sidebarIcons.params} label="Par\u00e1metros" />
+                </>
+              )}
+              {canSeeFinanceBlock && (
+                <>
+                  <SideLink to="/admin/finance" icon={sidebarIcons.finance} label="Gerencia" />
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setAdminOpsMenuOpen((open) => !open)}
+                      className="w-full flex items-center rounded-lg text-sm px-3 py-2 transition-all
+                                 justify-center group-hover:justify-start
+                                 gap-0 group-hover:gap-2
+                                 hover:bg-slate-100 dark:hover:bg-slate-800 dark:text-slate-200"
+                      title="Administración (Ops)"
+                    >
+                      <span className="text-base w-6 text-center">{sidebarIcons.adminOps}</span>
+                      <span className="hidden group-hover:inline flex-1 text-left">Administraci\u00f3n (Ops)</span>
+                      <span className="hidden group-hover:inline text-[10px] text-slate-500">
+                        {adminOpsMenuOpen ? '▲' : '▼'}
+                      </span>
+                    </button>
+                    <div className={`${adminOpsMenuOpen ? 'block' : 'hidden'} ml-8 mt-1 space-y-1`}>
+                      <SideLink
+                        to="/admin-ops"
+                        icon={sidebarIcons.adminOps}
+                        label="Tablero Ops"
+                      />
+                      <SideLink
+                        to="/account-statement"
+                        icon={sidebarIcons.account}
+                        label="Estado de cuenta de clientes"
+                      />
+                      <SideLink
+                        to="/invoices"
+                        icon={sidebarIcons.invoices}
+                        label="Facturas"
+                      />
+                      <SideLink
+                        to="/admin-ops/purchases"
+                        icon={sidebarIcons.expenses}
+                        label="Compras operativas"
+                      />
+                      <SideLink
+                        to="/admin-ops/payment-orders"
+                        icon={sidebarIcons.payments}
+                        label="Ordenes de pago"
+                      />
+                      <SideLink
+                        to="/admin-ops/accounts-payable"
+                        icon={sidebarIcons.account}
+                        label="Ctas a pagar proveedores"
+                      />
+                      <SideLink
+                        to="/payments"
+                        icon={sidebarIcons.payments}
+                        label="Pagos / Recibos"
+                      />
+                      <SideLink
+                        to="/admin-expenses"
+                        icon={sidebarIcons.expenses}
+                        label="Gastos administrativos"
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+              {canSeeAdminCore && (
+                <>
+                  <hr className="my-2 dark:border-slate-800" />
+                  <SideLink to="/catalog" icon={sidebarIcons.catalog} label="Productos y servicios" />
+                </>
+              )}
             </>
           )}
 
@@ -412,7 +466,7 @@ export default function App() {
                 <Route
                   path="/admin/finance"
                   element={
-                    <RequireRole allow={['admin']}>
+                    <RequireRole allow={['admin', 'finanzas']}>
                       <AdminFinance />
                     </RequireRole>
                   }
@@ -420,7 +474,7 @@ export default function App() {
                 <Route
                   path="/admin-ops"
                   element={
-                    <RequireRole allow={['admin', 'manager']}>
+                    <RequireRole allow={['admin', 'manager', 'finanzas']}>
                       <AdminWorkspace />
                     </RequireRole>
                   }
@@ -428,7 +482,7 @@ export default function App() {
                 <Route
                   path="/admin-ops/purchases"
                   element={
-                    <RequireRole allow={['admin', 'manager']}>
+                    <RequireRole allow={['admin', 'manager', 'finanzas']}>
                       <OperationalPurchases />
                     </RequireRole>
                   }
@@ -436,7 +490,7 @@ export default function App() {
                 <Route
                   path="/admin-ops/payment-orders"
                   element={
-                    <RequireRole allow={['admin', 'manager']}>
+                    <RequireRole allow={['admin', 'manager', 'finanzas']}>
                       <PaymentOrders />
                     </RequireRole>
                   }
@@ -444,7 +498,7 @@ export default function App() {
                 <Route
                   path="/admin-ops/accounts-payable"
                   element={
-                    <RequireRole allow={['admin', 'manager']}>
+                    <RequireRole allow={['admin', 'manager', 'finanzas']}>
                       <AccountsPayable />
                     </RequireRole>
                   }
@@ -452,7 +506,7 @@ export default function App() {
                 <Route
                   path="/payments"
                   element={
-                    <RequireRole allow={['admin', 'manager']}>
+                    <RequireRole allow={['admin', 'manager', 'finanzas']}>
                       <Payments />
                     </RequireRole>
                   }
@@ -460,7 +514,7 @@ export default function App() {
                 <Route
                   path="/admin-expenses"
                   element={
-                    <RequireRole allow={['admin', 'manager']}>
+                    <RequireRole allow={['admin', 'manager', 'finanzas']}>
                       <AdminExpenses />
                     </RequireRole>
                   }
@@ -468,7 +522,7 @@ export default function App() {
                 <Route
                   path="/account-statement"
                   element={
-                    <RequireRole allow={['admin', 'manager']}>
+                    <RequireRole allow={['admin', 'manager', 'finanzas']}>
                       <AccountStatement />
                     </RequireRole>
                   }
@@ -517,7 +571,7 @@ export default function App() {
                 <Route
                   path="/service/cases/:id"
                   element={
-                    <RequireRole allow={['admin', 'service']}>
+                    <RequireRole allow={['admin', 'service', 'finanzas']}>
                       <ServiceCaseDetail />
                     </RequireRole>
                   }
@@ -560,8 +614,22 @@ export default function App() {
                 <Route path="/quotes/new" element={<QuoteEditor />} />
                 <Route path="/quotes/:id" element={<QuoteEditor />} />
 
-                <Route path="/invoices" element={<Invoices />} />
-                <Route path="/invoices/:id" element={<InvoiceDetail />} />
+                <Route
+                  path="/invoices"
+                  element={
+                    <RequireRole allow={['admin', 'finanzas']}>
+                      <Invoices />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/invoices/:id"
+                  element={
+                    <RequireRole allow={['admin', 'finanzas']}>
+                      <InvoiceDetail />
+                    </RequireRole>
+                  }
+                />
                 <Route path="/purchase-orders" element={<PurchaseOrders />} />
                 <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />
                 <Route path="/purchase-invoices/:id" element={<PurchaseInvoiceDetail />} />

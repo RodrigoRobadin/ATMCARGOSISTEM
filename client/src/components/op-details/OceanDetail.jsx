@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
+import LogisticsAutocomplete from '../LogisticsAutocomplete';
 
 const CONTAINER_TYPES = [
   { value: '40 ST', label: '40 ST' },
@@ -124,7 +125,9 @@ export default function OceanDetail({ dealId, data = {}, saving, onSaving, onSav
         {/* Identificación / actores */}
         <Input label="MBL" value={form.mbl} onChange={v => set('mbl', v)} />
         <Input label="HBL" value={form.hbl} onChange={v => set('hbl', v)} />
-        <Input label="Naviera" value={form.shipping_line} onChange={v => set('shipping_line', v)} />
+        <AutoField label="Naviera">
+          <LogisticsAutocomplete kind="carrier" value={form.shipping_line} onChange={v => set('shipping_line', v)} />
+        </AutoField>
         {/* ⚠️ Quitado: Tipo carga (se maneja en Detalles de operación) */}
         <Input label="Shpr/Cnee" value={form.shpr_cnee} onChange={v => set('shpr_cnee', v)} />
         <Input label="Agente" value={form.agent} onChange={v => set('agent', v)} />
@@ -133,9 +136,15 @@ export default function OceanDetail({ dealId, data = {}, saving, onSaving, onSav
         <Input label="Incoterm" value={form.incoterm} onChange={v => set('incoterm', v)} />
 
         {/* Puertos */}
-        <Input label="Puerto Origen" value={form.pol} onChange={v => set('pol', v)} />
-        <Input label="Transbordo" value={form.transshipment_port} onChange={v => set('transshipment_port', v)} />
-        <Input label="Puerto Destino" value={form.pod} onChange={v => set('pod', v)} />
+        <AutoField label="Puerto Origen">
+          <LogisticsAutocomplete includeTypes={['port', 'city']} value={form.pol} onChange={v => set('pol', v)} />
+        </AutoField>
+        <AutoField label="Transbordo">
+          <LogisticsAutocomplete includeTypes={['port', 'city']} value={form.transshipment_port} onChange={v => set('transshipment_port', v)} />
+        </AutoField>
+        <AutoField label="Puerto Destino">
+          <LogisticsAutocomplete includeTypes={['port', 'city']} value={form.pod} onChange={v => set('pod', v)} />
+        </AutoField>
 
         {/* Carga */}
         <Input label="Mercadería" value={form.commodity} onChange={v => set('commodity', v)} />
@@ -320,6 +329,12 @@ const Input = ({label,value,onChange,type='text'}) => (
   <label style={{ display:'grid', gap:6 }}>
     <span style={{ fontSize:12, opacity:0.7 }}>{label}</span>
     <input type={type} value={value ?? ''} onChange={e=>onChange(e.target.value)} style={{ padding:8, border:'1px solid #ddd', borderRadius:6 }} />
+  </label>
+);
+const AutoField = ({ label, children }) => (
+  <label style={{ display:'grid', gap:6 }}>
+    <span style={{ fontSize:12, opacity:0.7 }}>{label}</span>
+    {children}
   </label>
 );
 const Select = ({label,value,onChange,options=[]}) => (

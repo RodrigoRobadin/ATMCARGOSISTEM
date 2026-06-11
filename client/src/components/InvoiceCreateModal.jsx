@@ -2,12 +2,26 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api, fetchUsersByRole } from '../api';
 
+const PAYMENT_PLANS = [
+  { key: 'total', label: '100% del monto', installments: [100] },
+  { key: '60-40', label: '60% / 40%', installments: [60, 40] },
+  { key: '60-30-10', label: '60% / 30% / 10%', installments: [60, 30, 10] },
+];
+
+function toPercentNumber(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Number(num.toFixed(2));
+}
+
 export default function InvoiceCreateModal({
   defaultDealId,
   defaultServiceCaseId,
   defaultServiceQuoteAdditionId,
   defaultContainerBillingCycleId,
   defaultContainerBillingCycle,
+  defaultCostSheetVersionNumber,
+  defaultQuoteRevisionId,
   defaultSelectedQuoteItems = [],
   onClose,
   onSuccess
@@ -35,8 +49,9 @@ export default function InvoiceCreateModal({
     exchange_rate: 1,
     sales_rep: '',
     purchase_order_ref: '',
-    mode: 'percentage',
-    percentage: '60',
+    amount_plan: 'total',
+    mode: 'total',
+    percentage: '100',
   });
   const [saving, setSaving] = useState(false);
   const [executives, setExecutives] = useState([]);
@@ -48,9 +63,36 @@ export default function InvoiceCreateModal({
   const [businessUnitKey, setBusinessUnitKey] = useState("");
   const [dueDateTouched, setDueDateTouched] = useState(false);
   const [currencyTouched, setCurrencyTouched] = useState(false);
+  const [invoiceProgress, setInvoiceProgress] = useState({ usedPercentages: [], usedTotal: 0 });
   const hasSelectedQuoteItems = Array.isArray(defaultSelectedQuoteItems) && defaultSelectedQuoteItems.length > 0;
   const isContainerBilling = Boolean(defaultContainerBillingCycleId || form.container_billing_cycle_id);
   const isContainerInitialInvoice = !isContainerBilling && String(businessUnitKey || "").toLowerCase() === "atm-container";
+  const isCreditPayment = String(form.payment_condition || '').toLowerCase() === 'credito';
+  const selectedPlan = useMemo(
+    () => PAYMENT_PLANS.find((plan) => plan.key === form.amount_plan) || PAYMENT_PLANS[0],
+    [form.amount_plan]
+  );
+  const usedTotalPercentage = Number(invoiceProgress.usedTotal || 0);
+  const usedPercentageSet = useMemo(() => {
+    return new Set(
+      (invoiceProgress.usedPercentages || [])
+        .map((pct) => toPercentNumber(pct))
+        .filter((pct) => pct != null)
+    );
+  }, [invoiceProgress.usedPercentages]);
+  const planOptions = useMemo(() => {
+    return PAYMENT_PLANS.map((plan) => ({
+      ...plan,
+      availableInstallments: plan.installments.filter((pct) => {
+        const roundedPct = toPercentNumber(pct);
+        return !usedPercentageSet.has(roundedPct) && usedTotalPercentage + pct <= 100.0001;
+      }),
+    }));
+  }, [usedPercentageSet, usedTotalPercentage]);
+  const availableInstallments = useMemo(() => {
+    const option = planOptions.find((plan) => plan.key === selectedPlan.key);
+    return option?.availableInstallments || [];
+  }, [planOptions, selectedPlan.key]);
   const containerSourceLabel = useMemo(() => {
     if (!containerBilling) return "";
     return [
@@ -119,7 +161,11 @@ export default function InvoiceCreateModal({
     if (defaultContainerBillingCycleId || containerBilling?.id) {
       loadContainerBillingCurrency(defaultContainerBillingCycle || containerBilling);
     } else if (dealId) {
-      loadQuoteCurrency(dealId);
+      if (defaultCostSheetVersionNumber) {
+        loadCargoCostSheetCurrency(dealId, defaultCostSheetVersionNumber);
+      } else {
+        loadQuoteCurrency(dealId, defaultQuoteRevisionId || null);
+      }
     }
     if (defaultServiceQuoteAdditionId) {
       loadServiceAdditionQuoteCurrency(defaultServiceQuoteAdditionId);
@@ -127,12 +173,13 @@ export default function InvoiceCreateModal({
       loadServiceQuoteCurrency(serviceCaseId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaultDealId, defaultServiceCaseId, defaultServiceQuoteAdditionId, defaultContainerBillingCycleId, defaultContainerBillingCycle, containerBilling, form.deal_id, form.service_case_id, businessUnitKey, currencyTouched]);
+  }, [defaultDealId, defaultServiceCaseId, defaultServiceQuoteAdditionId, defaultContainerBillingCycleId, defaultContainerBillingCycle, defaultCostSheetVersionNumber, defaultQuoteRevisionId, containerBilling, form.deal_id, form.service_case_id, businessUnitKey, currencyTouched]);
 
   useEffect(() => {
     if (!isContainerInitialInvoice) return;
     setForm((prev) => ({
       ...prev,
+      amount_plan: "total",
       mode: "total",
       percentage: "100",
       notes: prev.notes || "Factura inicial ATM CONTAINER. Incluye el primer mes de alquiler.",
@@ -140,16 +187,56 @@ export default function InvoiceCreateModal({
   }, [isContainerInitialInvoice]);
 
   useEffect(() => {
-    if (!hasSelectedQuoteItems) return;
+    if (!defaultDealId && !defaultServiceCaseId) return;
+    loadInvoiceProgress(defaultDealId, defaultServiceCaseId, defaultCostSheetVersionNumber, defaultQuoteRevisionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultDealId, defaultServiceCaseId, defaultCostSheetVersionNumber, defaultQuoteRevisionId]);
+
+  useEffect(() => {
+    if (isCreditPayment) return;
+    setDueDateTouched(false);
     setForm((prev) => ({
       ...prev,
-      mode: "total",
-      percentage: "100",
+      due_date: '',
+      payment_terms: '',
     }));
-  }, [hasSelectedQuoteItems]);
+  }, [isCreditPayment]);
+
+  useEffect(() => {
+    if (isContainerBilling || isContainerInitialInvoice) return;
+    if (availableInstallments.length === 0) {
+      const fallbackPlan = planOptions.find((plan) => plan.availableInstallments.length > 0);
+      if (fallbackPlan && fallbackPlan.key !== form.amount_plan) {
+        setForm((prev) => ({
+          ...prev,
+          amount_plan: fallbackPlan.key,
+          mode: fallbackPlan.key === 'total' ? 'total' : 'percentage',
+          percentage: String(fallbackPlan.availableInstallments[0]),
+        }));
+      }
+      return;
+    }
+    const currentPct = toPercentNumber(form.percentage);
+    if (!availableInstallments.some((pct) => toPercentNumber(pct) === currentPct)) {
+      setForm((prev) => ({
+        ...prev,
+        mode: selectedPlan.key === 'total' ? 'total' : 'percentage',
+        percentage: String(availableInstallments[0]),
+      }));
+    }
+  }, [
+    availableInstallments,
+    form.percentage,
+    isContainerBilling,
+    isContainerInitialInvoice,
+    planOptions,
+    form.amount_plan,
+    selectedPlan.key,
+  ]);
 
   // Recalcula vencimiento según términos de pago (días) si no fue tocado manualmente
   useEffect(() => {
+    if (!isCreditPayment) return;
     const match = String(form.payment_terms || "").match(/(\d+)/);
     const days = match ? parseInt(match[1], 10) : NaN;
     if (!Number.isFinite(days)) return;
@@ -163,7 +250,7 @@ export default function InvoiceCreateModal({
       if (prev.due_date === nextDue) return prev;
       return { ...prev, due_date: nextDue };
     });
-  }, [form.payment_terms, dueDateTouched]);
+  }, [form.payment_terms, dueDateTouched, isCreditPayment]);
 
   async function loadExecutives() {
     try {
@@ -172,6 +259,47 @@ export default function InvoiceCreateModal({
     } catch (e) {
       console.error('No se pudo cargar ejecutivos', e);
     }
+  }
+
+  async function loadInvoiceProgress(dealId, serviceCaseId, costSheetVersionNumber = null, quoteRevisionId = null) {
+    try {
+      const params = dealId ? { deal_id: dealId } : { service_case_id: serviceCaseId };
+      const { data } = await api.get('/invoices/operation-docs', { params });
+      const activeInvoices = (Array.isArray(data) ? data : []).filter(
+        (doc) => doc.kind === 'invoice' && String(doc.status || '').toLowerCase() !== 'anulada'
+      ).filter((doc) => {
+        if (dealId && costSheetVersionNumber) {
+          return Number(doc.cost_sheet_version_number || 0) === Number(costSheetVersionNumber);
+        }
+        if (dealId && quoteRevisionId) {
+          return Number(doc.quote_revision_id || 0) === Number(quoteRevisionId);
+        }
+        return true;
+      });
+      const usedPercentages = activeInvoices
+        .map((doc) => toPercentNumber(doc.percentage))
+        .filter((pct) => pct != null && pct > 0);
+      const usedTotal = usedPercentages.reduce((sum, pct) => sum + pct, 0);
+      setInvoiceProgress({ usedPercentages, usedTotal });
+    } catch (err) {
+      console.warn('No se pudo cargar avance de facturacion', err?.message);
+      setInvoiceProgress({ usedPercentages: [], usedTotal: 0 });
+    }
+  }
+
+  function handleAmountPlanChange(planKey) {
+    const plan = PAYMENT_PLANS.find((p) => p.key === planKey) || PAYMENT_PLANS[0];
+    const nextAvailable = plan.installments.filter((pct) => {
+      const roundedPct = toPercentNumber(pct);
+      return !usedPercentageSet.has(roundedPct) && usedTotalPercentage + pct <= 100.0001;
+    });
+    const nextPct = nextAvailable[0] || plan.installments[0] || 100;
+    setForm((prev) => ({
+      ...prev,
+      amount_plan: plan.key,
+      mode: plan.key === 'total' ? 'total' : 'percentage',
+      percentage: String(nextPct),
+    }));
   }
 
   async function preloadDealData(dealId) {
@@ -268,9 +396,11 @@ export default function InvoiceCreateModal({
     }
   }
 
-  async function loadQuoteCurrency(dealId) {
+  async function loadQuoteCurrency(dealId, revisionId = null) {
     try {
-      const { data } = await api.get(`/deals/${dealId}/quote`);
+      const { data } = await api.get(`/deals/${dealId}/quote`, {
+        params: revisionId ? { revision_id: revisionId } : {},
+      });
       const inputs = data?.quote?.inputs || data?.inputs || {};
       const curr = String(inputs.operation_currency || 'USD').toUpperCase();
       const rate = Number(inputs.exchange_rate_operation_sell_usd || 1) || 1;
@@ -286,6 +416,28 @@ export default function InvoiceCreateModal({
       });
     } catch (err) {
       console.warn('No se pudo cargar moneda desde cotizacion', err?.message);
+    }
+  }
+
+  async function loadCargoCostSheetCurrency(dealId, versionNumber) {
+    try {
+      const { data } = await api.get(`/deals/${dealId}/cost-sheet/versions/${versionNumber}`);
+      const header = data?.data?.header || {};
+      const curr = String(header.operationCurrency || header.currency || 'USD').toUpperCase();
+      const rate = curr === 'PYG' || curr === 'GS' ? Number(header.gsRate || 1) || 1 : 1;
+      setQuoteCurrencyInfo({ currency: curr || 'USD', exchange_rate: rate || 1 });
+      setForm((prev) => {
+        if (currencyTouched) return prev;
+        const suggestedRate = getSuggestedExchangeRate({ currency: curr, exchange_rate: rate }, prev.exchange_rate);
+        return {
+          ...prev,
+          currency_code: curr || prev.currency_code,
+          exchange_rate: suggestedRate === '' ? prev.exchange_rate : suggestedRate,
+        };
+      });
+    } catch (err) {
+      console.warn('No se pudo cargar moneda desde revision de planilla', err?.message);
+      loadQuoteCurrency(dealId);
     }
   }
 
@@ -437,6 +589,48 @@ export default function InvoiceCreateModal({
     })();
   }, [timbreFetched]);
 
+  async function validateInvoiceHasAmount(pct) {
+    if (isContainerBilling) {
+      const amount = Number(
+        containerBilling?.amount ??
+        containerBilling?.total_amount ??
+        containerBilling?.monthly_amount ??
+        containerBilling?.billing_amount ??
+        0
+      );
+      return !Number.isFinite(amount) || amount > 0;
+    }
+
+    const dealId = form.deal_id ? Number(form.deal_id) : null;
+    const serviceCaseId = form.service_case_id ? Number(form.service_case_id) : null;
+    if (!dealId && !serviceCaseId) return true;
+
+    const params = dealId
+      ? {
+          deal_id: dealId,
+          cost_sheet_version_number: defaultCostSheetVersionNumber || undefined,
+          quote_revision_id: defaultQuoteRevisionId || undefined,
+        }
+      : { service_case_id: serviceCaseId };
+
+    try {
+      const { data } = await api.get('/invoices/billable-items', { params });
+      const items = Array.isArray(data) ? data : [];
+      if (!items.length) return true;
+      const selectedKeys = new Set(defaultSelectedQuoteItems.map((key) => String(key || '')));
+      const sourceItems = hasSelectedQuoteItems
+        ? items.filter((item) => selectedKeys.has(String(item.source_item_key || '')))
+        : items.filter((item) => item.pending);
+      if (!sourceItems.length) return true;
+      const baseAmount = sourceItems.reduce((sum, item) => sum + (Number(item.total || 0) || 0), 0);
+      const estimatedTotal = isContainerBilling ? baseAmount : baseAmount * (Number(pct || 100) / 100);
+      return Number.isFinite(estimatedTotal) && estimatedTotal > 0.0001;
+    } catch (err) {
+      console.warn('No se pudo validar monto facturable antes de crear factura', err?.message);
+      return true;
+    }
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     if (!form.deal_id && !form.service_case_id && !form.container_billing_cycle_id) {
@@ -449,10 +643,27 @@ export default function InvoiceCreateModal({
       alert('Ingresa un porcentaje valido entre 1 y 100');
       return;
     }
+    if (!isContainerBilling && !isContainerInitialInvoice) {
+      const roundedPct = toPercentNumber(pct);
+      if (usedPercentageSet.has(roundedPct)) {
+        alert(`El ${roundedPct}% ya fue facturado para esta operacion.`);
+        return;
+      }
+      if ((Number(invoiceProgress.usedTotal || 0) + pct) > 100.0001) {
+        alert(`El porcentaje supera el 100%. Ya facturado: ${Number(invoiceProgress.usedTotal || 0).toFixed(2)}%.`);
+        return;
+      }
+    }
 
     const fxValue = Number(form.exchange_rate || 0) || 0;
     if (requiresExchangeRate && fxValue <= 1) {
       alert('Carga un tipo de cambio valido mayor a 1 para convertir entre PYG y USD.');
+      return;
+    }
+
+    const hasAmountToInvoice = await validateInvoiceHasAmount(pct);
+    if (!hasAmountToInvoice) {
+      alert('No hay monto para facturar. Revisa que el presupuesto o los items seleccionados tengan precio de venta mayor a cero.');
       return;
     }
 
@@ -464,8 +675,12 @@ export default function InvoiceCreateModal({
         service_case_id: form.service_case_id ? Number(form.service_case_id) : null,
         service_quote_addition_id: form.service_quote_addition_id ? Number(form.service_quote_addition_id) : null,
         container_billing_cycle_id: form.container_billing_cycle_id ? Number(form.container_billing_cycle_id) : null,
-        percentage: hasSelectedQuoteItems ? null : pct,
+        percentage: isContainerBilling ? null : pct,
+        payment_terms: isCreditPayment ? form.payment_terms : '',
+        due_date: isCreditPayment ? form.due_date : '',
         exchange_rate: fxValue || 1,
+        cost_sheet_version_number: defaultCostSheetVersionNumber || undefined,
+        quote_revision_id: defaultQuoteRevisionId || undefined,
         selected_quote_items: hasSelectedQuoteItems ? defaultSelectedQuoteItems : undefined,
       };
       const { data } = await api.post('/invoices', payload);
@@ -588,28 +803,6 @@ export default function InvoiceCreateModal({
                 <p className="text-xs text-slate-500 mt-1">Factura sobre presupuesto adicional.</p>
               </div>
             )}
-            <div>
-              <label className="block text-sm font-medium mb-1">Vencimiento</label>
-              <input
-                type="date"
-                className="w-full border rounded-lg px-3 py-2"
-                value={form.due_date}
-                onChange={(e) => {
-                  setDueDateTouched(true);
-                  setForm({ ...form, due_date: e.target.value });
-                }}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Terminos de pago</label>
-              <input
-                type="text"
-                className="w-full border rounded-lg px-3 py-2"
-                value={form.payment_terms}
-                onChange={(e) => setForm({ ...form, payment_terms: e.target.value })}
-                placeholder="Ej: 30 dias"
-              />
-            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -618,34 +811,77 @@ export default function InvoiceCreateModal({
               <select
                 className="w-full border rounded-lg px-3 py-2"
                 value={form.payment_condition}
-                onChange={(e) => setForm({ ...form, payment_condition: e.target.value })}
+                onChange={(e) => {
+                  const nextCondition = e.target.value;
+                  setDueDateTouched(false);
+                  setForm((prev) => ({
+                    ...prev,
+                    payment_condition: nextCondition,
+                    payment_terms: nextCondition === 'credito' ? (prev.payment_terms || '30 dias') : '',
+                    due_date: nextCondition === 'credito' ? prev.due_date : '',
+                  }));
+                }}
               >
                 <option value="credito">Credito</option>
                 <option value="contado">Contado</option>
               </select>
             </div>
+            {isCreditPayment && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Terminos de pago</label>
+                  <input
+                    type="text"
+                    className="w-full border rounded-lg px-3 py-2"
+                    value={form.payment_terms}
+                    onChange={(e) => setForm({ ...form, payment_terms: e.target.value })}
+                    placeholder="Ej: 30 dias"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Vencimiento</label>
+                  <input
+                    type="date"
+                    className="w-full border rounded-lg px-3 py-2"
+                    value={form.due_date}
+                    onChange={(e) => {
+                      setDueDateTouched(true);
+                      setForm({ ...form, due_date: e.target.value });
+                    }}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
               <label className="block text-sm font-medium mb-1">Tipo de monto</label>
               <select
                 className="w-full border rounded-lg px-3 py-2"
-                value={form.mode}
-                disabled={isContainerBilling || isContainerInitialInvoice || hasSelectedQuoteItems}
-                onChange={(e) => {
-                  const mode = e.target.value;
-                  if (mode === "total") {
-                    setForm((prev) => ({ ...prev, mode, percentage: "100" }));
-                  } else {
-                    setForm((prev) => ({ ...prev, mode, percentage: prev.percentage || "60" }));
-                  }
-                }}
+                value={form.amount_plan}
+                disabled={isContainerBilling || isContainerInitialInvoice}
+                onChange={(e) => handleAmountPlanChange(e.target.value)}
                 >
-                  <option value="total">{isContainerBilling ? "Monto de mensualidad" : "100% del presupuesto"}</option>
-                  {!isContainerBilling && !isContainerInitialInvoice && !hasSelectedQuoteItems && <option value="percentage">Porcentaje</option>}
+                  {isContainerBilling ? (
+                    <option value="total">Monto de mensualidad</option>
+                  ) : (
+                    planOptions.map((plan) => (
+                      <option key={plan.key} value={plan.key} disabled={!plan.availableInstallments.length}>
+                        {plan.label}{!plan.availableInstallments.length ? " - sin saldo" : ""}
+                      </option>
+                    ))
+                  )}
                 </select>
+                {!isContainerBilling && !isContainerInitialInvoice && (
+                  <p className="text-xs text-slate-500 mt-1">
+                    Facturado: {Number(invoiceProgress.usedTotal || 0).toFixed(2)}%
+                  </p>
+                )}
               </div>
             <div>
               <label className="block text-sm font-medium mb-1">
-                {isContainerBilling ? "Monto mensual" : isContainerInitialInvoice ? "Factura inicial" : hasSelectedQuoteItems ? "?tems seleccionados" : "Porcentaje a facturar"}
+                {isContainerBilling ? "Monto mensual" : isContainerInitialInvoice ? "Factura inicial" : "Porcentaje a facturar"}
               </label>
               {isContainerBilling ? (
                 <input
@@ -657,13 +893,6 @@ export default function InvoiceCreateModal({
                   })}` : ""}
                   readOnly
                 />
-              ) : hasSelectedQuoteItems ? (
-                <input
-                  type="text"
-                  className="w-full border rounded-lg px-3 py-2 bg-slate-100"
-                  value={`${defaultSelectedQuoteItems.length} item(s)`}
-                  readOnly
-                />
               ) : form.mode === "percentage" && !isContainerInitialInvoice ? (
                 <select
                   className="w-full border rounded-lg px-3 py-2"
@@ -671,9 +900,15 @@ export default function InvoiceCreateModal({
                   onChange={(e) => setForm({ ...form, percentage: e.target.value })}
                   required
                 >
-                  <option value="60">60%</option>
-                  <option value="30">30%</option>
-                  <option value="10">10%</option>
+                  {selectedPlan.installments.map((pct) => {
+                    const used = usedPercentageSet.has(toPercentNumber(pct));
+                    const exceedsBalance = usedTotalPercentage + pct > 100.0001;
+                    return (
+                      <option key={pct} value={pct} disabled={used || exceedsBalance}>
+                        {pct}%{used ? " - ya facturado" : exceedsBalance ? " - excede saldo" : ""}
+                      </option>
+                    );
+                  })}
                 </select>
               ) : (
                 <input
@@ -682,6 +917,12 @@ export default function InvoiceCreateModal({
                   value="100"
                   readOnly
                 />
+              )}
+              {hasSelectedQuoteItems && (
+                <p className="text-xs text-slate-500 mt-1">{defaultSelectedQuoteItems.length} item(s) seleccionado(s)</p>
+              )}
+              {!isContainerBilling && !isContainerInitialInvoice && availableInstallments.length === 0 && (
+                <p className="text-xs text-red-600 mt-1">No quedan porcentajes disponibles en este esquema.</p>
               )}
             </div>
           </div>

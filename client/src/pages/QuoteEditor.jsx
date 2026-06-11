@@ -1,9 +1,10 @@
 ﻿// client/src/pages/QuoteEditor.jsx
 import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams, useSearchParams, useLocation } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams, useLocation, useBeforeUnload } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth.jsx";
 import { RichTextDialogField } from "../components/RichTextEditor.jsx";
+import OperationExpenseInvoices from "../components/OperationExpenseInvoices.jsx";
 
 function quoteRevisionSelectionStorageKey({ dealId = null, serviceCaseId = null } = {}) {
   if (Number.isFinite(Number(serviceCaseId)) && Number(serviceCaseId) > 0) {
@@ -15,13 +16,25 @@ function quoteRevisionSelectionStorageKey({ dealId = null, serviceCaseId = null 
   return "";
 }
 
+function getStoredQuoteRevisionId({ dealId = null, serviceCaseId = null } = {}) {
+  const storageKey = quoteRevisionSelectionStorageKey({ dealId, serviceCaseId });
+  if (!storageKey) return null;
+  try {
+    const raw = window.localStorage.getItem(storageKey) || window.sessionStorage.getItem(storageKey);
+    const parsed = Number(raw || 0);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 const emptyItem = (n = 1) => ({
   line_no: n,
   description: "",
   observation: "",
   observation_html: "",
   qty: 1,
-  door_value_usd: 0,
+  door_value_usd: "",
   additional_usd: 0, // ✅ adicional por item
   sale_mode: "auto", // auto | manual
   sale_price: "",
@@ -54,6 +67,9 @@ const INSTALL_PACKAGES = {
     ],
   },
 };
+
+const RENT_RATE_OPTIONS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6];
+const QUOTE_CATALOG_TYPES = new Set(["PRODUCTO", "SERVICIO"]);
 
 // ✅ TODOS los conceptos de despacho (editables)
 // Nota: aunque el engine ya no usa "type" en UI, lo dejamos por compat/DB.
@@ -109,6 +125,22 @@ function parseLocaleNumber(raw) {
   const normalized = s.replace(/\./g, "").replace(",", ".");
   const num = Number(normalized);
   return Number.isFinite(num) ? num : 0;
+}
+
+function stableStringify(value) {
+  const normalize = (input) => {
+    if (Array.isArray(input)) return input.map(normalize);
+    if (input && typeof input === "object") {
+      return Object.keys(input)
+        .sort()
+        .reduce((acc, key) => {
+          acc[key] = normalize(input[key]);
+          return acc;
+        }, {});
+    }
+    return input;
+  };
+  return JSON.stringify(normalize(value || {}));
 }
 
 function NumericInput({ value, onChange, decimals = 2, className = "", placeholder = "", ...rest }) {
@@ -172,6 +204,7 @@ export default function QuoteEditor({
   caseQuoteEndpointOverride = null,
   ignoreInvoiceLock = false,
   enableRevisions = true,
+  initialRevisionId = null,
 }) {
   const params = useParams();
   const location = useLocation();
@@ -220,16 +253,14 @@ export default function QuoteEditor({
     additional_global_usd: 0,
 
     insurance_sale_total_usd: 0,
-    insurance_buy_rate: 0,
-    insurance_profit_mode: "CORRECTED",
+    insurance_buy_total_usd: 0,
 
     org_branch_id: null,
     operation_currency: "USD",
+    exchange_rate_atm_gs_per_usd: 1,
     exchange_rate_customs_gs_per_usd: 0,
     exchange_rate_customs_internal_gs_per_usd: 7000,
     exchange_rate_install_gs_per_usd: 1,
-    exchange_rate_operation_buy_usd: 1,
-    exchange_rate_operation_sell_usd: 1,
 
     financing_buy_annual_rate: 0,
     financing_sell_annual_rate: 0,
@@ -245,7 +276,10 @@ export default function QuoteEditor({
   const [computed, setComputed] = useState(null);
   const [error, setError] = useState("");
   const [revisions, setRevisions] = useState([]); // [{id,name,created_at}]
-  const [selectedRevisionId, setSelectedRevisionId] = useState(null);
+  const [selectedRevisionId, setSelectedRevisionId] = useState(() => {
+    const parsed = Number(initialRevisionId || 0);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  });
   const [orgId, setOrgId] = useState(null);
   const [branches, setBranches] = useState([]);
   const [branchLoading, setBranchLoading] = useState(false);
@@ -256,19 +290,25 @@ export default function QuoteEditor({
     city: "",
     country: "",
   });
+  const [catalogItems, setCatalogItems] = useState([]);
+  const [openQuoteCatalogIdx, setOpenQuoteCatalogIdx] = useState(null);
   const [budgetStatus, setBudgetStatus] = useState("borrador"); // borrador | confirmado
   const isAdmin = user?.role === "admin" || (Array.isArray(user?.roles) && user.roles.includes("admin"));
   const [invoiceLock, setInvoiceLock] = useState({ locked: false, count: 0 });
   const [invoiceLockLoading, setInvoiceLockLoading] = useState(false);
+  const [savedInputsKey, setSavedInputsKey] = useState("");
   const invoiceLocked = Boolean(invoiceLock?.locked);
   const isLocked = (!isService && budgetStatus === "confirmado") || (invoiceLocked && !ignoreInvoiceLock);
   const lockReason = invoiceLocked ? "facturada" : (!isService && budgetStatus === "confirmado" ? "confirmado" : null);
 
   const opCurrency = String(inputs.operation_currency || "USD").toUpperCase();
-  const opRate = Number(inputs.exchange_rate_operation_sell_usd || 1) || 1;
+  const tcAtm = Number(inputs.exchange_rate_atm_gs_per_usd || inputs.exchange_rate_customs_internal_gs_per_usd || inputs.exchange_rate_install_gs_per_usd || 1) || 1;
+  const customsInternalRate = Number(inputs.exchange_rate_customs_internal_gs_per_usd || tcAtm || 1) || 1;
+  const installRate = Number(inputs.exchange_rate_install_gs_per_usd || tcAtm || 1) || 1;
+  const opRate = tcAtm || 1;
   const isPyg = opCurrency === "PYG" || opCurrency === "GS";
   const currencyLabel = isPyg ? "Gs" : "USD";
-  const installRate = Number(inputs.exchange_rate_install_gs_per_usd || 1) || 1;
+  const hasUnsavedChanges = Boolean(savedInputsKey) && stableStringify(inputs) !== savedInputsKey;
   const toOp = (usd) => (isPyg ? Number(usd || 0) * opRate : Number(usd || 0));
   const toInstal = (usd) => (isPyg ? Number(usd || 0) * installRate : Number(usd || 0));
   const fmtOp = (usd) => {
@@ -281,6 +321,7 @@ export default function QuoteEditor({
     if (!Number.isFinite(val)) return "-";
     return isPyg ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 0 }) : fmt2(val);
   };
+  const filteredCatalogItems = catalogItems;
   const fmtTotalSales = (totalUsd, instalUsd) => {
     const total = Number(totalUsd || 0);
     const inst = Number(instalUsd || 0);
@@ -311,7 +352,9 @@ export default function QuoteEditor({
     setInvoiceLockLoading(true);
     try {
       const { data } = await api.get("/invoices/lock-status", {
-        params: isService ? { service_case_id: idToUse } : { deal_id: idToUse },
+        params: isService
+          ? { service_case_id: idToUse }
+          : { deal_id: idToUse, quote_revision_id: selectedRevisionId || undefined },
       });
       setInvoiceLock({ locked: Boolean(data?.locked), count: Number(data?.count || 0) });
     } catch (_) {
@@ -345,7 +388,30 @@ export default function QuoteEditor({
 
   useEffect(() => {
     refreshInvoiceLock();
-  }, [isService, dealId, serviceCaseId]);
+  }, [isService, dealId, serviceCaseId, selectedRevisionId]);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const { data } = await api.get("/catalog/items", {
+          params: { active: 1, limit: 1000, t: Date.now() },
+        });
+        const list = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
+        if (live) {
+          setCatalogItems(
+            list.filter((item) => QUOTE_CATALOG_TYPES.has(String(item.type || "").toUpperCase()))
+          );
+        }
+      } catch (e) {
+        console.warn("No se pudo cargar catalogo para cotizacion", e);
+        if (live) setCatalogItems([]);
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, []);
 
   async function createBranch() {
     if (!orgId) return;
@@ -395,42 +461,71 @@ export default function QuoteEditor({
     if (ctx?.org_budget_status) setBudgetStatus(ctx.org_budget_status);
     const branchIdFromCtx = ctx?.org_branch_id ?? null;
 
-    setInputs((prev) => ({
-      ...prev,
-      ...(data?.inputs || {}),
-      org_branch_id:
-        data?.inputs?.org_branch_id ??
-        branchIdFromCtx ??
-        prev.org_branch_id ??
-        null,
-      client_name:
-        (data?.inputs?.client_name || "").trim() ||
-        (serviceCaseData?.org_name || dealData?.org_name || "").trim() ||
-        prev.client_name,
-      ref_code:
-        (data?.inputs?.ref_code || "").trim() ||
-        (serviceCaseData?.reference || dealData?.reference || "").trim() ||
-        prev.ref_code,
-      items:
-        Array.isArray(data?.inputs?.items) && data.inputs.items.length
-          ? data.inputs.items.map((it) => ({
-              ...it,
-              sale_mode: it?.sale_mode || "auto",
-              sale_price:
-                it?.sale_price === null || it?.sale_price === undefined
-                  ? ""
-                  : it.sale_price,
-            }))
-          : prev.items,
-      install_items:
-        Array.isArray(data?.inputs?.install_items) && data.inputs.install_items.length
-          ? data.inputs.install_items
-          : prev.install_items,
-      customs_lines:
-        Array.isArray(data?.inputs?.customs_lines) && data.inputs.customs_lines.length
-          ? data.inputs.customs_lines
-          : prev.customs_lines,
-    }));
+    setInputs((prev) => {
+      const loadedInputs = data?.inputs || {};
+      const tcAtmLoaded =
+        loadedInputs.exchange_rate_atm_gs_per_usd ??
+        loadedInputs.exchange_rate_customs_internal_gs_per_usd ??
+        loadedInputs.exchange_rate_install_gs_per_usd ??
+        loadedInputs.exchange_rate_operation_sell_usd ??
+        prev.exchange_rate_atm_gs_per_usd ??
+        1;
+      const customsInternalLoaded =
+        loadedInputs.exchange_rate_customs_internal_gs_per_usd ??
+        tcAtmLoaded;
+      const installLoaded =
+        loadedInputs.exchange_rate_install_gs_per_usd ??
+        tcAtmLoaded;
+      const nextInputs = {
+        ...prev,
+        ...loadedInputs,
+        insurance_buy_total_usd:
+          loadedInputs.insurance_buy_total_usd ??
+          prev.insurance_buy_total_usd ??
+          0,
+        exchange_rate_atm_gs_per_usd: tcAtmLoaded,
+        exchange_rate_customs_internal_gs_per_usd: customsInternalLoaded,
+        exchange_rate_install_gs_per_usd: installLoaded,
+        org_branch_id:
+          loadedInputs.org_branch_id ??
+          branchIdFromCtx ??
+          prev.org_branch_id ??
+          null,
+        client_name:
+          (loadedInputs.client_name || "").trim() ||
+          (serviceCaseData?.org_name || dealData?.org_name || "").trim() ||
+          prev.client_name,
+        ref_code:
+          (loadedInputs.ref_code || "").trim() ||
+          (serviceCaseData?.reference || dealData?.reference || "").trim() ||
+          prev.ref_code,
+        items:
+          Array.isArray(loadedInputs.items) && loadedInputs.items.length
+            ? loadedInputs.items.map((it) => ({
+                ...it,
+                sale_mode: it?.sale_mode || "auto",
+                sale_price:
+                  it?.sale_price === null || it?.sale_price === undefined
+                    ? ""
+                    : it.sale_price,
+              }))
+            : prev.items,
+        install_items:
+          Array.isArray(loadedInputs.install_items) && loadedInputs.install_items.length
+            ? loadedInputs.install_items
+            : prev.install_items,
+        customs_lines:
+          Array.isArray(loadedInputs.customs_lines) && loadedInputs.customs_lines.length
+            ? loadedInputs.customs_lines
+            : prev.customs_lines,
+      };
+      delete nextInputs.exchange_rate_operation_buy_usd;
+      delete nextInputs.exchange_rate_operation_sell_usd;
+      delete nextInputs.insurance_buy_rate;
+      delete nextInputs.insurance_profit_mode;
+      setSavedInputsKey(stableStringify(nextInputs));
+      return nextInputs;
+    });
 
     setSelectedRevisionId(data?.meta?.revision_id || null);
     setComputed(data?.computed || null);
@@ -471,9 +566,11 @@ export default function QuoteEditor({
     return data;
   }
 
-  async function loadOrCreateByDeal(dealIdToLoad) {
+  async function loadOrCreateByDeal(dealIdToLoad, revisionIdToLoad = null) {
     const [quoteRes, dealRes] = await Promise.all([
-      api.get(`/deals/${dealIdToLoad}/quote`),
+      api.get(`/deals/${dealIdToLoad}/quote`, {
+        params: revisionIdToLoad ? { revision_id: revisionIdToLoad } : {},
+      }),
       api.get(`/deals/${dealIdToLoad}`).catch(() => ({ data: null })),
     ]);
     const data = quoteRes.data;
@@ -494,11 +591,15 @@ export default function QuoteEditor({
   async function loadSmart() {
     setLoading(true);
     setError("");
+    const preferredRevisionId = (() => {
+      const parsed = Number(initialRevisionId || 0);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    })();
 
     try {
       if (isService) {
         if (isEmbedded && Number.isFinite(quoteIdProp) && quoteIdProp > 0) {
-          await loadQuoteById(quoteIdProp);
+          await loadQuoteById(quoteIdProp, preferredRevisionId || getStoredQuoteRevisionId({ dealId: dealIdProp, serviceCaseId: serviceCaseIdProp }));
           return;
         }
         if (isEmbedded && Number.isFinite(serviceCaseIdProp) && serviceCaseIdProp > 0) {
@@ -524,16 +625,20 @@ export default function QuoteEditor({
       if (isNew) {
         setQuoteId(null);
         setComputed(null);
+        setSavedInputsKey(stableStringify(inputs));
         setLoading(false);
         return;
       }
       if (isEmbedded && Number.isFinite(quoteIdProp) && quoteIdProp > 0) {
-        await loadQuoteById(quoteIdProp);
+        await loadQuoteById(
+          quoteIdProp,
+          preferredRevisionId || getStoredQuoteRevisionId({ dealId: dealIdProp, serviceCaseId: serviceCaseIdProp })
+        );
         return;
       }
 
       if (isEmbedded && Number.isFinite(dealIdProp) && dealIdProp > 0) {
-        await loadOrCreateByDeal(dealIdProp);
+        await loadOrCreateByDeal(dealIdProp, preferredRevisionId || getStoredQuoteRevisionId({ dealId: dealIdProp }));
         return;
       }
 
@@ -545,7 +650,7 @@ export default function QuoteEditor({
       }
 
       if (Number.isFinite(dealIdFromQuery) && dealIdFromQuery > 0) {
-        await loadOrCreateByDeal(dealIdFromQuery);
+        await loadOrCreateByDeal(dealIdFromQuery, getStoredQuoteRevisionId({ dealId: dealIdFromQuery }));
         return;
       }
 
@@ -555,7 +660,7 @@ export default function QuoteEditor({
       } catch (e) {
         const status = e?.response?.status;
         if (status === 404) {
-          await loadOrCreateByDeal(raw);
+          await loadOrCreateByDeal(raw, getStoredQuoteRevisionId({ dealId: raw }));
           return;
         }
         throw e;
@@ -592,23 +697,15 @@ export default function QuoteEditor({
     setSaving(true);
     setError("");
     try {
-      const payloadInputs = { ...inputs };
-      if (Array.isArray(payloadInputs.items)) {
-        payloadInputs.items = payloadInputs.items.map((it) => ({
-          ...it,
-          sale_mode: it.sale_mode || "auto",
-          sale_price: it.sale_price === "" ? null : it.sale_price,
-          tax_rate: Number(it.tax_rate ?? 10),
-        }));
-      }
-      if (dealId) payloadInputs.deal_id = dealId;
-      if (isService && serviceCaseId) payloadInputs.service_case_id = serviceCaseId;
+      const payloadInputs = prepareInputsForSave();
 
       const { data } = await api.post(quoteBase, { inputs: payloadInputs });
       const newId = data?.id;
       if (!newId) throw new Error("No se recibió id");
 
       setQuoteId(newId);
+      setInputs(payloadInputs);
+      setSavedInputsKey(stableStringify(payloadInputs));
       setComputed(data?.computed || null);
       fetchRevisions(newId);
 
@@ -627,6 +724,7 @@ export default function QuoteEditor({
     if (!enableRevisions) return;
     if (isLocked) return;
     if (!quoteId) return;
+    if (!confirmDiscardChanges()) return;
     const nextSeq = String((revisions?.length || 0) + 1).padStart(2, "0");
     const now = new Date();
     const stamp = now.toLocaleString("es-PY", {
@@ -683,22 +781,26 @@ export default function QuoteEditor({
     setSaving(true);
     setError("");
     try {
-      const payloadInputs = { ...inputs };
-      if (Array.isArray(payloadInputs.items)) {
-        payloadInputs.items = payloadInputs.items.map((it) => ({
-          ...it,
-          sale_mode: it.sale_mode || "auto",
-          sale_price: it.sale_price === "" ? null : it.sale_price,
-          tax_rate: Number(it.tax_rate ?? 10),
-        }));
-      }
-      if (dealId) payloadInputs.deal_id = dealId;
-      if (isService && serviceCaseId) payloadInputs.service_case_id = serviceCaseId;
+      const payloadInputs = prepareInputsForSave();
 
       const { data } = selectedRevisionId
         ? await api.put(`${quoteBase}/${quoteId}/revisions/${selectedRevisionId}`, { inputs: payloadInputs })
         : await api.put(`${quoteBase}/${quoteId}`, { inputs: payloadInputs });
+      setInputs(payloadInputs);
+      setSavedInputsKey(stableStringify(payloadInputs));
       setComputed(data?.computed || null);
+      try {
+        window.dispatchEvent(
+          new CustomEvent("quote-revision-updated", {
+            detail: {
+              quoteId,
+              dealId,
+              serviceCaseId,
+              revisionId: selectedRevisionId || null,
+            },
+          })
+        );
+      } catch (_) {}
     } catch (e) {
       console.error(e);
       setError(e?.response?.data?.error || "No se pudo guardar");
@@ -713,7 +815,7 @@ export default function QuoteEditor({
     setSaving(true);
     setError("");
     try {
-      if (selectedRevisionId) {
+      if (selectedRevisionId || hasUnsavedChanges) {
         await saveQuote();
       } else {
         const { data } = await api.post(`${quoteBase}/${quoteId}/recalculate`);
@@ -730,6 +832,7 @@ export default function QuoteEditor({
   async function duplicateQuote() {
     if (isLocked) return;
     if (!quoteId) return;
+    if (!confirmDiscardChanges()) return;
     setSaving(true);
     setError("");
     try {
@@ -750,10 +853,52 @@ export default function QuoteEditor({
     window.open(`${api.defaults.baseURL}${quoteBase}/${quoteId}/export-xlsx`, "_blank");
   }
 
+  function prepareInputsForSave(sourceInputs = inputs) {
+    const tc = Number(sourceInputs.exchange_rate_atm_gs_per_usd || 1) || 1;
+    const payloadInputs = {
+      ...sourceInputs,
+      exchange_rate_atm_gs_per_usd: tc,
+      exchange_rate_customs_internal_gs_per_usd:
+        Number(sourceInputs.exchange_rate_customs_internal_gs_per_usd || tc) || tc,
+      exchange_rate_install_gs_per_usd:
+        Number(sourceInputs.exchange_rate_install_gs_per_usd || tc) || tc,
+      insurance_buy_total_usd: Number(sourceInputs.insurance_buy_total_usd || 0),
+    };
+    delete payloadInputs.exchange_rate_operation_buy_usd;
+    delete payloadInputs.exchange_rate_operation_sell_usd;
+    delete payloadInputs.insurance_buy_rate;
+    delete payloadInputs.insurance_profit_mode;
+    if (Array.isArray(payloadInputs.items)) {
+      payloadInputs.items = payloadInputs.items.map((it) => ({
+        ...it,
+        sale_mode: it.sale_mode || "auto",
+        sale_price: it.sale_price === "" ? null : it.sale_price,
+        tax_rate: Number(it.tax_rate ?? 10),
+      }));
+    }
+    if (dealId) payloadInputs.deal_id = dealId;
+    if (isService && serviceCaseId) payloadInputs.service_case_id = serviceCaseId;
+    return payloadInputs;
+  }
+
+  function confirmDiscardChanges() {
+    if (!hasUnsavedChanges) return true;
+    return window.confirm("Hay cambios sin guardar. Si continuas, se perderan esos cambios.");
+  }
+
   useEffect(() => {
     loadSmart();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, quoteIdProp, dealIdProp, serviceCaseId, serviceCaseIdProp]);
+  }, [id, quoteIdProp, dealIdProp, serviceCaseId, serviceCaseIdProp, initialRevisionId]);
+
+  useBeforeUnload(
+    (event) => {
+      if (!hasUnsavedChanges) return;
+      event.preventDefault();
+      event.returnValue = "";
+    },
+    { capture: true }
+  );
 
   useEffect(() => {
     const storageKey = quoteRevisionSelectionStorageKey({ dealId, serviceCaseId });
@@ -761,8 +906,10 @@ export default function QuoteEditor({
 
     try {
       if (selectedRevisionId) {
+        window.localStorage.setItem(storageKey, String(selectedRevisionId));
         window.sessionStorage.setItem(storageKey, String(selectedRevisionId));
       } else {
+        window.localStorage.removeItem(storageKey);
         window.sessionStorage.removeItem(storageKey);
       }
     } catch (_) {}
@@ -792,7 +939,21 @@ export default function QuoteEditor({
 
   function setField(key, value) {
     if (isLocked) return;
-    setInputs((prev) => ({ ...prev, [key]: value }));
+    setInputs((prev) => {
+      if (key !== "exchange_rate_atm_gs_per_usd") return { ...prev, [key]: value };
+      const tc = Number(value || 0) || 1;
+      const prevGlobal = Number(prev.exchange_rate_atm_gs_per_usd || 1) || 1;
+      const customsInternal = Number(prev.exchange_rate_customs_internal_gs_per_usd || 0);
+      const install = Number(prev.exchange_rate_install_gs_per_usd || 0);
+      const customsLinked = !customsInternal || Math.abs(customsInternal - prevGlobal) < 0.0001;
+      const installLinked = !install || Math.abs(install - prevGlobal) < 0.0001;
+      return {
+        ...prev,
+        exchange_rate_atm_gs_per_usd: tc,
+        exchange_rate_customs_internal_gs_per_usd: customsLinked ? tc : prev.exchange_rate_customs_internal_gs_per_usd,
+        exchange_rate_install_gs_per_usd: installLinked ? tc : prev.exchange_rate_install_gs_per_usd,
+      };
+    });
   }
 
   function setItem(i, key, value) {
@@ -806,6 +967,45 @@ export default function QuoteEditor({
       items[i] = next;
       return { ...prev, items };
     });
+  }
+
+  function selectCatalogItemForQuoteLine(i, catalogId) {
+    if (isLocked) return;
+    const selected = catalogItems.find((item) => String(item.id) === String(catalogId));
+    if (!selected) return;
+    setInputs((prev) => {
+      const items = [...(prev.items || [])];
+      const current = items[i] || emptyItem(i + 1);
+      const itemCurrency = String(selected.currency || "").toUpperCase();
+      const shouldUsePrice = !itemCurrency || itemCurrency === opCurrency;
+      const price = Number(selected.price || 0);
+      items[i] = {
+        ...current,
+        product_id: selected.id,
+        catalog_item_id: selected.id,
+        product_name: selected.name || "",
+        brand: selected.brand || "",
+        description: selected.name || current.description || "",
+        qty: Number(current.qty || 0) > 0 ? current.qty : 1,
+        tax_rate: Number(selected.tax_rate ?? current.tax_rate ?? 10),
+        catalog_currency: selected.currency || "",
+        door_value_usd: shouldUsePrice && price > 0 ? price : current.door_value_usd ?? "",
+      };
+      return { ...prev, items };
+    });
+    setOpenQuoteCatalogIdx(null);
+  }
+
+  function getQuoteCatalogOptions(value = "") {
+    const term = String(value || "").trim().toLowerCase();
+    const list = term
+      ? filteredCatalogItems.filter((item) =>
+          [item.name, item.sku, item.brand, item.type]
+            .filter(Boolean)
+            .some((field) => String(field).toLowerCase().includes(term))
+        )
+      : filteredCatalogItems;
+    return list.slice(0, 10);
   }
 
   function addItem() {
@@ -912,6 +1112,10 @@ export default function QuoteEditor({
                 className="px-3 py-2 rounded-lg border bg-white text-sm"
                 value={selectedRevisionId || ""}
                 onChange={(e) => {
+                  if (!confirmDiscardChanges()) {
+                    e.target.value = selectedRevisionId || "";
+                    return;
+                  }
                   const next = e.target.value ? Number(e.target.value) : null;
                   setSelectedRevisionId(next);
                   if (quoteId) loadQuoteById(quoteId, next || null);
@@ -939,10 +1143,17 @@ export default function QuoteEditor({
               Estás editando la revisión seleccionada.
             </span>
           )}
+          {hasUnsavedChanges && (
+            <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-medium">
+              Cambios sin guardar
+            </span>
+          )}
           {dealId && (
             <button
               className="px-3 py-2 rounded-lg border bg-white hover:bg-slate-50 text-sm"
-              onClick={() => navigate(`/operations/${dealId}`)}
+              onClick={() => {
+                if (confirmDiscardChanges()) navigate(`/operations/${dealId}`);
+              }}
               type="button"
             >
               ← Volver a la operación
@@ -1071,18 +1282,32 @@ export default function QuoteEditor({
 
         <div>
           <label className="text-xs text-slate-500">Rent % (sobre CIF)</label>
-          <input
-            type="number"
-            step="0.0001"
+          <select
             className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
             value={inputs.rent_rate ?? 0}
             onChange={(e) => setField("rent_rate", n2(e.target.value))}
+          >
+            {RENT_RATE_OPTIONS.map((rate) => (
+              <option key={rate} value={rate}>
+                {Math.round(rate * 100)}%
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="text-xs text-slate-500">TC ATM (Gs/USD)</label>
+          <NumericInput
+            className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
+            value={tcAtm}
+            onChange={(v) => setField("exchange_rate_atm_gs_per_usd", v || 1)}
+            decimals={0}
           />
         </div>
       </div>
 
       {/* Tabs */}
-      <div className={`flex flex-wrap gap-2 ${lockClass}`}>
+      <div className="flex flex-wrap gap-2">
         <TabButton active={activeTab === "oferta"} onClick={() => setActiveTab("oferta")}>
           Detalle Oferta
         </TabButton>
@@ -1098,12 +1323,24 @@ export default function QuoteEditor({
         <TabButton active={activeTab === "operacion"} onClick={() => setActiveTab("operacion")}>
           Operación (Profit)
         </TabButton>
+        <TabButton active={activeTab === "costos-finales"} onClick={() => setActiveTab("costos-finales")}>
+          Costos finales
+        </TabButton>
       </div>
 
       {/* ---------------- TAB: OFERTA ---------------- */}
       {activeTab === "oferta" && (
         <div className={`space-y-3 ${lockClass}`}>
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
+            <div>
+              <label className="text-xs text-slate-500">Flete Intl (Compra {currencyLabel})</label>
+              <NumericInput
+                className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
+                value={inputs.freight_buy_usd ?? 0}
+                onChange={(v) => setField("freight_buy_usd", v)}
+              />
+            </div>
+
             <div>
               <label className="text-xs text-slate-500">Flete Intl (Venta {currencyLabel})</label>
               <NumericInput
@@ -1114,11 +1351,11 @@ export default function QuoteEditor({
             </div>
 
             <div>
-              <label className="text-xs text-slate-500">Flete compra {currencyLabel}</label>
+              <label className="text-xs text-slate-500">Seguro (Compra {currencyLabel})</label>
               <NumericInput
                 className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
-                value={inputs.freight_buy_usd ?? 0}
-                onChange={(v) => setField("freight_buy_usd", v)}
+                value={inputs.insurance_buy_total_usd ?? 0}
+                onChange={(v) => setField("insurance_buy_total_usd", v)}
               />
             </div>
 
@@ -1140,28 +1377,6 @@ export default function QuoteEditor({
               >
                 <option value="USD">USD</option>
                 <option value="PYG">PYG</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="text-xs text-slate-500">Seguro compra rate</label>
-              <NumericInput
-                className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
-                value={inputs.insurance_buy_rate ?? 0}
-                onChange={(v) => setField("insurance_buy_rate", v)}
-                decimals={4}
-              />
-            </div>
-
-            <div>
-              <label className="text-xs text-slate-500">Modo profit seguro</label>
-              <select
-                className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
-                value={inputs.insurance_profit_mode || "CORRECTED"}
-                onChange={(e) => setField("insurance_profit_mode", e.target.value)}
-              >
-                <option value="CORRECTED">Corregido (venta - compra)</option>
-                <option value="COMPAT_SIMPLE">Simple (venta)</option>
               </select>
             </div>
           </div>
@@ -1257,16 +1472,16 @@ export default function QuoteEditor({
             </div>
           )}
 
-<div className="overflow-auto rounded-xl border bg-white">
-            <table className="min-w-full text-sm">
+          <div className="overflow-auto rounded-xl border bg-white">
+            <table className="min-w-[1320px] text-sm">
               <thead className="bg-slate-100 text-left">
                 <tr>
                   <th className="px-3 py-2">Item</th>
-                  <th className="px-3 py-2">Descripción</th>
+                  <th className="px-3 py-2 min-w-[360px]">Descripción</th>
                   <th className="px-3 py-2">Observación</th>
                   <th className="px-3 py-2 text-right">Cant</th>
                   <th className="px-3 py-2 text-right">IVA</th>
-                  <th className="px-3 py-2 text-right">Costo item ({currencyLabel})</th>
+                  <th className="px-3 py-2 text-right">Costo unitario ({currencyLabel})</th>
                   <th className="px-3 py-2 text-right">Adicional ({currencyLabel})</th>
                   <th className="px-3 py-2 text-right">Venta ({currencyLabel})</th>
                   <th className="px-3 py-2 text-right">Acciones</th>
@@ -1283,12 +1498,53 @@ export default function QuoteEditor({
                         decimals={0}
                       />
                     </td>
-                    <td className="px-3 py-2">
-                      <input
-                        className="w-full border rounded-lg px-2 py-1"
-                        value={it.description || ""}
-                        onChange={(e) => setItem(idx, "description", e.target.value)}
-                      />
+                    <td className="px-3 py-2 min-w-[360px]">
+                      <div className="relative flex flex-col gap-1 min-w-[340px]">
+                        <input
+                          className={`w-full border px-2 py-1 ${
+                            openQuoteCatalogIdx === idx ? "rounded-t-lg rounded-b-none border-b-slate-200" : "rounded-lg"
+                          }`}
+                          value={it.description || ""}
+                          onChange={(e) => {
+                            setItem(idx, "description", e.target.value);
+                            setOpenQuoteCatalogIdx(idx);
+                          }}
+                          onFocus={() => setOpenQuoteCatalogIdx(idx)}
+                          onBlur={() => window.setTimeout(() => setOpenQuoteCatalogIdx(null), 120)}
+                          placeholder="Buscar producto o servicio"
+                        />
+                        {openQuoteCatalogIdx === idx && (
+                          <div className="absolute left-0 right-0 top-[30px] z-30 max-h-64 overflow-auto rounded-b-lg border border-t-0 bg-white shadow-lg">
+                            {getQuoteCatalogOptions(it.description).length > 0 ? (
+                              getQuoteCatalogOptions(it.description).map((item) => (
+                                <button
+                                  key={item.id}
+                                  type="button"
+                                  className="w-full px-3 py-2 text-left hover:bg-slate-50 focus:bg-slate-50 focus:outline-none"
+                                  onMouseDown={(event) => {
+                                    event.preventDefault();
+                                    selectCatalogItemForQuoteLine(idx, item.id);
+                                  }}
+                                >
+                                  <div className="text-sm font-medium text-slate-900">{item.name}</div>
+                                  <div className="text-[11px] text-slate-500">
+                                    {[item.sku, item.brand, item.type].filter(Boolean).join(" - ")}
+                                  </div>
+                                </button>
+                              ))
+                            ) : (
+                              <div className="px-3 py-2 text-xs text-slate-500">Sin resultados</div>
+                            )}
+                          </div>
+                        )}
+                        {(it.brand || it.product_id || it.catalog_item_id) && (
+                          <div className="text-[11px] text-slate-500">
+                            {[it.brand, it.product_id || it.catalog_item_id ? `Catalogo #${it.product_id || it.catalog_item_id}` : ""]
+                              .filter(Boolean)
+                              .join(" - ")}
+                          </div>
+                        )}
+                      </div>
                     </td>
                     <td className="px-3 py-2 w-[240px]">
                       <RichTextDialogField
@@ -1357,7 +1613,7 @@ export default function QuoteEditor({
                           className="w-full border rounded-lg px-2 py-1 text-right"
                           value={it.sale_price ?? 0}
                           onChange={(v) => setItem(idx, "sale_price", v)}
-                          placeholder={it.sale_mode === "manual" ? "Precio venta" : "Auto"}
+                          placeholder={it.sale_mode === "manual" ? "Venta unit." : "Auto"}
                           disabled={it.sale_mode !== "manual"}
                         />
                       </div>
@@ -1388,7 +1644,6 @@ export default function QuoteEditor({
                   <tr>
                     <th className="px-3 py-2">Item</th>
                     <th className="px-3 py-2">Descripción</th>
-                    <th className="px-3 py-2 text-right">%Part</th>
                     <th className="px-3 py-2 text-right">Flete</th>
                     <th className="px-3 py-2 text-right">Seguro</th>
                     <th className="px-3 py-2 text-right">CIF</th>
@@ -1408,7 +1663,6 @@ export default function QuoteEditor({
                     <tr key={i} className="border-t">
                       <td className="px-3 py-2">{r.line_no}</td>
                       <td className="px-3 py-2">{r.description}</td>
-                      <td className="px-3 py-2 text-right">{fmt2((r.participation || 0) * 100)}%</td>
                       <td className="px-3 py-2 text-right">{fmtOp(r.flete)}</td>
                       <td className="px-3 py-2 text-right">{fmtOp(r.seguro)}</td>
                       <td className="px-3 py-2 text-right">{fmtOp(r.valor_imp)}</td>
@@ -1451,12 +1705,12 @@ export default function QuoteEditor({
               />
             </div>
             <div>
-              <label className="text-xs text-slate-500">TC Interno (Gs/USD)</label>
+              <label className="text-xs text-slate-500">TC ATM (Gs/USD)</label>
               <input
                 type="number"
                 step="1"
                 className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
-                value={inputs.exchange_rate_customs_internal_gs_per_usd ?? 7000}
+                value={customsInternalRate}
                 onChange={(e) => setField("exchange_rate_customs_internal_gs_per_usd", n2(e.target.value))}
               />
             </div>
@@ -1658,29 +1912,11 @@ export default function QuoteEditor({
         <div className={`space-y-3 ${lockClass}`}>
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
             <div>
-              <label className="text-xs text-slate-500">TC Instalación (Gs/USD)</label>
+              <label className="text-xs text-slate-500">TC ATM (Gs/USD)</label>
               <NumericInput
                 className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
-                value={inputs.exchange_rate_install_gs_per_usd ?? 1}
+                value={installRate}
                 onChange={(v) => setField("exchange_rate_install_gs_per_usd", v || 1)}
-                decimals={0}
-              />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500">TC Operación compra (Gs/USD)</label>
-              <NumericInput
-                className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
-                value={inputs.exchange_rate_operation_buy_usd ?? 1}
-                onChange={(v) => setField("exchange_rate_operation_buy_usd", v || 1)}
-                decimals={0}
-              />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500">TC Operación venta (Gs/USD)</label>
-              <NumericInput
-                className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
-                value={inputs.exchange_rate_operation_sell_usd ?? 1}
-                onChange={(v) => setField("exchange_rate_operation_sell_usd", v || 1)}
                 decimals={0}
               />
             </div>
@@ -1895,6 +2131,28 @@ export default function QuoteEditor({
                   | Profit final: <b>{fmtOp(computed.operacion.distribution.final_profit_usd)}</b>
                 </div>
               </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ---------------- TAB: COSTOS FINALES ---------------- */}
+      {activeTab === "costos-finales" && (
+        <div className="space-y-3">
+          {dealId ? (
+            <OperationExpenseInvoices
+              operationId={Number(dealId)}
+              operationType="deal"
+              showList
+              showExpenseControl
+              showInvoiceTable={false}
+              quoteRevisionId={selectedRevisionId || undefined}
+              title="Costos finales"
+              subtitle="Compra presupuestada vs facturas reales, ordenes de pago y pagos a proveedores."
+            />
+          ) : (
+            <div className="rounded-xl border bg-white p-4 text-sm text-slate-500">
+              Esta cotizacion no tiene operacion vinculada.
             </div>
           )}
         </div>

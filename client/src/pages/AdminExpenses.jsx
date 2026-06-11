@@ -2,6 +2,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import AdminExpensesMastersModal from '../components/AdminExpensesMastersModal';
+import {
+  companyBankAccountLabel,
+  companyBankAccountValue,
+  filterCompanyBankAccounts,
+  parseCompanyBankAccounts,
+} from '../utils/companyBankAccounts';
 
 const fmtMoney = (v) =>
   new Intl.NumberFormat('es-PY', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(
@@ -106,6 +112,7 @@ export default function AdminExpenses() {
   const [providerOpen, setProviderOpen] = useState(false);
   const [providerLoading, setProviderLoading] = useState(false);
   const [mastersOpen, setMastersOpen] = useState(false);
+  const [companyAccounts, setCompanyAccounts] = useState([]);
 
   const [filters, setFilters] = useState({
     from_date: '',
@@ -485,6 +492,10 @@ export default function AdminExpenses() {
         setLoading(true);
         await api.post('/admin-expenses/recurrences/run').catch(() => null);
         await loadMeta();
+        const { data: accountParams } = await api.get('/params', {
+          params: { keys: 'company_bank_account', only_active: 1 },
+        }).catch(() => ({ data: {} }));
+        setCompanyAccounts(parseCompanyBankAccounts(accountParams?.company_bank_account || []));
         await loadExpenses();
         await loadReport();
         await loadUpcomingRecurrences();
@@ -681,6 +692,8 @@ export default function AdminExpenses() {
       setSaving(false);
     }
   }
+
+  const paymentAccountOptions = filterCompanyBankAccounts(companyAccounts, paymentForm.currency_code);
 
   if (loading) return <div className="text-sm text-slate-600">Cargando...</div>;
 
@@ -1996,11 +2009,20 @@ export default function AdminExpenses() {
                   onChange={(e) => setPaymentForm((f) => ({ ...f, account: e.target.value }))}
                 >
                   <option value="">Seleccionar</option>
-                  {PAYMENT_ACCOUNTS.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
+                  {paymentForm.account && !paymentAccountOptions.some((account) => companyBankAccountValue(account) === paymentForm.account) ? (
+                    <option value={paymentForm.account}>{paymentForm.account}</option>
+                  ) : null}
+                  {paymentAccountOptions.length
+                    ? paymentAccountOptions.map((account) => (
+                        <option key={account.id || companyBankAccountValue(account)} value={companyBankAccountValue(account)}>
+                          {companyBankAccountLabel(account)}
+                        </option>
+                      ))
+                    : PAYMENT_ACCOUNTS.map((a) => (
+                        <option key={a} value={a}>
+                          {a}
+                        </option>
+                      ))}
                 </select>
               </div>
               <div>

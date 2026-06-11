@@ -283,7 +283,10 @@ function buildQuoteSyncFromCostSheet(costSheet) {
         totals: { total_sales_usd: Number(totalSalesUsd.toFixed(2)) },
       },
       operacion: {
-        totals: { total_sell_usd: Number(totalSalesUsd.toFixed(2)) },
+        totals: {
+          total_sell_usd: Number(totalSalesUsd.toFixed(2)),
+          profit_total_usd: Number((toUsd(costSheet?.totals?.profitGeneral) || 0).toFixed(2)),
+        },
       },
       meta: {
         operation_currency: opCurrency || 'USD',
@@ -663,11 +666,23 @@ router.put('/:id/cost-sheet/versions/:versionId', requireAuth, async (req, res) 
     await ensureCostSheetVersionSchema();
     // Verificar que la versión existe y es borrador
     const [[version]] = await pool.query(
-      'SELECT status, change_reason FROM deal_cost_sheet_versions WHERE id = ? AND deal_id = ?',
+      'SELECT status, change_reason, version_number FROM deal_cost_sheet_versions WHERE id = ? AND deal_id = ?',
       [versionId, id]
     );
 
     if (!version) return res.status(404).json({ error: 'Versi?n no encontrada' });
+    const [[invoiceLock]] = await pool.query(
+      `SELECT COUNT(*) AS cnt
+         FROM invoices
+        WHERE deal_id = ?
+          AND cost_sheet_version_number = ?
+          AND status <> 'anulada'
+          AND COALESCE(net_total_amount, total_amount, 0) > 0.01`,
+      [id, version.version_number]
+    ).catch(() => [[{ cnt: 0 }]]);
+    if (Number(invoiceLock?.cnt || 0) > 0) {
+      return res.status(409).json({ error: 'Revision ya facturada. No se puede modificar.' });
+    }
 
     const hasIncomingData = data && typeof data === 'object' && Object.keys(data).length > 0;
     if (version.status !== 'borrador' && hasIncomingData) {

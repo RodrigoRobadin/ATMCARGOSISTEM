@@ -22,7 +22,8 @@ export default function TableView({
   showInTransit = false,
 }) {
   const { user } = useAuth();
-  const isAdmin = String(user?.role || "").toLowerCase() === "admin";
+  const userRole = String(user?.role || "").toLowerCase();
+  const canInvoice = userRole === "admin" || userRole === "finanzas";
   return (
     <div className="bg-white border rounded-lg overflow-hidden">
       <div className="px-3 py-2 border-b font-semibold bg-slate-50">Operaciones</div>
@@ -100,7 +101,7 @@ export default function TableView({
                       Docs
                     </button>
                   )}
-                  {isAdmin ? (
+                  {canInvoice ? (
                     <button className="btn" onClick={() => onInvoice && onInvoice(r)}>
                       Facturar
                     </button>

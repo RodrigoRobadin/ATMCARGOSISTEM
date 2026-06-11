@@ -1116,8 +1116,8 @@ router.get('/sheet', requireAuth, requireAnyRole('admin', 'service', 'finanzas')
       const totals = pickInstallTotals(computed);
 
       const invCurrency = normalizeCurrency(row.currency_code || quoteInputs.operation_currency || 'USD');
-      const installRate = toNumber(quoteInputs.exchange_rate_install_gs_per_usd || row.exchange_rate || 1) || 1;
-      const opRate = toNumber(quoteInputs.exchange_rate_operation_sell_usd || row.exchange_rate || 1) || 1;
+      const installRate = toNumber(quoteInputs.exchange_rate_atm_gs_per_usd || quoteInputs.exchange_rate_install_gs_per_usd || row.exchange_rate || 1) || 1;
+      const opRate = toNumber(quoteInputs.exchange_rate_atm_gs_per_usd || quoteInputs.exchange_rate_operation_sell_usd || row.exchange_rate || 1) || 1;
 
       const ofertaTotalUsd = pickOfertaTotalUsd(computed);
       const servicio_cotizado_usd = ofertaTotalUsd;
@@ -1378,7 +1378,11 @@ router.get('/cases', requireAuth, requireAnyRole('admin', 'service'), async (req
       computed?.meta?.operation_currency || inputs.operation_currency || 'USD'
     ).toUpperCase();
     const opRate = Number(
-      computed?.meta?.exchange_rate_operation_sell_usd || inputs.exchange_rate_operation_sell_usd || 1
+      computed?.meta?.exchange_rate_atm_gs_per_usd ||
+        computed?.meta?.exchange_rate_operation_sell_usd ||
+        inputs.exchange_rate_atm_gs_per_usd ||
+        inputs.exchange_rate_operation_sell_usd ||
+        1
     ) || 1;
     const profit = computed?.operacion?.totals?.profit_total_usd ?? null;
     const isPyg = opCurrency === 'PYG' || opCurrency === 'GS';
@@ -1390,7 +1394,7 @@ router.get('/cases', requireAuth, requireAnyRole('admin', 'service'), async (req
       profit_total_usd: profit,
       profit_total_currency: opCurrency,
       profit_total_display: profitDisplay,
-      exchange_rate_operation_sell_usd: opRate,
+      exchange_rate_atm_gs_per_usd: opRate,
     };
   });
   res.json(list);
@@ -2000,7 +2004,7 @@ router.post('/cases/:caseId/additional-quotes', requireAuth, requireAnyRole('adm
       client_name: caseRow.org_name || '',
       org_branch_id: caseRow.org_branch_id || null,
       operation_currency: baseInputs.operation_currency || 'USD',
-      exchange_rate_operation_sell_usd: baseInputs.exchange_rate_operation_sell_usd || 1,
+      exchange_rate_atm_gs_per_usd: baseInputs.exchange_rate_atm_gs_per_usd || baseInputs.exchange_rate_operation_sell_usd || 1,
       items: [],
     };
     const { computed } = safeCompute(inputs);

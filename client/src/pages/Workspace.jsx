@@ -67,6 +67,49 @@ function openInNewTab(url) {
   document.body.removeChild(link);
 }
 
+function getSelectedIndustrialRevisionId(dealId) {
+  try {
+    const key = `industrial-quote-revision:deal:${Number(dealId)}`;
+    const raw = window.localStorage.getItem(key) || window.sessionStorage.getItem(key);
+    const parsed = Number(raw || 0);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function getSelectedCargoCostSheetVersion(dealId) {
+  try {
+    const raw = window.sessionStorage.getItem(`cargo-cost-sheet-version:deal:${Number(dealId)}`);
+    const parsed = Number(raw || 0);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function pickQuoteProfitSummary(row) {
+  const selectedRevisionId = getSelectedIndustrialRevisionId(row?.deal_id);
+  const selectedCostSheetVersion = getSelectedCargoCostSheetVersion(row?.deal_id);
+  const revisions = Array.isArray(row?.revisions) ? row.revisions : [];
+  const costSheetVersions = Array.isArray(row?.cost_sheet_versions) ? row.cost_sheet_versions : [];
+  const selectedCostSheet = selectedCostSheetVersion
+    ? costSheetVersions.find((version) => Number(version.version_number) === Number(selectedCostSheetVersion))
+    : null;
+  const selectedRevision = selectedRevisionId
+    ? revisions.find((revision) => Number(revision.id) === Number(selectedRevisionId))
+    : null;
+  const latestRevision = revisions[0] || null;
+  const latestCostSheet = costSheetVersions[0] || null;
+  const source = selectedCostSheet || selectedRevision || latestRevision || latestCostSheet || row || {};
+  return {
+    profit_total_display: source.profit_total_display,
+    profit_total_currency: source.profit_total_currency || row?.profit_total_currency || "USD",
+    revision_id: selectedRevision?.id || null,
+    cost_sheet_version: selectedCostSheet?.version_number || null,
+  };
+}
+
 function formatShortDate(value) {
   if (!value) return "-";
   const date = new Date(value);
@@ -261,10 +304,7 @@ export default function Workspace() {
         for (const row of data || []) {
           if (row?.deal_id == null) continue;
           if (map[row.deal_id] !== undefined) continue;
-          map[row.deal_id] = {
-            profit_total_display: row.profit_total_display,
-            profit_total_currency: row.profit_total_currency || "USD",
-          };
+          map[row.deal_id] = pickQuoteProfitSummary(row);
         }
         if (!cancelled) setQuoteTotals(map);
       } catch {}
@@ -310,13 +350,17 @@ export default function Workspace() {
     if (source.droppableId === destination.droppableId) return;
 
     const id = Number(draggableId);
-    await api.patch(`/deals/${id}`, {
+    const { data } = await api.patch(`/deals/${id}`, {
       stage_id: Number(destination.droppableId),
     });
     setDeals((prev) =>
       prev.map((d) =>
         d.id === id
-          ? { ...d, stage_id: Number(destination.droppableId) }
+          ? {
+              ...d,
+              stage_id: Number(destination.droppableId),
+              ...(data?.reference ? { reference: data.reference } : {}),
+            }
           : d
       )
     );
@@ -455,6 +499,7 @@ export default function Workspace() {
                           : getOperationUrl(deal.id);
 
                       const signalMeta = getOperationSignalMeta(deal, isProspectStage);
+                      const hasOverBudget = String(deal.expense_control_status || "") === "over_budget";
 
                       return (
                         <Draggable
@@ -476,10 +521,10 @@ export default function Workspace() {
                                 event.stopPropagation();
                                 openInNewTab(detailUrl);
                               }}
-                              className={`relative block w-full border rounded-xl p-3 hover:shadow transition bg-white cursor-pointer${
-                                isAged ? " deal-alert" : ""
-                              }`}
-                              title="Doble clic para abrir"
+                              className={`relative block w-full border rounded-xl p-3 hover:shadow transition cursor-pointer ${
+                                hasOverBudget ? "border-red-300 bg-red-50" : "bg-white"
+                              }${isAged ? " deal-alert" : ""}`}
+                              title={hasOverBudget ? "Sobrecosto" : "Doble clic para abrir"}
                             >
                               <span
                                 className={`absolute top-2 right-2 h-2.5 w-2.5 rounded-full ${signalMeta.dotClass}`}

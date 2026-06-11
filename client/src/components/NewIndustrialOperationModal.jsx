@@ -232,11 +232,12 @@ function normalizeOrgs(data) {
       const id = o.id || o.org_id || o.organization_id || null;
       const name = o.name || o.org_name || o.title || null;
       if (!id || !name) return null;
+      const ruc = o.tax_id || o.ruc || o.document || o.doc || o.code || "";
       const extra =
-        o.tax_id || o.ruc || o.document || o.doc || o.code
+        ruc
           ? ` (${o.tax_id || o.ruc || o.document || o.doc || o.code})`
           : "";
-      return { id, name: String(name), display: `${name}${extra}` };
+      return { id, name: String(name), ruc: String(ruc || ""), display: `${name}${extra}` };
     })
     .filter(Boolean);
 }
@@ -362,6 +363,7 @@ export default function NewIndustrialOperationModal({
 
   // Empresa / contacto
   const [orgName, setOrgName] = useState("");
+  const [orgRuc, setOrgRuc] = useState("");
   const [contactName, setContactName] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const [contactEmail, setContactEmail] = useState("");
@@ -526,6 +528,7 @@ export default function NewIndustrialOperationModal({
     setOrgName(v);
     setOrgQuery(v);
     setSelectedOrg(null);
+    setOrgRuc("");
     setContacts([]);
     setContactName("");
     setContactEmail("");
@@ -536,6 +539,7 @@ export default function NewIndustrialOperationModal({
   async function selectOrganization(org) {
     setSelectedOrg(org);
     setOrgName(org.name);
+    setOrgRuc(org.ruc || "");
     setOrgQuery(org.name);
     setOrgOpen(false);
 
@@ -666,6 +670,7 @@ export default function NewIndustrialOperationModal({
         business_unit_id: businessUnitId || null,
         account_exec_id: execId || null,
         org_name: orgName || null,
+        org_ruc: orgRuc || null,
         contact_name: contactName || null,
         contact_phone: contactPhone || null,
         contact_email: contactEmail || null,
@@ -808,6 +813,16 @@ export default function NewIndustrialOperationModal({
                     </div>
                   )}
                 </div>
+              </label>
+
+              <label className="text-sm">
+                RUC
+                <Input
+                  value={orgRuc}
+                  onChange={(e) => setOrgRuc(e.target.value)}
+                  placeholder="Ej: 80000000-1"
+                  autoComplete="off"
+                />
               </label>
 
               <label className="text-sm" ref={contactBoxRef}>

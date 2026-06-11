@@ -1,6 +1,7 @@
 // client/src/components/op-details/MultimodalDetail.jsx
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
+import LogisticsAutocomplete from '../LogisticsAutocomplete';
 
 const CONTAINER_TYPES = [
   { value: '40 ST', label: '40 ST' },
@@ -331,9 +332,15 @@ export default function MultimodalDetail({ dealId, data = {}, saving, onSaving, 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0,1fr))', gap: 8 }}>
               <Input label="N°" value={L.leg_no} onChange={() => {}} />
               <Select label="Modo" value={L.mode} onChange={v => setLeg(i, 'mode', v)} options={MODES} />
-              <Input label="Carrier" value={L.carrier} onChange={v => setLeg(i, 'carrier', v)} />
-              <Input label="Origen" value={L.origin} onChange={v => setLeg(i, 'origin', v)} />
-              <Input label="Destino" value={L.destination} onChange={v => setLeg(i, 'destination', v)} />
+              <AutoField label="Carrier">
+                <LogisticsAutocomplete kind="carrier" value={L.carrier} onChange={v => setLeg(i, 'carrier', v)} />
+              </AutoField>
+              <AutoField label="Origen">
+                <LogisticsAutocomplete value={L.origin} onChange={v => setLeg(i, 'origin', v)} />
+              </AutoField>
+              <AutoField label="Destino">
+                <LogisticsAutocomplete value={L.destination} onChange={v => setLeg(i, 'destination', v)} />
+              </AutoField>
               <Input label="Ref. Doc" value={L.ref_doc} onChange={v => setLeg(i, 'ref_doc', v)} />
               <Input label="ETD" type="datetime-local" value={toLocal(L.etd)} onChange={v => setLeg(i, 'etd', v)} />
               <Input label="ETA" type="datetime-local" value={toLocal(L.eta)} onChange={v => setLeg(i, 'eta', v)} />
@@ -384,6 +391,12 @@ const Input = ({ label, value, onChange, type = 'text' }) => (
   <label style={{ display: 'grid', gap: 6 }}>
     <span style={{ fontSize: 12, opacity: 0.7 }}>{label}</span>
     <input type={type} value={value ?? ''} onChange={e => onChange(e.target.value)} style={{ padding: 8, border: '1px solid #ddd', borderRadius: 6 }} />
+  </label>
+);
+const AutoField = ({ label, children }) => (
+  <label style={{ display: 'grid', gap: 6 }}>
+    <span style={{ fontSize: 12, opacity: 0.7 }}>{label}</span>
+    {children}
   </label>
 );
 

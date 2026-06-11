@@ -54,6 +54,8 @@ async function ensureInvoiceExtraColumns() {
     "ALTER TABLE invoices ADD COLUMN service_case_id INT NULL",
     "ALTER TABLE invoices ADD COLUMN container_billing_cycle_id INT NULL",
     "ALTER TABLE invoices ADD COLUMN container_contract_id INT NULL",
+    "ALTER TABLE invoices ADD COLUMN cost_sheet_version_number INT NULL",
+    "ALTER TABLE invoices ADD COLUMN quote_revision_id INT NULL",
   ];
   for (const sql of alters) {
     try {
@@ -95,11 +97,164 @@ function asJson(value) {
   return null;
 }
 
-async function fetchQuoteTotalUsd(dealId, conn) {
-  const [[row]] = await conn.query(
-    'SELECT computed_json FROM quotes WHERE deal_id = ? LIMIT 1',
+function toSheetNumber(value) {
+  if (value === '' || value === null || value === undefined) return 0;
+  const normalized = String(value).replace(/\./g, '').replace(',', '.');
+  const num = Number(normalized);
+  return Number.isFinite(num) ? num : 0;
+}
+
+async function fetchCostSheetInvoiceSnapshot(dealId, conn, versionNumber = null) {
+  const requestedVersion = Number(versionNumber || 0) || null;
+  let row = null;
+
+  if (requestedVersion) {
+    const [[versionRow]] = await conn.query(
+      `SELECT id, version_number, revision_name, data
+         FROM deal_cost_sheet_versions
+        WHERE deal_id = ? AND version_number = ?
+        LIMIT 1`,
+      [dealId, requestedVersion]
+    );
+    row = versionRow || null;
+  } else {
+    const [[versionRow]] = await conn.query(
+      `SELECT v.id, v.version_number, v.revision_name, v.data
+         FROM deal_cost_sheets s
+         INNER JOIN deal_cost_sheet_versions v ON v.id = s.current_version_id
+        WHERE s.deal_id = ?
+        LIMIT 1`,
+      [dealId]
+    );
+    row = versionRow || null;
+  }
+
+  const data = asJson(row?.data);
+  if (!data) return null;
+
+  const header = data.header || {};
+  const operationCurrency = String(header.operationCurrency || header.currency || 'USD').toUpperCase();
+  const isPyg = operationCurrency === 'PYG' || operationCurrency === 'GS';
+  const exchangeRate = isPyg ? (toSheetNumber(header.gsRate) || 1) : 1;
+  const weightKg = toSheetNumber(header.pesoKg);
+  const allInEnabled = !!header.allInEnabled;
+  const allInServiceName = String(header.allInServiceName || '').trim();
+
+  const saleRows = Array.isArray(data.ventaRows) ? data.ventaRows : [];
+  const localClientRows = Array.isArray(data.locCliRows) ? data.locCliRows : [];
+  const insuranceRows = Array.isArray(data.segVentaRows) ? data.segVentaRows : [];
+
+  const valueToUsd = (amount) => {
+    const value = Number(amount || 0) || 0;
+    return isPyg && exchangeRate > 0 ? value / exchangeRate : value;
+  };
+  const rowSaleAmount = (row) => {
+    const manualSale =
+      row?.ventaInt !== '' && row?.ventaInt !== undefined && row?.ventaInt !== null
+        ? toSheetNumber(row.ventaInt)
+        : null;
+    if (allInEnabled && manualSale !== null) return manualSale;
+    if (row?.total !== '' && !row?.lockPerKg) return toSheetNumber(row.total);
+    return toSheetNumber(row?.usdXKg) * weightKg;
+  };
+
+  const saleBaseTotal = saleRows.reduce((sum, row) => sum + rowSaleAmount(row), 0);
+  let saleItems = [];
+  if (allInEnabled && allInServiceName) {
+    const target = allInServiceName.toLowerCase();
+    const zeroItems = saleRows.map((row) => ({
+      description: row?.concepto || 'Servicio',
+      unit_price: 0,
+      tax_rate: Number(row?.tax_rate ?? 0) || 0,
+    }));
+    const hasTarget = zeroItems.some((item) => String(item.description || '').trim().toLowerCase() === target);
+    saleItems = hasTarget
+      ? zeroItems.map((item) =>
+          String(item.description || '').trim().toLowerCase() === target
+            ? { ...item, unit_price: valueToUsd(saleBaseTotal) }
+            : item
+        )
+      : [
+          ...zeroItems,
+          { description: allInServiceName, unit_price: valueToUsd(saleBaseTotal), tax_rate: 10 },
+        ];
+  } else {
+    saleItems = saleRows.map((row) => ({
+      description: row?.concepto || 'Servicio',
+      unit_price: valueToUsd(rowSaleAmount(row)),
+      tax_rate: Number(row?.tax_rate ?? 0) || 0,
+    }));
+  }
+
+  const localItems = localClientRows.map((row) => ({
+    description: row?.concepto || 'Gasto local',
+    unit_price: valueToUsd(toSheetNumber(row?.gs)),
+    tax_rate: Number(row?.tax_rate ?? 0) || 0,
+  }));
+
+  const insuranceItems = insuranceRows.map((row) => ({
+    description: row?.concepto || 'Seguro',
+    unit_price: valueToUsd(toSheetNumber(row?.usd ?? row?.monto ?? 0)),
+    tax_rate: Number(row?.tax_rate ?? 10) || 10,
+  }));
+
+  const items = [...saleItems, ...localItems, ...insuranceItems]
+    .filter((item) => String(item.description || '').trim() !== '')
+    .map((item, idx) => ({
+      description: item.description || 'Item',
+      quantity: 1,
+      unit_price: round2(item.unit_price),
+      tax_rate: Number(item.tax_rate ?? 0) || 0,
+      item_order: idx + 1,
+      source_item_key: `deal_quote:${idx + 1}`,
+      cost_sheet_version_number: row.version_number || null,
+      cost_sheet_revision_name: row.revision_name || null,
+    }));
+
+  if (!items.length) return null;
+  return {
+    version_number: row.version_number || null,
+    revision_name: row.revision_name || null,
+    currency: operationCurrency || 'USD',
+    exchange_rate: exchangeRate || 1,
+    items,
+    total_usd: round2(items.reduce((sum, item) => sum + Number(item.unit_price || 0), 0)),
+  };
+}
+async function fetchDealQuoteJsonForInvoice(dealId, conn, quoteRevisionId = null) {
+  const [[quote]] = await conn.query(
+    'SELECT id, inputs_json, computed_json FROM quotes WHERE deal_id = ? LIMIT 1',
     [dealId]
   );
+  if (!quote) return null;
+
+  const revisionId = Number(quoteRevisionId || 0) || null;
+  if (revisionId) {
+    const [[rev]] = await conn.query(
+      'SELECT inputs_json, computed_json FROM quote_revisions WHERE id = ? AND quote_id = ? LIMIT 1',
+      [revisionId, quote.id]
+    );
+    if (rev) {
+      return {
+        inputs_json: rev.inputs_json,
+        computed_json: rev.computed_json,
+        quote_id: quote.id,
+        quote_revision_id: revisionId,
+      };
+    }
+  }
+
+  return {
+    inputs_json: quote.inputs_json,
+    computed_json: quote.computed_json,
+    quote_id: quote.id,
+    quote_revision_id: null,
+  };
+}
+async function fetchQuoteTotalUsd(dealId, conn, costSheetVersionNumber = null, quoteRevisionId = null) {
+  const snapshot = quoteRevisionId ? null : await fetchCostSheetInvoiceSnapshot(dealId, conn, costSheetVersionNumber);
+  if (snapshot) return snapshot.total_usd;
+  const row = await fetchDealQuoteJsonForInvoice(dealId, conn, quoteRevisionId);
   if (!row?.computed_json) return null;
   const computed = asJson(row.computed_json);
   return (
@@ -109,16 +264,31 @@ async function fetchQuoteTotalUsd(dealId, conn) {
   );
 }
 
-async function fetchInvoiceLockStatus({ deal_id, service_case_id }) {
+async function fetchInvoiceLockStatus({ deal_id, service_case_id, cost_sheet_version_number, quote_revision_id }) {
   if (!deal_id && !service_case_id) return { locked: false, count: 0 };
   try {
+    const where = ["status <> 'anulada'", 'COALESCE(net_total_amount, total_amount, 0) > 0.01'];
+    const params = [];
+    if (deal_id) {
+      where.push('deal_id = ?');
+      params.push(deal_id);
+    } else {
+      where.push('service_case_id = ?');
+      params.push(service_case_id);
+    }
+    if (cost_sheet_version_number) {
+      where.push('cost_sheet_version_number = ?');
+      params.push(cost_sheet_version_number);
+    }
+    if (quote_revision_id) {
+      where.push('quote_revision_id = ?');
+      params.push(quote_revision_id);
+    }
     const [[row]] = await pool.query(
       `SELECT COUNT(*) AS cnt
          FROM invoices
-        WHERE status <> 'anulada'
-          AND COALESCE(net_total_amount, total_amount, 0) > 0.01
-          AND ${deal_id ? 'deal_id = ?' : 'service_case_id = ?'}`,
-      [deal_id ? deal_id : service_case_id]
+        WHERE ${where.join(' AND ')}`,
+      params
     );
     const count = Number(row?.cnt || 0);
     return { locked: count > 0, count };
@@ -129,7 +299,6 @@ async function fetchInvoiceLockStatus({ deal_id, service_case_id }) {
     throw err;
   }
 }
-
 async function fetchServiceQuoteTotalUsd(serviceCaseId, conn) {
   const [[row]] = await conn.query(
     'SELECT computed_json FROM service_quotes WHERE service_case_id = ? LIMIT 1',
@@ -182,15 +351,22 @@ async function ensureInvoiceMoneyColumns() {
   }
 }
 
-async function fetchQuoteCurrencyInfo(dealId, conn) {
-  const [[row]] = await conn.query(
-    'SELECT inputs_json FROM quotes WHERE deal_id = ? LIMIT 1',
-    [dealId]
-  );
+async function fetchQuoteCurrencyInfo(dealId, conn, costSheetVersionNumber = null, quoteRevisionId = null) {
+  const snapshot = quoteRevisionId ? null : await fetchCostSheetInvoiceSnapshot(dealId, conn, costSheetVersionNumber);
+  if (snapshot) {
+    return {
+      currency: snapshot.currency || 'USD',
+      exchange_rate: snapshot.exchange_rate || 1,
+      cost_sheet_version_number: snapshot.version_number || null,
+      cost_sheet_revision_name: snapshot.revision_name || null,
+    };
+  }
+
+  const row = await fetchDealQuoteJsonForInvoice(dealId, conn, quoteRevisionId);
   if (!row?.inputs_json) return { currency: 'USD', exchange_rate: 1 };
   const inputs = asJson(row.inputs_json) || {};
   const currency = String(inputs.operation_currency || 'USD').toUpperCase();
-  const exchange_rate = Number(inputs.exchange_rate_operation_sell_usd || 1) || 1;
+  const exchange_rate = Number(inputs.exchange_rate_atm_gs_per_usd || inputs.exchange_rate_customs_internal_gs_per_usd || inputs.exchange_rate_install_gs_per_usd || inputs.exchange_rate_operation_sell_usd || 1) || 1;
   return { currency, exchange_rate };
 }
 
@@ -202,7 +378,7 @@ async function fetchServiceQuoteCurrencyInfo(serviceCaseId, conn) {
   if (!row?.inputs_json) return { currency: 'USD', exchange_rate: 1 };
   const inputs = asJson(row.inputs_json) || {};
   const currency = String(inputs.operation_currency || 'USD').toUpperCase();
-  const exchange_rate = Number(inputs.exchange_rate_operation_sell_usd || 1) || 1;
+  const exchange_rate = Number(inputs.exchange_rate_atm_gs_per_usd || inputs.exchange_rate_customs_internal_gs_per_usd || inputs.exchange_rate_install_gs_per_usd || inputs.exchange_rate_operation_sell_usd || 1) || 1;
   return { currency, exchange_rate };
 }
 
@@ -218,7 +394,7 @@ async function fetchServiceQuoteAdditionCurrencyInfo(additionId, conn) {
   const inputs = asJson(row.inputs_json) || {};
   const currencyRaw = inputs.operation_currency || '';
   const currency = String(currencyRaw || '').toUpperCase();
-  const exchange_rate = Number(inputs.exchange_rate_operation_sell_usd || 0) || 0;
+  const exchange_rate = Number(inputs.exchange_rate_atm_gs_per_usd || inputs.exchange_rate_customs_internal_gs_per_usd || inputs.exchange_rate_install_gs_per_usd || inputs.exchange_rate_operation_sell_usd || 0) || 0;
   if (!currency || exchange_rate === 0) {
     if (row?.service_case_id) return fetchServiceQuoteCurrencyInfo(row.service_case_id, conn);
   }
@@ -292,6 +468,18 @@ async function fetchContainerBillingInfo(billingCycleId, conn) {
 
 function round2(n) {
   return Number((Number(n || 0)).toFixed(2));
+}
+
+function parsePercentageList(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => Number(item))
+    .filter((item) => Number.isFinite(item));
+}
+
+function hasPercentage(list, percentage) {
+  const pct = Number(percentage);
+  return (list || []).some((item) => Math.abs(Number(item) - pct) < 0.0001);
 }
 
 function normalizeAmountToUsd(amount, currency, exchangeRate) {
@@ -401,12 +589,13 @@ async function fetchContainerInitialInvoiceCoverage(contractId, dealId, conn) {
   };
 }
 
-async function fetchQuoteItemsForInvoice(dealId, conn) {
-  const [[row]] = await conn.query(
-    'SELECT inputs_json, computed_json FROM quotes WHERE deal_id = ? LIMIT 1',
-    [dealId]
-  );
+async function fetchQuoteItemsForInvoice(dealId, conn, costSheetVersionNumber = null, quoteRevisionId = null) {
+  const snapshot = quoteRevisionId ? null : await fetchCostSheetInvoiceSnapshot(dealId, conn, costSheetVersionNumber);
+  if (snapshot) return snapshot.items;
+
+  const row = await fetchDealQuoteJsonForInvoice(dealId, conn, quoteRevisionId);
   if (!row) return [];
+  const sourcePrefix = row.quote_revision_id ? 'deal_quote_revision:' + row.quote_revision_id : 'deal_quote';
   const inputs = asJson(row.inputs_json) || {};
   const computed = asJson(row.computed_json) || {};
   const inputItems = Array.isArray(inputs.items) ? inputs.items : [];
@@ -429,7 +618,7 @@ async function fetchQuoteItemsForInvoice(dealId, conn) {
         unit_price: unitPrice,
         tax_rate: rate,
         item_order: itemOrder,
-        source_item_key: `deal_quote:${itemOrder}`,
+        source_item_key: `${sourcePrefix}:${itemOrder}`,
       };
     });
   }
@@ -450,7 +639,7 @@ async function fetchQuoteItemsForInvoice(dealId, conn) {
       unit_price: unitPrice,
       tax_rate: rate,
       item_order: itemOrder,
-      source_item_key: `deal_quote:${itemOrder}`,
+      source_item_key: `${sourcePrefix}:${itemOrder}`,
     };
   });
 }
@@ -555,37 +744,53 @@ async function fetchServiceQuoteAdditionItemsForInvoice(additionId, conn) {
 }
 
 
-async function fetchDealQuoteBillableItems(dealId, conn) {
+async function fetchDealQuoteBillableItems(dealId, conn, costSheetVersionNumber = null, quoteRevisionId = null) {
   await ensureInvoiceItemSourceColumns();
-  const quoteItems = await fetchQuoteItemsForInvoice(dealId, conn);
+  const quoteItems = await fetchQuoteItemsForInvoice(dealId, conn, costSheetVersionNumber, quoteRevisionId);
   if (!quoteItems.length) return [];
 
-  const quoteCurrency = await fetchQuoteCurrencyInfo(dealId, conn);
+  const quoteCurrency = await fetchQuoteCurrencyInfo(dealId, conn, costSheetVersionNumber, quoteRevisionId);
   const billCurrency = String(quoteCurrency?.currency || 'USD').toUpperCase();
 
+  const usageWhere = [
+    'i.deal_id = ?',
+    "i.status <> 'anulada'",
+    "ii.source_type = 'deal_quote'",
+    'ii.source_parent_id = ?',
+    'ii.source_item_key IS NOT NULL',
+  ];
+  const usageParams = [dealId, dealId];
+  if (costSheetVersionNumber) {
+    usageWhere.push('i.cost_sheet_version_number = ?');
+    usageParams.push(costSheetVersionNumber);
+  }
+  if (quoteRevisionId) {
+    usageWhere.push('i.quote_revision_id = ?');
+    usageParams.push(quoteRevisionId);
+  }
   const [rows] = await conn.query(
     `SELECT ii.source_item_key,
             MAX(i.id) AS last_invoice_id,
             MAX(i.invoice_number) AS last_invoice_number,
             MAX(i.status) AS last_invoice_status,
-            COUNT(*) AS used_count
+            COUNT(*) AS used_count,
+            SUM(COALESCE(i.percentage, 100)) AS used_pct,
+            GROUP_CONCAT(COALESCE(i.percentage, 100) ORDER BY i.created_at, i.id) AS used_percentages
        FROM invoice_items ii
        INNER JOIN invoices i ON i.id = ii.invoice_id
-      WHERE i.deal_id = ?
-        AND i.status <> 'anulada'
-        AND ii.source_type = 'deal_quote'
-        AND ii.source_parent_id = ?
-        AND ii.source_item_key IS NOT NULL
+      WHERE ${usageWhere.join(' AND ')}
       GROUP BY ii.source_item_key`,
-    [dealId, dealId]
-  );
-  const usedMap = new Map((rows || []).map((row) => [String(row.source_item_key || ''), row]));
+    usageParams
+  );  const usedMap = new Map((rows || []).map((row) => [String(row.source_item_key || ''), row]));
   return quoteItems.map((item, idx) => {
     const sourceItemKey = String(item.source_item_key || `deal_quote:${item.item_order ?? idx}`);
     const used = usedMap.get(sourceItemKey) || null;
     const quantity = Number(item.quantity || 0) || 1;
     const unitPrice = Number(item.unit_price || 0) || 0;
     const total = Number((quantity * unitPrice).toFixed(2));
+    const usedPercentage = Math.min(100, Number(used?.used_pct || 0));
+    const usedPercentages = parsePercentageList(used?.used_percentages);
+    const isFullyInvoiced = usedPercentage >= 99.999;
     return {
       source_item_key: sourceItemKey,
       item_order: Number(item.item_order ?? idx) || idx,
@@ -595,8 +800,11 @@ async function fetchDealQuoteBillableItems(dealId, conn) {
       total,
       tax_rate: Number(item.tax_rate ?? 0) || 0,
       currency_code: billCurrency,
-      invoiced: Boolean(used),
-      pending: !used,
+      used_percentage: usedPercentage,
+      remaining_percentage: Math.max(0, round2(100 - usedPercentage)),
+      used_percentages: usedPercentages,
+      invoiced: isFullyInvoiced,
+      pending: !isFullyInvoiced,
       invoice_id: used?.last_invoice_id || null,
       invoice_number: used?.last_invoice_number || null,
       invoice_status: used?.last_invoice_status || null,
@@ -604,15 +812,22 @@ async function fetchDealQuoteBillableItems(dealId, conn) {
   });
 }
 
-async function assertDealQuoteItemsAvailable(dealId, selectedKeys, conn) {
-  const billableItems = await fetchDealQuoteBillableItems(dealId, conn);
+async function assertDealQuoteItemsAvailable(dealId, selectedKeys, percentage, conn, costSheetVersionNumber = null, quoteRevisionId = null) {
+  const billableItems = await fetchDealQuoteBillableItems(dealId, conn, costSheetVersionNumber, quoteRevisionId);
   const wanted = new Set((selectedKeys || []).map((key) => String(key || '')));
-  const invalid = billableItems.filter((item) => wanted.has(String(item.source_item_key)) && item.invoiced);
-  if (invalid.length) {
-    const labels = invalid.map((item) => item.description).join(', ');
-    throw new Error(`Los siguientes items ya fueron facturados: ${labels}`);
+  const pct = Number(percentage || 100);
+  const selected = billableItems.filter((item) => wanted.has(String(item.source_item_key)));
+  const duplicates = selected.filter((item) => hasPercentage(item.used_percentages, pct));
+  if (duplicates.length) {
+    const labels = duplicates.map((item) => item.description).join(', ');
+    throw new Error(`El ${pct}% ya fue facturado para: ${labels}`);
   }
-  return billableItems.filter((item) => wanted.has(String(item.source_item_key)) && item.pending);
+  const invalid = selected.filter((item) => Number(item.used_percentage || 0) + pct > 100.0001);
+  if (invalid.length) {
+    const labels = invalid.map((item) => `${item.description} (${Number(item.remaining_percentage || 0).toFixed(2)}% disponible)`).join(', ');
+    throw new Error(`El porcentaje supera el saldo pendiente de: ${labels}`);
+  }
+  return selected.filter((item) => item.pending);
 }
 
 
@@ -628,7 +843,9 @@ async function fetchServiceCaseBillableItems(serviceCaseId, conn) {
             MAX(i.id) AS last_invoice_id,
             MAX(i.invoice_number) AS last_invoice_number,
             MAX(i.status) AS last_invoice_status,
-            COUNT(*) AS used_count
+            COUNT(*) AS used_count,
+            SUM(COALESCE(i.percentage, 100)) AS used_pct,
+            GROUP_CONCAT(COALESCE(i.percentage, 100) ORDER BY i.created_at, i.id) AS used_percentages
        FROM invoice_items ii
        INNER JOIN invoices i ON i.id = ii.invoice_id
       WHERE i.service_case_id = ?
@@ -646,6 +863,9 @@ async function fetchServiceCaseBillableItems(serviceCaseId, conn) {
     const quantity = Number(item.quantity || 0) || 1;
     const unitPrice = Number(item.unit_price || 0) || 0;
     const total = Number((quantity * unitPrice).toFixed(2));
+    const usedPercentage = Math.min(100, Number(used?.used_pct || 0));
+    const usedPercentages = parsePercentageList(used?.used_percentages);
+    const isFullyInvoiced = usedPercentage >= 99.999;
     return {
       source_item_key: sourceItemKey,
       item_order: Number(item.item_order ?? idx) || idx,
@@ -655,8 +875,11 @@ async function fetchServiceCaseBillableItems(serviceCaseId, conn) {
       total,
       tax_rate: Number(item.tax_rate ?? 0) || 0,
       currency_code: billCurrency,
-      invoiced: Boolean(used),
-      pending: !used,
+      used_percentage: usedPercentage,
+      remaining_percentage: Math.max(0, round2(100 - usedPercentage)),
+      used_percentages: usedPercentages,
+      invoiced: isFullyInvoiced,
+      pending: !isFullyInvoiced,
       invoice_id: used?.last_invoice_id || null,
       invoice_number: used?.last_invoice_number || null,
       invoice_status: used?.last_invoice_status || null,
@@ -664,15 +887,22 @@ async function fetchServiceCaseBillableItems(serviceCaseId, conn) {
   });
 }
 
-async function assertServiceQuoteItemsAvailable(serviceCaseId, selectedKeys, conn) {
+async function assertServiceQuoteItemsAvailable(serviceCaseId, selectedKeys, percentage, conn) {
   const billableItems = await fetchServiceCaseBillableItems(serviceCaseId, conn);
   const wanted = new Set((selectedKeys || []).map((key) => String(key || '')));
-  const invalid = billableItems.filter((item) => wanted.has(String(item.source_item_key)) && item.invoiced);
-  if (invalid.length) {
-    const labels = invalid.map((item) => item.description).join(', ');
-    throw new Error(`Los siguientes items ya fueron facturados: ${labels}`);
+  const pct = Number(percentage || 100);
+  const selected = billableItems.filter((item) => wanted.has(String(item.source_item_key)));
+  const duplicates = selected.filter((item) => hasPercentage(item.used_percentages, pct));
+  if (duplicates.length) {
+    const labels = duplicates.map((item) => item.description).join(', ');
+    throw new Error(`El ${pct}% ya fue facturado para: ${labels}`);
   }
-  return billableItems.filter((item) => wanted.has(String(item.source_item_key)) && item.pending);
+  const invalid = selected.filter((item) => Number(item.used_percentage || 0) + pct > 100.0001);
+  if (invalid.length) {
+    const labels = invalid.map((item) => `${item.description} (${Number(item.remaining_percentage || 0).toFixed(2)}% disponible)`).join(', ');
+    throw new Error(`El porcentaje supera el saldo pendiente de: ${labels}`);
+  }
+  return selected.filter((item) => item.pending);
 }
 
 async function ensureInvoiceItemsTaxColumn() {
@@ -1570,6 +1800,11 @@ function canManageInvoice(user, invoice) {
   return false;
 }
 
+function canCreateInvoice(user) {
+  const role = String(user?.role || '').toLowerCase();
+  return role === 'admin' || role === 'finanzas';
+}
+
 function canViewInvoicePdf(user, invoice) {
   return Boolean(user?.id);
 }
@@ -1654,10 +1889,12 @@ router.get('/lock-status', requireAuth, async (req, res) => {
   try {
     const deal_id = Number(req.query?.deal_id || 0) || null;
     const service_case_id = Number(req.query?.service_case_id || 0) || null;
+    const cost_sheet_version_number = Number(req.query?.cost_sheet_version_number || req.query?.cost_sheet_version || 0) || null;
+    const quote_revision_id = Number(req.query?.quote_revision_id || req.query?.revision_id || 0) || null;
     if (!deal_id && !service_case_id) {
       return res.status(400).json({ error: 'deal_id o service_case_id es requerido' });
     }
-    const status = await fetchInvoiceLockStatus({ deal_id, service_case_id });
+    const status = await fetchInvoiceLockStatus({ deal_id, service_case_id, cost_sheet_version_number, quote_revision_id });
     res.json({
       locked: status.locked,
       count: status.count,
@@ -1718,6 +1955,12 @@ router.get('/defaults', requireAuth, async (req, res) => {
   }
 });
 
+// Rutas financieras: solo admin y finanzas desde aqui.
+router.use(requireAuth, (req, res, next) => {
+  if (canCreateInvoice(req.user)) return next();
+  return res.status(403).json({ error: 'No tienes permiso para acceder a facturacion' });
+});
+
 // GET /api/invoices
 router.get('/', requireAuth, async (req, res) => {
   try {
@@ -1744,8 +1987,10 @@ router.get('/', requireAuth, async (req, res) => {
           ) AS currency_resolved,
           COALESCE(
             i.exchange_rate,
+            JSON_EXTRACT(sqa.inputs_json, '$.exchange_rate_atm_gs_per_usd'),
             JSON_EXTRACT(sqa.inputs_json, '$.exchange_rate_operation_sell_usd'),
-            JSON_EXTRACT(ql.inputs_json, '$.exchange_rate_operation_sell_usd')${withService ? ', JSON_EXTRACT(sq.inputs_json, \'$.exchange_rate_operation_sell_usd\')' : ''},
+            JSON_EXTRACT(ql.inputs_json, '$.exchange_rate_atm_gs_per_usd'),
+            JSON_EXTRACT(ql.inputs_json, '$.exchange_rate_operation_sell_usd')${withService ? ', JSON_EXTRACT(sq.inputs_json, \'$.exchange_rate_atm_gs_per_usd\'), JSON_EXTRACT(sq.inputs_json, \'$.exchange_rate_operation_sell_usd\')' : ''},
             1
           ) AS exchange_rate_resolved,
           COALESCE(
@@ -1756,8 +2001,10 @@ router.get('/', requireAuth, async (req, res) => {
           ) AS currency_code,
           COALESCE(
             i.exchange_rate,
+            JSON_EXTRACT(sqa.inputs_json, '$.exchange_rate_atm_gs_per_usd'),
             JSON_EXTRACT(sqa.inputs_json, '$.exchange_rate_operation_sell_usd'),
-            JSON_EXTRACT(ql.inputs_json, '$.exchange_rate_operation_sell_usd')${withService ? ', JSON_EXTRACT(sq.inputs_json, \'$.exchange_rate_operation_sell_usd\')' : ''},
+            JSON_EXTRACT(ql.inputs_json, '$.exchange_rate_atm_gs_per_usd'),
+            JSON_EXTRACT(ql.inputs_json, '$.exchange_rate_operation_sell_usd')${withService ? ', JSON_EXTRACT(sq.inputs_json, \'$.exchange_rate_atm_gs_per_usd\'), JSON_EXTRACT(sq.inputs_json, \'$.exchange_rate_operation_sell_usd\')' : ''},
             1
           ) AS exchange_rate
         FROM invoices i
@@ -1819,6 +2066,7 @@ router.get('/', requireAuth, async (req, res) => {
 // GET /api/invoices/operation-docs?deal_id=# or service_case_id=#
 router.get('/operation-docs', requireAuth, async (req, res) => {
   try {
+    await ensureInvoiceExtraColumns();
     const dealId = Number(req.query?.deal_id || 0);
     const serviceCaseId = Number(req.query?.service_case_id || 0);
     if (!dealId && !serviceCaseId) {
@@ -1826,7 +2074,7 @@ router.get('/operation-docs', requireAuth, async (req, res) => {
     }
 
     const [invRows] = await pool.query(
-      `SELECT id, invoice_number, issue_date, created_at, status, total_amount, currency_code
+      `SELECT id, invoice_number, issue_date, created_at, status, total_amount, currency_code, percentage, cost_sheet_version_number, quote_revision_id
          FROM invoices
         WHERE ${dealId ? 'deal_id = ?' : 'service_case_id = ?'}
         ORDER BY issue_date ASC, created_at ASC, id ASC`,
@@ -1859,6 +2107,9 @@ router.get('/operation-docs', requireAuth, async (req, res) => {
         status: r.status,
         total_amount: r.total_amount,
         currency_code: r.currency_code,
+        percentage: r.percentage,
+        cost_sheet_version_number: r.cost_sheet_version_number || null,
+        quote_revision_id: r.quote_revision_id || null,
       })),
       ...(cnRows || []).map((r) => ({
         kind: 'credit_note',
@@ -1893,14 +2144,17 @@ router.get('/operation-docs', requireAuth, async (req, res) => {
 router.get('/billable-items', requireAuth, async (req, res) => {
   const conn = await pool.getConnection();
   try {
+    await ensureInvoiceExtraColumns();
     await ensureInvoiceItemSourceColumns();
     const dealId = Number(req.query?.deal_id || 0);
     const serviceCaseId = Number(req.query?.service_case_id || 0);
+    const costSheetVersionNumber = Number(req.query?.cost_sheet_version_number || req.query?.cost_sheet_version || 0) || null;
+    const quoteRevisionId = Number(req.query?.quote_revision_id || req.query?.revision_id || 0) || null;
     if (!dealId && !serviceCaseId) {
       return res.status(400).json({ error: 'deal_id o service_case_id requerido' });
     }
     const items = dealId
-      ? await fetchDealQuoteBillableItems(dealId, conn)
+      ? await fetchDealQuoteBillableItems(dealId, conn, costSheetVersionNumber, quoteRevisionId)
       : await fetchServiceCaseBillableItems(serviceCaseId, conn);
     res.json(items);
   } catch (e) {
@@ -1943,8 +2197,12 @@ router.post('/', requireAuth, async (req, res) => {
       purchase_order_ref,
       percentage,
       selected_quote_items,
+      cost_sheet_version_number,
+      quote_revision_id,
     } = req.body || {};
 
+    const costSheetVersionNumber = Number(cost_sheet_version_number || req.body?.cost_sheet_version || 0) || null;
+    const quoteRevisionId = Number(quote_revision_id || req.body?.revision_id || 0) || null;
     const selectedQuoteItems = Array.isArray(selected_quote_items)
       ? selected_quote_items.map((v) => String(v || '').trim()).filter(Boolean)
       : [];
@@ -1955,6 +2213,9 @@ router.post('/', requireAuth, async (req, res) => {
     }
     if (hasSelectedQuoteItems && !deal_id && !service_case_id) {
       return res.status(400).json({ error: 'La seleccion de items pendientes solo aplica a operaciones o servicios.' });
+    }
+    if (!canCreateInvoice(req.user)) {
+      return res.status(403).json({ error: 'No tienes permiso para crear facturas' });
     }
 
     await conn.beginTransaction();
@@ -2096,20 +2357,24 @@ router.post('/', requireAuth, async (req, res) => {
       : containerBilling?.due_date
       ? new Date(containerBilling.due_date)
       : null;
-    const perc = containerBilling || hasSelectedQuoteItems ? null : Number(percentage || 100);
+    const perc = containerBilling ? null : Number(percentage || 100);
+    if (!containerBilling && (!Number.isFinite(perc) || perc <= 0 || perc > 100)) {
+      await conn.rollback();
+      return res.status(400).json({ error: 'Ingresa un porcentaje valido entre 1 y 100' });
+    }
     const useAddition = Number(service_quote_addition_id || 0) > 0;
     const effectiveServiceCaseId = deal_id || containerBilling ? null : (service_case_id || serviceCase?.id || null);
     const quoteCurrency = containerBilling
       ? { currency: String(containerBilling.currency_code || 'PYG').toUpperCase(), exchange_rate: 1 }
       : deal_id
-      ? await fetchQuoteCurrencyInfo(deal_id, conn)
+      ? await fetchQuoteCurrencyInfo(deal_id, conn, costSheetVersionNumber, quoteRevisionId)
       : useAddition
       ? await fetchServiceQuoteAdditionCurrencyInfo(Number(service_quote_addition_id), conn)
       : await fetchServiceQuoteCurrencyInfo(effectiveServiceCaseId, conn);
     const quoteTotalUsd = containerBilling
       ? null
       : deal_id
-      ? await fetchQuoteTotalUsd(deal_id, conn)
+      ? await fetchQuoteTotalUsd(deal_id, conn, costSheetVersionNumber, quoteRevisionId)
       : useAddition
       ? await fetchServiceQuoteAdditionTotalUsd(Number(service_quote_addition_id), conn)
       : await fetchServiceQuoteTotalUsd(effectiveServiceCaseId, conn);
@@ -2133,9 +2398,35 @@ router.post('/', requireAuth, async (req, res) => {
       : null;
     const resolvedCustomerAddress = customer_address || branchAddress || null;
 
+    const invoiceRevisionWhere = deal_id && costSheetVersionNumber
+      ? ' AND cost_sheet_version_number = ?'
+      : deal_id && quoteRevisionId
+      ? ' AND quote_revision_id = ?'
+      : '';
+    const invoiceRevisionParams = deal_id && costSheetVersionNumber
+      ? [costSheetVersionNumber]
+      : deal_id && quoteRevisionId
+      ? [quoteRevisionId]
+      : [];
+
     if (containerBilling) {
       // No aplica control porcentual por deal para mensualidades container.
     } else if (useAddition) {
+      const [[dup]] = await conn.query(
+        `SELECT id, invoice_number
+           FROM invoices
+          WHERE service_quote_addition_id = ?
+            AND status <> 'anulada'
+            
+            AND percentage IS NOT NULL
+            AND ABS(percentage - ?) < 0.0001
+          LIMIT 1`,
+        [service_quote_addition_id, perc]
+      );
+      if (dup) {
+        await conn.rollback();
+        return res.status(400).json({ error: `El ${perc}% ya fue facturado${dup.invoice_number ? ` en la factura ${dup.invoice_number}` : ''}.` });
+      }
       const [[agg]] = await conn.query(
         `SELECT COALESCE(SUM(percentage),0) AS used_pct
            FROM invoices
@@ -2149,12 +2440,29 @@ router.post('/', requireAuth, async (req, res) => {
         return res.status(400).json({ error: `El porcentaje supera el 100% (ya facturado ${usedPct.toFixed(2)}%)` });
       }
     } else if (!hasSelectedQuoteItems) {
+      const scopeValue = deal_id ? deal_id : effectiveServiceCaseId;
+      const [[dup]] = await conn.query(
+        `SELECT id, invoice_number
+           FROM invoices
+          WHERE ${deal_id ? 'deal_id = ?' : 'service_case_id = ?'}
+            AND status <> 'anulada'
+            ${invoiceRevisionWhere}
+            AND percentage IS NOT NULL
+            AND ABS(percentage - ?) < 0.0001
+          LIMIT 1`,
+        [scopeValue, ...invoiceRevisionParams, perc]
+      );
+      if (dup) {
+        await conn.rollback();
+        return res.status(400).json({ error: `El ${perc}% ya fue facturado${dup.invoice_number ? ` en la factura ${dup.invoice_number}` : ''}.` });
+      }
       const [[agg]] = await conn.query(
         `SELECT COALESCE(SUM(percentage),0) AS used_pct
            FROM invoices
           WHERE ${deal_id ? 'deal_id = ?' : 'service_case_id = ?'}
-            AND status <> 'anulada'`,
-        [deal_id ? deal_id : effectiveServiceCaseId]
+            AND status <> 'anulada'
+            ${invoiceRevisionWhere}`,
+        [scopeValue, ...invoiceRevisionParams]
       );
       const usedPct = Number(agg.used_pct || 0);
       if (usedPct + perc > 100.0001) {
@@ -2182,14 +2490,14 @@ router.post('/', requireAuth, async (req, res) => {
     let itemsFromQuote = containerBilling
       ? []
       : deal_id
-      ? await fetchQuoteItemsForInvoice(deal_id, conn)
+      ? await fetchQuoteItemsForInvoice(deal_id, conn, costSheetVersionNumber, quoteRevisionId)
       : useAddition
       ? await fetchServiceQuoteAdditionItemsForInvoice(Number(service_quote_addition_id), conn)
       : await fetchServiceQuoteItemsForInvoice(effectiveServiceCaseId, conn);
     if (hasSelectedQuoteItems) {
       const selectedPendingItems = deal_id
-        ? await assertDealQuoteItemsAvailable(Number(deal_id), selectedQuoteItems, conn)
-        : await assertServiceQuoteItemsAvailable(Number(effectiveServiceCaseId), selectedQuoteItems, conn);
+        ? await assertDealQuoteItemsAvailable(Number(deal_id), selectedQuoteItems, perc, conn, costSheetVersionNumber, quoteRevisionId)
+        : await assertServiceQuoteItemsAvailable(Number(effectiveServiceCaseId), selectedQuoteItems, perc, conn);
       if (!selectedPendingItems.length) {
         await conn.rollback();
         return res.status(400).json({ error: 'Los items seleccionados ya no estan pendientes de facturar.' });
@@ -2197,7 +2505,7 @@ router.post('/', requireAuth, async (req, res) => {
       const selectedMap = new Map(selectedPendingItems.map((item) => [String(item.source_item_key), item]));
       itemsFromQuote = itemsFromQuote.filter((item) => selectedMap.has(String(item.source_item_key || '')));
     }
-    const factor = hasSelectedQuoteItems ? 1 : (perc / 100);
+    const factor = containerBilling ? 1 : (perc / 100);
     let invoiceItems = [];
     if (itemsFromQuote.length > 0) {
       invoiceItems = itemsFromQuote.map((it, idx) => {
@@ -2264,6 +2572,10 @@ router.post('/', requireAuth, async (req, res) => {
     const total_amount = round2(
       invoiceItems.reduce((sum, it) => sum + Number(it.subtotal || 0), 0)
     );
+    if (total_amount <= 0) {
+      await conn.rollback();
+      return res.status(400).json({ error: 'La factura debe tener un total mayor a cero.' });
+    }
 
     const credited_total = 0;
     const net_total_amount = Number((total_amount - credited_total).toFixed(2));
@@ -2279,14 +2591,14 @@ router.post('/', requireAuth, async (req, res) => {
     percentage, base_amount, subtotal, tax_amount, total_amount,
     paid_amount, balance,
     credited_total, net_total_amount, net_balance,
-    status, created_by
+    status, created_by, cost_sheet_version_number, quote_revision_id
   ) VALUES (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?,
-    ?, ?
+    ?, ?, ?, ?
   )`,
   [
     deal ? deal.id : null,
@@ -2326,6 +2638,8 @@ router.post('/', requireAuth, async (req, res) => {
     total_amount,   // net_balance
     'borrador',     // status
     req.user.id,    // created_by
+    costSheetVersionNumber,
+    quoteRevisionId,
   ]
 );
 
@@ -2757,7 +3071,7 @@ router.get('/:id', requireAuth, async (req, res) => {
         );
         const inputs = asJson(addRow?.inputs_json) || {};
         const curr = String(inputs.operation_currency || '').toUpperCase();
-        const rate = Number(inputs.exchange_rate_operation_sell_usd || 0) || 0;
+        const rate = Number(inputs.exchange_rate_atm_gs_per_usd || inputs.exchange_rate_customs_internal_gs_per_usd || inputs.exchange_rate_install_gs_per_usd || inputs.exchange_rate_operation_sell_usd || 0) || 0;
         if (!invoice.currency_code && curr) invoice.currency_code = curr;
         if (!invoice.exchange_rate && rate) invoice.exchange_rate = rate;
       } catch (_) {}
@@ -2817,7 +3131,7 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
         );
         const inputs = asJson(addRow?.inputs_json) || {};
         const curr = String(inputs.operation_currency || '').toUpperCase();
-        const rate = Number(inputs.exchange_rate_operation_sell_usd || 0) || 0;
+        const rate = Number(inputs.exchange_rate_atm_gs_per_usd || inputs.exchange_rate_customs_internal_gs_per_usd || inputs.exchange_rate_install_gs_per_usd || inputs.exchange_rate_operation_sell_usd || 0) || 0;
         if (!invoice.currency_code && curr) invoice.currency_code = curr;
         if (!invoice.exchange_rate && rate) invoice.exchange_rate = rate;
       } catch (_) {}
@@ -3290,4 +3604,15 @@ router.get('/credit-notes/:id/pdf', requireAuth, async (req, res) => {
 });
 
 export default router;
+
+
+
+
+
+
+
+
+
+
+
 

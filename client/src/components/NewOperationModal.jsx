@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import useParamOptions from "../hooks/useParamOptions";
+import { LOGISTICS_COUNTRIES, LOGISTICS_LOCATION_OPTIONS } from "../data/logisticsCatalog";
 
 const Input = (props) => (
   <input
@@ -50,30 +51,14 @@ const OP_LABELS = {
 };
 const opLabel = (v) => OP_LABELS[v] || v || "";
 
-const FALLBACK_COUNTRIES = [
-  { iso2: "PY", iso3: "PRY", iso_num: "600", name: "Paraguay" },
-  { iso2: "AR", iso3: "ARG", iso_num: "032", name: "Argentina" },
-  { iso2: "BR", iso3: "BRA", iso_num: "076", name: "Brazil" },
-  { iso2: "UY", iso3: "URY", iso_num: "858", name: "Uruguay" },
-  { iso2: "CL", iso3: "CHL", iso_num: "152", name: "Chile" },
-  { iso2: "BO", iso3: "BOL", iso_num: "068", name: "Bolivia" },
-  { iso2: "PE", iso3: "PER", iso_num: "604", name: "Peru" },
-  { iso2: "US", iso3: "USA", iso_num: "840", name: "United States" },
-  { iso2: "ES", iso3: "ESP", iso_num: "724", name: "Spain" },
-];
+const FALLBACK_COUNTRIES = LOGISTICS_COUNTRIES;
 
-const FALLBACK_CITIES = [
-  { id: 1, country_iso2: "PY", city_code: "ASU", name: "Asuncion" },
-  { id: 2, country_iso2: "PY", city_code: "AGT", name: "Ciudad del Este" },
-  { id: 3, country_iso2: "AR", city_code: "BUE", name: "Buenos Aires" },
-  { id: 4, country_iso2: "AR", city_code: "COR", name: "Cordoba" },
-  { id: 5, country_iso2: "BR", city_code: "SAO", name: "Sao Paulo" },
-  { id: 6, country_iso2: "BR", city_code: "RIO", name: "Rio de Janeiro" },
-  { id: 7, country_iso2: "UY", city_code: "MVD", name: "Montevideo" },
-  { id: 8, country_iso2: "CL", city_code: "SCL", name: "Santiago" },
-  { id: 9, country_iso2: "US", city_code: "MIA", name: "Miami" },
-  { id: 10, country_iso2: "ES", city_code: "MAD", name: "Madrid" },
-];
+const FALLBACK_CITIES = LOGISTICS_LOCATION_OPTIONS.map((location, idx) => ({
+  id: idx + 1,
+  country_iso2: location.country_iso2,
+  city_code: location.code,
+  name: location.name,
+}));
 
 // Normalizador robusto para options de tipo de operación
 function normalizeOpTypeOptions(raw) {
@@ -303,11 +288,12 @@ function normalizeOrgs(data) {
       const id = o.id ?? o.org_id ?? o.organization_id ?? null;
       const name = o.name ?? o.org_name ?? o.title ?? null;
       if (!id || !name) return null;
+      const ruc = o.tax_id || o.ruc || o.document || o.doc || o.code || "";
       const extra =
-        o.tax_id || o.ruc || o.document || o.doc || o.code
+        ruc
           ? ` (${o.tax_id || o.ruc || o.document || o.doc || o.code})`
           : "";
-      return { id, name: String(name), display: `${name}${extra}` };
+      return { id, name: String(name), ruc: String(ruc || ""), display: `${name}${extra}` };
     })
     .filter(Boolean);
 }
@@ -420,6 +406,7 @@ export default function NewOperationModal({
 
   // Empresa / contacto
   const [orgName, setOrgName] = useState("");
+  const [orgRuc, setOrgRuc] = useState("");
   const [contactName, setContactName] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const [contactEmail, setContactEmail] = useState("");
@@ -611,6 +598,7 @@ export default function NewOperationModal({
     setOrgName(v);
     setOrgQuery(v);
     setSelectedOrg(null);
+    setOrgRuc("");
     setContacts([]);
     setContactName("");
     setContactEmail("");
@@ -621,6 +609,7 @@ export default function NewOperationModal({
   async function selectOrganization(org) {
     setSelectedOrg(org);
     setOrgName(org.name);
+    setOrgRuc(org.ruc || "");
     setOrgQuery(org.name);
     setOrgOpen(false);
 
@@ -755,6 +744,7 @@ async function handleCreate(e) {
         business_unit_id: businessUnitId || null,
         account_exec_id: execId || null, // opcional
         org_name: orgName || null,
+        org_ruc: orgRuc || null,
         contact_name: contactName || null,
         contact_phone: contactPhone || null,
         contact_email: contactEmail || null,
@@ -990,6 +980,16 @@ async function handleCreate(e) {
                 </div>
               </label>
 
+              <label className="text-sm">
+                RUC
+                <Input
+                  value={orgRuc}
+                  onChange={(e) => setOrgRuc(e.target.value)}
+                  placeholder="Ej: 80000000-1"
+                  autoComplete="off"
+                />
+              </label>
+
               <label className="text-sm" ref={contactBoxRef}>
                 Contacto
                 <div className="relative">
@@ -1130,8 +1130,8 @@ async function handleCreate(e) {
                     const code =
                       c.city_code || (c.name ? c.name.slice(0, 3).toUpperCase() : "");
                     const value = `${c.country_iso2} - ${code}`;
-                    const label = `${country?.name || c.country_iso2} - ${c.name}`;
-                    return <option key={c.id} value={value} label={label} />;
+                    const label = `${c.name}, ${country?.name || c.country_iso2}`;
+                    return <option key={`${c.id}-${value}-${label}`} value={value} label={label} />;
                   })}
                 </datalist>
               </label>
@@ -1151,8 +1151,8 @@ async function handleCreate(e) {
                     const code =
                       c.city_code || (c.name ? c.name.slice(0, 3).toUpperCase() : "");
                     const value = `${c.country_iso2} - ${code}`;
-                    const label = `${country?.name || c.country_iso2} - ${c.name}`;
-                    return <option key={c.id} value={value} label={label} />;
+                    const label = `${c.name}, ${country?.name || c.country_iso2}`;
+                    return <option key={`${c.id}-${value}-${label}`} value={value} label={label} />;
                   })}
                 </datalist>
               </label>

@@ -1,6 +1,7 @@
 // client/src/components/op-details/RoadDetail.jsx
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
+import LogisticsAutocomplete from '../LogisticsAutocomplete';
 
 const CONTAINER_TYPES = [
   { value: '40 ST', label: '40 ST' },
@@ -93,9 +94,15 @@ export default function RoadDetail({ dealId, data = {}, saving, onSaving, onSave
         <Input label="Placa Remolque" value={form.trailer_plate} onChange={v => set('trailer_plate', v)} />
         <Input label="Chofer" value={form.driver_name} onChange={v => set('driver_name', v)} />
         <Input label="Tel. Chofer" value={form.driver_phone} onChange={v => set('driver_phone', v)} />
-        <Input label="Cruce Fronterizo" value={form.border_crossing} onChange={v => set('border_crossing', v)} />
-        <Input label="Ciudad Origen" value={form.origin_city} onChange={v => set('origin_city', v)} />
-        <Input label="Ciudad Destino" value={form.destination_city} onChange={v => set('destination_city', v)} />
+        <AutoField label="Cruce Fronterizo">
+          <LogisticsAutocomplete value={form.border_crossing} onChange={v => set('border_crossing', v)} />
+        </AutoField>
+        <AutoField label="Ciudad Origen">
+          <LogisticsAutocomplete value={form.origin_city} onChange={v => set('origin_city', v)} />
+        </AutoField>
+        <AutoField label="Ciudad Destino">
+          <LogisticsAutocomplete value={form.destination_city} onChange={v => set('destination_city', v)} />
+        </AutoField>
         <Input label="Itinerario Ruta" value={form.route_itinerary} onChange={v => set('route_itinerary', v)} />
         <Select label="Clase carga" value={form.cargo_class} onChange={v => set('cargo_class', v)} options={['FTL','LTL','FCL']} />
         <Input label="Mercadería" value={form.commodity} onChange={v => set('commodity', v)} />
@@ -198,6 +205,12 @@ const Input = ({label,value,onChange,type='text'}) => (
   <label style={{ display:'grid', gap:6 }}>
     <span style={{ fontSize:12, opacity:0.7 }}>{label}</span>
     <input type={type} value={value ?? ''} onChange={e=>onChange(e.target.value)} style={{ padding:8, border:'1px solid #ddd', borderRadius:6 }} />
+  </label>
+);
+const AutoField = ({label, children}) => (
+  <label style={{ display:'grid', gap:6 }}>
+    <span style={{ fontSize:12, opacity:0.7 }}>{label}</span>
+    {children}
   </label>
 );
 const Select = ({label,value,onChange,options=[]}) => (

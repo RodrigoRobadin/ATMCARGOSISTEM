@@ -20,7 +20,7 @@ function renderPaymentOrderPdfBuffer(data) {
   });
 }
 
-router.get('/operation-expenses', requireAuth, requireAnyRole('admin', 'manager'), async (req, res) => {
+router.get('/operation-expenses', requireAuth, requireAnyRole('admin', 'manager', 'finanzas'), async (req, res) => {
   try {
     const {
       from_date,
@@ -161,7 +161,7 @@ router.get('/operation-expenses', requireAuth, requireAnyRole('admin', 'manager'
   }
 });
 
-router.get('/operation-expenses/export', requireAuth, requireAnyRole('admin', 'manager'), async (req, res) => {
+router.get('/operation-expenses/export', requireAuth, requireAnyRole('admin', 'manager', 'finanzas'), async (req, res) => {
   try {
     const {
       from_date,
@@ -368,7 +368,7 @@ router.get('/operation-expenses/export', requireAuth, requireAnyRole('admin', 'm
   }
 });
 
-router.get('/payment-orders', requireAuth, requireAnyRole('admin', 'manager'), async (req, res) => {
+router.get('/payment-orders', requireAuth, requireAnyRole('admin', 'manager', 'finanzas'), async (req, res) => {
   try {
     const {
       from_date,
@@ -486,7 +486,7 @@ router.get('/payment-orders', requireAuth, requireAnyRole('admin', 'manager'), a
   }
 });
 
-router.get('/payment-orders/export', requireAuth, requireAnyRole('admin', 'manager'), async (req, res) => {
+router.get('/payment-orders/export', requireAuth, requireAnyRole('admin', 'manager', 'finanzas'), async (req, res) => {
   try {
     const {
       from_date,
@@ -650,7 +650,7 @@ router.get('/payment-orders/export', requireAuth, requireAnyRole('admin', 'manag
   }
 });
 
-router.post('/payment-orders/export-zip', requireAuth, requireAnyRole('admin', 'manager'), async (req, res) => {
+router.post('/payment-orders/export-zip', requireAuth, requireAnyRole('admin', 'manager', 'finanzas'), async (req, res) => {
   try {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
     if (!ids.length) return res.status(400).json({ error: 'Sin ordenes seleccionadas' });
@@ -715,7 +715,7 @@ router.post('/payment-orders/export-zip', requireAuth, requireAnyRole('admin', '
   }
 });
 
-router.patch('/payment-orders/:id/approve', requireAuth, requireAnyRole('admin', 'manager'), async (req, res) => {
+router.patch('/payment-orders/:id/approve', requireAuth, requireAnyRole('admin', 'manager', 'finanzas'), async (req, res) => {
   try {
     const { id } = req.params;
     const [[row]] = await pool.query('SELECT * FROM operation_expense_payment_orders WHERE id = ?', [id]);

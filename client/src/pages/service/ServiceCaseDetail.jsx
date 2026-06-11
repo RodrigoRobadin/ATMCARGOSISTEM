@@ -155,7 +155,8 @@ export default function ServiceCaseDetail() {
   const [doorsPickerOpen, setDoorsPickerOpen] = useState(false);
   const [doorSearch, setDoorSearch] = useState("");
   const [doorSelection, setDoorSelection] = useState([]);
-  const isAdmin = String(user?.role || "").toLowerCase() === "admin";
+  const userRole = String(user?.role || "").toLowerCase();
+  const canAccessAdminOps = userRole === "admin" || userRole === "finanzas";
   const requestedTab = String(searchParams.get("tab") || "").toLowerCase();
 
   const isLocked = Boolean(invoiceLock?.locked);
@@ -232,16 +233,16 @@ export default function ServiceCaseDetail() {
   }, [form]);
 
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!canAccessAdminOps) return;
     if (requestedTab === "administracion") {
       setTab("administracion");
     }
-  }, [isAdmin, requestedTab, caseId]);
+  }, [canAccessAdminOps, requestedTab, caseId]);
 
   function handleTabChange(nextTab) {
     setTab(nextTab);
     const nextParams = new URLSearchParams(searchParams);
-    if (isAdmin && nextTab === "administracion") nextParams.set("tab", "administracion");
+    if (canAccessAdminOps && nextTab === "administracion") nextParams.set("tab", "administracion");
     else nextParams.delete("tab");
     setSearchParams(nextParams, { replace: true });
   }
@@ -361,7 +362,7 @@ export default function ServiceCaseDetail() {
     { id: "presupuesto", label: "Presupuesto" },
     { id: "informes", label: "Informes" },
     { id: "gastos", label: "Gastos" },
-    ...(isAdmin ? [{ id: "administracion", label: "Administración" }] : []),
+    ...(canAccessAdminOps ? [{ id: "administracion", label: "Administración" }] : []),
   ];
 
   useEffect(() => {

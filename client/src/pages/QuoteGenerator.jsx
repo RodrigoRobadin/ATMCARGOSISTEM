@@ -4,6 +4,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../auth.jsx';
 import useParamOptions from '../hooks/useParamOptions';
+import LogisticsAutocomplete from '../components/LogisticsAutocomplete.jsx';
 
 // 👉 Cabecera gráfica desde /public (no requiere import):
 const HEADER_SRC = `${import.meta.env.BASE_URL}quote-header.png`;
@@ -15,13 +16,21 @@ const PDF_MARGIN = { top: 0, right: 0, bottom: 0, left: 0 };
 const CONTENT_W_MM = PDF_PAGE_W_MM - PDF_MARGIN.left - PDF_MARGIN.right - 0.2;
 
 const decimalsFrom = (raw) => {
-  const m = String(raw ?? '').match(/[.,](\d+)/);
-  return m ? m[1].length : 0;
+  const s = String(raw ?? '').trim();
+  const lastComma = s.lastIndexOf(',');
+  const lastDot = s.lastIndexOf('.');
+  const sep = Math.max(lastComma, lastDot);
+  if (sep < 0) return 0;
+  const decimals = s.slice(sep + 1).replace(/\D/g, '');
+  if (!decimals) return 0;
+  const hasOtherSeparator = /[.,]/.test(s.slice(0, sep));
+  if (decimals.length === 3 && !hasOtherSeparator) return 0;
+  return decimals.length;
 };
 
 const money = (n, decimalsHint) => {
   if (n === null || n === undefined || n === '') return '0';
-  const numeric = Number(n);
+  const numeric = typeof n === 'number' ? n : num(n);
   if (!Number.isFinite(numeric)) return String(n);
 
   const decs =
@@ -29,34 +38,44 @@ const money = (n, decimalsHint) => {
       ? decimalsHint
       : decimalsFrom(n);
 
-  const hasFraction = Math.abs(numeric - Math.trunc(numeric)) > 0;
-  if (!hasFraction) {
-    return String(Math.trunc(numeric));
-  }
-
-  const out = decs > 0 ? numeric.toFixed(decs) : String(numeric);
-  return out.replace('.', ','); // usa coma si hay decimales
+  return new Intl.NumberFormat('es-PY', {
+    minimumFractionDigits: decs,
+    maximumFractionDigits: decs,
+  }).format(numeric);
 };
 
 const formatByCurrency = (n, currency = 'USD', decimalsHint) => {
   const curr = String(currency || 'USD').toUpperCase();
   const isPyg = curr === 'PYG' || curr === 'GS';
   if (n === null || n === undefined || n === '') return '0';
-  const numeric = Number(n);
+  const numeric = typeof n === 'number' ? n : num(n);
   if (!Number.isFinite(numeric)) return String(n);
-  if (isPyg) {
-    return numeric.toLocaleString('es-PY', {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    });
-  }
-  return money(numeric, decimalsHint);
+  return money(numeric, isPyg ? 0 : decimalsHint);
 };
 const num = (v) => {
   if (v === '' || v === null || v === undefined) return 0;
-  const s = String(v).replace(/\./g, '').replace(',', '.');
-  const n = Number(s);
-  return isNaN(n) ? 0 : n;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+  const s = String(v).trim().replace(/\s/g, '');
+  if (!s) return 0;
+
+  let normalized = s;
+  const hasComma = s.includes(',');
+  const hasDot = s.includes('.');
+
+  if (hasComma && hasDot) {
+    const lastComma = s.lastIndexOf(',');
+    const lastDot = s.lastIndexOf('.');
+    normalized = lastComma > lastDot
+      ? s.replace(/\./g, '').replace(',', '.')
+      : s.replace(/,/g, '');
+  } else if (hasComma) {
+    normalized = s.replace(/\./g, '').replace(',', '.');
+  } else {
+    normalized = s.replace(/,/g, '');
+  }
+
+  const n = Number(normalized);
+  return Number.isFinite(n) ? n : 0;
 };
 
 // Paleta de branding
@@ -795,6 +814,73 @@ export default function QuoteGenerator(){
           page-break-after: always;
           height: 0;
         }
+        .formal-header{
+          display: flex;
+          align-items: stretch;
+          justify-content: space-between;
+          gap: 10mm;
+          margin: 0 0 3mm;
+          padding-top: 2mm;
+        }
+        .formal-logo-box{
+          width: 58mm;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding-top: 1mm;
+        }
+        .formal-logo-box img{
+          max-width: 100%;
+          max-height: 24mm;
+          object-fit: contain;
+        }
+        .formal-logo-fallback{
+          font-size: 18pt;
+          font-weight: 700;
+          letter-spacing: .3px;
+        }
+        .formal-logo-fallback .grupo{
+          color: #111827;
+        }
+        .formal-logo-fallback .atm{
+          color: #ef5a2f;
+          margin-left: 4px;
+        }
+        .formal-title-box{
+          flex: 1;
+          position: relative;
+          height: 26mm;
+          overflow: hidden;
+          margin-top: 0;
+        }
+        .formal-title-orange{
+          position: absolute;
+          left: 0;
+          top: 0;
+          width: 30%;
+          height: 100%;
+          background: #ef5a2f;
+          border-top-right-radius: 32mm;
+          border-bottom-right-radius: 32mm;
+        }
+        .formal-title-blue{
+          position: absolute;
+          right: 0;
+          top: 0;
+          width: 84%;
+          height: 100%;
+          background: #445f84;
+          border-top-left-radius: 32mm;
+          border-bottom-left-radius: 32mm;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-style: italic;
+          font-weight: 700;
+          font-size: 14pt;
+          letter-spacing: .4px;
+        }
         /* tabla de especificaciones: columna 1 = etiqueta+":" , columna 2 = valor */
         .kv-grid{
           display: grid;
@@ -981,16 +1067,16 @@ export default function QuoteGenerator(){
               <input value={paisDestino} onChange={e=>setPaisDestino(e.target.value)} className="w-full border rounded px-2 py-1" />
             </label>
             <label className="block">Ciudad Origen
-              <input value={ciudadOrigen} onChange={e=>setCiudadOrigen(e.target.value)} className="w-full border rounded px-2 py-1" />
+              <LogisticsAutocomplete value={ciudadOrigen} onChange={setCiudadOrigen} inputClassName="w-full border rounded px-2 py-1" />
             </label>
             <label className="block">Ciudad Destino
-              <input value={ciudadDestino} onChange={e=>setCiudadDestino(e.target.value)} className="w-full border rounded px-2 py-1" />
+              <LogisticsAutocomplete value={ciudadDestino} onChange={setCiudadDestino} inputClassName="w-full border rounded px-2 py-1" />
             </label>
             <label className="block">Aeropuerto Origen
-              <input value={aeropuertoOrigen} onChange={e=>setAeropuertoOrigen(e.target.value)} className="w-full border rounded px-2 py-1" />
+              <LogisticsAutocomplete includeTypes={["airport", "port", "city"]} value={aeropuertoOrigen} onChange={setAeropuertoOrigen} inputClassName="w-full border rounded px-2 py-1" />
             </label>
             <label className="block">Aeropuerto Destino
-              <input value={aeropuertoDestino} onChange={e=>setAeropuertoDestino(e.target.value)} className="w-full border rounded px-2 py-1" />
+              <LogisticsAutocomplete includeTypes={["airport", "port", "city"]} value={aeropuertoDestino} onChange={setAeropuertoDestino} inputClassName="w-full border rounded px-2 py-1" />
             </label>
           </div>
         </div>
@@ -1097,20 +1183,7 @@ export default function QuoteGenerator(){
       {/* ================= PREVIEW / PDF (A4) ================= */}
       <div id="quote-print" className="bg-white border rounded-xl p-0">
         <div className="mx-auto text-[14px] leading-6" style={{ width: `${CONTENT_W_MM}mm`, paddingRight: '3mm', boxSizing: 'border-box' }}>
-          <div className="quote-header">
-            <div className="quote-logo">
-              <div className="quote-logo-text">
-                <span className="quote-logo-grupo">grupo</span>
-                <span className="quote-logo-atm">atm</span>
-              </div>
-              <div className="quote-logo-swoosh" aria-hidden="true"></div>
-            </div>
-
-            <div className="quote-banner">
-              <div className="quote-banner-orange"></div>
-              <div className="quote-banner-blue">COTIZACION</div>
-            </div>
-          </div>
+          <FormalHeader />
 
           <div className="flex justify-between items-start px-1 mt-3 avoid-break">
             <div className="text-[16px]">
@@ -1516,6 +1589,22 @@ function ListFromText({ text }) {
     <ul className="list-disc ml-6">
       {lines.map((l, i) => <li key={i}>{l}</li>)}
     </ul>
+  );
+}
+
+function FormalHeader() {
+  return (
+    <div className="formal-header">
+      <div className="formal-logo-box">
+        <div className="formal-logo-fallback">
+          <span className="grupo">grupo</span><span className="atm">atm</span>
+        </div>
+      </div>
+      <div className="formal-title-box">
+        <div className="formal-title-orange"></div>
+        <div className="formal-title-blue">COTIZACION</div>
+      </div>
+    </div>
   );
 }
 

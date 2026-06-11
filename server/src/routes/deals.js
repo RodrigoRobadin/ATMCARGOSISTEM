@@ -14,6 +14,142 @@ function formatReference(n) {
   return `OP-${String(n).padStart(6, '0')}`;
 }
 
+function safeJson(value, fallback = null) {
+  if (!value) return fallback;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function toSheetNumber(value) {
+  if (value === '' || value === null || value === undefined) return 0;
+  const normalized = String(value).replace(/\./g, '').replace(',', '.');
+  const num = Number(normalized);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function normalizeCurrency(value, fallback = 'PYG') {
+  const code = String(value || fallback || 'PYG').toUpperCase();
+  return code === 'GS' ? 'PYG' : code;
+}
+
+function sumCostSheetRows(rows = []) {
+  if (!Array.isArray(rows)) return 0;
+  return rows.reduce((sum, row) => {
+    const total = toSheetNumber(row?.total ?? row?.totalUsd ?? row?.total_usd);
+    if (total) return sum + total;
+    const qty = toSheetNumber(row?.qty ?? row?.cantidad ?? 1) || 1;
+    const unit = toSheetNumber(row?.unit ?? row?.monto ?? row?.usd ?? row?.gs ?? 0);
+    return sum + qty * unit;
+  }, 0);
+}
+
+function summarizeCargoBudget(data = {}) {
+  const header = data?.header || {};
+  const totals = data?.totals || {};
+  const currency = normalizeCurrency(header.operationCurrency || header.currency || 'USD', 'USD');
+  const budgetedPurchase =
+    toSheetNumber(totals.totalCostos) ||
+    toSheetNumber(totals.total_costos) ||
+    sumCostSheetRows(data.compraRows) +
+      sumCostSheetRows(data.locRows) +
+      sumCostSheetRows(data.segCostoRows);
+  return { currency_code: currency, budgeted_purchase: Number(budgetedPurchase || 0) };
+}
+
+function convertCurrency(amount, fromCurrency, toCurrency, exchangeRate) {
+  const source = normalizeCurrency(fromCurrency);
+  const target = normalizeCurrency(toCurrency);
+  const value = Number(amount || 0);
+  const rate = Number(exchangeRate || 0);
+  if (!Number.isFinite(value)) return null;
+  if (source === target) return value;
+  if (!Number.isFinite(rate) || rate <= 1) return null;
+  if (source === 'PYG' && target === 'USD') return value / rate;
+  if (source === 'USD' && target === 'PYG') return value * rate;
+  return null;
+}
+
+async function attachCargoExpenseControl(rows = []) {
+  const cargoRows = (rows || []).filter((row) => String(row.business_unit_key || '').toLowerCase() === 'atm-cargo');
+  const dealIds = cargoRows.map((row) => Number(row.id)).filter(Boolean);
+  if (!dealIds.length) return rows;
+  try {
+    const placeholders = dealIds.map(() => '?').join(',');
+    const [budgetRows] = await pool.query(
+      `SELECT s.deal_id, v.version_number, v.revision_name, v.data
+         FROM deal_cost_sheets s
+         INNER JOIN deal_cost_sheet_versions v ON v.id = s.current_version_id
+        WHERE s.deal_id IN (${placeholders})`,
+      dealIds
+    ).catch(() => [[]]);
+    const budgetByDeal = new Map();
+    for (const row of budgetRows || []) {
+      budgetByDeal.set(Number(row.deal_id), summarizeCargoBudget(safeJson(row.data, {}) || {}));
+    }
+
+    const [expenseRows] = await pool.query(
+      `SELECT operation_id, currency_code, SUM(amount_total) AS actual_total
+         FROM operation_expense_invoices
+        WHERE operation_type = 'deal'
+          AND operation_id IN (${placeholders})
+          AND LOWER(COALESCE(status, '')) <> 'anulada'
+        GROUP BY operation_id, currency_code`,
+      dealIds
+    ).catch(() => [[]]);
+    const actualByDeal = new Map();
+    for (const row of expenseRows || []) {
+      const dealId = Number(row.operation_id);
+      if (!actualByDeal.has(dealId)) actualByDeal.set(dealId, []);
+      actualByDeal.get(dealId).push({
+        currency_code: normalizeCurrency(row.currency_code || 'PYG'),
+        actual_total: Number(row.actual_total || 0),
+      });
+    }
+
+    const [settingRows] = await pool.query(
+      `SELECT operation_id, exchange_rate
+         FROM operation_expense_control_settings
+        WHERE operation_type = 'deal'
+          AND operation_id IN (${placeholders})`,
+      dealIds
+    ).catch(() => [[]]);
+    const exchangeRateByDeal = new Map(
+      (settingRows || []).map((row) => [Number(row.operation_id), Number(row.exchange_rate || 0) || null])
+    );
+
+    return rows.map((row) => {
+      if (String(row.business_unit_key || '').toLowerCase() !== 'atm-cargo') return row;
+      const budget = budgetByDeal.get(Number(row.id));
+      const actualRows = actualByDeal.get(Number(row.id)) || [];
+      const budgetCurrency = normalizeCurrency(budget?.currency_code || '');
+      const budgetedPurchase = Number(budget?.budgeted_purchase || 0);
+      if (!budgetCurrency || budgetedPurchase <= 0 || !actualRows.length) {
+        return { ...row, expense_control_status: 'within_budget' };
+      }
+      const exchangeRate = exchangeRateByDeal.get(Number(row.id));
+      let actualConverted = 0;
+      for (const actual of actualRows) {
+        const converted = convertCurrency(actual.actual_total, actual.currency_code, budgetCurrency, exchangeRate);
+        if (converted == null) {
+          return { ...row, expense_control_status: 'not_comparable' };
+        }
+        actualConverted += converted;
+      }
+      return {
+        ...row,
+        expense_control_status: actualConverted > budgetedPurchase ? 'over_budget' : 'within_budget',
+      };
+    });
+  } catch (e) {
+    console.error('[deals] cargo expense control summary error', e?.message || e);
+    return rows;
+  }
+}
+
 async function getParamValue(key, conn = pool) {
   try {
     const [[row]] = await conn.query(
@@ -342,7 +478,7 @@ router.get('/', requireAuth, async (req, res) => {
     [...params, safeLimit, safeOffset]
   );
 
-  res.json(rows);
+  res.json(await attachCargoExpenseControl(rows));
 });
 
 router.get('/:id', async (req, res) => {
@@ -647,6 +783,7 @@ router.post('/', requireAuth, async (req, res) => {
   const contact      = body.contact || null;
 
   const org_name     = body.org_name || organization?.name || null;
+  const org_ruc      = body.org_ruc || organization?.ruc || organization?.tax_id || null;
   const org_id_body  = organization?.id || null;
 
   const contact_name    = body.contact_name  || contact?.name  || null;
@@ -681,17 +818,38 @@ router.post('/', requireAuth, async (req, res) => {
     let orgId = null;
     if (org_id_body) {
       orgId = org_id_body;
+      if (org_ruc) {
+        await conn.query(
+          'UPDATE organizations SET ruc = ?, updated_at = NOW() WHERE id = ?',
+          [org_ruc, orgId]
+        ).catch(async () => {
+          await conn.query('UPDATE organizations SET ruc = ? WHERE id = ?', [org_ruc, orgId]);
+        });
+      }
     } else if (org_name) {
-      const [orgRows] = await conn.query(
-        'SELECT id FROM organizations WHERE name = ? LIMIT 1',
-        [org_name]
-      );
+      const [orgRows] = org_ruc
+        ? await conn.query(
+            'SELECT id FROM organizations WHERE ruc = ? OR name = ? LIMIT 1',
+            [org_ruc, org_name]
+          )
+        : await conn.query(
+            'SELECT id FROM organizations WHERE name = ? LIMIT 1',
+            [org_name]
+          );
       if (orgRows.length) {
         orgId = orgRows[0].id;
+        if (org_ruc) {
+          await conn.query(
+            'UPDATE organizations SET ruc = ?, updated_at = NOW() WHERE id = ?',
+            [org_ruc, orgId]
+          ).catch(async () => {
+            await conn.query('UPDATE organizations SET ruc = ? WHERE id = ?', [org_ruc, orgId]);
+          });
+        }
       } else {
         const [ins] = await conn.query(
-          'INSERT INTO organizations(name) VALUES(?)',
-          [org_name]
+          'INSERT INTO organizations(name, ruc) VALUES(?, ?)',
+          [org_name, org_ruc || null]
         );
         orgId = ins.insertId;
       }
@@ -861,33 +1019,95 @@ router.patch('/:id', requireAuth, async (req, res) => {
     org_branch_id,
   } = req.body;
 
+  const conn = await pool.getConnection();
+
   const fields = [];
   const params = [];
+  let promotedToOperation = false;
+  let promotedReference = null;
 
-  const nextTitle = (title !== undefined ? title : description);
+  try {
+    await conn.beginTransaction();
 
-  if (nextTitle !== undefined)       { fields.push('title = ?');            params.push(nextTitle); }
-  if (value !== undefined)           { fields.push('value = ?');            params.push(value); }
-  if (status !== undefined)          { fields.push('status = ?');           params.push(status); }
-  if (stage_id !== undefined)        { fields.push('stage_id = ?');         params.push(stage_id); }
-  if (contact_id !== undefined)      { fields.push('contact_id = ?');       params.push(contact_id); }
-  if (org_id !== undefined)          { fields.push('org_id = ?');           params.push(org_id); }
-  if (org_branch_id !== undefined)   { fields.push('org_branch_id = ?');    params.push(org_branch_id || null); }
-  if (business_unit_id !== undefined){ fields.push('business_unit_id = ?'); params.push(business_unit_id); }
-  if (advisor_user_id !== undefined) { fields.push('advisor_user_id = ?');  params.push(advisor_user_id || null); }
+    if (stage_id !== undefined) {
+      const [[stageMove]] = await conn.query(
+        `SELECT
+           d.id,
+           d.reference,
+           d.pipeline_id,
+           s_from.name AS from_stage_name,
+           s_to.name AS to_stage_name,
+           s_to.pipeline_id AS to_pipeline_id
+         FROM deals d
+         LEFT JOIN stages s_from ON s_from.id = d.stage_id
+         LEFT JOIN stages s_to ON s_to.id = ?
+         WHERE d.id = ?
+         LIMIT 1`,
+        [stage_id, id]
+      );
 
-  if (!fields.length) return res.status(400).json({ error: 'Sin cambios' });
+      if (!stageMove) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Operación no encontrada' });
+      }
 
-  params.push(id);
-  await pool.query(`UPDATE deals SET ${fields.join(', ')} WHERE id = ?`, params);
+      if (stageMove.to_pipeline_id && Number(stageMove.to_pipeline_id) !== Number(stageMove.pipeline_id)) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'La etapa pertenece a otro pipeline' });
+      }
 
-  await logAudit({
-    req, action: 'update', entity: 'deal', entityId: Number(id),
-    description: `Actualizó operación ${id}`,
-    meta: req.body
-  });
+      const fromProspect = String(stageMove.from_stage_name || '').trim().toLowerCase() === 'prospecto';
+      const toProspect = String(stageMove.to_stage_name || '').trim().toLowerCase() === 'prospecto';
+      const alreadyOp = /^OP-\d+$/i.test(String(stageMove.reference || ''));
 
-  res.json({ ok: true });
+      if (fromProspect && !toProspect && !alreadyOp) {
+        const nextSeq = await computeNextGlobalReference(conn, true);
+        promotedReference = formatReference(nextSeq);
+        fields.push('reference = ?');
+        params.push(promotedReference);
+        promotedToOperation = true;
+      }
+    }
+
+    const nextTitle = (title !== undefined ? title : description);
+
+    if (nextTitle !== undefined)       { fields.push('title = ?');            params.push(nextTitle); }
+    if (value !== undefined)           { fields.push('value = ?');            params.push(value); }
+    if (status !== undefined)          { fields.push('status = ?');           params.push(status); }
+    if (stage_id !== undefined)        { fields.push('stage_id = ?');         params.push(stage_id); }
+    if (contact_id !== undefined)      { fields.push('contact_id = ?');       params.push(contact_id); }
+    if (org_id !== undefined)          { fields.push('org_id = ?');           params.push(org_id); }
+    if (org_branch_id !== undefined)   { fields.push('org_branch_id = ?');    params.push(org_branch_id || null); }
+    if (business_unit_id !== undefined){ fields.push('business_unit_id = ?'); params.push(business_unit_id); }
+    if (advisor_user_id !== undefined) { fields.push('advisor_user_id = ?');  params.push(advisor_user_id || null); }
+
+    if (!fields.length) {
+      await conn.rollback();
+      return res.status(400).json({ error: 'Sin cambios' });
+    }
+
+    fields.push('updated_at = NOW()');
+    params.push(id);
+    await conn.query(`UPDATE deals SET ${fields.join(', ')} WHERE id = ?`, params);
+
+    await conn.commit();
+
+    await logAudit({
+      req, action: 'update', entity: 'deal', entityId: Number(id),
+      description: promotedToOperation
+        ? `Convirtió prospecto ${id} en operación ${promotedReference}`
+        : `Actualizó operación ${id}`,
+      meta: { ...req.body, promoted_to_operation: promotedToOperation, reference: promotedReference || undefined }
+    });
+
+    res.json({ ok: true, promoted_to_operation: promotedToOperation, reference: promotedReference || undefined });
+  } catch (e) {
+    await conn.rollback();
+    console.error('PATCH /deals/:id error:', e);
+    res.status(500).json({ error: 'No se pudo actualizar la operación' });
+  } finally {
+    conn.release();
+  }
 });
 
 export default router;

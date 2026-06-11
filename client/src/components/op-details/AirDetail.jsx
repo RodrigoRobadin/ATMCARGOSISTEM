@@ -1,6 +1,7 @@
 // client/src/sections/operation-detail/AirDetail.jsx
 import React, { useState, useEffect } from "react";
 import { api } from "../../api";
+import LogisticsAutocomplete from "../LogisticsAutocomplete";
 
 // Factor volumétrico aéreo (kg/m³)
 const AIR_CHARGE_FACTOR = 167;
@@ -156,12 +157,11 @@ export default function AirDetail({ op, onChange }) {
       </div>
 
       <Field label="Línea aérea">
-        <input
+        <LogisticsAutocomplete
+          kind="carrier"
           disabled={disabled}
-          className="input"
-          placeholder="Ej: AMERICAN AIRLINES"
           value={form.airline || ""}
-          onChange={(e) => set("airline", e.target.value)}
+          onChange={(value) => set("airline", value)}
         />
       </Field>
 
@@ -184,22 +184,22 @@ export default function AirDetail({ op, onChange }) {
       </Field>
 
       <Field label="Aeropuerto Origen (IATA o nombre)">
-        <input
+        <LogisticsAutocomplete
+          includeTypes={["airport", "city"]}
           disabled={disabled}
-          className="input"
-          placeholder="Ej: MIA"
+          placeholder="PY - ASU - Aeropuerto Silvio Pettirossi, Paraguay"
           value={form.origin_airport || ""}
-          onChange={(e) => set("origin_airport", e.target.value.toUpperCase())}
+          onChange={(value) => set("origin_airport", value)}
         />
       </Field>
 
       <Field label="Aeropuerto Destino (IATA o nombre)">
-        <input
+        <LogisticsAutocomplete
+          includeTypes={["airport", "city"]}
           disabled={disabled}
-          className="input"
-          placeholder="Ej: ASU"
+          placeholder="US - MIA - Miami, United States"
           value={form.destination_airport || ""}
-          onChange={(e) => set("destination_airport", e.target.value.toUpperCase())}
+          onChange={(value) => set("destination_airport", value)}
         />
       </Field>
 

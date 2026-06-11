@@ -163,11 +163,28 @@ router.put("/industrial-doors/:id", async (req, res) => {
     if (!id) return res.status(400).json({ error: "id inválido" });
 
     const b = req.body || {};
+    const productId = toInt(b.product_id, 0);
+    let productName = b.product_name || null;
+    let brand = b.brand || null;
+
+    if (productId) {
+      const [[prod]] = await db.query(
+        "SELECT name, brand FROM catalog_items WHERE id = ?",
+        [productId]
+      );
+      if (prod) {
+        if (!productName) productName = prod.name || null;
+        if (!brand) brand = prod.brand || null;
+      }
+    }
 
     await db.query(
       `
       UPDATE industrial_doors
-         SET identifier          = ?,
+         SET product_id          = ?,
+             product_name        = ?,
+             brand               = ?,
+             identifier          = ?,
              width_available     = ?,
              height_available    = ?,
              side_install        = ?,
@@ -186,6 +203,9 @@ router.put("/industrial-doors/:id", async (req, res) => {
        WHERE id = ?
       `,
       [
+        productId || null,
+        productName,
+        brand,
         b.identifier || null,
         b.width_available ?? null,
         b.height_available ?? null,

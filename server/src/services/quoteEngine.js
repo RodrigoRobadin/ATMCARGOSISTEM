@@ -63,14 +63,14 @@ export function computeQuote(inputs = {}) {
     additional_global_usd = 0, // se usa como "default" por item si el item no trae adicional_usd
 
     // seguros
+    insurance_buy_total_usd = null,
     insurance_buy_rate = 0,
-    insurance_profit_mode = "CORRECTED",
 
     // tipos de cambio
+    exchange_rate_atm_gs_per_usd = 0,
     exchange_rate_customs_gs_per_usd = 0, // TC Aduana (Gs/USD)
     exchange_rate_customs_internal_gs_per_usd = 7000, // TC interno para vender despacho
     exchange_rate_install_gs_per_usd = 1,
-    exchange_rate_operation_buy_usd = 1,
     exchange_rate_operation_sell_usd = 1,
 
     // datos
@@ -90,7 +90,10 @@ export function computeQuote(inputs = {}) {
   } = inputs;
 
   const opCurrency = String(operation_currency || 'USD').toUpperCase();
-  const opRate = Number(exchange_rate_operation_sell_usd || 1) || 1;
+  const atmRate = Number(exchange_rate_atm_gs_per_usd || exchange_rate_operation_sell_usd || 1) || 1;
+  const customsInternalRate = Number(exchange_rate_customs_internal_gs_per_usd || atmRate || 1) || 1;
+  const installRate = Number(exchange_rate_install_gs_per_usd || atmRate || 1) || 1;
+  const opRate = atmRate || 1;
   const isPyg = opCurrency === 'PYG' || opCurrency === 'GS';
   const toUsdOp = (v) => {
     const num = Number(v || 0);
@@ -109,8 +112,8 @@ export function computeQuote(inputs = {}) {
     const totalCostGs = mul(qty, unitCost);
     const totalSaleGs = mul(qty, unitPrice);
     const profitGs = sub(totalSaleGs, totalCostGs);
-    const saleUsd = div(totalSaleGs, toBig(exchange_rate_install_gs_per_usd || 1));
-    const profitUsd = div(profitGs, toBig(exchange_rate_install_gs_per_usd || 1));
+    const saleUsd = div(totalSaleGs, toBig(installRate || 1));
+    const profitUsd = div(profitGs, toBig(installRate || 1));
     return {
       ...l,
       total_cost_gs: fromBig(totalCostGs),
@@ -125,22 +128,29 @@ export function computeQuote(inputs = {}) {
   const installation_total_sale_gs = fromBig(sumBig(instLines.map((l) => toBig(l.total_sale_gs))));
   const installation_total_profit_gs = fromBig(sumBig(instLines.map((l) => toBig(l.profit_gs))));
 
-  const installation_total_cost_usd = installation_total_cost_gs / (exchange_rate_install_gs_per_usd || 1);
-  const installation_total_sale_usd = installation_total_sale_gs / (exchange_rate_install_gs_per_usd || 1);
-  const installation_total_profit_usd = installation_total_profit_gs / (exchange_rate_install_gs_per_usd || 1);
+  const installation_total_cost_usd = installation_total_cost_gs / (installRate || 1);
+  const installation_total_sale_usd = installation_total_sale_gs / (installRate || 1);
+  const installation_total_profit_usd = installation_total_profit_gs / (installRate || 1);
 
   /* ================= OFERTA (prorrateo por puerta) ================= */
   const itemsArr = Array.isArray(items) ? items : [];
-  const total_door_usd = sumNum(itemsArr.map((r) => toUsdOp(r.door_value_usd)));
+  const total_door_usd = sumNum(itemsArr.map((r) => {
+    const qty = Number(r.qty || 0);
+    return toUsdOp(r.door_value_usd) * (Number.isFinite(qty) ? qty : 0);
+  }));
   const hasDoors = total_door_usd > 0;
 
   const total_flete_usd = toUsdOp(freight_international_total_usd);
   const total_seguro_usd = toUsdOp(insurance_sale_total_usd);
 
   const ofertaBase = itemsArr.map((it, idx) => {
-    const doorVal = toUsdOp(it.door_value_usd);
+    const qty = Number(it.qty || 0);
+    const safeQty = Number.isFinite(qty) ? qty : 0;
+    const doorUnitVal = toUsdOp(it.door_value_usd);
+    const doorVal = doorUnitVal * safeQty;
     const saleMode = (it.sale_mode || "auto").toString();
-    const salePriceInput = toUsdOp(it.sale_price ?? 0);
+    const saleUnitPriceInput = toUsdOp(it.sale_price ?? 0);
+    const salePriceInput = saleUnitPriceInput * safeQty;
     const participation = hasDoors ? doorVal / total_door_usd : 0;
     const flete_i = total_flete_usd * participation;
     const seguro_i = total_seguro_usd * participation;
@@ -148,9 +158,11 @@ export function computeQuote(inputs = {}) {
     return {
       line_no: it.line_no ?? idx + 1,
       description: it.description || "",
-      qty: Number(it.qty || 0),
+      qty: safeQty,
+      door_unit_price_usd: doorUnitVal,
       door_value_usd: doorVal,
       sale_mode: saleMode,
+      sale_unit_price_input: saleUnitPriceInput,
       sale_price_input: salePriceInput,
       participation,
       flete_base: flete_i,
@@ -167,7 +179,7 @@ export function computeQuote(inputs = {}) {
      Base: Valor Imponible = CIF = Puertas + Flete + Seguro
   */
   const tcAduana = Number(exchange_rate_customs_gs_per_usd || 0);
-  const tcInterno = Number(exchange_rate_customs_internal_gs_per_usd ?? 1);
+  const tcInterno = Number(customsInternalRate ?? atmRate ?? 1);
 
   let customsLines = Array.isArray(customs_lines) ? customs_lines : [];
   if (!include_customs) customsLines = [];
@@ -336,7 +348,8 @@ export function computeQuote(inputs = {}) {
 
     return {
       ...r,
-      sale_price: isManual ? Number(r.sale_price_input || 0) : null,
+      sale_price: isManual ? Number(r.sale_unit_price_input || 0) : null,
+      sale_total_input: isManual ? Number(r.sale_price_input || 0) : null,
       flete: round2(flete_i),
       seguro: round2(seguro_i),
       despacho: round2(despacho_i),
@@ -357,16 +370,16 @@ export function computeQuote(inputs = {}) {
   const total_additional_usd = sumNum(ofertaItemsFull.map((r) => r.adicional));
   const venta_puertas = sumNum(
     ofertaItemsFull.map((r) =>
-      r.sale_price != null ? r.sale_price : Number(r.door_value_usd || 0) + Number(r.rent || 0)
+      r.sale_total_input != null ? r.sale_total_input : Number(r.door_value_usd || 0) + Number(r.rent || 0)
     )
   );
 
   /* ================= OPERACION (profit final) ================= */
-  const seguros_compra_usd = total_door_usd * Number(insurance_buy_rate || 0);
-  const seguro_profit =
-    insurance_profit_mode === "COMPAT_SIMPLE"
-      ? total_seguro_usd
-      : total_seguro_usd - seguros_compra_usd;
+  const seguros_compra_usd =
+    insurance_buy_total_usd !== null && insurance_buy_total_usd !== undefined && insurance_buy_total_usd !== ""
+      ? toUsdOp(insurance_buy_total_usd)
+      : total_door_usd * Number(insurance_buy_rate || 0);
+  const seguro_profit = total_seguro_usd - seguros_compra_usd;
 
   const compra_puertas = total_door_usd;
   const profit_puertas = venta_puertas - compra_puertas;
@@ -413,7 +426,9 @@ export function computeQuote(inputs = {}) {
   return {
     meta: {
       operation_currency: opCurrency,
-      exchange_rate_operation_sell_usd: opRate,
+      exchange_rate_atm_gs_per_usd: atmRate,
+      exchange_rate_customs_internal_gs_per_usd: customsInternalRate,
+      exchange_rate_install_gs_per_usd: installRate,
     },
     oferta: {
       items: ofertaItemsFull,
@@ -443,7 +458,7 @@ export function computeQuote(inputs = {}) {
       },
       inputs: {
         exchange_rate_customs_gs_per_usd,
-        exchange_rate_customs_internal_gs_per_usd,
+        exchange_rate_customs_internal_gs_per_usd: customsInternalRate,
       },
     },
     instalacion: {
@@ -455,6 +470,7 @@ export function computeQuote(inputs = {}) {
         installation_total_cost_usd: round2(installation_total_cost_usd),
         installation_total_sale_usd: round2(installation_total_sale_usd),
         installation_total_profit_usd: round2(installation_total_profit_usd),
+        exchange_rate_install_gs_per_usd: installRate,
       },
     },
     financiacion: {

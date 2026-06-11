@@ -113,6 +113,57 @@ function labelOfFile(f, labels) {
   return (labels && labels[f.id]) || visibleNameOf(f);
 }
 
+const FOLLOWUP_DUE_SOON_MS = 24 * 60 * 60 * 1000;
+
+function getFollowupDueMeta(entry, nowMs = Date.now()) {
+  if (!entry?.due_at) return null;
+  const dueDate = new Date(entry.due_at);
+  const dueMs = dueDate.getTime();
+  if (!Number.isFinite(dueMs)) return null;
+
+  const isDone =
+    Boolean(entry.done) || String(entry.status || "").toLowerCase() === "done";
+  const labelDate = dueDate.toLocaleString();
+
+  if (isDone) {
+    return {
+      state: "done",
+      label: `Completado - vencia: ${labelDate}`,
+      className: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      cardClass: "",
+      title: "Este seguimiento ya fue marcado como hecho.",
+    };
+  }
+
+  if (dueMs < nowMs) {
+    return {
+      state: "overdue",
+      label: `Vencido: ${labelDate}`,
+      className: "bg-red-50 text-red-700 border-red-200",
+      cardClass: "border-red-200 bg-red-50/40",
+      title: "Este seguimiento ya esta vencido.",
+    };
+  }
+
+  if (dueMs - nowMs <= FOLLOWUP_DUE_SOON_MS) {
+    return {
+      state: "soon",
+      label: `Por vencer: ${labelDate}`,
+      className: "bg-amber-50 text-amber-700 border-amber-200",
+      cardClass: "border-amber-200 bg-amber-50/40",
+      title: "Este seguimiento vence dentro de las proximas 24 horas.",
+    };
+  }
+
+  return {
+    state: "scheduled",
+    label: `Vence: ${labelDate}`,
+    className: "bg-slate-50 text-slate-700 border-slate-200",
+    cardClass: "",
+    title: "Fecha y hora programada para este seguimiento.",
+  };
+}
+
 /* ---------- UI helpers ---------- */
 function Field({ label, right, children }) {
   return (
@@ -407,7 +458,8 @@ export default function OperationDetailIndustrial() {
   const { id } = useParams();
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
-  const isAdmin = String(user?.role || "").toLowerCase() === "admin";
+  const userRole = String(user?.role || "").toLowerCase();
+  const canAccessAdminOps = userRole === "admin" || userRole === "finanzas";
 
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState(null);
@@ -457,6 +509,19 @@ export default function OperationDetailIndustrial() {
   const [notePendingFiles, setNotePendingFiles] = useState([]);
   const noteAttachInputRef = useRef(null);
 
+  const followupDueStats = useMemo(() => {
+    const nowMs = Date.now();
+    return (notesList || []).reduce(
+      (acc, entry) => {
+        const meta = getFollowupDueMeta(entry, nowMs);
+        if (meta?.state === "overdue") acc.overdue += 1;
+        if (meta?.state === "soon") acc.soon += 1;
+        return acc;
+      },
+      { overdue: 0, soon: 0 }
+    );
+  }, [notesList]);
+
   const [paramMap, setParamMap] = useState({
     tipo_operacion: [],
     modalidad_carga: [],
@@ -471,16 +536,16 @@ export default function OperationDetailIndustrial() {
   const requestedTab = String(searchParams.get("tab") || "").toLowerCase();
 
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!canAccessAdminOps) return;
     if (requestedTab === "administracion") {
       setActiveTab("administracion");
     }
-  }, [isAdmin, requestedTab, id]);
+  }, [canAccessAdminOps, requestedTab, id]);
 
   function handleTabChange(nextTab) {
     setActiveTab(nextTab);
     const nextParams = new URLSearchParams(searchParams);
-    if (isAdmin && nextTab === "administracion") nextParams.set("tab", "administracion");
+    if (canAccessAdminOps && nextTab === "administracion") nextParams.set("tab", "administracion");
     else nextParams.delete("tab");
     setSearchParams(nextParams, { replace: true });
   }
@@ -918,12 +983,16 @@ export default function OperationDetailIndustrial() {
   }, [quoteId]);
 
   useEffect(() => {
-    function handleRevisionCreated(e) {
+    function handleRevisionChanged(e) {
       const qid = e?.detail?.quoteId;
-      if (qid && qid === quoteId) fetchQuoteRevisions(qid);
+      if (qid && Number(qid) === Number(quoteId)) fetchQuoteRevisions(qid);
     }
-    window.addEventListener("quote-revision-created", handleRevisionCreated);
-    return () => window.removeEventListener("quote-revision-created", handleRevisionCreated);
+    window.addEventListener("quote-revision-created", handleRevisionChanged);
+    window.addEventListener("quote-revision-updated", handleRevisionChanged);
+    return () => {
+      window.removeEventListener("quote-revision-created", handleRevisionChanged);
+      window.removeEventListener("quote-revision-updated", handleRevisionChanged);
+    };
   }, [quoteId]);
 
   /* ---------- guardar ---------- */
@@ -1191,7 +1260,7 @@ export default function OperationDetailIndustrial() {
     { id: "detalle", kind: "base", label: "Detalle" },
     { id: "documentos", kind: "base", label: "Documentos" },
     { id: "gastos", kind: "base", label: "Gastos" },
-    ...(isAdmin ? [{ id: "administracion", kind: "base", label: "Administración" }] : []),
+    ...(canAccessAdminOps ? [{ id: "administracion", kind: "base", label: "Administración" }] : []),
     {
       id: "detcos",
       kind: "base",
@@ -1239,12 +1308,29 @@ export default function OperationDetailIndustrial() {
 
   function getStoredIndustrialRevisionId() {
     try {
-      const raw = window.sessionStorage.getItem(`industrial-quote-revision:deal:${Number(id)}`);
+      const key = `industrial-quote-revision:deal:${Number(id)}`;
+      const raw = window.localStorage.getItem(key) || window.sessionStorage.getItem(key);
       const parsed = Number(raw || 0);
       return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
     } catch (_) {
       return null;
     }
+  }
+
+  function persistIndustrialRevisionId(revisionId) {
+    const parsed = Number(revisionId || 0);
+    const next = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    setSelectedQuoteRevisionId(next);
+    try {
+      const key = `industrial-quote-revision:deal:${Number(id)}`;
+      if (next) {
+        window.localStorage.setItem(key, String(next));
+        window.sessionStorage.setItem(key, String(next));
+      } else {
+        window.localStorage.removeItem(key);
+        window.sessionStorage.removeItem(key);
+      }
+    } catch (_) {}
   }
 
   const [selectedQuoteRevisionId, setSelectedQuoteRevisionId] = useState(() => getStoredIndustrialRevisionId());
@@ -1258,7 +1344,7 @@ export default function OperationDetailIndustrial() {
   useEffect(() => {
     function handleQuoteRevisionSelected(e) {
       if (Number(e?.detail?.dealId || 0) !== Number(id)) return;
-      setSelectedQuoteRevisionId(e?.detail?.revisionId || null);
+      persistIndustrialRevisionId(e?.detail?.revisionId || null);
     }
     window.addEventListener("quote-revision-selected", handleQuoteRevisionSelected);
     return () => window.removeEventListener("quote-revision-selected", handleQuoteRevisionSelected);
@@ -1271,6 +1357,14 @@ export default function OperationDetailIndustrial() {
     () => quoteRevisions.find((r) => Number(r.id) === Number(currentIndustrialRevisionId)) || null,
     [quoteRevisions, currentIndustrialRevisionId]
   );
+
+  useEffect(() => {
+    const stored = getStoredIndustrialRevisionId();
+    if (!stored || !quoteRevisions.length) return;
+    const exists = quoteRevisions.some((r) => Number(r.id) === Number(stored));
+    if (!exists) persistIndustrialRevisionId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quoteRevisions, id]);
   const industrialQuoteHref = currentIndustrialRevisionId
     ? `/operations/${id}/industrial-quote?revision_id=${currentIndustrialRevisionId}`
     : `/operations/${id}/industrial-quote`;
@@ -1974,17 +2068,36 @@ export default function OperationDetailIndustrial() {
       <div className="bg-white rounded-2xl shadow px-4 pt-3 pb-0">
         <div className="flex gap-1 flex-wrap overflow-x-auto">
           {topTabs.map((t) => (
-            <button
-              key={t.id}
-              className={`px-3 py-2 text-sm rounded-t-lg border-b-0 border whitespace-nowrap ${activeTab === t.id
-                ? "bg-black text-white"
-                : "bg-white"
-                }`}
-              onClick={() => handleTabChange(t.id)}
-              title={t.fullLabel || t.label}
-            >
-              {t.label}
-            </button>
+            (() => {
+              const isSelectedRevision =
+                t.kind === "revision" &&
+                Number(t.revisionId || 0) === Number(selectedQuoteRevisionId || 0);
+              const buttonClass =
+                activeTab === t.id
+                  ? "bg-black text-white border-black"
+                  : isSelectedRevision
+                  ? "bg-sky-50 text-sky-900 border-sky-300"
+                  : "bg-white";
+              return (
+                <button
+                  key={t.id}
+                  className={`px-3 py-2 text-sm rounded-t-lg border-b-0 border whitespace-nowrap ${buttonClass}`}
+                  onClick={() => {
+                    if (t.kind === "revision" && t.revisionId) {
+                      persistIndustrialRevisionId(t.revisionId);
+                    }
+                    handleTabChange(t.id);
+                  }}
+                  title={
+                    isSelectedRevision
+                      ? `${t.fullLabel || t.label} (revision seleccionada)`
+                      : t.fullLabel || t.label
+                  }
+                >
+                  {isSelectedRevision ? `${t.label} (sel.)` : t.label}
+                </button>
+              );
+            })()
           ))}
         </div>
       </div>
@@ -2010,6 +2123,7 @@ export default function OperationDetailIndustrial() {
             <AdminOpsPanel
               dealId={Number(id)}
               deal={deal}
+              quoteRevisionId={currentIndustrialRevisionId || null}
               onDocsRefresh={() => {
                 api
                   .get("/invoices/operation-docs", { params: { deal_id: id } })
@@ -2031,7 +2145,8 @@ export default function OperationDetailIndustrial() {
                 embedded
                 quoteId={quoteId}
                 dealId={Number(id)}
-                key={quoteId}
+                initialRevisionId={currentIndustrialRevisionId || null}
+                key={`${quoteId}-${currentIndustrialRevisionId || "base"}`}
               />
             ) : (
               <div className="bg-white rounded-2xl shadow p-4 text-sm text-slate-600">
@@ -2674,8 +2789,18 @@ export default function OperationDetailIndustrial() {
               <div className="bg-white rounded-2xl shadow p-4">
                 <div className="flex items-center justify-between gap-3 mb-3">
                   <h3 className="font-medium">Seguimiento de la operacion</h3>
-                  <div className="text-xs text-slate-500">
-                    Actividades, notas, recordatorios y tareas
+                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                    {followupDueStats.overdue > 0 ? (
+                      <span className="px-2 py-1 rounded-full border bg-red-50 text-red-700 border-red-200">
+                        {followupDueStats.overdue} vencido(s)
+                      </span>
+                    ) : null}
+                    {followupDueStats.soon > 0 ? (
+                      <span className="px-2 py-1 rounded-full border bg-amber-50 text-amber-700 border-amber-200">
+                        {followupDueStats.soon} por vencer
+                      </span>
+                    ) : null}
+                    <span>Actividades, notas, recordatorios y tareas</span>
                   </div>
                 </div>
 
@@ -2735,17 +2860,25 @@ export default function OperationDetailIndustrial() {
                   </button>
                 </div>
 
-                {(noteEntryType === "reminder" || noteEntryType === "task") && (
-                  <div className="grid md:grid-cols-2 gap-2 mt-2">
+                <div className="grid md:grid-cols-2 gap-2 mt-2">
+                  <div>
+                    <label className="block text-[11px] text-slate-500 mb-1">
+                      Fecha y hora {noteEntryType === "reminder" || noteEntryType === "task" ? "" : "(opcional)"}
+                    </label>
                     <input
                       type="datetime-local"
-                      className="border rounded-lg px-3 py-2 text-sm"
+                      className="w-full border rounded-lg px-3 py-2 text-sm"
                       value={noteDueAt}
                       onChange={(e) => setNoteDueAt(e.target.value)}
                     />
-                    {noteEntryType === "task" ? (
+                  </div>
+                  {noteEntryType === "task" ? (
+                    <div>
+                      <label className="block text-[11px] text-slate-500 mb-1">
+                        Prioridad
+                      </label>
                       <select
-                        className="border rounded-lg px-3 py-2 text-sm"
+                        className="w-full border rounded-lg px-3 py-2 text-sm"
                         value={notePriority}
                         onChange={(e) => setNotePriority(e.target.value)}
                       >
@@ -2753,13 +2886,13 @@ export default function OperationDetailIndustrial() {
                         <option value="medium">Prioridad media</option>
                         <option value="high">Prioridad alta</option>
                       </select>
-                    ) : (
-                      <div className="text-xs text-slate-500 flex items-center px-2">
-                        El recordatorio quedara pendiente hasta marcarlo como hecho.
-                      </div>
-                    )}
-                  </div>
-                )}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-slate-500 flex items-end px-2 pb-2">
+                      Si cargas fecha y hora, el sistema lo resaltara cuando este por vencer o vencido.
+                    </div>
+                  )}
+                </div>
 
                 {noteEntryType === "note" && (
                   <>
@@ -2859,9 +2992,14 @@ export default function OperationDetailIndustrial() {
                           : a.entry_type === "reminder"
                           ? `Recordatorio pendiente${a.due_at ? ` hasta ${new Date(a.due_at).toLocaleString()}` : ""}`
                           : `Tarea ${a.status || "pending"}${a.due_at ? ` con vencimiento ${new Date(a.due_at).toLocaleString()}` : ""}`;
+                      const dueMeta = getFollowupDueMeta(a);
+                      const canMarkDone =
+                        !a.done &&
+                        String(a.status || "").toLowerCase() !== "done" &&
+                        (a.entry_type === "reminder" || a.entry_type === "task" || Boolean(a.due_at));
 
                       return (
-                        <div key={a.id} className="border rounded-xl p-3">
+                        <div key={a.id} className={`border rounded-xl p-3 ${dueMeta?.cardClass || ""}`}>
                           <div className="flex items-start justify-between gap-2">
                             <div>
                               <div className="text-sm font-medium">{a.title || typeLabel}</div>
@@ -2871,8 +3009,7 @@ export default function OperationDetailIndustrial() {
                               <span className={`text-[11px] px-2 py-1 rounded-full ${typeClass}`} title={tooltip}>
                                 {typeLabel}
                               </span>
-                              {((a.entry_type === "reminder" && !a.done) ||
-                                (a.entry_type === "task" && a.status !== "done")) && (
+                              {canMarkDone && (
                                 <button
                                   type="button"
                                   className="text-[11px] px-2 py-1 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50"
@@ -2888,7 +3025,14 @@ export default function OperationDetailIndustrial() {
 
                           {(a.due_at || a.priority || a.status) && (
                             <div className="mt-2 text-xs text-slate-600 flex flex-wrap gap-2">
-                              {a.due_at ? <span>Vence: {new Date(a.due_at).toLocaleString()}</span> : null}
+                              {dueMeta ? (
+                                <span
+                                  className={`px-2 py-0.5 rounded-full border ${dueMeta.className}`}
+                                  title={dueMeta.title}
+                                >
+                                  {dueMeta.label}
+                                </span>
+                              ) : null}
                               {a.priority ? <span>Prioridad: {a.priority}</span> : null}
                               {a.status ? <span>Estado: {a.status}</span> : null}
                             </div>
@@ -2928,6 +3072,7 @@ export default function OperationDetailIndustrial() {
             operationId={Number(id)}
             showList={activeTab === "gastos"}
             openNewKey={expenseOpenKey}
+            quoteRevisionId={currentIndustrialRevisionId || null}
           />
         </section>
 

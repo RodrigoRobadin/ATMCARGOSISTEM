@@ -4,10 +4,12 @@ import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
 import { pool } from '../services/db.js';
-import { requireAuth } from '../middlewares/auth.js';
+import { requireAuth, requireAnyRole } from '../middlewares/auth.js';
 import ExcelJS from 'exceljs';
 
 const router = Router();
+
+router.use(requireAuth, requireAnyRole('admin', 'manager', 'finanzas'));
 
 const storage = multer.diskStorage({
   destination: (req, _file, cb) => {
@@ -1662,7 +1664,7 @@ router.get('/providers', requireAuth, async (_req, res) => {
   const [rows] = await pool.query(
     `SELECT id, razon_social, name, ruc
      FROM organizations
-     WHERE LOWER(tipo_org) = 'proveedor'
+     WHERE LOWER(tipo_org) IN ('proveedor', 'agente', 'seguro', 'aseguradora', 'despachante', 'transporte', 'ferreteria', 'combustible', 'gasolinera')
      ORDER BY name`
   );
   res.json(rows);
@@ -1675,7 +1677,7 @@ router.get('/providers/search', requireAuth, async (req, res) => {
   const [rows] = await pool.query(
     `SELECT id, razon_social, name, ruc
      FROM organizations
-     WHERE LOWER(tipo_org) = 'proveedor'
+     WHERE LOWER(tipo_org) IN ('proveedor', 'agente', 'seguro', 'aseguradora', 'despachante', 'transporte', 'ferreteria', 'combustible', 'gasolinera')
        AND (name LIKE ? OR razon_social LIKE ? OR ruc LIKE ?)
      ORDER BY name
      LIMIT 20`,
@@ -1687,11 +1689,12 @@ router.get('/providers/search', requireAuth, async (req, res) => {
 router.post('/providers', requireAuth, async (req, res) => {
   const name = String(req.body?.name || '').trim();
   const ruc = String(req.body?.ruc || '').trim() || null;
+  const tipoOrg = String(req.body?.tipo_org || req.body?.category || 'Proveedor').trim() || 'Proveedor';
   if (!name) return res.status(400).json({ error: 'name is required' });
   const [result] = await pool.query(
     `INSERT INTO organizations (razon_social, name, ruc, tipo_org, created_at, updated_at)
-     VALUES (?, ?, ?, 'Proveedor', NOW(), NOW())`,
-    [name, name, ruc]
+     VALUES (?, ?, ?, ?, NOW(), NOW())`,
+    [name, name, ruc, tipoOrg]
   );
   const [[row]] = await pool.query(
     `SELECT id, razon_social, name, ruc

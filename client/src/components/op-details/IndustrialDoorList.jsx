@@ -1,5 +1,5 @@
 // client/src/components/op-details/IndustrialDoorList.jsx
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { api } from "../../api";
 import { generateQuoteEmail } from "../../utils/generateQuoteEmail";
 
@@ -38,6 +38,7 @@ function Field({ label, children }) {
 
 export default function IndustrialDoorList({ dealId, editMode, dealReference }) {
     const [doors, setDoors] = useState([]);
+    const [catalogItems, setCatalogItems] = useState([]);
     const [loading, setLoading] = useState(false);
     const [editingDoorId, setEditingDoorId] = useState(null);
     const [doorFormData, setDoorFormData] = useState({});
@@ -63,6 +64,31 @@ export default function IndustrialDoorList({ dealId, editMode, dealReference }) 
         loadDoors();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [dealId]);
+
+    useEffect(() => {
+        async function loadCatalogItems() {
+            try {
+                const { data } = await api.get("/catalog/items", {
+                    params: { active: 1, limit: 1000, t: Date.now() },
+                });
+                const list = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
+                setCatalogItems(list.filter((item) => String(item.type || "").toUpperCase() === "PRODUCTO"));
+            } catch (error) {
+                console.error("Error cargando catalogo:", error);
+                setCatalogItems([]);
+            }
+        }
+        loadCatalogItems();
+    }, []);
+
+    const catalogBrands = useMemo(() => {
+        const set = new Set();
+        catalogItems.forEach((item) => {
+            const brand = String(item.brand || "").trim();
+            if (brand) set.add(brand);
+        });
+        return Array.from(set).sort((a, b) => a.localeCompare(b));
+    }, [catalogItems]);
 
     // Agregar nueva puerta
     async function handleAddDoor() {
@@ -99,6 +125,9 @@ export default function IndustrialDoorList({ dealId, editMode, dealReference }) 
             visor_lines: door.visor_lines || "",
             right_leg: door.right_leg || "",
             notes: door.notes || "",
+            product_id: door.product_id || "",
+            product_name: door.product_name || "",
+            brand: door.brand || "",
         });
     }
 
@@ -123,6 +152,9 @@ export default function IndustrialDoorList({ dealId, editMode, dealReference }) 
                 visor_lines: doorFormData.visor_lines || null,
                 right_leg: doorFormData.right_leg || null,
                 notes: doorFormData.notes || null,
+                product_id: doorFormData.product_id || null,
+                product_name: doorFormData.product_name || null,
+                brand: doorFormData.brand || null,
             };
 
             await api.put(`/industrial-doors/${editingDoorId}`, payload);
@@ -156,6 +188,16 @@ export default function IndustrialDoorList({ dealId, editMode, dealReference }) 
     // Actualizar campo del formulario
     function updateFormField(field, value) {
         setDoorFormData((prev) => ({ ...prev, [field]: value }));
+    }
+
+    function updateDoorCatalogProduct(productId) {
+        const selectedProduct = catalogItems.find((item) => String(item.id) === String(productId));
+        setDoorFormData((prev) => ({
+            ...prev,
+            product_id: selectedProduct?.id || "",
+            product_name: selectedProduct?.name || "",
+            brand: selectedProduct?.brand || prev.brand || "",
+        }));
     }
 
     // Subir imagen
@@ -278,6 +320,42 @@ Asunto: ${subject}`);
                                     </div>
 
                                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                        <Field label="Marca">
+                                            <Select
+                                                value={doorFormData.brand || ""}
+                                                onChange={(e) =>
+                                                    setDoorFormData((prev) => ({
+                                                        ...prev,
+                                                        brand: e.target.value,
+                                                        product_id: "",
+                                                        product_name: "",
+                                                    }))
+                                                }
+                                            >
+                                                <option value="">Todas las marcas</option>
+                                                {catalogBrands.map((brand) => (
+                                                    <option key={brand} value={brand}>
+                                                        {brand}
+                                                    </option>
+                                                ))}
+                                            </Select>
+                                        </Field>
+
+                                        <Field label="Producto del catalogo">
+                                            <Select
+                                                value={doorFormData.product_id || ""}
+                                                onChange={(e) => updateDoorCatalogProduct(e.target.value)}
+                                            >
+                                                <option value="">Sin producto vinculado</option>
+                                                {catalogItems
+                                                    .filter((item) => !doorFormData.brand || String(item.brand || "") === String(doorFormData.brand))
+                                                    .map((item) => (
+                                                        <option key={item.id} value={item.id}>
+                                                            {[item.sku, item.name, item.brand].filter(Boolean).join(" - ")}
+                                                        </option>
+                                                    ))}
+                                            </Select>
+                                        </Field>
                                         <Field label="Identificación de la puerta">
                                             <Input
                                                 value={doorFormData.identifier || ""}
@@ -518,6 +596,18 @@ Asunto: ${subject}`);
                                     )}
 
                                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 text-sm">
+                                        {door.product_name && (
+                                            <div>
+                                                <span className="text-slate-500">Producto:</span>{" "}
+                                                <span className="font-medium">{door.product_name}</span>
+                                            </div>
+                                        )}
+                                        {door.brand && (
+                                            <div>
+                                                <span className="text-slate-500">Marca:</span>{" "}
+                                                <span className="font-medium">{door.brand}</span>
+                                            </div>
+                                        )}
                                         {door.frame_type && (
                                             <div>
                                                 <span className="text-slate-500">Tipo:</span>{" "}

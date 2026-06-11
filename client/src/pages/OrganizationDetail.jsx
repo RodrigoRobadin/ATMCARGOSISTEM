@@ -673,6 +673,7 @@ export default function OrganizationDetail() {
   const isFreightOrg =
     (org.tipo_org || '').toLowerCase().includes('flete') ||
     (org.rubro || '').toLowerCase().includes('flete');
+  const isSupplierOrg = (org.tipo_org || '').toLowerCase().includes('proveedor');
 
   const freightModalities = parseModalitiesCSV(org.modalities_supported);
 
@@ -785,6 +786,19 @@ export default function OrganizationDetail() {
                 <FieldRow label="Rubro" value={org.rubro} />
                 <FieldRow label="Tipo org" value={org.tipo_org} />
                 <FieldRow label="Operación" value={org.operacion} />
+                {isSupplierOrg && (
+                  <>
+                    <FieldRow label="Banco proveedor" value={org.supplier_bank_name} />
+                    <FieldRow label="Cuenta proveedor" value={org.supplier_bank_account} />
+                    <FieldRow label="Moneda cuenta" value={org.supplier_bank_currency} />
+                    <FieldRow label="Tipo cuenta" value={org.supplier_bank_account_type} />
+                    <FieldRow label="Titular cuenta" value={org.supplier_bank_holder} />
+                    <FieldRow label="RUC titular" value={org.supplier_bank_holder_ruc} />
+                    <FieldRow label="CCI / IBAN" value={org.supplier_bank_cci_iban} />
+                    <FieldRow label="SWIFT" value={org.supplier_bank_swift} />
+                    <FieldRow label="Notas bancarias" value={org.supplier_bank_notes} />
+                  </>
+                )}
                 <FieldRow
                   label="Despachante habitual"
                   value={
@@ -1519,6 +1533,15 @@ function EditOrgModal({ org, onClose, onSaved }) {
     hoja_ruta: org.hoja_ruta || '',
     default_customs_broker_org_id:
       org.default_customs_broker_org_id || null,
+    supplier_bank_name: org.supplier_bank_name || '',
+    supplier_bank_account: org.supplier_bank_account || '',
+    supplier_bank_currency: org.supplier_bank_currency || 'PYG',
+    supplier_bank_account_type: org.supplier_bank_account_type || '',
+    supplier_bank_holder: org.supplier_bank_holder || '',
+    supplier_bank_holder_ruc: org.supplier_bank_holder_ruc || '',
+    supplier_bank_cci_iban: org.supplier_bank_cci_iban || '',
+    supplier_bank_swift: org.supplier_bank_swift || '',
+    supplier_bank_notes: org.supplier_bank_notes || '',
     zone_id: org.zone_id || null,
     department: org.department || '',
     latitude: org.latitude || '',
@@ -1558,6 +1581,7 @@ function EditOrgModal({ org, onClose, onSaved }) {
   const isFreight =
     (org.tipo_org || '').toLowerCase().includes('flete') ||
     (org.rubro || '').toLowerCase().includes('flete');
+  const isSupplier = (org.tipo_org || '').toLowerCase().includes('proveedor');
 
   // Cargar zonas al montar el componente
   useEffect(() => {
@@ -1859,6 +1883,96 @@ function EditOrgModal({ org, onClose, onSaved }) {
               </div>
             </div>
           </div>
+
+          {isSupplier && (
+            <div className="md:col-span-2 border rounded-xl bg-slate-50 p-3 space-y-3">
+              <div>
+                <div className="text-sm font-medium">Cuenta bancaria del proveedor</div>
+                <div className="text-xs text-slate-500">
+                  Cuenta destino que se muestra al registrar pagos a este proveedor.
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <label className="block text-sm">
+                  Banco
+                  <input
+                    className="w-full border rounded-lg px-3 py-2"
+                    value={form.supplier_bank_name ?? ''}
+                    onChange={(e) => upd('supplier_bank_name', e.target.value)}
+                  />
+                </label>
+                <label className="block text-sm">
+                  Nro. de cuenta
+                  <input
+                    className="w-full border rounded-lg px-3 py-2"
+                    value={form.supplier_bank_account ?? ''}
+                    onChange={(e) => upd('supplier_bank_account', e.target.value)}
+                  />
+                </label>
+                <label className="block text-sm">
+                  Moneda
+                  <select
+                    className="w-full border rounded-lg px-3 py-2"
+                    value={form.supplier_bank_currency || 'PYG'}
+                    onChange={(e) => upd('supplier_bank_currency', e.target.value)}
+                  >
+                    <option value="PYG">PYG</option>
+                    <option value="USD">USD</option>
+                    <option value="EUR">EUR</option>
+                  </select>
+                </label>
+                <label className="block text-sm">
+                  Tipo de cuenta
+                  <input
+                    className="w-full border rounded-lg px-3 py-2"
+                    value={form.supplier_bank_account_type ?? ''}
+                    onChange={(e) => upd('supplier_bank_account_type', e.target.value)}
+                  />
+                </label>
+                <label className="block text-sm">
+                  Titular
+                  <input
+                    className="w-full border rounded-lg px-3 py-2"
+                    value={form.supplier_bank_holder ?? ''}
+                    onChange={(e) => upd('supplier_bank_holder', e.target.value)}
+                  />
+                </label>
+                <label className="block text-sm">
+                  RUC titular
+                  <input
+                    className="w-full border rounded-lg px-3 py-2"
+                    value={form.supplier_bank_holder_ruc ?? ''}
+                    onChange={(e) => upd('supplier_bank_holder_ruc', e.target.value)}
+                  />
+                </label>
+                <label className="block text-sm">
+                  CCI / IBAN
+                  <input
+                    className="w-full border rounded-lg px-3 py-2"
+                    value={form.supplier_bank_cci_iban ?? ''}
+                    onChange={(e) => upd('supplier_bank_cci_iban', e.target.value)}
+                  />
+                </label>
+                <label className="block text-sm">
+                  SWIFT
+                  <input
+                    className="w-full border rounded-lg px-3 py-2"
+                    value={form.supplier_bank_swift ?? ''}
+                    onChange={(e) => upd('supplier_bank_swift', e.target.value)}
+                  />
+                </label>
+                <label className="block text-sm md:col-span-2">
+                  Notas bancarias
+                  <textarea
+                    className="w-full border rounded-lg px-3 py-2"
+                    rows={2}
+                    value={form.supplier_bank_notes ?? ''}
+                    onChange={(e) => upd('supplier_bank_notes', e.target.value)}
+                  />
+                </label>
+              </div>
+            </div>
+          )}
 
           <label className="block text-sm">
             Visibilidad

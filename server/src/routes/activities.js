@@ -44,6 +44,14 @@ function getUserId(req) {
       `);
       console.log('[activities] Columna created_by agregada.');
     }
+
+    if (byName.due_date && !['datetime', 'timestamp'].includes(String(byName.due_date.DATA_TYPE || '').toLowerCase())) {
+      await pool.query(`
+        ALTER TABLE activities
+        MODIFY COLUMN due_date DATETIME NULL
+      `);
+      console.log('[activities] Columna due_date ampliada a DATETIME.');
+    }
   } catch (err) {
     console.error('[activities] No se pudo asegurar esquema:', err?.message || err);
   }

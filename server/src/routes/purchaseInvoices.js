@@ -36,6 +36,23 @@ function canManageInvoice(user, invoice) {
     return false;
 }
 
+async function ensurePurchaseInvoicePaymentAccountColumn() {
+    try {
+        const [cols] = await pool.query(`
+          SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+           WHERE TABLE_SCHEMA = DATABASE()
+             AND TABLE_NAME = 'purchase_invoice_payments'
+             AND COLUMN_NAME = 'account'
+        `);
+        if (!cols?.length) {
+            await pool.query(`ALTER TABLE purchase_invoice_payments ADD COLUMN account VARCHAR(128) NULL AFTER payment_method`);
+        }
+    } catch (e) {
+        console.error('[purchase-invoices] ensure payment account column error:', e?.message || e);
+    }
+}
+
 // =================== ENDPOINTS ===================
 
 // GET /api/purchase-invoices - Listar facturas de compra
@@ -520,8 +537,9 @@ router.post('/:id/cancel', requireAuth, requireRole(['admin', 'finanzas']), asyn
 // POST /api/purchase-invoices/:id/payments - Registrar pago
 router.post('/:id/payments', requireAuth, requireRole(['admin', 'finanzas']), async (req, res) => {
     try {
+        await ensurePurchaseInvoicePaymentAccountColumn();
         const { id } = req.params;
-        const { payment_date, amount, payment_method, reference_number, notes } = req.body;
+        const { payment_date, amount, payment_method, account, reference_number, notes } = req.body;
         const userId = req.user.id;
 
         if (!payment_date || !amount || !payment_method) {
@@ -551,9 +569,9 @@ router.post('/:id/payments', requireAuth, requireRole(['admin', 'finanzas']), as
         // Registrar pago
         await pool.query(
             `INSERT INTO purchase_invoice_payments 
-       (invoice_id, payment_date, amount, payment_method, reference_number, notes, registered_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [id, payment_date, paymentAmount, payment_method, reference_number, notes, userId]
+       (invoice_id, payment_date, amount, payment_method, account, reference_number, notes, registered_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [id, payment_date, paymentAmount, payment_method, account || null, reference_number, notes, userId]
         );
 
         // Actualizar factura

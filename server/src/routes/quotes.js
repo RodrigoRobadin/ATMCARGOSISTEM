@@ -185,37 +185,150 @@ function safeCompute(inputs) {
   }
 }
 
+async function isQuoteRevisionInvoiced(revisionId) {
+  if (!revisionId) return false;
+  try {
+    const [[row]] = await db.query(
+      `SELECT COUNT(*) AS cnt
+         FROM invoices
+        WHERE status <> 'anulada'
+          AND COALESCE(net_total_amount, total_amount, 0) > 0.01
+          AND quote_revision_id = ?`,
+      [revisionId]
+    );
+    return Number(row?.cnt || 0) > 0;
+  } catch (err) {
+    if (err?.code === "ER_BAD_FIELD_ERROR") return false;
+    throw err;
+  }
+}
+
+async function assertQuoteRevisionUnlocked(revisionId, res) {
+  if (!revisionId) return true;
+  const locked = await isQuoteRevisionInvoiced(revisionId);
+  if (locked) {
+    res.status(409).json({ error: "Revision ya facturada. No se puede modificar." });
+    return false;
+  }
+  return true;
+}
+
+function summarizeQuoteComputed(computed, inputs = {}) {
+  const opCurrency = String(
+    computed?.meta?.operation_currency || inputs.operation_currency || 'USD'
+  ).toUpperCase();
+  const opRate = Number(
+    computed?.meta?.exchange_rate_atm_gs_per_usd ||
+      computed?.meta?.exchange_rate_operation_sell_usd ||
+      inputs.exchange_rate_atm_gs_per_usd ||
+      inputs.exchange_rate_operation_sell_usd ||
+      1
+  ) || 1;
+  const isPyg = opCurrency === 'PYG' || opCurrency === 'GS';
+  const profitUsd =
+    computed?.operacion?.totals?.profit_total_usd ??
+    computed?.operacion?.totals?.profitGeneral ??
+    computed?.operacion?.totals?.profit_general ??
+    null;
+  const profitDisplay = Number.isFinite(Number(profitUsd))
+    ? (isPyg ? Number(profitUsd) * opRate : Number(profitUsd))
+    : null;
+
+  return {
+    total_sales_usd: computed?.oferta?.totals?.total_sales_usd ?? null,
+    profit_total_usd: profitUsd,
+    profit_total_currency: opCurrency,
+    profit_total_display: profitDisplay,
+    exchange_rate_atm_gs_per_usd: opRate,
+  };
+}
+
+function summarizeCostSheetData(data = {}) {
+  const h = data?.header || {};
+  const totals = data?.totals || {};
+  const opCurrency = String(h.operationCurrency || h.currency || 'USD').toUpperCase();
+  const opRate = Number(h.gsRate || h.exchange_rate_atm_gs_per_usd || h.exchange_rate_operation_sell_usd || 1) || 1;
+  const isPyg = opCurrency === 'PYG' || opCurrency === 'GS';
+  const profitUsd = Number(totals.profitGeneral ?? totals.profit_total_usd ?? totals.profit ?? 0);
+  return {
+    profit_total_usd: Number.isFinite(profitUsd) ? profitUsd : null,
+    profit_total_currency: opCurrency,
+    profit_total_display: Number.isFinite(profitUsd)
+      ? (isPyg ? profitUsd * opRate : profitUsd)
+      : null,
+    exchange_rate_atm_gs_per_usd: opRate,
+  };
+}
+
 router.get("/quotes", async (_req, res) => {
   try {
     const [rows] = await db.query(
       "SELECT id, deal_id, ref_code, client_name, status, computed_json, inputs_json, updated_at FROM quotes ORDER BY updated_at DESC"
     );
+    const quoteIds = rows.map((r) => Number(r.id)).filter(Boolean);
+    let revisionsByQuote = new Map();
+
+    if (quoteIds.length) {
+      const [revisionRows] = await db.query(
+        `SELECT id, quote_id, name, computed_json, inputs_json, created_at
+           FROM quote_revisions
+          WHERE quote_id IN (?)
+          ORDER BY id DESC`,
+        [quoteIds]
+      );
+      revisionsByQuote = revisionRows.reduce((map, rev) => {
+        const computed = asJson(rev.computed_json);
+        const inputs = asJson(rev.inputs_json) || {};
+        const list = map.get(rev.quote_id) || [];
+        list.push({
+          id: rev.id,
+          name: rev.name,
+          created_at: rev.created_at,
+          ...summarizeQuoteComputed(computed, inputs),
+        });
+        map.set(rev.quote_id, list);
+        return map;
+      }, new Map());
+    }
+    const dealIds = rows.map((r) => Number(r.deal_id)).filter(Boolean);
+    let costSheetVersionsByDeal = new Map();
+    if (dealIds.length) {
+      const [versionRows] = await db.query(
+        `SELECT v.id, v.deal_id, v.version_number, v.revision_name, v.status, v.data, v.created_at
+           FROM deal_cost_sheet_versions v
+          WHERE v.deal_id IN (?)
+          ORDER BY v.version_number DESC, v.id DESC`,
+        [dealIds]
+      ).catch(() => [[]]);
+      costSheetVersionsByDeal = versionRows.reduce((map, version) => {
+        const data = asJson(version.data) || {};
+        const list = map.get(version.deal_id) || [];
+        list.push({
+          id: version.id,
+          version_number: version.version_number,
+          revision_name: version.revision_name,
+          status: version.status,
+          created_at: version.created_at,
+          ...summarizeCostSheetData(data),
+        });
+        map.set(version.deal_id, list);
+        return map;
+      }, new Map());
+    }
 
     const list = rows.map((r) => {
       const computed = asJson(r.computed_json);
       const inputs = asJson(r.inputs_json) || {};
-      const opCurrency = String(
-        computed?.meta?.operation_currency || inputs.operation_currency || 'USD'
-      ).toUpperCase();
-      const opRate = Number(
-        computed?.meta?.exchange_rate_operation_sell_usd || inputs.exchange_rate_operation_sell_usd || 1
-      ) || 1;
-      const isPyg = opCurrency === 'PYG' || opCurrency === 'GS';
-      const profitUsd = computed?.operacion?.totals?.profit_total_usd ?? null;
-      const profitDisplay = Number.isFinite(Number(profitUsd))
-        ? (isPyg ? Number(profitUsd) * opRate : Number(profitUsd))
-        : null;
+      const summary = summarizeQuoteComputed(computed, inputs);
       return {
         id: r.id,
         deal_id: r.deal_id,
         ref_code: r.ref_code,
         client_name: r.client_name,
         status: r.status,
-        total_sales_usd: computed?.oferta?.totals?.total_sales_usd ?? null,
-        profit_total_usd: profitUsd,
-        profit_total_currency: opCurrency,
-        profit_total_display: profitDisplay,
-        exchange_rate_operation_sell_usd: opRate,
+        ...summary,
+        revisions: revisionsByQuote.get(r.id) || [],
+        cost_sheet_versions: costSheetVersionsByDeal.get(r.deal_id) || [],
         updated_at: r.updated_at,
       };
     });
@@ -552,7 +665,6 @@ router.post("/quotes/:id/revisions", async (req, res) => {
     }
     const [[row]] = await db.query("SELECT * FROM quotes WHERE id = ?", [id]);
     if (!row) return res.status(404).json({ error: "No encontrada" });
-    if (!(await assertDealUnlocked(row.deal_id, res))) return;
 
     const [[meta]] = await db.query(
       "SELECT COUNT(*) AS total FROM quote_revisions WHERE quote_id = ?",
@@ -593,7 +705,7 @@ router.put("/quotes/:id/revisions/:revisionId", async (req, res) => {
 
     const [[row]] = await db.query("SELECT * FROM quotes WHERE id = ?", [id]);
     if (!row) return res.status(404).json({ error: "No encontrada" });
-    if (!(await assertDealUnlocked(row.deal_id, res))) return;
+    if (!(await assertQuoteRevisionUnlocked(revisionId, res))) return;
 
     const [[rev]] = await db.query(
       "SELECT * FROM quote_revisions WHERE id = ? AND quote_id = ? LIMIT 1",

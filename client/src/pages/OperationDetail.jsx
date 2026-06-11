@@ -8,6 +8,7 @@ import ReportPreview from "../components/op-details/ReportPreview";
 import OperationExpenseInvoices from "../components/OperationExpenseInvoices.jsx";
 import AdminOpsPanel from "../components/op-details/AdminOpsPanel.jsx";
 import OrganizationLookupField from "../components/OrganizationLookupField.jsx";
+import LogisticsAutocomplete from "../components/LogisticsAutocomplete.jsx";
 import { attachOperationToAssistant } from "../utils/assistantContext";
 
 // 👇 Ajustá la ruta real según tu backend
@@ -117,6 +118,57 @@ function resolveUploadUrl(urlPath = "") {
 /* Helpers de rótulos (nombres visibles elegidos por el usuario) */
 function labelOfFile(f, labels) {
   return (labels && labels[f.id]) || visibleNameOf(f);
+}
+
+const FOLLOWUP_DUE_SOON_MS = 24 * 60 * 60 * 1000;
+
+function getFollowupDueMeta(entry, nowMs = Date.now()) {
+  if (!entry?.due_at) return null;
+  const dueDate = new Date(entry.due_at);
+  const dueMs = dueDate.getTime();
+  if (!Number.isFinite(dueMs)) return null;
+
+  const isDone =
+    Boolean(entry.done) || String(entry.status || "").toLowerCase() === "done";
+  const labelDate = dueDate.toLocaleString();
+
+  if (isDone) {
+    return {
+      state: "done",
+      label: `Completado - vencia: ${labelDate}`,
+      className: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      cardClass: "",
+      title: "Este seguimiento ya fue marcado como hecho.",
+    };
+  }
+
+  if (dueMs < nowMs) {
+    return {
+      state: "overdue",
+      label: `Vencido: ${labelDate}`,
+      className: "bg-red-50 text-red-700 border-red-200",
+      cardClass: "border-red-200 bg-red-50/40",
+      title: "Este seguimiento ya esta vencido.",
+    };
+  }
+
+  if (dueMs - nowMs <= FOLLOWUP_DUE_SOON_MS) {
+    return {
+      state: "soon",
+      label: `Por vencer: ${labelDate}`,
+      className: "bg-amber-50 text-amber-700 border-amber-200",
+      cardClass: "border-amber-200 bg-amber-50/40",
+      title: "Este seguimiento vence dentro de las proximas 24 horas.",
+    };
+  }
+
+  return {
+    state: "scheduled",
+    label: `Vence: ${labelDate}`,
+    className: "bg-slate-50 text-slate-700 border-slate-200",
+    cardClass: "",
+    title: "Fecha y hora programada para este seguimiento.",
+  };
 }
 function joinLabelsForDetail(list, fileLabels) {
   if (!Array.isArray(list)) return "";
@@ -509,7 +561,8 @@ export default function OperationDetail() {
   const { id } = useParams();
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
-  const isAdmin = String(user?.role || "").toLowerCase() === "admin";
+  const userRole = String(user?.role || "").toLowerCase();
+  const canAccessAdminOps = userRole === "admin" || userRole === "finanzas";
 
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState(null);
@@ -549,6 +602,19 @@ export default function OperationDetail() {
   // NUEVO: mapa de rótulos por fileId
   const [fileLabels, setFileLabels] = useState({}); // { [fileId]: "Rótulo" }
 
+  const followupDueStats = useMemo(() => {
+    const nowMs = Date.now();
+    return (notesList || []).reduce(
+      (acc, entry) => {
+        const meta = getFollowupDueMeta(entry, nowMs);
+        if (meta?.state === "overdue") acc.overdue += 1;
+        if (meta?.state === "soon") acc.soon += 1;
+        return acc;
+      },
+      { overdue: 0, soon: 0 }
+    );
+  }, [notesList]);
+
   const [paramMap, setParamMap] = useState({
     tipo_operacion: [],
     modalidad_carga: [],
@@ -580,19 +646,52 @@ export default function OperationDetail() {
   const [selectedProviderIds, setSelectedProviderIds] = useState([]);
     // ====== VISTA PREVIA DE INFORME ======
   const [showReportPreview, setShowReportPreview] = useState(false);
+  const [internalReportHtml, setInternalReportHtml] = useState("");
+  const [showInternalReportModal, setShowInternalReportModal] = useState(false);
+  const [reportsMenuOpen, setReportsMenuOpen] = useState(false);
+  const [communicationMenuOpen, setCommunicationMenuOpen] = useState(false);
   const requestedTab = String(searchParams.get("tab") || "").toLowerCase();
+  const costSheetVersionStorageKey = useMemo(
+    () => `cargo-cost-sheet-version:deal:${Number(id)}`,
+    [id]
+  );
+
+  function persistSelectedCostSheetVersion(versionNumber) {
+    const normalized = Number(versionNumber || 0) || null;
+    setSelectedCostSheetVersionNumber(normalized);
+    try {
+      if (normalized) {
+        window.localStorage.setItem(costSheetVersionStorageKey, String(normalized));
+        window.sessionStorage.setItem(costSheetVersionStorageKey, String(normalized));
+      } else {
+        window.localStorage.removeItem(costSheetVersionStorageKey);
+        window.sessionStorage.removeItem(costSheetVersionStorageKey);
+      }
+    } catch (_) {}
+  }
+
+  async function refreshCostSheetRevisionState() {
+    try {
+      const [versionsRes, currentRes] = await Promise.all([
+        api.get(`/deals/${id}/cost-sheet/versions`).catch(() => ({ data: [] })),
+        api.get(`/deals/${id}/cost-sheet/current-version`).catch(() => ({ data: null })),
+      ]);
+      setCostSheetVersions(Array.isArray(versionsRes?.data) ? versionsRes.data : []);
+      setCurrentCostSheetVersion(currentRes?.data || null);
+    } catch (_) {}
+  }
 
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!canAccessAdminOps) return;
     if (requestedTab === "administracion") {
       setActiveTab("administracion");
     }
-  }, [isAdmin, requestedTab, id]);
+  }, [canAccessAdminOps, requestedTab, id]);
 
   function handleTabChange(nextTab) {
     setActiveTab(nextTab);
     const nextParams = new URLSearchParams(searchParams);
-    if (isAdmin && nextTab === "administracion") nextParams.set("tab", "administracion");
+    if (canAccessAdminOps && nextTab === "administracion") nextParams.set("tab", "administracion");
     else nextParams.delete("tab");
     setSearchParams(nextParams, { replace: true });
   }
@@ -762,9 +861,27 @@ useEffect(() => {
 
       setDeal(detail.deal);
       setDesc(detail.deal?.title || "");
-      setCostSheetVersions(Array.isArray(costVersionsRes?.data) ? costVersionsRes.data : []);
+      const costVersions = Array.isArray(costVersionsRes?.data) ? costVersionsRes.data : [];
+      setCostSheetVersions(costVersions);
       setCurrentCostSheetVersion(currentCostVersionRes?.data || null);
-      setSelectedCostSheetVersionNumber(currentCostVersionRes?.data?.version_number || null);
+      let storedVersion = null;
+      try {
+        storedVersion =
+          Number(
+            window.localStorage.getItem(costSheetVersionStorageKey) ||
+              window.sessionStorage.getItem(costSheetVersionStorageKey) ||
+              0
+          ) || null;
+      } catch (_) {
+        storedVersion = null;
+      }
+      const storedExists = storedVersion
+        ? costVersions.some((v) => Number(v.version_number || 0) === storedVersion)
+        : false;
+      const nextSelectedVersion = storedExists
+        ? storedVersion
+        : currentCostVersionRes?.data?.version_number || null;
+      persistSelectedCostSheetVersion(nextSelectedVersion);
 
       const orgRes = detail?.deal?.org_id
         ? await api
@@ -1862,6 +1979,34 @@ useEffect(() => {
   }
 
   // pestañas de visor
+  async function openInternalOperationReport() {
+    if (!id) return;
+    try {
+      const { data } = await api.get(`/reports/operation/${id}`, {
+        responseType: "text",
+      });
+      setInternalReportHtml(String(data || ""));
+      setShowInternalReportModal(true);
+    } catch (err) {
+      console.error("No se pudo abrir el informe interno", err);
+      alert("No se pudo abrir el informe interno.");
+    }
+  }
+
+  async function downloadInternalOperationReportPdf() {
+    if (!id) return;
+    try {
+      const { data } = await api.get(`/reports/operation/${id}/pdf`, {
+        responseType: "blob",
+      });
+      const blob = new Blob([data], { type: "application/pdf" });
+      downloadBlob(blob, `informe-operacion-${deal?.reference || id}.pdf`);
+    } catch (err) {
+      console.error("No se pudo descargar el informe PDF", err);
+      alert("No se pudo descargar el informe PDF.");
+    }
+  }
+
   const pushUploading = ({ name, type }) => {
     const tempId = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
     setUploadingFiles((prev) => [
@@ -2068,7 +2213,7 @@ useEffect(() => {
     { id: "detalle", kind: "base", label: "Detalle" },
     { id: "documentos", kind: "base", label: "Documentos" },
     { id: "gastos", kind: "base", label: "Gastos" },
-    ...(isAdmin ? [{ id: "administracion", kind: "base", label: "Administración" }] : []),
+    ...(canAccessAdminOps ? [{ id: "administracion", kind: "base", label: "Administración" }] : []),
     { id: "detcos", kind: "base", label: "Planilla de costos (DET COS)" },
     ...currentBudgetTab,
     ...budgetRevisionTabs,
@@ -2684,7 +2829,10 @@ function providerHasFreightTag(p = {}) {
                 <button
                   key={t.id}
                   className={`px-3 py-2 text-sm rounded-t-lg border-b-0 border whitespace-nowrap ${buttonClass}`}
-                  onClick={() => handleTabChange(t.id)}
+                  onClick={() => {
+                    if (budgetVersionNumber) persistSelectedCostSheetVersion(budgetVersionNumber);
+                    handleTabChange(t.id);
+                  }}
                   title={title}
                 >
                   {label}
@@ -2701,7 +2849,8 @@ function providerHasFreightTag(p = {}) {
           {activeTab === "detcos" ? (
             <DetCosSheet
               onVersionSelectionChange={(versionNumber) => {
-                setSelectedCostSheetVersionNumber(versionNumber || currentCostSheetVersion?.version_number || null);
+                persistSelectedCostSheetVersion(versionNumber || currentCostSheetVersion?.version_number || null);
+                refreshCostSheetRevisionState();
               }}
               deal={deal}
               cf={{
@@ -2747,6 +2896,7 @@ function providerHasFreightTag(p = {}) {
             <AdminOpsPanel
               dealId={Number(id)}
               deal={deal}
+              costSheetVersionNumber={selectedCostSheetVersionNumber || currentCostSheetVersion?.version_number || null}
               onDocsRefresh={() => {
                 api
                   .get("/invoices/operation-docs", { params: { deal_id: id } })
@@ -3072,28 +3222,28 @@ function providerHasFreightTag(p = {}) {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 mb-3">
                   <Field label="Origen">
-                    <Input
+                    <LogisticsAutocomplete
                       readOnly={!editMode}
                       value={getCF("origen_pto")}
-                      onChange={(e) => {
+                      onChange={(value) => {
                         setCFLocal("origen_pto", {
                           label: "Origen",
                           type: "text",
-                          value: e.target.value,
+                          value,
                         });
                         markDirty("origen_pto");
                       }}
                     />
                   </Field>
                   <Field label="Destino">
-                    <Input
+                    <LogisticsAutocomplete
                       readOnly={!editMode}
                       value={getCF("destino_pto")}
-                      onChange={(e) => {
+                      onChange={(value) => {
                         setCFLocal("destino_pto", {
                           label: "Destino",
                           type: "text",
-                          value: e.target.value,
+                          value,
                         });
                         markDirty("destino_pto");
                       }}
@@ -3287,8 +3437,18 @@ function providerHasFreightTag(p = {}) {
                         <div className="bg-white rounded-2xl shadow p-4">
                           <div className="flex items-center justify-between gap-3 mb-3">
                             <h3 className="font-medium">Seguimiento de la operacion</h3>
-                            <div className="text-xs text-slate-500">
-                              Actividades, notas, recordatorios y tareas
+                            <div className="flex items-center gap-2 text-xs text-slate-500">
+                              {followupDueStats.overdue > 0 ? (
+                                <span className="px-2 py-1 rounded-full border bg-red-50 text-red-700 border-red-200">
+                                  {followupDueStats.overdue} vencido(s)
+                                </span>
+                              ) : null}
+                              {followupDueStats.soon > 0 ? (
+                                <span className="px-2 py-1 rounded-full border bg-amber-50 text-amber-700 border-amber-200">
+                                  {followupDueStats.soon} por vencer
+                                </span>
+                              ) : null}
+                              <span>Actividades, notas, recordatorios y tareas</span>
                             </div>
                           </div>
 
@@ -3350,17 +3510,25 @@ function providerHasFreightTag(p = {}) {
                             </button>
                           </div>
 
-                          {(noteEntryType === "reminder" || noteEntryType === "task") && (
-                            <div className="grid md:grid-cols-2 gap-2 mt-2">
+                          <div className="grid md:grid-cols-2 gap-2 mt-2">
+                            <div>
+                              <label className="block text-[11px] text-slate-500 mb-1">
+                                Fecha y hora {noteEntryType === "reminder" || noteEntryType === "task" ? "" : "(opcional)"}
+                              </label>
                               <input
                                 type="datetime-local"
-                                className="border rounded-lg px-3 py-2 text-sm"
+                                className="w-full border rounded-lg px-3 py-2 text-sm"
                                 value={noteDueAt}
                                 onChange={(e) => setNoteDueAt(e.target.value)}
                               />
-                              {noteEntryType === "task" ? (
+                            </div>
+                            {noteEntryType === "task" ? (
+                              <div>
+                                <label className="block text-[11px] text-slate-500 mb-1">
+                                  Prioridad
+                                </label>
                                 <select
-                                  className="border rounded-lg px-3 py-2 text-sm"
+                                  className="w-full border rounded-lg px-3 py-2 text-sm"
                                   value={notePriority}
                                   onChange={(e) => setNotePriority(e.target.value)}
                                 >
@@ -3368,13 +3536,13 @@ function providerHasFreightTag(p = {}) {
                                   <option value="medium">Prioridad media</option>
                                   <option value="high">Prioridad alta</option>
                                 </select>
-                              ) : (
-                                <div className="text-xs text-slate-500 flex items-center px-2">
-                                  El recordatorio quedara pendiente hasta marcarlo como hecho.
-                                </div>
-                              )}
-                            </div>
-                          )}
+                              </div>
+                            ) : (
+                              <div className="text-xs text-slate-500 flex items-end px-2 pb-2">
+                                Si cargas fecha y hora, el sistema lo resaltara cuando este por vencer o vencido.
+                              </div>
+                            )}
+                          </div>
 
                           {noteEntryType === "note" && (
                             <>
@@ -3480,9 +3648,14 @@ function providerHasFreightTag(p = {}) {
                                     : a.entry_type === "reminder"
                                     ? `Recordatorio pendiente${a.due_at ? ` hasta ${new Date(a.due_at).toLocaleString()}` : ""}`
                                     : `Tarea ${a.status || "pending"}${a.due_at ? ` con vencimiento ${new Date(a.due_at).toLocaleString()}` : ""}`;
+                                const dueMeta = getFollowupDueMeta(a);
+                                const canMarkDone =
+                                  !a.done &&
+                                  String(a.status || "").toLowerCase() !== "done" &&
+                                  (a.entry_type === "reminder" || a.entry_type === "task" || Boolean(a.due_at));
 
                                 return (
-                                  <div key={a.id} className="border rounded-xl p-3">
+                                  <div key={a.id} className={`border rounded-xl p-3 ${dueMeta?.cardClass || ""}`}>
                                     <div className="flex items-start justify-between gap-2">
                                       <div>
                                         <div className="text-sm font-medium">{a.title || typeLabel}</div>
@@ -3492,8 +3665,7 @@ function providerHasFreightTag(p = {}) {
                                         <span className={`text-[11px] px-2 py-1 rounded-full ${typeClass}`} title={tooltip}>
                                           {typeLabel}
                                         </span>
-                                        {((a.entry_type === "reminder" && !a.done) ||
-                                          (a.entry_type === "task" && a.status !== "done")) && (
+                                        {canMarkDone && (
                                           <button
                                             type="button"
                                             className="text-[11px] px-2 py-1 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50"
@@ -3511,7 +3683,14 @@ function providerHasFreightTag(p = {}) {
 
                                     {(a.due_at || a.priority || a.status) && (
                                       <div className="mt-2 text-xs text-slate-600 flex flex-wrap gap-2">
-                                        {a.due_at ? <span>Vence: {new Date(a.due_at).toLocaleString()}</span> : null}
+                                        {dueMeta ? (
+                                          <span
+                                            className={`px-2 py-0.5 rounded-full border ${dueMeta.className}`}
+                                            title={dueMeta.title}
+                                          >
+                                            {dueMeta.label}
+                                          </span>
+                                        ) : null}
                                         {a.priority ? <span>Prioridad: {a.priority}</span> : null}
                                         {a.status ? <span>Estado: {a.status}</span> : null}
                                       </div>
@@ -3553,6 +3732,7 @@ function providerHasFreightTag(p = {}) {
             operationId={Number(id)}
             showList={activeTab === "gastos"}
             openNewKey={expenseOpenKey}
+            costSheetVersionNumber={selectedCostSheetVersionNumber || currentCostSheetVersion?.version_number || null}
           />
         </section>
         {/* ASIDE */}
@@ -3593,10 +3773,24 @@ function providerHasFreightTag(p = {}) {
               ))}
               <button
                 type="button"
-                className="px-3 py-2 text-sm rounded-lg border w-full text-center"
+                className="hidden px-3 py-2 text-sm rounded-lg border w-full text-center"
                 onClick={() => setShowReportPreview(true)}
               >
                 📄 Informe de estado (vista previa)
+              </button>
+              <button
+                type="button"
+                className="hidden px-3 py-2 text-sm rounded-lg border w-full text-center"
+                onClick={openInternalOperationReport}
+              >
+                Informe interno completo
+              </button>
+              <button
+                type="button"
+                className="hidden px-3 py-2 text-sm rounded-lg border w-full text-center"
+                onClick={downloadInternalOperationReportPdf}
+              >
+                Descargar informe PDF
               </button>
               <Link
                 to={`/operations/${id}/quote${selectedCostSheetVersionNumber ? `?cost_sheet_version=${selectedCostSheetVersionNumber}` : ""}`}
@@ -3607,7 +3801,7 @@ function providerHasFreightTag(p = {}) {
               <button
                 type="button"
                 draggable
-                className="px-3 py-2 text-sm rounded-lg border text-left"
+                className="hidden px-3 py-2 text-sm rounded-lg border text-left"
                 onDragStart={(event) =>
                   event.dataTransfer.setData(
                     "application/x-assistant-context",
@@ -3633,13 +3827,13 @@ function providerHasFreightTag(p = {}) {
                 Enviar operacion a IA
               </button>
               <button
-                className="px-3 py-2 text-sm rounded-lg border"
+                className="hidden px-3 py-2 text-sm rounded-lg border"
                 onClick={() => openEmailModal("general")}
               >
                 Enviar correo
               </button>
               <button
-                className="px-3 py-2 text-sm rounded-lg border"
+                className="hidden px-3 py-2 text-sm rounded-lg border"
                 onClick={() => openEmailModal("flete")}
               >
                 Pedir tarifa (flete)
@@ -3650,6 +3844,97 @@ function providerHasFreightTag(p = {}) {
               >
                 + Factura de compra
               </button>
+
+              <div className="border rounded-xl overflow-hidden">
+                <button
+                  type="button"
+                  className="w-full px-3 py-2 text-sm bg-slate-50 hover:bg-slate-100 flex items-center justify-between"
+                  onClick={() => setReportsMenuOpen((open) => !open)}
+                >
+                  <span>Informes y PDF</span>
+                  <span className="text-xs text-slate-500">{reportsMenuOpen ? "▲" : "▼"}</span>
+                </button>
+                {reportsMenuOpen && (
+                  <div className="p-2 border-t bg-white flex flex-col gap-2">
+                    <button
+                      type="button"
+                      className="px-3 py-2 text-sm rounded-lg border w-full text-left"
+                      onClick={() => setShowReportPreview(true)}
+                    >
+                      Informe de estado
+                    </button>
+                    <button
+                      type="button"
+                      className="px-3 py-2 text-sm rounded-lg border w-full text-left"
+                      onClick={openInternalOperationReport}
+                    >
+                      Informe interno completo
+                    </button>
+                    <button
+                      type="button"
+                      className="px-3 py-2 text-sm rounded-lg border w-full text-left"
+                      onClick={downloadInternalOperationReportPdf}
+                    >
+                      Descargar informe PDF
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="border rounded-xl overflow-hidden">
+                <button
+                  type="button"
+                  className="w-full px-3 py-2 text-sm bg-slate-50 hover:bg-slate-100 flex items-center justify-between"
+                  onClick={() => setCommunicationMenuOpen((open) => !open)}
+                >
+                  <span>Comunicación</span>
+                  <span className="text-xs text-slate-500">{communicationMenuOpen ? "▲" : "▼"}</span>
+                </button>
+                {communicationMenuOpen && (
+                  <div className="p-2 border-t bg-white flex flex-col gap-2">
+                    <button
+                      type="button"
+                      draggable
+                      className="px-3 py-2 text-sm rounded-lg border text-left"
+                      onDragStart={(event) =>
+                        event.dataTransfer.setData(
+                          "application/x-assistant-context",
+                          JSON.stringify({
+                            type: "operation",
+                            id: Number(id),
+                            label: deal.reference || `Operacion ${id}`,
+                            meta: {
+                              title: desc || deal.title || "",
+                              href: `/operations/${id}`,
+                            },
+                          })
+                        )
+                      }
+                      onClick={() =>
+                        attachOperationToAssistant({
+                          id: Number(id),
+                          reference: deal.reference,
+                          title: desc || deal.title || "",
+                        })
+                      }
+                    >
+                      Enviar operacion a IA
+                    </button>
+                    <button
+                      className="px-3 py-2 text-sm rounded-lg border text-left"
+                      onClick={() => openEmailModal("general")}
+                    >
+                      Enviar correo
+                    </button>
+                    <button
+                      className="px-3 py-2 text-sm rounded-lg border text-left"
+                      onClick={() => openEmailModal("flete")}
+                    >
+                      Pedir tarifa (flete)
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -3672,6 +3957,44 @@ function providerHasFreightTag(p = {}) {
           // onObsChange lo dejamos listo por si después querés usar las OBS en el correo
           // onObsChange={(texto) => { console.log("OBS del informe:", texto); }}
         />
+      )}
+
+      {/* MODAL DE INFORME INTERNO COMPLETO */}
+      {showInternalReportModal && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 p-3">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-6xl h-[92vh] flex flex-col overflow-hidden">
+            <div className="px-4 py-3 border-b flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs text-slate-500">Informe interno completo</div>
+                <div className="font-semibold">{deal?.reference || `Operacion ${id}`}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="px-3 py-1.5 text-sm rounded-lg border"
+                  onClick={downloadInternalOperationReportPdf}
+                >
+                  Descargar PDF
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-1.5 text-sm rounded-lg border"
+                  onClick={() => {
+                    setShowInternalReportModal(false);
+                    setInternalReportHtml("");
+                  }}
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+            <iframe
+              title="Informe interno completo"
+              className="w-full flex-1 bg-slate-50"
+              srcDoc={internalReportHtml}
+            />
+          </div>
+        </div>
       )}
 
       {/* MODAL DE VISTA PREVIA DE CORREO */}
@@ -4005,16 +4328,36 @@ function OceanForm({
         </div>
 
         <Field label="Naviera">
-          <Input {...bind("shipping_line")} />
+          <LogisticsAutocomplete
+            kind="carrier"
+            readOnly={readOnly}
+            value={f.shipping_line || ""}
+            onChange={(value) => set("shipping_line", value)}
+          />
         </Field>
         <Field label="Puerto Origen">
-          <Input {...bind("pol")} />
+          <LogisticsAutocomplete
+            includeTypes={["port", "city"]}
+            readOnly={readOnly}
+            value={f.pol || ""}
+            onChange={(value) => set("pol", value)}
+          />
         </Field>
         <Field label="Transbordo">
-          <Input {...bind("transshipment_port")} />
+          <LogisticsAutocomplete
+            includeTypes={["port", "city"]}
+            readOnly={readOnly}
+            value={f.transshipment_port || ""}
+            onChange={(value) => set("transshipment_port", value)}
+          />
         </Field>
         <Field label="Puerto Destino">
-          <Input {...bind("pod")} />
+          <LogisticsAutocomplete
+            includeTypes={["port", "city"]}
+            readOnly={readOnly}
+            value={f.pod || ""}
+            onChange={(value) => set("pod", value)}
+          />
         </Field>
         <Field label="Mercadería">
           <Input {...bind("commodity")} />
@@ -4276,13 +4619,25 @@ function RoadForm({
       {/* Origen / Destino / Cruce frontera */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <Field label="Origen">
-          <Input {...bind("origin_city")} />
+          <LogisticsAutocomplete
+            readOnly={readOnly}
+            value={f.origin_city || ""}
+            onChange={(value) => set("origin_city", value)}
+          />
         </Field>
         <Field label="Destino">
-          <Input {...bind("destination_city")} />
+          <LogisticsAutocomplete
+            readOnly={readOnly}
+            value={f.destination_city || ""}
+            onChange={(value) => set("destination_city", value)}
+          />
         </Field>
         <Field label="Cruce frontera">
-          <Input {...bind("border_crossing")} />
+          <LogisticsAutocomplete
+            readOnly={readOnly}
+            value={f.border_crossing || ""}
+            onChange={(value) => set("border_crossing", value)}
+          />
         </Field>
       </div>
 
@@ -4290,13 +4645,25 @@ function RoadForm({
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <Field label="Origen">
-          <Input {...bind("origin_city")} />
+          <LogisticsAutocomplete
+            readOnly={readOnly}
+            value={f.origin_city || ""}
+            onChange={(value) => set("origin_city", value)}
+          />
         </Field>
         <Field label="Destino">
-          <Input {...bind("destination_city")} />
+          <LogisticsAutocomplete
+            readOnly={readOnly}
+            value={f.destination_city || ""}
+            onChange={(value) => set("destination_city", value)}
+          />
         </Field>
         <Field label="Cruce frontera">
-          <Input {...bind("border_crossing")} />
+          <LogisticsAutocomplete
+            readOnly={readOnly}
+            value={f.border_crossing || ""}
+            onChange={(value) => set("border_crossing", value)}
+          />
         </Field>
       </div>
 
@@ -4641,7 +5008,12 @@ function MultimodalForm({
         </Field>
 
         <Field label="Naviera / Carrier">
-          <Input {...bind("shipping_line")} />
+          <LogisticsAutocomplete
+            kind="carrier"
+            readOnly={readOnly}
+            value={f.shipping_line || ""}
+            onChange={(value) => set("shipping_line", value)}
+          />
         </Field>
         <Field label="Itinerario">
           <Input value={itineraryAuto || f.itinerary || ""} readOnly />
@@ -4677,24 +5049,25 @@ function MultimodalForm({
                   </Select>
                 </Field>
                 <Field label="Carrier">
-                  <Input
+                  <LogisticsAutocomplete
+                    kind="carrier"
                     readOnly={readOnly}
                     value={L.carrier || ""}
-                    onChange={(e) => setLeg(i, "carrier", e.target.value)}
+                    onChange={(value) => setLeg(i, "carrier", value)}
                   />
                 </Field>
                 <Field label="Origen">
-                  <Input
+                  <LogisticsAutocomplete
                     readOnly={readOnly}
                     value={L.origin || ""}
-                    onChange={(e) => setLeg(i, "origin", e.target.value)}
+                    onChange={(value) => setLeg(i, "origin", value)}
                   />
                 </Field>
                 <Field label="Destino">
-                  <Input
+                  <LogisticsAutocomplete
                     readOnly={readOnly}
                     value={L.destination || ""}
-                    onChange={(e) => setLeg(i, "destination", e.target.value)}
+                    onChange={(value) => setLeg(i, "destination", value)}
                   />
                 </Field>
                 <Field label="Ref. Doc">
@@ -4893,10 +5266,11 @@ function AirForm({
 
         {/* Línea aérea */}
         <Field label="Línea aérea">
-          <Input
+          <LogisticsAutocomplete
+            kind="carrier"
             readOnly={readOnly}
             value={f.airline || ""}
-            onChange={(e) => set("airline", e.target.value)}
+            onChange={(value) => set("airline", value)}
           />
         </Field>
 
@@ -4970,24 +5344,27 @@ function AirForm({
         </div>
 
         <Field label="Origen (AP)">
-          <Input
+          <LogisticsAutocomplete
+            includeTypes={["airport", "city"]}
             readOnly={readOnly}
             value={f.origin_airport || ""}
-            onChange={(e) => set("origin_airport", e.target.value)}
+            onChange={(value) => set("origin_airport", value)}
           />
         </Field>
         <Field label="Transbordo (AP)">
-          <Input
+          <LogisticsAutocomplete
+            includeTypes={["airport", "city"]}
             readOnly={readOnly}
             value={f.transshipment_airport || ""}
-            onChange={(e) => set("transshipment_airport", e.target.value)}
+            onChange={(value) => set("transshipment_airport", value)}
           />
         </Field>
         <Field label="Destino (AP)">
-          <Input
+          <LogisticsAutocomplete
+            includeTypes={["airport", "city"]}
             readOnly={readOnly}
             value={f.destination_airport || ""}
-            onChange={(e) => set("destination_airport", e.target.value)}
+            onChange={(value) => set("destination_airport", value)}
           />
         </Field>
         <Field label="Itinerario">

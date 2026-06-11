@@ -732,13 +732,24 @@ export default function QuoteGenerator(){
 
   const [searchParams] = useSearchParams();
 
-  const revisionId = searchParams.get('revision_id');
+  const revisionIdParam = searchParams.get('revision_id');
   const isEmbed = searchParams.get('embed') === '1';
   const serviceCaseIdFromQuery = Number(searchParams.get('serviceCaseId') || searchParams.get('caseId') || '');
   const serviceCaseId = Number.isFinite(serviceCaseIdFromQuery) ? serviceCaseIdFromQuery : Number(serviceCaseIdParam || 0);
   const isServicePath = location.pathname.startsWith('/service/');
   const isService = isServicePath || (Number.isFinite(serviceCaseId) && serviceCaseId > 0);
   const baseId = isService ? serviceCaseId : id;
+  const revisionId = useMemo(() => {
+    if (revisionIdParam) return revisionIdParam;
+    try {
+      const storageKey = isService
+        ? `industrial-quote-revision:service:${Number(baseId)}`
+        : `industrial-quote-revision:deal:${Number(baseId)}`;
+      return window.localStorage.getItem(storageKey) || window.sessionStorage.getItem(storageKey) || null;
+    } catch (_) {
+      return null;
+    }
+  }, [baseId, isService, revisionIdParam]);
 
   const { user } = useAuth();
 
@@ -1572,7 +1583,7 @@ CORDIALES SALUDOS`,
                   ""
                 ),
                 moneda: saved?.moneda || cur || it.moneda || "USD",
-                precio: saved?.precio ?? unit,
+                precio: unit,
                 impuesto: saved?.impuesto || it.impuesto || "EXENTA",
                 include: savedInclude ?? (it.include !== false),
               }, idx, cur || 'USD');

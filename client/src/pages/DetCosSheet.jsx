@@ -473,9 +473,10 @@ function CargoTable({
   );
 }
 
-function LocalesTable({ title, rows, setRows, gsToUsd, showProfit = false, costosRows = null, disabled = false }) {
+function LocalesTable({ title, rows, setRows, currency = "USD", showProfit = false, costosRows = null, disabled = false }) {
   const ignoredLinksRef = useRef(new Set());
   const addRow = () => { if (!disabled) setRows((prev) => [...prev, { id: crypto.randomUUID(), concepto: "", gs: "", tax_rate: 10 }]); };
+  const currencyLabel = String(currency || "USD").toUpperCase() === "GS" ? "PYG" : String(currency || "USD").toUpperCase();
   const removeRow = (row) => {
     if (disabled) return;
     if (row?.sourceId) ignoredLinksRef.current.add(row.sourceId);
@@ -483,7 +484,7 @@ function LocalesTable({ title, rows, setRows, gsToUsd, showProfit = false, costo
   };
 
   useEffect(() => {
-    if (title !== "GASTOS LOCALES AL CLIENTE (Gs)" || !Array.isArray(costosRows)) return;
+    if (!showProfit || !Array.isArray(costosRows)) return;
     setRows((prev) => {
       const prevBySource = new Map();
       prev.forEach((r) => r.sourceId && prevBySource.set(r.sourceId, r));
@@ -499,10 +500,9 @@ function LocalesTable({ title, rows, setRows, gsToUsd, showProfit = false, costo
       prev.forEach((r) => !r.sourceId && next.push(r));
       return next;
     });
-  }, [title, costosRows, setRows]);
+  }, [showProfit, costosRows, setRows]);
 
-  const totalGs = useMemo(() => rows.reduce((a, r) => a + num(r.gs), 0), [rows]);
-  const totalUsd = useMemo(() => (gsToUsd ? totalGs / gsToUsd : 0), [totalGs, gsToUsd]);
+  const totalAmount = useMemo(() => rows.reduce((a, r) => a + num(r.gs), 0), [rows]);
 
   return (
     <div className="overflow-x-auto">
@@ -511,7 +511,7 @@ function LocalesTable({ title, rows, setRows, gsToUsd, showProfit = false, costo
           <div className={`py-2 text-center font-bold text-base ${title.includes("COSTOS") ? "bg-blue-100" : "bg-green-100"}`}>{title}</div>
           <div className="grid auto-rows-min grid-cols-[minmax(220px,1fr)_120px_120px_140px]">
             <HeadCell className="bg-blue-100">Concepto</HeadCell>
-            <HeadCell className="bg-blue-100 text-right">Gs</HeadCell>
+            <HeadCell className="bg-blue-100 text-right">{currencyLabel}</HeadCell>
             <HeadCell className="bg-blue-100 text-right">IVA</HeadCell>
             <HeadCell className="bg-blue-100 text-right">{showProfit ? "PROFIT / ACCIÓN" : "ACCIÓN"}</HeadCell>
 
@@ -523,9 +523,9 @@ function LocalesTable({ title, rows, setRows, gsToUsd, showProfit = false, costo
                 const costosRow =
                   costosRows.find((cr) => r.sourceId ? cr.id === r.sourceId : cr.concepto === r.concepto);
                 if (costosRow) {
-                  const ventaGs = num(r.gs);
-                  const costoGs = num(costosRow.gs);
-                  profit = gsToUsd ? (ventaGs - costoGs) / gsToUsd : 0;
+                  const ventaAmount = num(r.gs);
+                  const costoAmount = num(costosRow.gs);
+                  profit = ventaAmount - costoAmount;
                 }
               }
 
@@ -562,7 +562,7 @@ function LocalesTable({ title, rows, setRows, gsToUsd, showProfit = false, costo
                     <div className="flex items-center justify-end gap-2">
                       {showProfit ? (
                         <span className={profit >= 0 ? "text-green-600" : "text-red-600"}>
-                          {profit === null ? "—" : formatMoney(profit, "USD")}
+                          {profit === null ? "—" : formatMoney(profit, currencyLabel)}
                         </span>
                       ) : null}
                       <button
@@ -591,8 +591,7 @@ function LocalesTable({ title, rows, setRows, gsToUsd, showProfit = false, costo
               </button>
               <div className="text-sm">
                 <span className="font-bold">TOTAL:</span>{" "}
-                <span className="font-black">Gs {String(totalGs)}</span>
-                <span className="ml-2 text-gray-500">= USD {formatMoney(totalUsd, "USD")}</span>
+                <span className="font-black">{currencyLabel} {formatMoney(totalAmount, currencyLabel)}</span>
               </div>
             </div>
           </div>
@@ -746,8 +745,20 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
   const [currentVersion, setCurrentVersion] = useState(null);
   const [selectedVersionNum, setSelectedVersionNum] = useState(null);
   const [revisionNameDraft, setRevisionNameDraft] = useState("");
+  const [savedSignature, setSavedSignature] = useState("");
+  const [pendingSignatureReset, setPendingSignatureReset] = useState(false);
 
   const notifyVersionSelection = (versionNumber, versionRow = null) => {
+    const storageKey = `cargo-cost-sheet-version:deal:${Number(id)}`;
+    try {
+      if (versionNumber) {
+        window.localStorage.setItem(storageKey, String(versionNumber));
+        window.sessionStorage.setItem(storageKey, String(versionNumber));
+      } else {
+        window.localStorage.removeItem(storageKey);
+        window.sessionStorage.removeItem(storageKey);
+      }
+    } catch (_) {}
     if (typeof onVersionSelectionChange === "function") {
       onVersionSelectionChange(versionNumber || null, versionRow || null);
     }
@@ -785,6 +796,7 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
   // estado presupuesto (org)
   const [orgId, setOrgId] = useState(null);
   const [budgetStatus, setBudgetStatus] = useState("borrador"); // borrador | bloqueado | confirmado
+  const [invoiceLock, setInvoiceLock] = useState({ locked: false, count: 0 });
 
   // permisos
   const role = String(user?.role || "").toLowerCase();
@@ -792,7 +804,8 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
   const isVentas = ["ventas", "vendedor", "venta", "seller", "sales", "commercial", "comercial"].includes(role);
 
   const isLocked = budgetStatus === "bloqueado" || budgetStatus === "confirmado";
-  const canEdit = !(isLocked && !isAdmin); // admin puede editar siempre
+  const isInvoiceLocked = Boolean(invoiceLock?.locked);
+  const canEdit = !isInvoiceLocked && !(isLocked && !isAdmin); // facturada no se modifica
 
   const opCurrency = String(operationCurrency || "USD").toUpperCase();
   const isPyg = opCurrency === "PYG" || opCurrency === "GS";
@@ -853,17 +866,44 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
         }
 
         // === NUEVO: Cargar versiones ===
+        let loadedVersions = [];
         try {
           const { data: vers } = await api.get(`/deals/${id}/cost-sheet/versions`);
-          setVersions(vers || []);
+          loadedVersions = vers || [];
+          setVersions(loadedVersions);
         } catch {
+          loadedVersions = [];
           setVersions([]);
         }
+        let loadedCurrentVersion = null;
         try {
           const { data: curr } = await api.get(`/deals/${id}/cost-sheet/current-version`);
-          setCurrentVersion(curr || null);
+          loadedCurrentVersion = curr || null;
+          setCurrentVersion(loadedCurrentVersion);
         } catch {
+          loadedCurrentVersion = null;
           setCurrentVersion(null);
+        }
+        try {
+          const storedVersion =
+            Number(
+              window.localStorage.getItem(`cargo-cost-sheet-version:deal:${Number(id)}`) ||
+                window.sessionStorage.getItem(`cargo-cost-sheet-version:deal:${Number(id)}`) ||
+                0
+            ) || null;
+          const storedExists = storedVersion
+            ? loadedVersions.some((v) => Number(v.version_number || 0) === storedVersion)
+            : false;
+          const versionToLoad = storedExists
+            ? storedVersion
+            : loadedCurrentVersion?.version_number || null;
+          if (versionToLoad) {
+            await loadVersion(versionToLoad);
+          } else {
+            notifyVersionSelection(null, null);
+          }
+        } catch (_) {
+          notifyVersionSelection(loadedCurrentVersion?.version_number || null, loadedCurrentVersion || null);
         }
 
         // === Catálogo robusto (SERVICIOS/PRODUCTOS activos) – prueba varios endpoints
@@ -923,6 +963,7 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
         }
 
         await loadCatalogServices();
+        setPendingSignatureReset(true);
       } finally {
         setLoading(false);
       }
@@ -940,6 +981,30 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
     }, 10000);
     return () => clearInterval(timer);
   }, [orgId]);
+
+  useEffect(() => {
+    let live = true;
+    const versionNumber = selectedVersionNum || currentVersion?.version_number || null;
+    if (!id || !versionNumber) {
+      setInvoiceLock({ locked: false, count: 0 });
+      return () => {
+        live = false;
+      };
+    }
+    api
+      .get("/invoices/lock-status", {
+        params: { deal_id: id, cost_sheet_version_number: versionNumber },
+      })
+      .then(({ data }) => {
+        if (live) setInvoiceLock({ locked: Boolean(data?.locked), count: Number(data?.count || 0) });
+      })
+      .catch(() => {
+        if (live) setInvoiceLock({ locked: false, count: 0 });
+      });
+    return () => {
+      live = false;
+    };
+  }, [id, selectedVersionNum, currentVersion?.version_number]);
 
   // Totales base de venta
   // Si All-in está activo, el total base viene de la suma de “ventaInt”;
@@ -1020,21 +1085,168 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
 
   // Locales y seguro
   const gsToUsd = useMemo(() => num(gsRate) || 0, [gsRate]);
-  const totalLocalesGs = useMemo(() => locRows.reduce((a, r) => a + num(r.gs), 0), [locRows]);
-  const totalLocales = useMemo(
-    () => (isPyg ? totalLocalesGs : (gsToUsd ? totalLocalesGs / gsToUsd : 0)),
-    [totalLocalesGs, gsToUsd, isPyg]
-  );
-  const totalLocalesClienteGs = useMemo(() => locCliRows.reduce((a, r) => a + num(r.gs), 0), [locCliRows]);
-  const totalLocalesCliente = useMemo(
-    () => (isPyg ? totalLocalesClienteGs : (gsToUsd ? totalLocalesClienteGs / gsToUsd : 0)),
-    [totalLocalesClienteGs, gsToUsd, isPyg]
-  );
+  const totalLocales = useMemo(() => locRows.reduce((a, r) => a + num(r.gs), 0), [locRows]);
+  const totalLocalesCliente = useMemo(() => locCliRows.reduce((a, r) => a + num(r.gs), 0), [locCliRows]);
   const segCostoTotal = useMemo(() => segCostoRows.reduce((a, r) => a + num(r.usd || r.monto || 0), 0), [segCostoRows]);
   const segVentaTotal = useMemo(() => segVentaRows.reduce((a, r) => a + num(r.usd || r.monto || 0), 0), [segVentaRows]);
   const totalCostos = useMemo(() => totalCompra + totalLocales + segCostoTotal, [totalCompra, totalLocales, segCostoTotal]);
   const totalVentas = useMemo(() => totalVenta + totalLocalesCliente + segVentaTotal, [totalVenta, totalLocalesCliente, segVentaTotal]);
   const profitGeneral = useMemo(() => totalVentas - totalCostos, [totalVentas, totalCostos]);
+  const profitPercent = useMemo(() => (totalVentas ? (profitGeneral / totalVentas) * 100 : 0), [profitGeneral, totalVentas]);
+  const costSheetPayload = useMemo(() => ({
+    header: {
+      modo,
+      clase,
+      pesoKg,
+      awb,
+      hbl,
+      mercaderia,
+      gsRate,
+      allInEnabled,
+      allInServiceName,
+      operationCurrency,
+    },
+    compraRows,
+    ventaRows,
+    locRows,
+    locCliRows,
+    segCostoRows,
+    segVentaRows,
+    totals: { totalCostos, totalVentas, profitGeneral },
+  }), [
+    modo,
+    clase,
+    pesoKg,
+    awb,
+    hbl,
+    mercaderia,
+    gsRate,
+    allInEnabled,
+    allInServiceName,
+    operationCurrency,
+    compraRows,
+    ventaRows,
+    locRows,
+    locCliRows,
+    segCostoRows,
+    segVentaRows,
+    totalCostos,
+    totalVentas,
+    profitGeneral,
+  ]);
+  const currentSignature = useMemo(() => JSON.stringify(costSheetPayload), [costSheetPayload]);
+  const hasUnsavedChanges = !!savedSignature && currentSignature !== savedSignature;
+
+  useEffect(() => {
+    if (loading || !pendingSignatureReset) return;
+    setSavedSignature(currentSignature);
+    setPendingSignatureReset(false);
+  }, [currentSignature, loading, pendingSignatureReset]);
+
+  useEffect(() => {
+    if (loading || savedSignature) return;
+    setSavedSignature(currentSignature);
+  }, [currentSignature, loading, savedSignature]);
+
+  useEffect(() => {
+    const onBeforeUnload = (event) => {
+      if (!hasUnsavedChanges) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  const costSheetWarnings = useMemo(() => {
+    const warnings = [];
+    const usedWeight = num(pesoKg);
+    const hasGsRate = num(gsRate) > 0;
+    const labelFor = (row, fallback) => String(row?.concepto || fallback || "Item").trim();
+    const hasCargoAmount = (row, sale = false) => {
+      if (!row) return false;
+      if (sale && allInEnabled && String(row.ventaInt ?? "").trim() !== "") return true;
+      if (!row.lockPerKg && String(row.total ?? "").trim() !== "") return true;
+      if (String(row.usdXKg ?? "").trim() !== "") return true;
+      return false;
+    };
+    const hasLocalAmount = (row) => String(row?.gs ?? "").trim() !== "";
+    const hasSeguroAmount = (row) => String(row?.usd ?? row?.monto ?? "").trim() !== "";
+
+    const rowsUseWeight = [...compraRows, ...ventaRows].some((row) => String(row.usdXKg ?? "").trim() !== "");
+    if (!usedWeight && rowsUseWeight) {
+      warnings.push({ level: "error", text: "Hay cargos por kg, pero falta el peso a utilizar." });
+    }
+    if (!hasGsRate) {
+      warnings.push({ level: "warn", text: "Falta TC Gs/USD para convertir moneda sin revisar montos manualmente." });
+    }
+
+    compraRows.forEach((row, index) => {
+      if (String(row.concepto || "").trim() && !hasCargoAmount(row)) {
+        warnings.push({ level: "warn", text: `Compra: ${labelFor(row, `item ${index + 1}`)} sin monto.` });
+      }
+    });
+
+    ventaRows.forEach((row, index) => {
+      if (String(row.concepto || "").trim() && !hasCargoAmount(row, true)) {
+        warnings.push({ level: "warn", text: `Venta: ${labelFor(row, `item ${index + 1}`)} sin monto.` });
+      }
+    });
+
+    compraRows.forEach((row) => {
+      if (!String(row.concepto || "").trim() || !hasCargoAmount(row)) return;
+      const linkedSale = ventaRows.find((vr) => vr.sourceId === row.id) || ventaRows.find((vr) => vr.concepto === row.concepto);
+      if (!linkedSale || !hasCargoAmount(linkedSale, true)) {
+        warnings.push({ level: "warn", text: `${labelFor(row)} tiene compra, pero no venta cargada.` });
+      }
+    });
+
+    locRows.forEach((row, index) => {
+      if (String(row.concepto || "").trim() && !hasLocalAmount(row)) {
+        warnings.push({ level: "warn", text: `Costo local: ${labelFor(row, `item ${index + 1}`)} sin monto.` });
+      }
+      if (!hasLocalAmount(row)) return;
+      const linkedClientRow = locCliRows.find((vr) => vr.sourceId === row.id) || locCliRows.find((vr) => vr.concepto === row.concepto);
+      if (!linkedClientRow || !hasLocalAmount(linkedClientRow)) {
+        warnings.push({ level: "warn", text: `${labelFor(row)} esta en costos locales, pero no en gastos al cliente.` });
+      }
+    });
+
+    locCliRows.forEach((row, index) => {
+      if (String(row.concepto || "").trim() && !hasLocalAmount(row)) {
+        warnings.push({ level: "warn", text: `Gasto local cliente: ${labelFor(row, `item ${index + 1}`)} sin monto.` });
+      }
+    });
+
+    segCostoRows.forEach((row) => {
+      if (!hasSeguroAmount(row)) return;
+      const linkedSale = segVentaRows.find((vr) => vr.sourceId === row.id) || segVentaRows.find((vr) => vr.concepto === row.concepto);
+      if (!linkedSale || !hasSeguroAmount(linkedSale)) {
+        warnings.push({ level: "warn", text: `${labelFor(row, "Seguro")} tiene costo, pero no venta de seguro.` });
+      }
+    });
+
+    if (profitGeneral < 0) {
+      warnings.push({ level: "error", text: "El profit general esta negativo." });
+    }
+    if (hasUnsavedChanges) {
+      warnings.push({ level: "info", text: "Hay cambios sin guardar." });
+    }
+
+    return warnings;
+  }, [
+    pesoKg,
+    gsRate,
+    compraRows,
+    ventaRows,
+    locRows,
+    locCliRows,
+    segCostoRows,
+    segVentaRows,
+    profitGeneral,
+    allInEnabled,
+    hasUnsavedChanges,
+  ]);
 
   // === actualiza deal.value con el profit calculado
   async function updateDealValue(profit) {
@@ -1073,6 +1285,7 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
       setCurrentVersion(data || null);
       setRevisionNameDraft(getRevisionDisplayName(data));
       notifyVersionSelection(data?.version_number || null, data || null);
+      setPendingSignatureReset(true);
     } catch (err) {
       console.error("Error al cargar versión actual:", err);
       setCurrentVersion(null);
@@ -1107,6 +1320,7 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
       setSelectedVersionNum(versionNum);
       setRevisionNameDraft(getRevisionDisplayName(v));
       notifyVersionSelection(versionNum, v || null);
+      setPendingSignatureReset(true);
     } catch (err) {
       console.error("Error al cargar versión:", err);
       alert("No se pudo cargar la versión");
@@ -1118,6 +1332,10 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
       ? versions.find((v) => Number(v.version_number) === Number(selectedVersionNum))
       : currentVersion;
     if (!targetVersion?.id) return;
+    if (isInvoiceLocked) {
+      alert("Esta revision ya fue facturada y no se puede modificar.");
+      return;
+    }
 
     const cleanedName = String(revisionNameDraft || "").trim();
     if (!cleanedName) {
@@ -1142,37 +1360,20 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
 
   // === Guardado: cada vez crea una nueva revisi?n autom?ticamente ===
   async function saveCostSheet() {
-    const payload = {
-      header: {
-        modo,
-        clase,
-        pesoKg,
-        awb,
-        hbl,
-        mercaderia,
-        gsRate,
-        allInEnabled,
-        allInServiceName,
-        operationCurrency,
-      },
-      compraRows,
-      ventaRows,
-      locRows,
-      locCliRows,
-      segCostoRows,
-      segVentaRows,
-      totals: { totalCostos, totalVentas, profitGeneral },
-    };
-
+    if (isInvoiceLocked) {
+      alert("Esta revision ya fue facturada y no se puede modificar.");
+      return;
+    }
     try {
       await api.post(`/deals/${id}/cost-sheet/versions`, {
-        data: payload,
+        data: costSheetPayload,
         change_reason: "Guardado autom?tico de revisi?n",
       });
       await updateDealValue(profitGeneral);
       await loadVersions();
       await loadCurrentVersion();
       setSelectedVersionNum(null);
+      setSavedSignature(currentSignature);
       alert("Nueva revisi?n creada.");
     } catch (err) {
       console.error("Error al guardar:", err);
@@ -1198,6 +1399,12 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
     setBudgetStatus("borrador");
   }
 
+  function confirmLeaveWithUnsavedChanges(event) {
+    if (!hasUnsavedChanges) return;
+    const ok = window.confirm("Hay cambios sin guardar en la planilla de costos. Si salis ahora, podrias perderlos.");
+    if (!ok) event.preventDefault();
+  }
+
   if (loading) return <p className="text-sm text-gray-600 p-4">Cargando…</p>;
   if (!deal) return <p className="text-sm text-gray-600 p-4">Operación no encontrada.</p>;
 
@@ -1211,6 +1418,16 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
           <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
             Estado: {budgetStatus}
           </span>
+          {hasUnsavedChanges && (
+            <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+              Cambios sin guardar
+            </span>
+          )}
+          {isInvoiceLocked && (
+            <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
+              Revision facturada ({invoiceLock.count})
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3">
           <button
@@ -1227,6 +1444,10 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
               className="border rounded px-3 py-2 text-sm"
               value={selectedVersionNum || ""}
               onChange={(e) => {
+                if (hasUnsavedChanges && !window.confirm("Hay cambios sin guardar. Cambiar de revision descartara lo no guardado. Continuar?")) {
+                  e.target.value = selectedVersionNum || "";
+                  return;
+                }
                 const numV = Number(e.target.value);
                 if (numV) {
                   loadVersion(numV);
@@ -1269,12 +1490,13 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
 
           <Link
             to={`/operations/${id}/quote${selectedVersionNum || currentVersion?.version_number ? `?cost_sheet_version=${selectedVersionNum || currentVersion?.version_number}` : ''}`}
+            onClick={confirmLeaveWithUnsavedChanges}
             className="px-3 py-2 text-sm bg-slate-700 text-white rounded hover:bg-slate-800"
           >
             Ver presupuesto de esta revisi?n
           </Link>
 
-          <Link to={-1} className="px-4 py-2 text-sm bg-gray-200 rounded hover:bg-gray-300 transition-colors">
+          <Link to={-1} onClick={confirmLeaveWithUnsavedChanges} className="px-4 py-2 text-sm bg-gray-200 rounded hover:bg-gray-300 transition-colors">
             ← Volver
           </Link>
         </div>
@@ -1316,7 +1538,7 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
           <div className="min-w-[980px] grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-6">
             <Box>
               <div className="py-2 text-center font-bold text-lg bg-blue-100">REF: {deal.reference}</div>
-                            <div className="flex items-center justify-between gap-3 px-3 py-2 bg-blue-50 border-b-2 border-gray-300">
+              <div className="flex items-center justify-between gap-3 px-3 py-2 bg-blue-50 border-b-2 border-gray-300">
                 <div className="text-sm font-bold">MONEDA</div>
                 <div className="flex items-center gap-2">
                   <button
@@ -1353,6 +1575,18 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
                           ...r,
                           usd: convertValue(r.usd ?? r.monto, gsToUsd, "toUSD"),
                           monto: convertValue(r.monto, gsToUsd, "toUSD"),
+                        }))
+                      );
+                      setLocRows((prev) =>
+                        prev.map((r) => ({
+                          ...r,
+                          gs: convertValue(r.gs, gsToUsd, "toUSD"),
+                        }))
+                      );
+                      setLocCliRows((prev) =>
+                        prev.map((r) => ({
+                          ...r,
+                          gs: convertValue(r.gs, gsToUsd, "toUSD"),
                         }))
                       );
                       setOperationCurrency("USD");
@@ -1394,6 +1628,18 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
                           ...r,
                           usd: convertValue(r.usd ?? r.monto, gsToUsd, "toPYG"),
                           monto: convertValue(r.monto, gsToUsd, "toPYG"),
+                        }))
+                      );
+                      setLocRows((prev) =>
+                        prev.map((r) => ({
+                          ...r,
+                          gs: convertValue(r.gs, gsToUsd, "toPYG"),
+                        }))
+                      );
+                      setLocCliRows((prev) =>
+                        prev.map((r) => ({
+                          ...r,
+                          gs: convertValue(r.gs, gsToUsd, "toPYG"),
                         }))
                       );
                       setOperationCurrency("PYG");
@@ -1502,7 +1748,7 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
               </div>
             </Box>
 
-            <Box>
+            <Box className="lg:sticky lg:top-4">
               <div className="py-2 text-center font-bold text-lg bg-green-100">RESUMEN</div>
               <div className="p-4 space-y-3">
                 <div className="grid grid-cols-[1fr_160px] items-center">
@@ -1518,6 +1764,55 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
                   <div className={`text-right font-bold text-xl ${profitGeneral >= 0 ? "text-green-700" : "text-red-700"}`}>
                     {currencyLabel} {formatMoney(profitGeneral, currencyLabel)}
                   </div>
+                </div>
+                <div className="grid grid-cols-[1fr_160px] items-center">
+                  <div className="font-semibold">RENTABILIDAD</div>
+                  <div className={`text-right font-bold ${profitPercent >= 0 ? "text-green-700" : "text-red-700"}`}>
+                    {formatMoney(profitPercent, "USD")}%
+                  </div>
+                </div>
+                <div className="pt-3 border-t border-gray-200">
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <div className="font-semibold">REVISION</div>
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded-full border ${
+                        costSheetWarnings.some((item) => item.level === "error")
+                          ? "bg-red-50 text-red-700 border-red-200"
+                          : costSheetWarnings.length
+                            ? "bg-amber-50 text-amber-700 border-amber-200"
+                            : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                      }`}
+                    >
+                      {costSheetWarnings.length ? `${costSheetWarnings.length} pendiente${costSheetWarnings.length === 1 ? "" : "s"}` : "Listo"}
+                    </span>
+                  </div>
+                  {costSheetWarnings.length ? (
+                    <ul className="space-y-1.5 text-xs">
+                      {costSheetWarnings.slice(0, 6).map((item, index) => (
+                        <li
+                          key={`${item.level}-${index}`}
+                          className={`rounded border px-2 py-1 ${
+                            item.level === "error"
+                              ? "bg-red-50 text-red-700 border-red-100"
+                              : item.level === "info"
+                                ? "bg-sky-50 text-sky-700 border-sky-100"
+                                : "bg-amber-50 text-amber-700 border-amber-100"
+                          }`}
+                        >
+                          {item.text}
+                        </li>
+                      ))}
+                      {costSheetWarnings.length > 6 && (
+                        <li className="text-gray-500 px-2">
+                          +{costSheetWarnings.length - 6} pendiente{costSheetWarnings.length - 6 === 1 ? "" : "s"} mas.
+                        </li>
+                      )}
+                    </ul>
+                  ) : (
+                    <div className="text-xs rounded border border-emerald-100 bg-emerald-50 text-emerald-700 px-2 py-1">
+                      Sin pendientes detectados para guardar.
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="px-3 py-2 text-xs text-gray-600 bg-gray-50">
@@ -1559,8 +1854,8 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
 
         {/* Locales */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <LocalesTable title="COSTOS LOCALES (en Gs)" rows={locRows} setRows={setLocRows} gsToUsd={gsToUsd} disabled={!canEdit} />
-          <LocalesTable title="GASTOS LOCALES AL CLIENTE (Gs)" rows={locCliRows} setRows={setLocCliRows} gsToUsd={gsToUsd} showProfit costosRows={locRows} disabled={!canEdit} />
+          <LocalesTable title={`COSTOS LOCALES (${currencyLabel})`} rows={locRows} setRows={setLocRows} currency={currencyLabel} disabled={!canEdit} />
+          <LocalesTable title={`GASTOS LOCALES AL CLIENTE (${currencyLabel})`} rows={locCliRows} setRows={setLocCliRows} currency={currencyLabel} showProfit costosRows={locRows} disabled={!canEdit} />
         </div>
 
         {/* Seguro */}
@@ -1580,8 +1875,13 @@ export default function DetCosSheet({ onVersionSelectionChange } = {}) {
                   }`}
                 onClick={saveCostSheet}
               >
-                Guardar
+                {hasUnsavedChanges ? "Guardar cambios" : "Guardar"}
               </button>
+              {hasUnsavedChanges && (
+                <span className="text-sm text-amber-700">
+                  Hay cambios sin guardar en esta planilla.
+                </span>
+              )}
 
               {isVentas && budgetStatus === "borrador" && (
                 <button className="px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-700 text-white" onClick={confirmBudget}>

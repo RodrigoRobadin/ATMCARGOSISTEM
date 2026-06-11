@@ -34,7 +34,8 @@ export default function PipelineView({
   onOpenDocs,
 }) {
   const { user } = useAuth();
-  const isAdmin = String(user?.role || "").toLowerCase() === "admin";
+  const userRole = String(user?.role || "").toLowerCase();
+  const canInvoice = userRole === "admin" || userRole === "finanzas";
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [selectedDealId, setSelectedDealId] = useState(null);
   const [selectedServiceCaseId, setSelectedServiceCaseId] = useState(null);
@@ -180,7 +181,7 @@ export default function PipelineView({
                             Documentos
                           </button>
                         )}
-                        {isAdmin ? (
+                        {canInvoice ? (
                           <button
                             className="px-2.5 py-1.5 text-xs rounded-lg bg-black text-white hover:bg-slate-800"
                             onClick={(event) => {

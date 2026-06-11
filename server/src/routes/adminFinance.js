@@ -378,7 +378,7 @@ async function buildFinanceData(query) {
   };
 }
 
-router.get('/', requireAuth, requireRole('admin'), async (req, res) => {
+router.get('/', requireAuth, requireRole(['admin', 'finanzas']), async (req, res) => {
   try {
     const data = await buildFinanceData(req.query);
     res.json(data);
@@ -388,7 +388,7 @@ router.get('/', requireAuth, requireRole('admin'), async (req, res) => {
   }
 });
 
-router.get('/export', requireAuth, requireRole('admin'), async (req, res) => {
+router.get('/export', requireAuth, requireRole(['admin', 'finanzas']), async (req, res) => {
   try {
     const data = await buildFinanceData(req.query);
     const wb = new ExcelJS.Workbook();

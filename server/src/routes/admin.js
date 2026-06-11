@@ -1,9 +1,12 @@
 // server/src/routes/admin.js
 import { Router } from "express";
 import db from "../services/db.js";
+import { requireAuth, requireAnyRole } from "../middlewares/auth.js";
 
 const router = Router();
 let invoiceHasServiceCaseId = null;
+
+router.use(requireAuth, requireAnyRole("admin", "manager", "finanzas"));
 
 async function q1(sql, params = []) {
   const [rows] = await db.query(sql, params);

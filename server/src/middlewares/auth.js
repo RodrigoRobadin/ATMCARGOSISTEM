@@ -51,11 +51,20 @@ export function requireAuth(req, res, next) {
 }
 
 // un único rol
+function normalizeRoles(roles) {
+  return roles
+    .flat()
+    .map((role) => String(role || "").toLowerCase())
+    .filter(Boolean);
+}
+
 export function requireRole(role) {
   return (req, res, next) => {
     const u = req.user || (req.session && req.session.user) || null;
     if (!u) return res.status(401).json({ error: "No auth" });
-    if (u.role !== role) {
+    const allowed = normalizeRoles([role]);
+    const userRole = String(u.role || "").toLowerCase();
+    if (!allowed.includes(userRole)) {
       return res.status(403).json({ error: "Permiso denegado" });
     }
     next();
@@ -67,7 +76,9 @@ export function requireAnyRole(...roles) {
   return (req, res, next) => {
     const u = req.user || (req.session && req.session.user) || null;
     if (!u) return res.status(401).json({ error: "No auth" });
-    if (!roles.includes(u.role)) {
+    const allowed = normalizeRoles(roles);
+    const userRole = String(u.role || "").toLowerCase();
+    if (!allowed.includes(userRole)) {
       return res.status(403).json({ error: "Permiso denegado" });
     }
     next();

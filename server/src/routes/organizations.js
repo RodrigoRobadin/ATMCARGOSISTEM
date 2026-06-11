@@ -43,6 +43,23 @@ const toUpperText = (v) =>
       `);
       console.log('[organizations] Columna default_customs_broker_org_id agregada');
     }
+
+    const supplierBankColumns = [
+      ['supplier_bank_name', "ADD COLUMN supplier_bank_name VARCHAR(160) NULL AFTER default_customs_broker_org_id"],
+      ['supplier_bank_account', "ADD COLUMN supplier_bank_account VARCHAR(160) NULL AFTER supplier_bank_name"],
+      ['supplier_bank_currency', "ADD COLUMN supplier_bank_currency VARCHAR(8) NULL AFTER supplier_bank_account"],
+      ['supplier_bank_account_type', "ADD COLUMN supplier_bank_account_type VARCHAR(80) NULL AFTER supplier_bank_currency"],
+      ['supplier_bank_holder', "ADD COLUMN supplier_bank_holder VARCHAR(160) NULL AFTER supplier_bank_account_type"],
+      ['supplier_bank_holder_ruc', "ADD COLUMN supplier_bank_holder_ruc VARCHAR(32) NULL AFTER supplier_bank_holder"],
+      ['supplier_bank_cci_iban', "ADD COLUMN supplier_bank_cci_iban VARCHAR(160) NULL AFTER supplier_bank_holder_ruc"],
+      ['supplier_bank_swift', "ADD COLUMN supplier_bank_swift VARCHAR(80) NULL AFTER supplier_bank_cci_iban"],
+      ['supplier_bank_notes', "ADD COLUMN supplier_bank_notes TEXT NULL AFTER supplier_bank_swift"],
+    ];
+    for (const [column, ddl] of supplierBankColumns) {
+      if (!have.has(column)) {
+        await db.query(`ALTER TABLE organizations ${ddl}`);
+      }
+    }
   } catch (e) {
     console.error('[organizations] No se pudo asegurar columna hoja_ruta:', e?.message || e);
   }
@@ -108,6 +125,9 @@ router.get('/', requireAuth, async (req, res) => {
         o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
         o.is_agent, o.modalities_supported,
         o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta, o.default_customs_broker_org_id,
+        o.supplier_bank_name, o.supplier_bank_account, o.supplier_bank_currency,
+        o.supplier_bank_account_type, o.supplier_bank_holder, o.supplier_bank_holder_ruc,
+        o.supplier_bank_cci_iban, o.supplier_bank_swift, o.supplier_bank_notes,
         o.zone_id, o.department,
         o.latitude, o.longitude,
         o.created_at, o.updated_at,
@@ -173,6 +193,15 @@ router.post('/', requireAuth, async (req, res) => {
       operacion = null,
       hoja_ruta = null,
       default_customs_broker_org_id = null,
+      supplier_bank_name = null,
+      supplier_bank_account = null,
+      supplier_bank_currency = null,
+      supplier_bank_account_type = null,
+      supplier_bank_holder = null,
+      supplier_bank_holder_ruc = null,
+      supplier_bank_cci_iban = null,
+      supplier_bank_swift = null,
+      supplier_bank_notes = null,
       branches = null,
     } = req.body || {};
 
@@ -186,11 +215,15 @@ router.post('/', requireAuth, async (req, res) => {
         (razon_social, name, industry, phone, website, ruc, address, city, country, notes,
          label, owner_user_id, created_by_user_id, visibility, is_agent, modalities_supported,
          email, rubro, tipo_org, operacion, hoja_ruta, default_customs_broker_org_id,
+         supplier_bank_name, supplier_bank_account, supplier_bank_currency,
+         supplier_bank_account_type, supplier_bank_holder, supplier_bank_holder_ruc,
+         supplier_bank_cci_iban, supplier_bank_swift, supplier_bank_notes,
          budget_status, budget_profit, created_at, updated_at)
       VALUES
         (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?, ?,
+         ?, ?, ?, ?, ?, ?, ?, ?, ?,
          'borrador', NULL, NOW(), NOW())
       `,
       [
@@ -216,6 +249,15 @@ router.post('/', requireAuth, async (req, res) => {
         operacion,
         hoja_ruta,
         toNull(default_customs_broker_org_id),
+        supplier_bank_name,
+        supplier_bank_account,
+        supplier_bank_currency,
+        supplier_bank_account_type,
+        supplier_bank_holder,
+        supplier_bank_holder_ruc,
+        supplier_bank_cci_iban,
+        supplier_bank_swift,
+        supplier_bank_notes,
       ]
     );
 
@@ -228,6 +270,9 @@ router.post('/', requireAuth, async (req, res) => {
         o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
         o.is_agent, o.modalities_supported,
         o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta, o.default_customs_broker_org_id,
+        o.supplier_bank_name, o.supplier_bank_account, o.supplier_bank_currency,
+        o.supplier_bank_account_type, o.supplier_bank_holder, o.supplier_bank_holder_ruc,
+        o.supplier_bank_cci_iban, o.supplier_bank_swift, o.supplier_bank_notes,
         o.created_at, o.updated_at,
         o.budget_status, o.budget_profit AS budget_profit_value,
         u.name AS owner_user_name,
@@ -712,6 +757,9 @@ router.get('/:id', requireAuth, async (req, res) => {
         o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
         o.is_agent, o.modalities_supported,
         o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta, o.default_customs_broker_org_id,
+        o.supplier_bank_name, o.supplier_bank_account, o.supplier_bank_currency,
+        o.supplier_bank_account_type, o.supplier_bank_holder, o.supplier_bank_holder_ruc,
+        o.supplier_bank_cci_iban, o.supplier_bank_swift, o.supplier_bank_notes,
         o.zone_id, o.department,
         o.latitude, o.longitude,
         o.created_at, o.updated_at,
@@ -772,6 +820,15 @@ router.patch('/:id', requireAuth, async (req, res) => {
       'operacion',
       'hoja_ruta',
       'default_customs_broker_org_id',
+      'supplier_bank_name',
+      'supplier_bank_account',
+      'supplier_bank_currency',
+      'supplier_bank_account_type',
+      'supplier_bank_holder',
+      'supplier_bank_holder_ruc',
+      'supplier_bank_cci_iban',
+      'supplier_bank_swift',
+      'supplier_bank_notes',
       'zone_id',
       'department',
       'latitude',
@@ -809,6 +866,9 @@ router.patch('/:id', requireAuth, async (req, res) => {
         o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
         o.is_agent, o.modalities_supported,
         o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta, o.default_customs_broker_org_id,
+        o.supplier_bank_name, o.supplier_bank_account, o.supplier_bank_currency,
+        o.supplier_bank_account_type, o.supplier_bank_holder, o.supplier_bank_holder_ruc,
+        o.supplier_bank_cci_iban, o.supplier_bank_swift, o.supplier_bank_notes,
         o.zone_id, o.department,
         o.latitude, o.longitude,
         o.created_at, o.updated_at,
