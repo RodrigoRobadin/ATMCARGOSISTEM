@@ -7,7 +7,7 @@ import ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
 import { pool } from '../services/db.js';
 import generatePaymentOrderPDF from '../services/paymentOrderTemplatePdfkit.js';
-import { requireAuth } from '../middlewares/auth.js';
+import { requireAuth, requireAnyRole } from '../middlewares/auth.js';
 
 const router = Router();
 
@@ -56,6 +56,9 @@ async function ensureOperationExpenseTables() {
       receipt_type VARCHAR(32) NULL,
       receipt_number VARCHAR(64) NULL,
       timbrado_number VARCHAR(64) NULL,
+      cost_sheet_version_number INT NULL,
+      quote_id INT NULL,
+      quote_revision_id INT NULL,
       expense_rubro VARCHAR(32) NULL,
       expense_concept VARCHAR(255) NULL,
       tax_mode VARCHAR(16) NULL,
@@ -251,6 +254,31 @@ ensureOperationExpenseTablesPost().catch((err) =>
   console.error('init operation expense post tables', err?.message || err)
 );
 
+function revisionScopeFromSource(source = {}) {
+  return {
+    costSheetVersionNumber: Number(source.cost_sheet_version_number || source.cost_sheet_version || 0) || null,
+    quoteId: Number(source.quote_id || 0) || null,
+    quoteRevisionId: Number(source.quote_revision_id || source.revision_id || 0) || null,
+  };
+}
+
+function appendExpenseRevisionScope(where, params, source = {}, alias = 'e') {
+  const scope = revisionScopeFromSource(source);
+  const prefix = alias ? `${alias}.` : '';
+  if (scope.costSheetVersionNumber) {
+    where.push(`${prefix}cost_sheet_version_number = ?`);
+    params.push(scope.costSheetVersionNumber);
+  }
+  if (scope.quoteRevisionId) {
+    where.push(`${prefix}quote_revision_id = ?`);
+    params.push(scope.quoteRevisionId);
+  } else if (scope.quoteId) {
+    where.push(`${prefix}quote_id = ?`);
+    params.push(scope.quoteId);
+  }
+  return scope;
+}
+
 async function ensureOperationExpenseColumns() {
   try {
     const [cols] = await pool.query(`
@@ -267,6 +295,9 @@ async function ensureOperationExpenseColumns() {
     if (!have.has('balance')) add.push("ADD COLUMN balance DECIMAL(15,2) NOT NULL DEFAULT 0");
     if (!have.has('paid_date')) add.push("ADD COLUMN paid_date DATE NULL");
     if (!have.has('due_date')) add.push("ADD COLUMN due_date DATE NULL");
+    if (!have.has('cost_sheet_version_number')) add.push('ADD COLUMN cost_sheet_version_number INT NULL AFTER timbrado_number');
+    if (!have.has('quote_id')) add.push('ADD COLUMN quote_id INT NULL AFTER cost_sheet_version_number');
+    if (!have.has('quote_revision_id')) add.push('ADD COLUMN quote_revision_id INT NULL AFTER quote_id');
     if (!have.has('tax_mode')) add.push('ADD COLUMN tax_mode VARCHAR(16) NULL');
     if (!have.has('gravado_10')) add.push('ADD COLUMN gravado_10 DECIMAL(15,2) NULL');
     if (!have.has('gravado_5')) add.push('ADD COLUMN gravado_5 DECIMAL(15,2) NULL');
@@ -561,6 +592,9 @@ router.get('/:id/expense-invoices', requireAuth, async (req, res) => {
     await ensureOperationExpenseTables();
     const { id } = req.params;
     const opType = String(req.query?.op_type || 'deal').toLowerCase();
+    const where = ['e.operation_id = ?', 'e.operation_type = ?'];
+    const params = [id, opType];
+    appendExpenseRevisionScope(where, params, req.query || {}, 'e');
     const [rows] = await pool.query(
       `
       SELECT e.*,
@@ -586,10 +620,10 @@ router.get('/:id/expense-invoices', requireAuth, async (req, res) => {
              ) AS expense_rubros
         FROM operation_expense_invoices e
         LEFT JOIN organizations o ON o.id = e.supplier_id
-       WHERE e.operation_id = ? AND e.operation_type = ?
+       WHERE ${where.join(' AND ')}
        ORDER BY e.invoice_date DESC, e.id DESC
       `,
-      [id, opType]
+      params
     );
     res.json(rows);
   } catch (e) {
@@ -631,6 +665,7 @@ router.post('/:id/expense-invoices', requireAuth, async (req, res) => {
     }
 
     const supplierId = await ensureSupplierId(payload);
+    const scope = revisionScopeFromSource(payload);
 
     let taxMode = String(payload.tax_mode || '').toLowerCase();
     let gravado10 = toNum(payload.gravado_10);
@@ -685,13 +720,14 @@ router.post('/:id/expense-invoices', requireAuth, async (req, res) => {
       `
       INSERT INTO operation_expense_invoices
       (operation_id, operation_type, invoice_date, receipt_type, receipt_number, timbrado_number,
+       cost_sheet_version_number, quote_id, quote_revision_id,
        expense_rubro, expense_concept,
        tax_mode, gravado_10, gravado_5,
        condition_type, due_date, currency_code, exchange_rate, amount_total,
        iva_10, iva_5, iva_exempt, iva_no_taxed,
        status, payment_status, paid_amount, balance,
        supplier_id, supplier_name, supplier_ruc, buyer_name, buyer_ruc, notes, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         Number(id),
@@ -700,6 +736,9 @@ router.post('/:id/expense-invoices', requireAuth, async (req, res) => {
         payload.receipt_type || null,
         payload.receipt_number || null,
         payload.timbrado_number || null,
+        scope.costSheetVersionNumber,
+        scope.quoteId,
+        scope.quoteRevisionId,
         payload.expense_rubro || 'SIN CLASIFICAR',
         payload.expense_concept || null,
         taxMode || null,
@@ -781,6 +820,9 @@ router.patch('/:id/expense-invoices/:invoiceId', requireAuth, async (req, res) =
       'receipt_type',
       'receipt_number',
       'timbrado_number',
+      'cost_sheet_version_number',
+      'quote_id',
+      'quote_revision_id',
       'expense_rubro',
       'expense_concept',
       'tax_mode',
@@ -993,19 +1035,19 @@ router.post('/:id/expense-invoices/:invoiceId/payments', requireAuth, async (req
       [invoiceId, id, opType]
     );
     if (!inv?.id) return res.status(404).json({ error: 'Not found' });
-    if (String(inv.condition_type || '').toUpperCase() !== 'CREDITO') {
-      return res.status(400).json({ error: 'La factura no es a crédito' });
-    }
-    const order = await findOrderForInvoice(invoiceId);
-    if (!order) return res.status(400).json({ error: 'Debe generar una orden de pago primero' });
-    if (order.status === 'pendiente') {
-      return res.status(400).json({ error: 'La orden de pago debe ser aprobada' });
-    }
-    if (order.status === 'anulada') {
-      return res.status(400).json({ error: 'La orden de pago está anulada' });
-    }
-    if (order.status === 'pagada') {
-      return res.status(400).json({ error: 'La orden de pago ya está pagada' });
+    const isCredit = String(inv.condition_type || '').toUpperCase() === 'CREDITO';
+    const order = isCredit ? await findOrderForInvoice(invoiceId) : null;
+    if (isCredit) {
+      if (!order) return res.status(400).json({ error: 'Debe generar una orden de pago primero' });
+      if (order.status === 'pendiente') {
+        return res.status(400).json({ error: 'La orden de pago debe ser aprobada' });
+      }
+      if (order.status === 'anulada') {
+        return res.status(400).json({ error: 'La orden de pago está anulada' });
+      }
+      if (order.status === 'pagada') {
+        return res.status(400).json({ error: 'La orden de pago ya está pagada' });
+      }
     }
     const amt = Number(amount || 0);
     if (!amt || amt <= 0) {
@@ -1041,7 +1083,9 @@ router.post('/:id/expense-invoices/:invoiceId/payments', requireAuth, async (req
     );
 
     await updateInvoicePaymentStatus(invoiceId, pool);
-    await recomputePaymentOrder(order.id);
+    if (order?.id) {
+      await recomputePaymentOrder(order.id);
+    }
 
     res.status(201).json({ id: result.insertId });
   } catch (e) {
@@ -1069,7 +1113,7 @@ router.get('/:id/expense-invoices/:invoiceId/payment-orders', requireAuth, async
   }
 });
 
-router.post('/:id/expense-invoices/:invoiceId/payment-orders', requireAuth, async (req, res) => {
+router.post('/:id/expense-invoices/:invoiceId/payment-orders', requireAuth, requireAnyRole('admin', 'finanzas'), async (req, res) => {
   try {
     const { id, invoiceId } = req.params;
     const opType = req.query?.operation_type || 'deal';
@@ -1150,7 +1194,7 @@ router.post('/:id/expense-invoices/:invoiceId/payment-orders', requireAuth, asyn
 });
 
 // Crear o reutilizar una orden de pago para varias facturas (misma operacion/proveedor)
-router.post('/:id/expense-invoices/payment-orders', requireAuth, async (req, res) => {
+router.post('/:id/expense-invoices/payment-orders', requireAuth, requireAnyRole('admin', 'finanzas'), async (req, res) => {
   try {
     const { id } = req.params;
     const opType = req.query?.operation_type || 'deal';
@@ -1553,7 +1597,7 @@ function buildIndustrialBudgetFromComputed(computed = {}, revisionLabel = 'Revis
   };
 }
 
-async function fetchIndustrialBudget(operationId, quoteRevisionId) {
+async function fetchIndustrialBudget(operationId, quoteRevisionId, quoteId = null) {
   if (quoteRevisionId) {
     const [[row]] = await pool.query(
       `SELECT qr.id, qr.name, qr.created_at, qr.computed_json, q.ref_code, q.revision
@@ -1568,6 +1612,18 @@ async function fetchIndustrialBudget(operationId, quoteRevisionId) {
         asJson(row.computed_json) || {},
         row.name || `REV ${row.id}`
       );
+    }
+  }
+  if (quoteId) {
+    const [[row]] = await pool.query(
+      `SELECT id, ref_code, revision, computed_json, updated_at
+         FROM quotes
+        WHERE id = ? AND deal_id = ?
+        LIMIT 1`,
+      [quoteId, operationId]
+    );
+    if (row?.id) {
+      return buildIndustrialBudgetFromComputed(asJson(row.computed_json) || {}, row.revision || row.ref_code || 'Cotizacion actual');
     }
   }
   const [[row]] = await pool.query(
@@ -1649,9 +1705,15 @@ async function buildExpenseControlData(operationId, opType, query = {}) {
   );
   const exchangeRate = exchangeRateFromQuery || Number(settings?.exchange_rate || 0) || null;
 
-  const budget = query.quote_revision_id
-    ? await fetchIndustrialBudget(operationId, query.quote_revision_id)
+  const industrialQuoteId = Number(query.quote_id || 0) || null;
+  const industrialRevisionId = Number(query.quote_revision_id || 0) || null;
+  const budget = industrialRevisionId || industrialQuoteId
+    ? await fetchIndustrialBudget(operationId, industrialRevisionId, industrialQuoteId)
     : await fetchCargoBudget(operationId, query.cost_sheet_version_number);
+
+  const invoiceWhere = ['e.operation_id = ?', 'e.operation_type = ?', "COALESCE(e.status, '') <> 'anulado'"];
+  const invoiceParams = [operationId, normalizedOpType];
+  appendExpenseRevisionScope(invoiceWhere, invoiceParams, query || {}, 'e');
 
   const [invoices] = await pool.query(
     `SELECT e.*,
@@ -1667,18 +1729,22 @@ async function buildExpenseControlData(operationId, opType, query = {}) {
             ) AS expense_rubros
        FROM operation_expense_invoices e
        LEFT JOIN organizations o ON o.id = e.supplier_id
-      WHERE e.operation_id = ? AND e.operation_type = ? AND COALESCE(e.status, '') <> 'anulado'
+      WHERE ${invoiceWhere.join(' AND ')}
       ORDER BY e.invoice_date DESC, e.id DESC`,
-    [operationId, normalizedOpType]
+    invoiceParams
   );
+
+  const detailWhere = ['e.operation_id = ?', 'e.operation_type = ?', "COALESCE(e.status, '') <> 'anulado'"];
+  const detailParams = [operationId, normalizedOpType];
+  appendExpenseRevisionScope(detailWhere, detailParams, query || {}, 'e');
 
   const [detailRows] = await pool.query(
     `SELECT e.id AS invoice_id, e.currency_code, e.amount_total, e.expense_rubro AS invoice_rubro,
             it.id AS item_id, it.description, it.expense_rubro AS item_rubro, it.subtotal
        FROM operation_expense_invoices e
        LEFT JOIN operation_expense_invoice_items it ON it.invoice_id = e.id
-      WHERE e.operation_id = ? AND e.operation_type = ? AND COALESCE(e.status, '') <> 'anulado'`,
-    [operationId, normalizedOpType]
+      WHERE ${detailWhere.join(' AND ')}`,
+    detailParams
   );
 
   const actualByRubro = {};
@@ -1754,6 +1820,339 @@ async function buildExpenseControlData(operationId, opType, query = {}) {
   };
 }
 
+function addCurrencyAmount(target, currency, amount) {
+  const code = normCurrency(currency || 'USD');
+  target[code] = Number(((target[code] || 0) + Number(amount || 0)).toFixed(2));
+}
+
+function convertCurrencyMap(values = {}, targetCurrency = 'USD', exchangeRate = null) {
+  const result = {
+    currency_code: normCurrency(targetCurrency),
+    amount: 0,
+    complete: true,
+    missing_currencies: [],
+  };
+  for (const [currency, amount] of Object.entries(values || {})) {
+    const converted = convertAmount(amount, currency, targetCurrency, exchangeRate);
+    if (converted == null) {
+      result.complete = false;
+      result.missing_currencies.push(normCurrency(currency));
+    } else {
+      result.amount += converted;
+    }
+  }
+  result.amount = Number(result.amount.toFixed(2));
+  result.missing_currencies = Array.from(new Set(result.missing_currencies));
+  return result;
+}
+
+function buildByCurrency(rows, field, currencyField = 'currency_code') {
+  return rows.reduce((acc, row) => {
+    addCurrencyAmount(acc, row[currencyField] || 'USD', row[field] || 0);
+    return acc;
+  }, {});
+}
+
+async function buildOperationFinancialStatement(operationId, opType, query = {}) {
+  await ensureOperationExpenseTables();
+  await ensureOperationExpenseTablesPost();
+  const normalizedOpType = String(opType || 'deal').toLowerCase();
+  const control = await buildExpenseControlData(operationId, normalizedOpType, query);
+  const exchangeRate = Number(control.exchange_rate || 0) || null;
+  const budgetCurrency = normCurrency(control.budget?.currency_code || 'USD');
+
+  const [salesInvoices] = await pool.query(
+    `
+    SELECT
+      i.id,
+      i.invoice_number,
+      i.issue_date,
+      i.due_date,
+      i.status,
+      i.payment_condition,
+      i.currency_code,
+      i.total_amount,
+      i.paid_amount AS paid_amount_db,
+      i.credited_total AS credited_total_db,
+      i.net_total_amount,
+      i.net_balance,
+      i.cost_sheet_version_number,
+      i.quote_revision_id,
+      COALESCE(o.razon_social, o.name) AS customer_name,
+      o.ruc AS customer_ruc,
+      COALESCE(rc.paid_amount, 0) AS receipts_paid,
+      COALESCE(cn.credited_total, 0) AS credit_notes_total
+    FROM invoices i
+    LEFT JOIN organizations o ON o.id = i.organization_id
+    LEFT JOIN (
+      SELECT invoice_id, SUM(net_amount) AS paid_amount
+      FROM receipts
+      WHERE status <> 'anulado'
+      GROUP BY invoice_id
+    ) rc ON rc.invoice_id = i.id
+    LEFT JOIN (
+      SELECT invoice_id, SUM(total_amount) AS credited_total
+      FROM credit_notes
+      WHERE status <> 'anulada'
+      GROUP BY invoice_id
+    ) cn ON cn.invoice_id = i.id
+    WHERE i.deal_id = ?
+    ORDER BY i.issue_date DESC, i.id DESC
+    `,
+    [operationId]
+  );
+
+  const saleDocuments = salesInvoices.map((row) => {
+    const total = Number(row.total_amount || 0);
+    const credited = Number(row.credit_notes_total || row.credited_total_db || 0);
+    const paid = Number(row.receipts_paid || row.paid_amount_db || 0);
+    const netTotal = Math.max(0, total - credited);
+    const balance = Math.max(0, netTotal - paid);
+    return {
+      ...row,
+      currency_code: normCurrency(row.currency_code || 'USD'),
+      total_amount: Number(total.toFixed(2)),
+      credited_total: Number(credited.toFixed(2)),
+      paid_amount: Number(paid.toFixed(2)),
+      net_total_amount: Number(netTotal.toFixed(2)),
+      balance: Number(balance.toFixed(2)),
+    };
+  });
+
+  const invoiceIds = saleDocuments.map((row) => Number(row.id)).filter(Boolean);
+  let receipts = [];
+  let canceledReceipts = [];
+  let creditNotes = [];
+  if (invoiceIds.length) {
+    const placeholders = invoiceIds.map(() => '?').join(',');
+    const [receiptRows] = await pool.query(
+      `
+      SELECT r.*, i.invoice_number
+      FROM receipts r
+      LEFT JOIN invoices i ON i.id = r.invoice_id
+      WHERE r.status <> 'anulado' AND r.invoice_id IN (${placeholders})
+      ORDER BY r.issue_date DESC, r.id DESC
+      `,
+      invoiceIds
+    );
+    receipts = receiptRows;
+    const [canceledReceiptRows] = await pool.query(
+      `
+      SELECT r.*, i.invoice_number, u.name AS cancelled_by_name
+      FROM receipts r
+      LEFT JOIN invoices i ON i.id = r.invoice_id
+      LEFT JOIN users u ON u.id = r.cancelled_by
+      WHERE r.status = 'anulado' AND r.invoice_id IN (${placeholders})
+      ORDER BY COALESCE(r.cancelled_at, r.updated_at, r.issue_date) DESC, r.id DESC
+      `,
+      invoiceIds
+    );
+    canceledReceipts = canceledReceiptRows;
+    const [creditRows] = await pool.query(
+      `
+      SELECT cn.*, i.invoice_number
+      FROM credit_notes cn
+      LEFT JOIN invoices i ON i.id = cn.invoice_id
+      WHERE cn.status <> 'anulada' AND cn.invoice_id IN (${placeholders})
+      ORDER BY cn.issue_date DESC, cn.id DESC
+      `,
+      invoiceIds
+    );
+    creditNotes = creditRows;
+  }
+
+  const purchaseInvoices = (control.invoices || []).map((row) => ({
+    ...row,
+    currency_code: normCurrency(row.currency_code || 'PYG'),
+    amount_total: Number(row.amount_total || 0),
+    paid_amount: Number(row.paid_amount || 0),
+    balance: Number(row.balance || 0),
+  }));
+  const scopedExpenseInvoiceIds = purchaseInvoices.map((row) => Number(row.id)).filter(Boolean);
+  let expensePayments = [];
+  let paymentOrders = [];
+  if (scopedExpenseInvoiceIds.length) {
+    const placeholders = scopedExpenseInvoiceIds.map(() => '?').join(',');
+    const [paymentRows] = await pool.query(
+      `
+      SELECT
+        p.*,
+        e.receipt_number,
+        e.supplier_name,
+        e.supplier_ruc,
+        e.currency_code AS invoice_currency_code
+      FROM operation_expense_payments p
+      INNER JOIN operation_expense_invoices e ON e.id = p.invoice_id
+      WHERE p.invoice_id IN (${placeholders})
+        AND COALESCE(e.status, '') <> 'anulado'
+        AND COALESCE(p.status, '') <> 'anulado'
+      ORDER BY p.payment_date DESC, p.id DESC
+      `,
+      scopedExpenseInvoiceIds
+    );
+    expensePayments = paymentRows;
+    const [orderRows] = await pool.query(
+      `
+      SELECT DISTINCT po.*
+      FROM operation_expense_payment_orders po
+      LEFT JOIN operation_expense_payment_order_items poi ON poi.order_id = po.id
+      WHERE COALESCE(po.status, '') <> 'anulada'
+        AND (po.invoice_id IN (${placeholders}) OR poi.invoice_id IN (${placeholders}))
+      ORDER BY po.created_at DESC, po.id DESC
+      `,
+      [...scopedExpenseInvoiceIds, ...scopedExpenseInvoiceIds]
+    );
+    paymentOrders = orderRows;
+  }
+
+  const sales = {
+    invoices: saleDocuments,
+    receipts,
+    canceled_receipts: canceledReceipts,
+    credit_notes: creditNotes,
+    totals: {
+      invoiced_by_currency: buildByCurrency(saleDocuments, 'total_amount'),
+      credited_by_currency: buildByCurrency(saleDocuments, 'credited_total'),
+      net_sales_by_currency: buildByCurrency(saleDocuments, 'net_total_amount'),
+      collected_by_currency: buildByCurrency(saleDocuments, 'paid_amount'),
+      receivable_by_currency: buildByCurrency(saleDocuments, 'balance'),
+    },
+  };
+
+  const purchases = {
+    invoices: purchaseInvoices,
+    payments: expensePayments,
+    payment_orders: paymentOrders,
+    totals: {
+      budgeted_by_currency: { [budgetCurrency]: Number(control.budget?.budgeted_purchase || 0) },
+      actual_by_currency: buildByCurrency(purchaseInvoices, 'amount_total'),
+      paid_by_currency: buildByCurrency(purchaseInvoices, 'paid_amount'),
+      payable_by_currency: buildByCurrency(purchaseInvoices, 'balance'),
+      payment_orders_by_currency: buildByCurrency(paymentOrders, 'amount'),
+    },
+  };
+
+  const convertedSalesNet = convertCurrencyMap(sales.totals.net_sales_by_currency, budgetCurrency, exchangeRate);
+  const convertedSalesCollected = convertCurrencyMap(sales.totals.collected_by_currency, budgetCurrency, exchangeRate);
+  const convertedPurchasesActual = convertCurrencyMap(purchases.totals.actual_by_currency, budgetCurrency, exchangeRate);
+  const convertedPurchasesPaid = convertCurrencyMap(purchases.totals.paid_by_currency, budgetCurrency, exchangeRate);
+  const convertedReceivable = convertCurrencyMap(sales.totals.receivable_by_currency, budgetCurrency, exchangeRate);
+  const convertedPayable = convertCurrencyMap(purchases.totals.payable_by_currency, budgetCurrency, exchangeRate);
+
+  const convertedComplete = convertedSalesNet.complete && convertedPurchasesActual.complete;
+  const budgetedSell = Number(control.budget?.budgeted_sell || 0);
+  const budgetedBuy = Number(control.budget?.budgeted_purchase || 0);
+  const budgetedProfit = Number(control.budget?.budgeted_profit || (budgetedSell - budgetedBuy));
+  const realProfit = convertedComplete
+    ? Number((convertedSalesNet.amount - convertedPurchasesActual.amount).toFixed(2))
+    : null;
+
+  const movements = [
+    ...saleDocuments.map((row) => ({
+      date: row.issue_date || row.created_at,
+      type: 'venta',
+      label: 'Factura venta',
+      document_number: row.invoice_number || row.id,
+      third_party: row.customer_name || 'Cliente',
+      currency_code: row.currency_code,
+      debit: row.net_total_amount,
+      credit: 0,
+      source_id: row.id,
+      source_type: 'invoice',
+    })),
+    ...receipts.map((row) => ({
+      date: row.issue_date || row.created_at,
+      type: 'cobro',
+      label: 'Cobro cliente',
+      document_number: row.receipt_number || row.id,
+      third_party: row.invoice_number || 'Factura',
+      currency_code: normCurrency(row.currency_code || 'USD'),
+      debit: 0,
+      credit: Number(row.net_amount || row.amount || 0),
+      source_id: row.id,
+      source_type: 'receipt',
+    })),
+    ...canceledReceipts.map((row) => ({
+      date: row.cancelled_at || row.updated_at || row.issue_date || row.created_at,
+      type: 'anulacion_recibo',
+      label: 'Anulacion de recibo',
+      document_number: row.receipt_number || row.id,
+      third_party: row.invoice_number || 'Factura',
+      description: row.cancel_reason
+        ? `Motivo: ${row.cancel_reason}`
+        : 'Recibo anulado',
+      currency_code: normCurrency(row.currency_code || 'USD'),
+      debit: Number(row.net_amount || row.amount || 0),
+      credit: 0,
+      source_id: row.id,
+      source_type: 'receipt',
+    })),
+    ...creditNotes.map((row) => ({
+      date: row.issue_date || row.created_at,
+      type: 'nota_credito',
+      label: 'Nota de credito',
+      document_number: row.credit_note_number || row.id,
+      third_party: row.invoice_number || 'Factura',
+      currency_code: normCurrency(row.currency_code || saleDocuments.find((inv) => Number(inv.id) === Number(row.invoice_id))?.currency_code || 'USD'),
+      debit: 0,
+      credit: Number(row.total_amount || 0),
+      source_id: row.id,
+      source_type: 'credit_note',
+    })),
+    ...purchaseInvoices.map((row) => ({
+      date: row.invoice_date || row.created_at,
+      type: 'compra',
+      label: 'Factura compra',
+      document_number: row.receipt_number || row.id,
+      third_party: row.supplier_org_name || row.supplier_name || 'Proveedor',
+      currency_code: row.currency_code,
+      debit: 0,
+      credit: Number(row.amount_total || 0),
+      source_id: row.id,
+      source_type: 'operation_expense_invoice',
+    })),
+    ...expensePayments.map((row) => ({
+      date: row.payment_date || row.created_at,
+      type: 'pago_proveedor',
+      label: 'Pago proveedor',
+      document_number: row.reference_number || row.id,
+      third_party: row.supplier_name || row.receipt_number || 'Proveedor',
+      currency_code: normCurrency(row.invoice_currency_code || 'PYG'),
+      debit: 0,
+      credit: Number(row.amount || 0),
+      source_id: row.id,
+      source_type: 'operation_expense_payment',
+    })),
+  ].sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
+
+  return {
+    operation_id: Number(operationId),
+    operation_type: normalizedOpType,
+    operation_meta: control.operation_meta,
+    exchange_rate: exchangeRate,
+    budget: control.budget,
+    sales,
+    purchases,
+    result: {
+      currency_code: budgetCurrency,
+      budgeted_sell: budgetedSell,
+      budgeted_buy: budgetedBuy,
+      budgeted_profit: Number(budgetedProfit.toFixed(2)),
+      actual_net_sales: convertedSalesNet,
+      actual_collected: convertedSalesCollected,
+      actual_buy: convertedPurchasesActual,
+      actual_paid_to_suppliers: convertedPurchasesPaid,
+      receivable: convertedReceivable,
+      payable: convertedPayable,
+      real_profit: realProfit,
+      profit_difference: realProfit == null ? null : Number((realProfit - budgetedProfit).toFixed(2)),
+      status: realProfit == null ? 'sin_comparacion' : realProfit >= budgetedProfit ? 'mejor_o_igual' : 'menor_profit',
+    },
+    rubros: control.rubros,
+    movements,
+  };
+}
+
 router.get('/:id/expense-control', requireAuth, async (req, res) => {
   try {
     const data = await buildExpenseControlData(req.params.id, req.query?.op_type || 'deal', req.query || {});
@@ -1761,6 +2160,16 @@ router.get('/:id/expense-control', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('[operation-expense] control error', e);
     res.status(500).json({ error: 'Error loading expense control' });
+  }
+});
+
+router.get('/:id/financial-statement', requireAuth, async (req, res) => {
+  try {
+    const data = await buildOperationFinancialStatement(req.params.id, req.query?.op_type || 'deal', req.query || {});
+    res.json(data);
+  } catch (e) {
+    console.error('[operation-expense] financial statement error', e);
+    res.status(500).json({ error: 'Error loading operation financial statement' });
   }
 });
 

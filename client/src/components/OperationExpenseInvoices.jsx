@@ -140,6 +140,7 @@ export default function OperationExpenseInvoices({
   showList = false,
   openNewKey = 0,
   costSheetVersionNumber,
+  quoteId,
   quoteRevisionId,
   title = "Gastos por operacion",
   subtitle = "Facturas de compra vinculadas a esta operacion.",
@@ -250,7 +251,12 @@ export default function OperationExpenseInvoices({
     setError("");
     try {
       const { data } = await api.get(`/operations/${operationId}/expense-invoices`, {
-        params: { op_type: operationType },
+        params: {
+          op_type: operationType,
+          cost_sheet_version_number: showExpenseControl ? costSheetVersionNumber || undefined : undefined,
+          quote_id: showExpenseControl ? quoteId || undefined : undefined,
+          quote_revision_id: showExpenseControl ? quoteRevisionId || undefined : undefined,
+        },
       });
       const baseRows = Array.isArray(data) ? data : [];
       const enrichedRows = await Promise.all(
@@ -291,6 +297,7 @@ export default function OperationExpenseInvoices({
       const params = {
         op_type: operationType,
         cost_sheet_version_number: costSheetVersionNumber || undefined,
+        quote_id: quoteId || undefined,
         quote_revision_id: quoteRevisionId || undefined,
       };
       const { data } = await api.get(`/operations/${operationId}/expense-control`, { params });
@@ -311,13 +318,13 @@ export default function OperationExpenseInvoices({
     if (!operationId) return;
     if (showList) loadInvoices();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [operationId, operationType, showList]);
+  }, [operationId, operationType, showList, showExpenseControl, costSheetVersionNumber, quoteId, quoteRevisionId]);
 
   useEffect(() => {
     if (!showList || !showExpenseControl) return;
     loadExpenseControl();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showList, showExpenseControl, operationId, operationType, costSheetVersionNumber, quoteRevisionId]);
+  }, [showList, showExpenseControl, operationId, operationType, costSheetVersionNumber, quoteId, quoteRevisionId]);
 
   useEffect(() => {
     try {
@@ -571,6 +578,7 @@ export default function OperationExpenseInvoices({
       const params = {
         op_type: operationType,
         cost_sheet_version_number: costSheetVersionNumber || undefined,
+        quote_id: quoteId || undefined,
         quote_revision_id: quoteRevisionId || undefined,
       };
       const res = await api.get(`/operations/${operationId}/expense-control/export-xlsx`, {
@@ -607,6 +615,7 @@ export default function OperationExpenseInvoices({
       const params = {
         op_type: operationType,
         cost_sheet_version_number: costSheetVersionNumber || undefined,
+        quote_id: quoteId || undefined,
         quote_revision_id: quoteRevisionId || undefined,
       };
       const res = await api.get(`/operations/${operationId}/expense-control/export-pdf`, {
@@ -767,6 +776,9 @@ export default function OperationExpenseInvoices({
         buyer_ruc: form.buyer_ruc || null,
         notes: form.notes || null,
         items: entryMode === "detalle" ? items : undefined,
+        cost_sheet_version_number: costSheetVersionNumber || undefined,
+        quote_id: quoteId || undefined,
+        quote_revision_id: quoteRevisionId || undefined,
       };
 
       let invoiceId = editingInvoice?.id;
@@ -1749,7 +1761,12 @@ function OperationExpensePaymentModal({ invoice, operationId, operationType, com
     notes: "",
   });
   const [saving, setSaving] = useState(false);
-  const accountOptions = filterCompanyBankAccounts(companyAccounts, invoice?.currency_code || "PYG");
+  const sameCurrencyAccounts = filterCompanyBankAccounts(companyAccounts, invoice?.currency_code || "PYG");
+  const fallbackAccounts = (companyAccounts || []).filter((account) => {
+    if (!account?.active) return false;
+    return !sameCurrencyAccounts.some((item) => companyBankAccountValue(item) === companyBankAccountValue(account));
+  });
+  const accountOptions = sameCurrencyAccounts.length ? sameCurrencyAccounts : fallbackAccounts;
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -1805,6 +1822,16 @@ function OperationExpensePaymentModal({ invoice, operationId, operationType, com
               </option>
             ))}
           </select>
+          {!sameCurrencyAccounts.length && fallbackAccounts.length > 0 && (
+            <div className="text-xs text-amber-700">
+              No hay cuentas activas en {invoice?.currency_code || "PYG"}. Se muestran cuentas de otras monedas.
+            </div>
+          )}
+          {!accountOptions.length && (
+            <div className="text-xs text-red-700">
+              No hay cuentas de empresa activas cargadas en Parametros del sistema.
+            </div>
+          )}
           <div className="rounded-lg border bg-slate-50 p-3 text-sm">
             <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
               Cuenta destino del proveedor

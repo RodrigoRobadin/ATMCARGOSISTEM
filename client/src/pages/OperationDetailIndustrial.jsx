@@ -12,6 +12,7 @@ import DetCosSheet from "./DetCosSheet";
 import QuoteEditor from "./QuoteEditor";
 import ReportPreview from "../components/op-details/ReportPreview";
 import OperationExpenseInvoices from "../components/OperationExpenseInvoices.jsx";
+import OperationFinancialStatement from "../components/OperationFinancialStatement.jsx";
 import IndustrialDoorList from "../components/op-details/IndustrialDoorList";
 import AdminOpsPanel from "../components/op-details/AdminOpsPanel.jsx";
 import { attachOperationToAssistant } from "../utils/assistantContext";
@@ -1261,6 +1262,7 @@ export default function OperationDetailIndustrial() {
     { id: "documentos", kind: "base", label: "Documentos" },
     { id: "gastos", kind: "base", label: "Gastos" },
     ...(canAccessAdminOps ? [{ id: "administracion", kind: "base", label: "Administración" }] : []),
+    { id: "estado-cuenta", kind: "base", label: "Estado de cuenta" },
     {
       id: "detcos",
       kind: "base",
@@ -2124,12 +2126,20 @@ export default function OperationDetailIndustrial() {
               dealId={Number(id)}
               deal={deal}
               quoteRevisionId={currentIndustrialRevisionId || null}
+              quoteId={quoteId || null}
               onDocsRefresh={() => {
                 api
                   .get("/invoices/operation-docs", { params: { deal_id: id } })
                   .then(({ data }) => setOpDocs(Array.isArray(data) ? data : []))
                   .catch(() => setOpDocs([]));
               }}
+            />
+          ) : activeTab === "estado-cuenta" ? (
+            <OperationFinancialStatement
+              operationId={Number(id)}
+              operationType="deal"
+              quoteRevisionId={currentIndustrialRevisionId || null}
+              quoteId={quoteId || null}
             />
           ) : activeTab === "detalle-oferta" ? (
             quoteLoading ? (
@@ -3072,6 +3082,7 @@ export default function OperationDetailIndustrial() {
             operationId={Number(id)}
             showList={activeTab === "gastos"}
             openNewKey={expenseOpenKey}
+            quoteId={quoteId || null}
             quoteRevisionId={currentIndustrialRevisionId || null}
           />
         </section>

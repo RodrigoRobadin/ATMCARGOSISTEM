@@ -1,829 +1,1191 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import api from '../api';
-import { useRef } from 'react';
 
-const formatMoney = (n = 0, currency = 'USD') =>
-  new Intl.NumberFormat('es-PY', {
+const STATUS_TABS = [
+  { value: 'por_cobrar', label: 'Por cobrar' },
+  { value: 'vencido', label: 'Vencidos' },
+  { value: 'vence_hoy', label: 'Vence hoy' },
+  { value: 'due_7d', label: 'Proximos 7 dias' },
+  { value: 'parcial', label: 'Pago parcial' },
+  { value: 'pagado', label: 'Pagado' },
+  { value: 'todos', label: 'Todos' },
+];
+
+const STATUS_META = {
+  pendiente: { label: 'Pendiente', className: 'bg-amber-50 text-amber-700' },
+  parcial: { label: 'Pago parcial', className: 'bg-blue-50 text-blue-700' },
+  vencido: { label: 'Vencido', className: 'bg-red-50 text-red-700' },
+  vence_hoy: { label: 'Vence hoy', className: 'bg-orange-50 text-orange-700' },
+  pagado: { label: 'Pagado', className: 'bg-emerald-50 text-emerald-700' },
+  anulado: { label: 'Anulado', className: 'bg-slate-100 text-slate-600' },
+};
+
+const MOVEMENT_LABELS = {
+  invoice: 'Factura',
+  receipt: 'Recibo',
+  credit_note: 'Nota de credito',
+};
+
+function fmtMoney(value = 0, currency = 'USD') {
+  const curr = String(currency || 'USD').toUpperCase();
+  const isPyg = curr === 'PYG' || curr === 'GS';
+  return new Intl.NumberFormat('es-PY', {
     style: 'currency',
-    currency: (currency || 'USD').toUpperCase(),
-    minimumFractionDigits: 2,
-  }).format(Number(n) || 0);
+    currency: curr === 'GS' ? 'PYG' : curr,
+    minimumFractionDigits: isPyg ? 0 : 2,
+    maximumFractionDigits: isPyg ? 0 : 2,
+  }).format(Number(value || 0));
+}
+
+function fmtDate(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleDateString('es-PY');
+}
+
+function currencyList(values = {}) {
+  return Object.entries(values || {}).filter(([, amount]) => Math.abs(Number(amount || 0)) > 0.0001);
+}
+
+function CurrencyStack({ values, emptyCurrency = 'USD', tone = 'slate' }) {
+  const entries = currencyList(values);
+  const toneClass = tone === 'red' ? 'text-red-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-slate-900';
+  if (!entries.length) return <span className={toneClass}>{fmtMoney(0, emptyCurrency)}</span>;
+  return (
+    <div className={`space-y-0.5 ${toneClass}`}>
+      {entries.map(([currency, amount]) => (
+        <div key={currency}>{fmtMoney(amount, currency)}</div>
+      ))}
+    </div>
+  );
+}
+
+function StatusChip({ status }) {
+  const meta = STATUS_META[status] || { label: status || '-', className: 'bg-slate-100 text-slate-700' };
+  return (
+    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${meta.className}`}>
+      {meta.label}
+    </span>
+  );
+}
+
+function csvEscape(value) {
+  return `"${String(value ?? '').replace(/"/g, '""')}"`;
+}
+
+function downloadCsv(rows, filename) {
+  const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 export default function AccountStatement() {
-  const [rows, setRows] = useState([]);
-  const [receipts, setReceipts] = useState([]);
+  const [data, setData] = useState({
+    totals: {},
+    clients: [],
+    documents: [],
+    movements: [],
+  });
+  const [filters, setFilters] = useState({
+    client_q: '',
+    search: '',
+    status: 'por_cobrar',
+    currency_code: 'todas',
+    from_date: '',
+    to_date: '',
+    due_from: '',
+    due_to: '',
+  });
+  const [selectedClientKey, setSelectedClientKey] = useState('');
+  const [clientDrawerOpen, setClientDrawerOpen] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [loadingReceipts, setLoadingReceipts] = useState(true);
   const [error, setError] = useState('');
-  const [selectedClient, setSelectedClient] = useState('');
   const [htmlPreview, setHtmlPreview] = useState('');
   const [htmlTitle, setHtmlTitle] = useState('');
+  const [collectionData, setCollectionData] = useState({ promises: [], events: [] });
+  const [collectionsLoading, setCollectionsLoading] = useState(false);
+  const [promiseForm, setPromiseForm] = useState({
+    promise_date: '',
+    promised_amount: '',
+    currency_code: 'USD',
+    invoice_id: '',
+    notes: '',
+  });
+  const [eventForm, setEventForm] = useState({
+    event_type: 'nota',
+    event_date: '',
+    invoice_id: '',
+    subject: '',
+    notes: '',
+    next_action_date: '',
+  });
   const htmlRef = useRef(null);
-  const [filters, setFilters] = useState({
-    cliente: '',
-    estado: 'pendiente', // por defecto solo pendientes
-    moneda: 'todas', // ✅ NUEVO: permitir PYG / USD / todas
-    search: '',
-  });
 
   useEffect(() => {
-    const load = async () => {
+    let alive = true;
+    async function load() {
+      setLoading(true);
+      setError('');
       try {
-        const { data } = await api.get('/invoices');
-        const list = Array.isArray(data) ? data : data?.data || [];
-        setRows(list);
+        const params = {
+          client_q: filters.client_q || undefined,
+          search: filters.search || undefined,
+          status: filters.status || 'por_cobrar',
+          currency_code: filters.currency_code || 'todas',
+          from_date: filters.from_date || undefined,
+          to_date: filters.to_date || undefined,
+          due_from: filters.due_from || undefined,
+          due_to: filters.due_to || undefined,
+        };
+        const { data: response } = await api.get('/invoices/customer-statement', { params });
+        if (!alive) return;
+        setData({
+          totals: response?.totals || {},
+          clients: Array.isArray(response?.clients) ? response.clients : [],
+          documents: Array.isArray(response?.documents) ? response.documents : [],
+          movements: Array.isArray(response?.movements) ? response.movements : [],
+        });
       } catch (err) {
-        console.error('Error cargando estado de cuenta', err);
-        setError('No se pudo cargar la información.');
-        setRows([]);
+        console.error('customer statement load error', err);
+        if (!alive) return;
+        setError(err?.response?.data?.error || 'No se pudo cargar el estado de cuenta.');
+        setData({ totals: {}, clients: [], documents: [], movements: [] });
       } finally {
-        setLoading(false);
+        if (alive) setLoading(false);
       }
-    };
+    }
     load();
-  }, []);
-
-  useEffect(() => {
-    const loadReceipts = async () => {
-      try {
-        const { data } = await api.get('/invoices/receipts');
-        setReceipts(Array.isArray(data) ? data : []);
-      } catch (err) {
-        console.error('Error cargando recibos', err);
-      } finally {
-        setLoadingReceipts(false);
-      }
+    return () => {
+      alive = false;
     };
-    loadReceipts();
-  }, []);
+  }, [filters]);
 
-  // Pagos aplicados (recibos) agrupados por factura
-  const receiptsByInvoice = useMemo(() => {
-    const map = {};
-    receipts.forEach((r) => {
-      const invId = r.invoice_id ?? r.invoiceId ?? r.invoiceid ?? r.factura_id;
-      if (!invId) return;
-      const amt = Number(r.net_amount ?? r.amount ?? r.total ?? r.monto ?? 0);
-      if (!Number.isFinite(amt)) return;
-      map[invId] = (map[invId] || 0) + amt;
-    });
-    return map;
-  }, [receipts]);
-
-  // ✅ Helper para detectar moneda real (en tu DB tenés currency='PYG' normalmente)
-  const normalizeCurrency = (row) => {
-    const raw = String(
-      row?.currency_code ||
-        row?.currency_resolved ||
-        row?.moneda ||
-        row?.currency ||
-        ''
-    ).toUpperCase();
-    if (raw) return raw;
-    const ex = Number(
-      row?.exchange_rate ||
-        row?.exchange_rate_resolved ||
-        row?.exchangeRate ||
-        0
-    );
-    if (Number.isFinite(ex) && ex > 1.5) return 'PYG';
-    return 'USD';
-  };
-
-  const getClientLabel = (row) => {
-    const name =
-      row?.client_name ||
-      row?.client ||
-      row?.organization_name ||
-      row?.organization ||
-      '';
-    if (String(name || '').trim()) return name;
-    // fallback para no quedar todo "Sin cliente"
-    const orgId = row?.organization_id ?? row?.org_id ?? row?.organizationId ?? null;
-    return orgId ? `Cliente #${orgId}` : 'Sin cliente';
-  };
-
-  const filtered = useMemo(() => {
-    const cliente = (filters.cliente || '').toLowerCase();
-    const monedaFiltro = (filters.moneda || 'todas').toLowerCase();
-    const q = (filters.search || '').toLowerCase();
-
-    return rows
-      .map((row) => {
-        const currency = normalizeCurrency(row);
-
-        const subtotal = Number(row?.subtotal ?? row?.base_amount ?? 0);
-        const tax = Number(row?.tax_amount ?? 0);
-
-        // ✅ prioridad: total_amount (backend) → total (alias) → subtotal+tax
-        const totalRaw = Number(row?.total_amount ?? row?.total ?? 0);
-        const total = totalRaw > 0 ? totalRaw : Math.max(0, subtotal + tax);
-
-        const statusRaw = (row?.status || "").toLowerCase();
-        const isCanceled = statusRaw === "anulada";
-
-        // pagos
-        const paidBase = Number(row?.paid || row?.payments_total || row?.paid_amount || 0);
-        const paidReceipts = receiptsByInvoice[row?.id] || 0;
-        const paid = paidBase + paidReceipts;
-
-        const credited = Number(row?.credited_total || 0);
-        const netTotalDb = Number(row?.net_total_amount ?? 0);
-        const netTotal = netTotalDb > 0 ? netTotalDb : Math.max(0, total - credited);
-
-        // ✅ si backend ya tiene balance/net_balance, úsalo como guía también
-        const balanceDb = Number(row?.net_balance ?? row?.balance ?? 0);
-
-        let pending = Math.max(0, netTotal - paid);
-        if (pending <= 0 && total > 0 && paid < total) {
-          pending = Math.max(0, total - paid - credited);
-        }
-
-        // Si DB trae un net_balance > 0, preferirlo cuando el cálculo de UI quede 0 por discrepancias
-        if (pending <= 0.0001 && balanceDb > 0.0001) {
-          pending = balanceDb;
-        }
-
-        const credit = paidReceipts; // para mostrar en columna Haber
-        const displayStatus = isCanceled
-          ? "anulada por nc"
-          : statusRaw || row?.status || "";
-
-        if (isCanceled) {
-          return {
-            ...row,
-            currency,
-            paid,
-            credited,
-            total,
-            netTotal,
-            pending: 0,
-            credit: 0,
-            display_status: displayStatus,
-            is_canceled: true,
-          };
-        }
-
-        return { ...row, currency, paid, credited, total, netTotal, pending, credit, display_status: displayStatus, is_canceled: false };
-      })
-      .filter((row) => {
-        // ✅ ANTES: filtraba solo USD (te dejaba todo vacío en PYG)
-        // AHORA: permite filtrar por moneda si querés, o ver todas
-        if (monedaFiltro !== 'todas' && String(row.currency).toLowerCase() !== monedaFiltro) {
-          return false;
-        }
-
-        const name = getClientLabel(row);
-        const matchCliente = name.toLowerCase().includes(cliente);
-        const haystack = [
-          name,
-          row?.reference,
-          row?.deal_reference,
-          row?.operation_reference,
-          row?.deal_ref,
-          row?.operation_ref,
-          row?.number,
-          row?.invoice_number,
-          row?.status,
-          row?.type,
-          row?.kind,
-        ]
-          .filter(Boolean)
-          .map((v) => String(v).toLowerCase())
-          .join(' ');
-        const matchSearch = q ? haystack.includes(q) : true;
-
-        const status = (row?.status || '').toLowerCase();
-        let pass = matchCliente && matchSearch;
-
-        switch (filters.estado) {
-          case 'todos':
-            break;
-          case 'pendiente':
-            pass = pass && row.pending > 0.0001;
-            break;
-          case 'pagado':
-            pass = pass && row.pending <= 0.0001;
-            break;
-          case 'parcial':
-            pass = pass && row.pending > 0.0001 && row.paid > 0;
-            break;
-          case 'vencido':
-            pass = pass && status === 'vencido';
-            break;
-          default:
-            pass = pass && status === filters.estado.toLowerCase();
-        }
-        return pass;
-      });
-  }, [rows, filters, receiptsByInvoice]);
-
-  const ledger = filtered.map((row) => {
-    const debit = row?.is_canceled
-      ? 0
-      : Number(row?.pending || row?.netTotal || row?.total || row?.total_amount || 0);
-    const credit = row?.is_canceled ? 0 : Number(row?.credit || 0);
-    const balance = Math.max(0, debit - credit);
-
-    return {
-      ...row,
-      client_label: getClientLabel(row), // ✅ para usar consistente en UI
-      debit,
-      credit,
-      balance,
-      running: balance,
-    };
-  });
-
-  const clientTotals = useMemo(() => {
-    return ledger.reduce((acc, row) => {
-      const key = row?.client_label || 'Sin cliente';
-      const curr = (row.currency || 'USD').toUpperCase();
-      if (!acc[key]) acc[key] = {};
-      if (!row.is_canceled) {
-        acc[key][curr] = (acc[key][curr] || 0) + row.debit - row.credit;
-      }
-      return acc;
-    }, {});
-  }, [ledger]);
-
-  const summary = ledger.reduce(
-    (acc, r) => {
-      const curr = (r.currency || 'USD').toUpperCase();
-      if (!acc.saldo[curr]) acc.saldo[curr] = 0;
-      if (!acc.vencido[curr]) acc.vencido[curr] = 0;
-      if (!r.is_canceled) {
-        acc.saldo[curr] += r.balance;
-      }
-      if ((r.status || '').toLowerCase() === 'vencido' && !r.is_canceled) {
-        acc.vencido[curr] += r.balance > 0 ? r.balance : 0;
-      }
-      return acc;
-    },
-    { saldo: {}, vencido: {} }
+  const selectedClient = useMemo(
+    () => data.clients.find((client) => client.customer_key === selectedClientKey) || null,
+    [data.clients, selectedClientKey]
   );
 
-  const clientInvoices = useMemo(() => {
-    if (!selectedClient) return [];
-    return ledger.filter((row) => (row?.client_label || 'Sin cliente') === selectedClient);
-  }, [ledger, selectedClient]);
+  const selectedClientDocuments = useMemo(() => {
+    if (!selectedClientKey) return [];
+    return data.documents.filter((row) => row.customer_key === selectedClientKey);
+  }, [data.documents, selectedClientKey]);
 
-  const getInvoiceReference = (row) =>
-    row?.reference ||
-    row?.deal_reference ||
-    row?.operation_reference ||
-    row?.deal_ref ||
-    row?.operation_ref ||
-    '';
+  const selectedClientMovements = useMemo(() => {
+    if (!selectedClientKey) return [];
+    return data.movements.filter((row) => row.customer_key === selectedClientKey);
+  }, [data.movements, selectedClientKey]);
 
-  const getInvoiceDescription = (row) =>
-    row?.first_item_desc ||
-    row?.description ||
-    '';
+  const selectedClientAging = useMemo(() => {
+    const buckets = {
+      current: {},
+      d30: {},
+      d60: {},
+      d90: {},
+      over90: {},
+    };
+    for (const row of selectedClientDocuments) {
+      if (Number(row.balance || 0) <= 0.0001 || row.normalized_status === 'anulado') continue;
+      const days = Number(row.days_overdue || 0);
+      const key = days <= 0 ? 'current' : days <= 30 ? 'd30' : days <= 60 ? 'd60' : days <= 90 ? 'd90' : 'over90';
+      const currency = row.currency_code || 'USD';
+      buckets[key][currency] = Number(((buckets[key][currency] || 0) + Number(row.balance || 0)).toFixed(2));
+    }
+    return buckets;
+  }, [selectedClientDocuments]);
 
-  const getInvoiceDate = (row) => row?.issue_date?.slice(0, 10) || row?.created_at?.slice(0, 10) || '';
+  const selectedClientContact = useMemo(() => {
+    const doc = selectedClientDocuments.find((row) => row.organization_email || row.customer_email || row.organization_phone) || {};
+    return {
+      email: doc.customer_email || doc.organization_email || '',
+      phone: doc.organization_phone || '',
+    };
+  }, [selectedClientDocuments]);
 
-  const getDaysElapsed = (dateStr) => {
-    if (!dateStr) return '';
-    const base = new Date(dateStr);
-    if (Number.isNaN(base.getTime())) return '';
-    const diff = Date.now() - base.getTime();
-    return Math.max(0, Math.floor(diff / 86400000));
-  };
+  const defaultClientCurrency = useMemo(() => {
+    const fromBalance = currencyList(selectedClient?.balance_by_currency || {})[0]?.[0];
+    const fromDoc = selectedClientDocuments.find((row) => row.currency_code)?.currency_code;
+    return String(fromBalance || fromDoc || 'USD').toUpperCase();
+  }, [selectedClient, selectedClientDocuments]);
 
-  const formatExportAmount = (amount, currency) => {
-    const curr = String(currency || '').toUpperCase();
-    const isPyg = curr === 'PYG' || curr === 'GS';
-    return new Intl.NumberFormat('es-PY', {
-      minimumFractionDigits: isPyg ? 0 : 2,
-      maximumFractionDigits: isPyg ? 0 : 2,
-    }).format(Number(amount || 0));
-  };
+  useEffect(() => {
+    setPromiseForm((prev) => ({ ...prev, currency_code: defaultClientCurrency }));
+  }, [defaultClientCurrency]);
 
-  const buildExportRows = (list) =>
-    list
-      .filter((r) => !r.is_canceled && Number(r.pending || 0) > 0.0001)
-      .map((r) => {
-        const dateStr = getInvoiceDate(r);
-        const moneda = (r?.currency || '').toUpperCase() || normalizeCurrency(r);
-        const monto = Number(r?.pending || r?.netTotal || r?.total || r?.total_amount || 0);
-        return {
-          factura: r?.number || r?.invoice_number || r?.id || '',
-          fecha: dateStr,
-          referencia: getInvoiceReference(r),
-          descripcion: getInvoiceDescription(r),
-          monto,
-          monto_fmt: formatExportAmount(monto, moneda),
-          moneda,
-          dias: getDaysElapsed(dateStr),
-        };
-      });
+  useEffect(() => {
+    if (!selectedClientKey || !selectedClient) {
+      setCollectionData({ promises: [], events: [] });
+      return;
+    }
+    loadCollections(selectedClient);
+  }, [selectedClientKey, selectedClient?.organization_id]);
 
-  const exportCsv = (rowsToExport, filename) => {
-    const headers = ['Factura', 'Fecha', 'Referencia', 'Descripcion', 'Monto', 'Moneda', 'Dias transcurridos'];
-    const sep = ';';
-    const lines = [headers.join(sep)];
-    rowsToExport.forEach((r) => {
-      const line = [
-        String(r.factura || '').replace(/"/g, '""'),
-        String(r.fecha || '').replace(/"/g, '""'),
-        String(r.referencia || '').replace(/"/g, '""'),
-        String(r.descripcion || '').replace(/"/g, '""'),
-        String(r.monto_fmt ?? r.monto ?? '').replace(/"/g, '""'),
-        String(r.moneda ?? '').replace(/"/g, '""'),
-        String(r.dias ?? '').replace(/"/g, '""'),
-      ]
-        .map((v) => `"${v}"`)
-        .join(sep);
-      lines.push(line);
+  const visibleDocuments = useMemo(() => {
+    if (!selectedClientKey) return data.documents;
+    return data.documents.filter((row) => row.customer_key === selectedClientKey);
+  }, [data.documents, selectedClientKey]);
+
+  const visibleMovements = useMemo(() => {
+    if (!selectedClientKey) return data.movements;
+    return data.movements.filter((row) => row.customer_key === selectedClientKey);
+  }, [data.movements, selectedClientKey]);
+
+  const tabCounts = useMemo(() => {
+    const counts = {
+      por_cobrar: 0,
+      vencido: 0,
+      vence_hoy: 0,
+      due_7d: 0,
+      parcial: 0,
+      pagado: 0,
+      todos: data.documents.length,
+    };
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const max = new Date(today);
+    max.setDate(max.getDate() + 7);
+    for (const row of data.documents) {
+      if (Number(row.balance || 0) > 0.0001 && row.normalized_status !== 'anulado') counts.por_cobrar += 1;
+      if (counts[row.normalized_status] != null) counts[row.normalized_status] += 1;
+      const due = row.due_date ? new Date(row.due_date) : null;
+      if (due && !Number.isNaN(due.getTime())) {
+        const dueOnly = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+        if (Number(row.balance || 0) > 0.0001 && dueOnly >= today && dueOnly <= max) counts.due_7d += 1;
+      }
+    }
+    return counts;
+  }, [data.documents]);
+
+  function setFilter(name, value) {
+    setFilters((prev) => ({ ...prev, [name]: value }));
+    setSelectedClientKey('');
+    setClientDrawerOpen(false);
+  }
+
+  function clearFilters() {
+    setFilters({
+      client_q: '',
+      search: '',
+      status: 'por_cobrar',
+      currency_code: 'todas',
+      from_date: '',
+      to_date: '',
+      due_from: '',
+      due_to: '',
     });
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
+    setSelectedClientKey('');
+    setClientDrawerOpen(false);
+  }
 
-  const buildHtmlTable = (rowsToExport, title) => {
-    const header = `
+  function openClientDrawer(client) {
+    setSelectedClientKey(client.customer_key);
+    setClientDrawerOpen(true);
+  }
+
+  function selectClient(client) {
+    setSelectedClientKey(client.customer_key);
+  }
+
+  function handleClientDoubleClick(client) {
+    openClientDrawer(client);
+  }
+
+  function closeClientDrawer() {
+    setClientDrawerOpen(false);
+  }
+
+  async function loadCollections(client = selectedClient) {
+    if (!client?.customer_key) return;
+    setCollectionsLoading(true);
+    try {
+      const { data: response } = await api.get('/customer-collections', {
+        params: {
+          customer_key: client.customer_key,
+          organization_id: client.organization_id || undefined,
+        },
+      });
+      setCollectionData({
+        promises: Array.isArray(response?.promises) ? response.promises : [],
+        events: Array.isArray(response?.events) ? response.events : [],
+      });
+    } catch (err) {
+      console.error('customer collections load error', err);
+      setCollectionData({ promises: [], events: [] });
+    } finally {
+      setCollectionsLoading(false);
+    }
+  }
+
+  async function savePromise() {
+    if (!selectedClient) return;
+    const amount = Number(promiseForm.promised_amount || 0);
+    if (!promiseForm.promise_date) return alert('Carga la fecha prometida.');
+    if (!amount || amount <= 0) return alert('Carga un monto prometido valido.');
+    try {
+      await api.post('/customer-collections/promises', {
+        organization_id: selectedClient.organization_id || null,
+        customer_key: selectedClient.customer_key,
+        invoice_id: promiseForm.invoice_id || null,
+        promise_date: promiseForm.promise_date,
+        promised_amount: amount,
+        currency_code: promiseForm.currency_code || defaultClientCurrency,
+        notes: promiseForm.notes || null,
+      });
+      setPromiseForm({
+        promise_date: '',
+        promised_amount: '',
+        currency_code: defaultClientCurrency,
+        invoice_id: '',
+        notes: '',
+      });
+      await loadCollections(selectedClient);
+    } catch (err) {
+      console.error('customer promise save error', err);
+      alert(err?.response?.data?.error || 'No se pudo registrar la promesa.');
+    }
+  }
+
+  async function updatePromiseStatus(promise, status) {
+    try {
+      await api.patch(`/customer-collections/promises/${promise.id}`, { status });
+      await loadCollections(selectedClient);
+    } catch (err) {
+      console.error('customer promise update error', err);
+      alert(err?.response?.data?.error || 'No se pudo actualizar la promesa.');
+    }
+  }
+
+  async function saveCollectionEvent() {
+    if (!selectedClient) return;
+    if (!eventForm.subject.trim() && !eventForm.notes.trim()) return alert('Carga asunto o detalle.');
+    try {
+      await api.post('/customer-collections/events', {
+        organization_id: selectedClient.organization_id || null,
+        customer_key: selectedClient.customer_key,
+        invoice_id: eventForm.invoice_id || null,
+        event_type: eventForm.event_type || 'nota',
+        event_date: eventForm.event_date ? eventForm.event_date.replace('T', ' ') : null,
+        subject: eventForm.subject || null,
+        notes: eventForm.notes || null,
+        next_action_date: eventForm.next_action_date || null,
+      });
+      setEventForm({
+        event_type: 'nota',
+        event_date: '',
+        invoice_id: '',
+        subject: '',
+        notes: '',
+        next_action_date: '',
+      });
+      await loadCollections(selectedClient);
+    } catch (err) {
+      console.error('customer event save error', err);
+      alert(err?.response?.data?.error || 'No se pudo registrar el seguimiento.');
+    }
+  }
+
+  function exportDocumentsCsv(rows, filename) {
+    const lines = [
+      ['Cliente', 'RUC', 'Factura', 'Operacion', 'Emision', 'Vencimiento', 'Moneda', 'Total', 'NC', 'Cobrado', 'Saldo', 'Estado', 'Dias mora']
+        .map(csvEscape)
+        .join(';'),
+      ...rows.map((row) =>
+        [
+          row.customer_name,
+          row.customer_ruc,
+          row.invoice_number,
+          row.operation_reference,
+          fmtDate(row.issue_date),
+          fmtDate(row.due_date),
+          row.currency_code,
+          row.total_amount,
+          row.credited_total,
+          row.paid_amount,
+          row.balance,
+          row.status_label,
+          row.days_overdue || 0,
+        ].map(csvEscape).join(';')
+      ),
+    ];
+    downloadCsv(lines, filename);
+  }
+
+  function buildHtmlTable(rows, title) {
+    const body = rows.map((row) => `
+      <tr>
+        <td>${row.invoice_number || ''}</td>
+        <td>${fmtDate(row.issue_date)}</td>
+        <td>${fmtDate(row.due_date)}</td>
+        <td>${row.operation_reference || ''}</td>
+        <td>${row.currency_code || ''}</td>
+        <td align="right">${fmtMoney(row.total_amount, row.currency_code)}</td>
+        <td align="right">${fmtMoney(row.paid_amount, row.currency_code)}</td>
+        <td align="right">${fmtMoney(row.credited_total, row.currency_code)}</td>
+        <td align="right">${fmtMoney(row.balance, row.currency_code)}</td>
+        <td>${row.status_label || ''}</td>
+      </tr>
+    `).join('');
+    return `
+      <div style="font-family:Arial,sans-serif;font-size:14px;font-weight:bold;margin-bottom:8px;">${title}</div>
       <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:12px;">
         <thead style="background:#f1f5f9;">
           <tr>
             <th align="left">Factura</th>
-            <th align="left">Fecha</th>
-            <th align="left">Referencia</th>
-            <th align="left">Descripcion</th>
-            <th align="right">Monto</th>
+            <th align="left">Emision</th>
+            <th align="left">Vencimiento</th>
+            <th align="left">Operacion</th>
             <th align="left">Moneda</th>
-            <th align="right">Dias transcurridos</th>
+            <th align="right">Total</th>
+            <th align="right">Cobrado</th>
+            <th align="right">NC</th>
+            <th align="right">Saldo</th>
+            <th align="left">Estado</th>
           </tr>
         </thead>
-        <tbody>
-    `;
-    const body = rowsToExport
-      .map(
-        (r) => `
-          <tr>
-            <td>${r.factura || ''}</td>
-            <td>${r.fecha || ''}</td>
-            <td>${r.referencia || ''}</td>
-            <td>${r.descripcion || ''}</td>
-            <td align="right">${r.monto_fmt ?? r.monto ?? ''}</td>
-            <td>${r.moneda ?? ''}</td>
-            <td align="right">${r.dias ?? ''}</td>
-          </tr>
-        `
-      )
-      .join('');
-    const footer = `
-        </tbody>
+        <tbody>${body}</tbody>
       </table>
     `;
-    const titleHtml = title ? `<div style="font-family:Arial,sans-serif;font-size:14px;font-weight:bold;margin-bottom:6px;">${title}</div>` : '';
-    return `${titleHtml}${header}${body}${footer}`;
-  };
+  }
 
-  const openHtmlPreview = (rowsToExport, title) => {
-    const html = buildHtmlTable(rowsToExport, title);
-    setHtmlTitle(title || 'Tabla de estado de cuenta');
-    setHtmlPreview(html);
-  };
+  function openHtmlPreview(rows, title) {
+    setHtmlTitle(title);
+    setHtmlPreview(buildHtmlTable(rows, title));
+  }
 
-  const copyHtml = async () => {
+  async function exportPdf() {
+    try {
+      const params = {
+        client_q: selectedClient?.organization_id ? undefined : (selectedClient?.customer_name || filters.client_q || undefined),
+        organization_id: selectedClient?.organization_id || undefined,
+        search: filters.search || undefined,
+        status: filters.status || 'por_cobrar',
+        currency_code: filters.currency_code || 'todas',
+        from_date: filters.from_date || undefined,
+        to_date: filters.to_date || undefined,
+        due_from: filters.due_from || undefined,
+        due_to: filters.due_to || undefined,
+      };
+      const response = await api.get('/invoices/customer-statement/pdf', {
+        params,
+        responseType: 'blob',
+      });
+      const url = URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (err) {
+      console.error('customer statement pdf error', err);
+      alert(err?.response?.data?.error || 'No se pudo generar el PDF.');
+    }
+  }
+
+  async function copyHtml() {
     if (!htmlPreview) return;
     try {
       const plain = htmlRef.current?.innerText || '';
       if (window.ClipboardItem) {
-        const htmlBlob = new Blob([htmlPreview], { type: 'text/html' });
-        const textBlob = new Blob([plain], { type: 'text/plain' });
         await navigator.clipboard.write([
           new ClipboardItem({
-            'text/html': htmlBlob,
-            'text/plain': textBlob,
+            'text/html': new Blob([htmlPreview], { type: 'text/html' }),
+            'text/plain': new Blob([plain], { type: 'text/plain' }),
           }),
         ]);
-        alert('Tabla copiada.');
-        return;
+      } else {
+        await navigator.clipboard.writeText(plain || htmlPreview);
       }
-      await navigator.clipboard.writeText(plain || htmlPreview);
       alert('Tabla copiada.');
-    } catch (_) {
+    } catch {
       alert('No se pudo copiar. Selecciona y copia manualmente.');
     }
-  };
-
-  // ✅ moneda de resumen: si hay solo una moneda en los filtros, usar esa. Si hay varias, mostramos USD como fallback.
-  const summaryCurrencies = useMemo(() => {
-    const mon = (filters.moneda || 'todas').toUpperCase();
-    if (mon !== 'TODAS') return [mon];
-    const uniq = Array.from(new Set(ledger.map((r) => r.currency).filter(Boolean)));
-    return uniq.length ? uniq : ['USD'];
-  }, [filters.moneda, ledger]);
+  }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold">Estado de cuenta de CLIENTES</h1>
+          <h1 className="text-xl font-semibold">Estado de cuenta de clientes</h1>
           <p className="text-sm text-slate-500">
-            Consulta rápida de saldos, facturas, notas de crédito y pagos aplicados.
+            Libro de facturas, recibos, notas de credito y saldos por cliente.
           </p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex flex-wrap gap-2">
           <button
-            className="px-3 py-2 text-sm border rounded"
-            onClick={() => exportCsv(buildExportRows(ledger), 'estado-cuenta-general.csv')}
-            disabled={ledger.length === 0}
+            type="button"
+            className="rounded border px-3 py-2 text-sm hover:bg-slate-50"
+            disabled={!visibleDocuments.length}
+            onClick={exportPdf}
           >
-            Exportar Excel (General)
+            Exportar PDF
           </button>
           <button
-            className="px-3 py-2 text-sm border rounded"
-            onClick={() => openHtmlPreview(buildExportRows(ledger), 'Estado de cuenta (General)')}
-            disabled={ledger.length === 0}
+            type="button"
+            className="rounded border px-3 py-2 text-sm hover:bg-slate-50"
+            disabled={!visibleDocuments.length}
+            onClick={() => exportDocumentsCsv(visibleDocuments, selectedClient ? `estado-cuenta-${selectedClient.customer_name}.csv` : 'estado-cuenta-clientes.csv')}
           >
-            Generar tabla HTML (General)
-          </button>
-        </div>
-        <div className="flex gap-3 text-right">
-          <div>
-            <div className="text-xs text-slate-500">Saldo</div>
-            <div className="text-lg font-semibold space-y-0.5">
-              {summaryCurrencies.map((c) => (
-                <div key={c}>{formatMoney(summary.saldo[c] || 0, c)}</div>
-              ))}
-            </div>
-          </div>
-          <div>
-            <div className="text-xs text-slate-500">Total vencido</div>
-            <div className="text-lg font-semibold text-red-600 space-y-0.5">
-              {summaryCurrencies.map((c) => (
-                <div key={c}>{formatMoney(summary.vencido[c] || 0, c)}</div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-6 gap-3 bg-white p-4 rounded-lg border">
-        <div>
-          <label className="text-xs text-slate-500">Cliente</label>
-          <input
-            className="mt-1 w-full border rounded px-2 py-1 text-sm"
-            placeholder="Nombre / RUC"
-            value={filters.cliente}
-            onChange={(e) => setFilters((f) => ({ ...f, cliente: e.target.value }))}
-          />
-        </div>
-
-        <div>
-          <label className="text-xs text-slate-500">Buscar</label>
-          <input
-            className="mt-1 w-full border rounded px-2 py-1 text-sm"
-            placeholder="Operación, factura, referencia, estado..."
-            value={filters.search}
-            onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
-          />
-        </div>
-
-        <div>
-          <label className="text-xs text-slate-500">Estado</label>
-          <select
-            className="mt-1 w-full border rounded px-2 py-1 text-sm"
-            value={filters.estado}
-            onChange={(e) => setFilters((f) => ({ ...f, estado: e.target.value }))}
-          >
-            <option value="todos">Todos</option>
-            <option value="pendiente">Pendiente</option>
-            <option value="parcial">Parcial</option>
-            <option value="pagado">Pagado</option>
-            <option value="vencido">Vencido</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="text-xs text-slate-500">Moneda</label>
-          <select
-            className="mt-1 w-full border rounded px-2 py-1 text-sm"
-            value={filters.moneda}
-            onChange={(e) => setFilters((f) => ({ ...f, moneda: e.target.value }))}
-          >
-            <option value="todas">Todas</option>
-            <option value="PYG">PYG</option>
-            <option value="USD">USD</option>
-          </select>
-        </div>
-
-        <div className="flex items-end gap-2 md:col-span-2">
-          <button
-            className="px-3 py-2 text-sm border rounded"
-            onClick={() =>
-              setFilters({
-                cliente: '',
-                estado: 'pendiente',
-                moneda: 'todas',
-                search: '',
-              })
-            }
-          >
-            Limpiar filtros
+            Exportar CSV
           </button>
           <button
-            className="px-3 py-2 text-sm bg-slate-900 text-white rounded"
-            onClick={() => setFilters({ ...filters })}
+            type="button"
+            className="rounded border px-3 py-2 text-sm hover:bg-slate-50"
+            disabled={!visibleDocuments.length}
+            onClick={() => openHtmlPreview(visibleDocuments, selectedClient ? `Estado de cuenta - ${selectedClient.customer_name}` : 'Estado de cuenta clientes')}
           >
-            Aplicar
+            Tabla para correo
           </button>
         </div>
       </div>
 
-      <div className="bg-white border rounded-lg p-3">
-        <div className="text-sm font-semibold mb-2">Saldos por cliente</div>
-        <div className="divide-y">
-          {Object.keys(clientTotals).length === 0 && (
-            <div className="py-2 text-slate-500 text-sm">Sin saldos pendientes.</div>
+      <div className="grid gap-3 md:grid-cols-4">
+        <div className="rounded-lg border bg-white p-3">
+          <div className="text-xs text-slate-500">Saldo por cobrar</div>
+          <div className="mt-2 text-lg font-semibold">
+            <CurrencyStack values={data.totals.balance_by_currency} />
+          </div>
+        </div>
+        <div className="rounded-lg border bg-white p-3">
+          <div className="text-xs text-slate-500">Vencido</div>
+          <div className="mt-2 text-lg font-semibold">
+            <CurrencyStack values={data.totals.overdue_by_currency} tone="red" />
+          </div>
+        </div>
+        <div className="rounded-lg border bg-white p-3">
+          <div className="text-xs text-slate-500">Cobrado</div>
+          <div className="mt-2 text-lg font-semibold">
+            <CurrencyStack values={data.totals.paid_by_currency} tone="emerald" />
+          </div>
+        </div>
+        <div className="rounded-lg border bg-white p-3">
+          <div className="text-xs text-slate-500">Documentos abiertos</div>
+          <div className="mt-2 text-lg font-semibold">{data.totals.open_documents || 0}</div>
+          <div className="text-xs text-slate-500">
+            {data.totals.overdue_documents || 0} vencidos · {data.totals.partial_documents || 0} parciales
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-lg border bg-white p-3">
+        <div className="mb-3 flex flex-wrap gap-2">
+          {STATUS_TABS.map((tab) => (
+            <button
+              key={tab.value}
+              type="button"
+              className={`rounded-full border px-3 py-1.5 text-sm ${
+                filters.status === tab.value ? 'bg-black text-white' : 'hover:bg-slate-50'
+              }`}
+              onClick={() => setFilter('status', tab.value)}
+            >
+              {tab.label}
+              <span className="ml-1 text-xs opacity-70">{tabCounts[tab.value] || 0}</span>
+            </button>
+          ))}
+        </div>
+        <div className="grid gap-3 md:grid-cols-6">
+          <div>
+            <label className="text-xs text-slate-500">Cliente</label>
+            <input
+              className="mt-1 w-full rounded border px-2 py-1.5 text-sm"
+              placeholder="Nombre / RUC"
+              value={filters.client_q}
+              onChange={(event) => setFilter('client_q', event.target.value)}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500">Buscar</label>
+            <input
+              className="mt-1 w-full rounded border px-2 py-1.5 text-sm"
+              placeholder="Factura, operacion..."
+              value={filters.search}
+              onChange={(event) => setFilter('search', event.target.value)}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500">Moneda</label>
+            <select
+              className="mt-1 w-full rounded border px-2 py-1.5 text-sm"
+              value={filters.currency_code}
+              onChange={(event) => setFilter('currency_code', event.target.value)}
+            >
+              <option value="todas">Todas</option>
+              <option value="PYG">PYG</option>
+              <option value="USD">USD</option>
+              <option value="BRL">BRL</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-slate-500">Emitida desde</label>
+            <input className="mt-1 w-full rounded border px-2 py-1.5 text-sm" type="date" value={filters.from_date} onChange={(event) => setFilter('from_date', event.target.value)} />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500">Emitida hasta</label>
+            <input className="mt-1 w-full rounded border px-2 py-1.5 text-sm" type="date" value={filters.to_date} onChange={(event) => setFilter('to_date', event.target.value)} />
+          </div>
+          <div className="flex items-end">
+            <button type="button" className="w-full rounded border px-3 py-2 text-sm hover:bg-slate-50" onClick={clearFilters}>
+              Limpiar filtros
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {error && <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+
+      <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+        <div className="rounded-lg border bg-white">
+          <div className="border-b px-3 py-2">
+            <div className="text-sm font-semibold">Saldos por cliente</div>
+            <div className="text-xs text-slate-500">{data.clients.length} clientes</div>
+          </div>
+          <div className="max-h-[560px] overflow-auto divide-y">
+            {loading ? (
+              <div className="p-3 text-sm text-slate-500">Cargando...</div>
+            ) : data.clients.length === 0 ? (
+              <div className="p-3 text-sm text-slate-500">Sin clientes para los filtros actuales.</div>
+            ) : (
+              data.clients.map((client) => (
+                <button
+                  key={client.customer_key}
+                  type="button"
+                  className={`w-full px-3 py-2 text-left hover:bg-slate-50 ${
+                    selectedClientKey === client.customer_key ? 'bg-slate-100' : ''
+                  }`}
+                  onClick={() => selectClient(client)}
+                  onDoubleClick={() => handleClientDoubleClick(client)}
+                  title="Doble click para abrir detalle"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium">{client.customer_name || 'Sin cliente'}</div>
+                      <div className="text-xs text-slate-500">{client.customer_ruc || '-'}</div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {client.open_documents || 0} abiertos · {client.overdue_documents || 0} vencidos
+                      </div>
+                    </div>
+                    <div className="text-right text-sm font-semibold">
+                      <CurrencyStack values={client.balance_by_currency} />
+                    </div>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-4 min-w-0">
+          {selectedClient && (
+            <div className="rounded-lg border bg-white p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold">{selectedClient.customer_name}</div>
+                  <div className="text-xs text-slate-500">RUC: {selectedClient.customer_ruc || '-'}</div>
+                </div>
+                <div className="grid gap-3 text-sm sm:grid-cols-3">
+                  <div>
+                    <div className="text-xs text-slate-500">Saldo</div>
+                    <div className="font-semibold"><CurrencyStack values={selectedClient.balance_by_currency} /></div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Vencido</div>
+                    <div className="font-semibold"><CurrencyStack values={selectedClient.overdue_by_currency} tone="red" /></div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Ultimo pago</div>
+                    <div className="font-semibold">{fmtDate(selectedClient.last_payment_date)}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
           )}
-          {Object.entries(clientTotals).map(([client, val]) => {
-            const isSel = selectedClient === client;
-            const currencies = Object.keys(val || {});
-            return (
-              <button
-                key={client}
-                className={`flex w-full justify-between py-1 text-sm text-left px-2 rounded ${
-                  isSel ? 'bg-slate-100 font-semibold' : 'hover:bg-slate-50'
-                }`}
-                onClick={() => setSelectedClient((prev) => (prev === client ? '' : client))}
-              >
-                <span>{client}</span>
-                <span className="font-semibold text-right">
-                  {currencies.length === 0 && formatMoney(0, 'USD')}
-                  {currencies.map((c) => (
-                    <div key={c}>{formatMoney(val[c] || 0, c)}</div>
-                  ))}
-                </span>
-              </button>
-            );
-          })}
+
+          <div className="rounded-lg border bg-white">
+            <div className="flex items-center justify-between border-b px-3 py-2">
+              <div>
+                <div className="text-sm font-semibold">Documentos</div>
+                <div className="text-xs text-slate-500">{visibleDocuments.length} facturas</div>
+              </div>
+            </div>
+            <div className="overflow-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-xs text-slate-600">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Factura</th>
+                    <th className="px-3 py-2 text-left">Cliente</th>
+                    <th className="px-3 py-2 text-left">Operacion</th>
+                    <th className="px-3 py-2 text-left">Emision</th>
+                    <th className="px-3 py-2 text-left">Vence</th>
+                    <th className="px-3 py-2 text-right">Total</th>
+                    <th className="px-3 py-2 text-right">Cobrado</th>
+                    <th className="px-3 py-2 text-right">NC</th>
+                    <th className="px-3 py-2 text-right">Saldo</th>
+                    <th className="px-3 py-2 text-left">Estado</th>
+                    <th className="px-3 py-2 text-left">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr><td colSpan={11} className="px-3 py-4 text-center text-slate-500">Cargando...</td></tr>
+                  ) : visibleDocuments.length === 0 ? (
+                    <tr><td colSpan={11} className="px-3 py-4 text-center text-slate-500">Sin documentos.</td></tr>
+                  ) : (
+                    visibleDocuments.map((row) => (
+                      <tr key={row.id} className="border-t">
+                        <td className="px-3 py-2">
+                          <a className="font-medium text-blue-600 hover:underline" href={`/invoices/${row.id}`} target="_blank" rel="noreferrer">
+                            {row.invoice_number || row.id}
+                          </a>
+                        </td>
+                        <td className="px-3 py-2">
+                          <div>{row.customer_name || '-'}</div>
+                          <div className="text-xs text-slate-500">{row.customer_ruc || '-'}</div>
+                        </td>
+                        <td className="px-3 py-2">
+                          {row.deal_id ? (
+                            <a className="text-blue-600 hover:underline" href={`/operations/${row.deal_id}`} target="_blank" rel="noreferrer">
+                              {row.operation_reference || row.deal_id}
+                            </a>
+                          ) : row.operation_reference || '-'}
+                        </td>
+                        <td className="px-3 py-2">{fmtDate(row.issue_date || row.created_at)}</td>
+                        <td className="px-3 py-2">
+                          <div>{fmtDate(row.due_date)}</div>
+                          {row.days_overdue > 0 && <div className="text-xs text-red-600">{row.days_overdue} dias mora</div>}
+                        </td>
+                        <td className="px-3 py-2 text-right">{fmtMoney(row.total_amount, row.currency_code)}</td>
+                        <td className="px-3 py-2 text-right text-emerald-700">{fmtMoney(row.paid_amount, row.currency_code)}</td>
+                        <td className="px-3 py-2 text-right text-amber-700">{fmtMoney(row.credited_total, row.currency_code)}</td>
+                        <td className="px-3 py-2 text-right font-semibold">{fmtMoney(row.balance, row.currency_code)}</td>
+                        <td className="px-3 py-2"><StatusChip status={row.normalized_status} /></td>
+                        <td className="px-3 py-2">
+                          <div className="flex flex-wrap gap-2 whitespace-nowrap text-xs">
+                            <a className="text-blue-600 hover:underline" href={`/invoices/${row.id}`} target="_blank" rel="noreferrer">Ver</a>
+                            {row.balance > 0.0001 && (
+                              <a className="text-emerald-700 hover:underline" href={`/invoices/${row.id}`} target="_blank" rel="noreferrer">Cobrar</a>
+                            )}
+                            {row.normalized_status !== 'anulado' && (
+                              <a className="text-orange-700 hover:underline" href={`/invoices/${row.id}#credit-note`} target="_blank" rel="noreferrer">NC</a>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="rounded-lg border bg-white">
+            <div className="border-b px-3 py-2">
+              <div className="text-sm font-semibold">Libro de movimientos</div>
+              <div className="text-xs text-slate-500">Debe, haber y saldo corrido por cliente/moneda</div>
+            </div>
+            <div className="overflow-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-xs text-slate-600">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Fecha</th>
+                    <th className="px-3 py-2 text-left">Tipo</th>
+                    <th className="px-3 py-2 text-left">Documento</th>
+                    <th className="px-3 py-2 text-left">Cliente</th>
+                    <th className="px-3 py-2 text-left">Ref.</th>
+                    <th className="px-3 py-2 text-right">Debe</th>
+                    <th className="px-3 py-2 text-right">Haber</th>
+                    <th className="px-3 py-2 text-right">Saldo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleMovements.length === 0 ? (
+                    <tr><td colSpan={8} className="px-3 py-4 text-center text-slate-500">Sin movimientos.</td></tr>
+                  ) : (
+                    visibleMovements.map((row) => (
+                      <tr key={row.id} className="border-t">
+                        <td className="px-3 py-2">{fmtDate(row.date)}</td>
+                        <td className="px-3 py-2">{MOVEMENT_LABELS[row.source_type] || row.source_type}</td>
+                        <td className="px-3 py-2">{row.document_number || '-'}</td>
+                        <td className="px-3 py-2">{row.customer_name || '-'}</td>
+                        <td className="px-3 py-2">{row.reference || '-'}</td>
+                        <td className="px-3 py-2 text-right">{Number(row.debit || 0) ? fmtMoney(row.debit, row.currency_code) : '-'}</td>
+                        <td className="px-3 py-2 text-right">{Number(row.credit || 0) ? fmtMoney(row.credit, row.currency_code) : '-'}</td>
+                        <td className="px-3 py-2 text-right font-semibold">{fmtMoney(row.balance, row.currency_code)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
 
-      {selectedClient && (
-        <div className="bg-white border rounded-lg p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="text-sm font-semibold">
-              Pendientes de: <span className="text-slate-700">{selectedClient}</span>
+      {clientDrawerOpen && selectedClient && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/30">
+          <div className="h-full w-full max-w-2xl overflow-y-auto bg-white shadow-2xl">
+            <div className="sticky top-0 z-10 border-b bg-white px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-base font-semibold">{selectedClient.customer_name}</div>
+                  <div className="text-xs text-slate-500">RUC: {selectedClient.customer_ruc || '-'}</div>
+                </div>
+                <button type="button" className="rounded border px-3 py-1.5 text-sm hover:bg-slate-50" onClick={closeClientDrawer}>
+                  Cerrar
+                </button>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button type="button" className="rounded bg-black px-3 py-1.5 text-sm text-white" onClick={exportPdf}>
+                  PDF
+                </button>
+                <button
+                  type="button"
+                  className="rounded border px-3 py-1.5 text-sm hover:bg-slate-50"
+                  onClick={() => exportDocumentsCsv(selectedClientDocuments, `estado-cuenta-${selectedClient.customer_name}.csv`)}
+                >
+                  CSV
+                </button>
+                <button
+                  type="button"
+                  className="rounded border px-3 py-1.5 text-sm hover:bg-slate-50"
+                  onClick={() => openHtmlPreview(selectedClientDocuments, `Estado de cuenta - ${selectedClient.customer_name}`)}
+                >
+                  Tabla correo
+                </button>
+              </div>
             </div>
-            <div className="text-xs text-slate-500">{clientInvoices.length} documento(s)</div>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              className="px-3 py-2 text-sm border rounded"
-              onClick={() =>
-                exportCsv(buildExportRows(clientInvoices), `estado-cuenta-${selectedClient}.csv`)
-              }
-            >
-              Exportar Excel (Cliente)
-            </button>
-            <button
-              className="px-3 py-2 text-sm border rounded"
-              onClick={() =>
-                openHtmlPreview(
-                  buildExportRows(clientInvoices),
-                  `Estado de cuenta - ${selectedClient}`
-                )
-              }
-            >
-              Generar tabla HTML (Cliente)
-            </button>
-          </div>
 
-          <div className="overflow-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-100 text-slate-600">
-                <tr>
-                  <th className="text-left px-3 py-2">Documento</th>
-                  <th className="text-left px-3 py-2">Referencia</th>
-                  <th className="text-left px-3 py-2">Descripcion</th>
-                  <th className="text-left px-3 py-2">Fecha</th>
-                  <th className="text-right px-3 py-2">Pendiente</th>
-                  <th className="text-right px-3 py-2">Total</th>
-                  <th className="text-left px-3 py-2">Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {clientInvoices.map((inv) => (
-                  <tr key={`${inv.id || inv.number}`} className="border-t">
-                    <td className="px-3 py-2">{inv?.number || inv?.invoice_number || inv?.id || '-'}</td>
-                    <td className="px-3 py-2">
-                      {inv?.reference ||
-                      inv?.deal_reference ||
-                      inv?.operation_reference ||
-                      inv?.deal_ref ||
-                      inv?.operation_ref ? (
-                        <a
-                          className="text-blue-600 hover:underline"
-                          href={
-                            inv?.deal_id || inv?.operation_id
-                              ? `/operations/${inv.deal_id || inv.operation_id}`
-                              : '#'
-                          }
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {inv?.reference ||
-                            inv?.deal_reference ||
-                            inv?.operation_reference ||
-                            inv?.deal_ref ||
-                            inv?.operation_ref}
-                        </a>
-                      ) : (
-                        '-'
+            <div className="space-y-4 p-4">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-lg border p-3">
+                  <div className="text-xs text-slate-500">Saldo</div>
+                  <div className="mt-1 text-sm font-semibold"><CurrencyStack values={selectedClient.balance_by_currency} /></div>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <div className="text-xs text-slate-500">Vencido</div>
+                  <div className="mt-1 text-sm font-semibold"><CurrencyStack values={selectedClient.overdue_by_currency} tone="red" /></div>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <div className="text-xs text-slate-500">Ultimo pago</div>
+                  <div className="mt-1 text-sm font-semibold">{fmtDate(selectedClient.last_payment_date)}</div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border p-3">
+                <div className="mb-2 text-sm font-semibold">Datos de contacto</div>
+                <div className="grid gap-2 text-sm sm:grid-cols-2">
+                  <div>
+                    <div className="text-xs text-slate-500">Email</div>
+                    <div>{selectedClientContact.email || '-'}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Telefono</div>
+                    <div>{selectedClientContact.phone || '-'}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border p-3">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">Promesas de pago</div>
+                    <div className="text-xs text-slate-500">Fechas y montos comprometidos por el cliente</div>
+                  </div>
+                  {collectionsLoading && <div className="text-xs text-slate-500">Cargando...</div>}
+                </div>
+
+                <div className="grid gap-2 md:grid-cols-5">
+                  <input
+                    type="date"
+                    className="rounded border px-2 py-1.5 text-sm"
+                    value={promiseForm.promise_date}
+                    onChange={(event) => setPromiseForm((prev) => ({ ...prev, promise_date: event.target.value }))}
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="rounded border px-2 py-1.5 text-sm"
+                    placeholder="Monto"
+                    value={promiseForm.promised_amount}
+                    onChange={(event) => setPromiseForm((prev) => ({ ...prev, promised_amount: event.target.value }))}
+                  />
+                  <select
+                    className="rounded border px-2 py-1.5 text-sm"
+                    value={promiseForm.currency_code}
+                    onChange={(event) => setPromiseForm((prev) => ({ ...prev, currency_code: event.target.value }))}
+                  >
+                    <option value="USD">USD</option>
+                    <option value="PYG">PYG</option>
+                    <option value="BRL">BRL</option>
+                  </select>
+                  <select
+                    className="rounded border px-2 py-1.5 text-sm"
+                    value={promiseForm.invoice_id}
+                    onChange={(event) => setPromiseForm((prev) => ({ ...prev, invoice_id: event.target.value }))}
+                  >
+                    <option value="">Cliente general</option>
+                    {selectedClientDocuments.filter((row) => Number(row.balance || 0) > 0.0001).map((row) => (
+                      <option key={row.id} value={row.id}>{row.invoice_number || row.id}</option>
+                    ))}
+                  </select>
+                  <button type="button" className="rounded bg-black px-3 py-1.5 text-sm text-white" onClick={savePromise}>
+                    Agregar
+                  </button>
+                  <textarea
+                    className="md:col-span-5 min-h-[64px] rounded border px-2 py-1.5 text-sm"
+                    placeholder="Observacion de la promesa"
+                    value={promiseForm.notes}
+                    onChange={(event) => setPromiseForm((prev) => ({ ...prev, notes: event.target.value }))}
+                  />
+                </div>
+
+                <div className="mt-3 overflow-auto rounded border">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-50 text-xs text-slate-600">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Fecha</th>
+                        <th className="px-3 py-2 text-left">Factura</th>
+                        <th className="px-3 py-2 text-right">Monto</th>
+                        <th className="px-3 py-2 text-left">Estado</th>
+                        <th className="px-3 py-2 text-left">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {collectionData.promises.length === 0 ? (
+                        <tr><td colSpan={5} className="px-3 py-4 text-center text-slate-500">Sin promesas registradas.</td></tr>
+                      ) : collectionData.promises.map((promise) => (
+                        <tr key={promise.id} className="border-t">
+                          <td className="px-3 py-2">
+                            <div>{fmtDate(promise.promise_date)}</div>
+                            {promise.created_by_name && <div className="text-xs text-slate-500">{promise.created_by_name}</div>}
+                          </td>
+                          <td className="px-3 py-2">{promise.invoice_number || 'General'}</td>
+                          <td className="px-3 py-2 text-right font-semibold">{fmtMoney(promise.promised_amount, promise.currency_code)}</td>
+                          <td className="px-3 py-2 capitalize">{promise.status || '-'}</td>
+                          <td className="px-3 py-2">
+                            <div className="flex flex-wrap gap-2 text-xs">
+                              {promise.status === 'pendiente' && (
+                                <>
+                                  <button type="button" className="text-emerald-700 hover:underline" onClick={() => updatePromiseStatus(promise, 'cumplida')}>Cumplida</button>
+                                  <button type="button" className="text-red-700 hover:underline" onClick={() => updatePromiseStatus(promise, 'incumplida')}>Incumplida</button>
+                                  <button type="button" className="text-slate-600 hover:underline" onClick={() => updatePromiseStatus(promise, 'cancelada')}>Cancelar</button>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="rounded-lg border p-3">
+                <div className="mb-3">
+                  <div className="text-sm font-semibold">Seguimiento de cobranza</div>
+                  <div className="text-xs text-slate-500">Registro de llamadas, mensajes, correos y notas</div>
+                </div>
+                <div className="grid gap-2 md:grid-cols-4">
+                  <select
+                    className="rounded border px-2 py-1.5 text-sm"
+                    value={eventForm.event_type}
+                    onChange={(event) => setEventForm((prev) => ({ ...prev, event_type: event.target.value }))}
+                  >
+                    <option value="nota">Nota</option>
+                    <option value="llamada">Llamada</option>
+                    <option value="email">Email</option>
+                    <option value="whatsapp">WhatsApp</option>
+                    <option value="reclamo">Reclamo</option>
+                    <option value="otro">Otro</option>
+                  </select>
+                  <input
+                    type="datetime-local"
+                    className="rounded border px-2 py-1.5 text-sm"
+                    value={eventForm.event_date}
+                    onChange={(event) => setEventForm((prev) => ({ ...prev, event_date: event.target.value }))}
+                  />
+                  <select
+                    className="rounded border px-2 py-1.5 text-sm"
+                    value={eventForm.invoice_id}
+                    onChange={(event) => setEventForm((prev) => ({ ...prev, invoice_id: event.target.value }))}
+                  >
+                    <option value="">Cliente general</option>
+                    {selectedClientDocuments.map((row) => (
+                      <option key={row.id} value={row.id}>{row.invoice_number || row.id}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="date"
+                    className="rounded border px-2 py-1.5 text-sm"
+                    value={eventForm.next_action_date}
+                    onChange={(event) => setEventForm((prev) => ({ ...prev, next_action_date: event.target.value }))}
+                    title="Proxima accion"
+                  />
+                  <input
+                    className="md:col-span-4 rounded border px-2 py-1.5 text-sm"
+                    placeholder="Asunto"
+                    value={eventForm.subject}
+                    onChange={(event) => setEventForm((prev) => ({ ...prev, subject: event.target.value }))}
+                  />
+                  <textarea
+                    className="md:col-span-4 min-h-[76px] rounded border px-2 py-1.5 text-sm"
+                    placeholder="Detalle de la gestion"
+                    value={eventForm.notes}
+                    onChange={(event) => setEventForm((prev) => ({ ...prev, notes: event.target.value }))}
+                  />
+                  <div className="md:col-span-4 flex justify-end">
+                    <button type="button" className="rounded bg-black px-3 py-1.5 text-sm text-white" onClick={saveCollectionEvent}>
+                      Registrar seguimiento
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-3 max-h-72 overflow-auto rounded border">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-50 text-xs text-slate-600">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Fecha</th>
+                        <th className="px-3 py-2 text-left">Tipo</th>
+                        <th className="px-3 py-2 text-left">Asunto</th>
+                        <th className="px-3 py-2 text-left">Factura</th>
+                        <th className="px-3 py-2 text-left">Proxima</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {collectionData.events.length === 0 ? (
+                        <tr><td colSpan={5} className="px-3 py-4 text-center text-slate-500">Sin seguimientos registrados.</td></tr>
+                      ) : collectionData.events.map((event) => (
+                        <tr key={event.id} className="border-t align-top">
+                          <td className="px-3 py-2">
+                            <div>{fmtDate(event.event_date)}</div>
+                            {event.created_by_name && <div className="text-xs text-slate-500">{event.created_by_name}</div>}
+                          </td>
+                          <td className="px-3 py-2 capitalize">{event.event_type}</td>
+                          <td className="px-3 py-2">
+                            <div className="font-medium">{event.subject || '-'}</div>
+                            {event.notes && <div className="mt-1 text-xs text-slate-500">{event.notes}</div>}
+                          </td>
+                          <td className="px-3 py-2">{event.invoice_number || 'General'}</td>
+                          <td className="px-3 py-2">{fmtDate(event.next_action_date)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="rounded-lg border p-3">
+                <div className="mb-2 text-sm font-semibold">Aging de cobranza</div>
+                <div className="grid gap-2 sm:grid-cols-5">
+                  {[
+                    ['current', 'Al dia'],
+                    ['d30', '1-30'],
+                    ['d60', '31-60'],
+                    ['d90', '61-90'],
+                    ['over90', '+90'],
+                  ].map(([key, label]) => (
+                    <div key={key} className="rounded border bg-slate-50 p-2">
+                      <div className="text-xs text-slate-500">{label}</div>
+                      <div className="mt-1 text-xs font-semibold">
+                        <CurrencyStack values={selectedClientAging[key]} tone={key === 'over90' ? 'red' : 'slate'} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-lg border">
+                <div className="border-b px-3 py-2">
+                  <div className="text-sm font-semibold">Facturas abiertas</div>
+                  <div className="text-xs text-slate-500">{selectedClientDocuments.filter((row) => Number(row.balance || 0) > 0.0001).length} documentos con saldo</div>
+                </div>
+                <div className="max-h-72 overflow-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-50 text-xs text-slate-600">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Factura</th>
+                        <th className="px-3 py-2 text-left">Vence</th>
+                        <th className="px-3 py-2 text-right">Saldo</th>
+                        <th className="px-3 py-2 text-left">Estado</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedClientDocuments.filter((row) => Number(row.balance || 0) > 0.0001).slice(0, 20).map((row) => (
+                        <tr key={row.id} className="border-t">
+                          <td className="px-3 py-2">
+                            <a className="text-blue-600 hover:underline" href={`/invoices/${row.id}`} target="_blank" rel="noreferrer">
+                              {row.invoice_number || row.id}
+                            </a>
+                          </td>
+                          <td className="px-3 py-2">
+                            <div>{fmtDate(row.due_date)}</div>
+                            {row.days_overdue > 0 && <div className="text-xs text-red-600">{row.days_overdue} dias mora</div>}
+                          </td>
+                          <td className="px-3 py-2 text-right font-semibold">{fmtMoney(row.balance, row.currency_code)}</td>
+                          <td className="px-3 py-2"><StatusChip status={row.normalized_status} /></td>
+                        </tr>
+                      ))}
+                      {selectedClientDocuments.filter((row) => Number(row.balance || 0) > 0.0001).length === 0 && (
+                        <tr><td colSpan={4} className="px-3 py-4 text-center text-slate-500">Sin facturas abiertas.</td></tr>
                       )}
-                    </td>
-                    <td className="px-3 py-2">
-                      {inv?.first_item_desc || inv?.description || '-'}
-                    </td>
-                    <td className="px-3 py-2">
-                      {inv?.issue_date?.slice(0, 10) || inv?.created_at?.slice(0, 10) || '-'}
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      {formatMoney(inv?.pending || 0, inv?.currency || summaryCurrency)}
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <div>Total: {formatMoney(inv?.total || inv?.total_amount || 0, inv?.currency || summaryCurrency)}</div>
-                      <div className="text-xs text-amber-700">
-                        NC: {formatMoney(inv?.credited || 0, inv?.currency || summaryCurrency)}
-                      </div>
-                      <div className="text-xs text-slate-600">
-                        Neto: {formatMoney(inv?.netTotal || 0, inv?.currency || summaryCurrency)}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 space-x-2 whitespace-nowrap">
-                      <a
-                        className="text-blue-600 hover:underline"
-                        href={`/invoices/${inv.id || inv.invoice_id || inv.number || ''}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Ver factura
-                      </a>
-                      <a
-                        className="text-emerald-600 hover:underline"
-                        href={`/invoices/${inv.id || inv.invoice_id || inv.number || ''}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Registrar pago
-                      </a>
-                      <a
-                        className="text-orange-600 hover:underline"
-                        href={`/invoices/${inv.id || inv.invoice_id || inv.number || ''}#credit-note`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Nota de crédito
-                      </a>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="rounded-lg border">
+                <div className="border-b px-3 py-2">
+                  <div className="text-sm font-semibold">Ultimos movimientos</div>
+                  <div className="text-xs text-slate-500">Facturas, recibos y notas de credito</div>
+                </div>
+                <div className="max-h-72 overflow-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-50 text-xs text-slate-600">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Fecha</th>
+                        <th className="px-3 py-2 text-left">Tipo</th>
+                        <th className="px-3 py-2 text-left">Doc.</th>
+                        <th className="px-3 py-2 text-right">Debe</th>
+                        <th className="px-3 py-2 text-right">Haber</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedClientMovements.slice(-20).reverse().map((row) => (
+                        <tr key={row.id} className="border-t">
+                          <td className="px-3 py-2">{fmtDate(row.date)}</td>
+                          <td className="px-3 py-2">{MOVEMENT_LABELS[row.source_type] || row.source_type}</td>
+                          <td className="px-3 py-2">{row.document_number || '-'}</td>
+                          <td className="px-3 py-2 text-right">{Number(row.debit || 0) ? fmtMoney(row.debit, row.currency_code) : '-'}</td>
+                          <td className="px-3 py-2 text-right">{Number(row.credit || 0) ? fmtMoney(row.credit, row.currency_code) : '-'}</td>
+                        </tr>
+                      ))}
+                      {selectedClientMovements.length === 0 && (
+                        <tr><td colSpan={5} className="px-3 py-4 text-center text-slate-500">Sin movimientos.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
 
-      <div className="bg-white border rounded-lg overflow-auto">
-        <table className="min-w-full text-sm">
-          <thead className="bg-slate-100 text-slate-600">
-            <tr>
-              <th className="text-left px-3 py-2">Fecha</th>
-              <th className="text-left px-3 py-2">Tipo</th>
-              <th className="text-left px-3 py-2">Documento</th>
-              <th className="text-left px-3 py-2">Referencia</th>
-              <th className="text-left px-3 py-2">Descripcion</th>
-              <th className="text-left px-3 py-2">Cliente</th>
-              <th className="text-right px-3 py-2">Debe</th>
-              <th className="text-right px-3 py-2">Haber</th>
-              <th className="text-right px-3 py-2">Saldo</th>
-              <th className="text-left px-3 py-2">Estado</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr>
-                <td colSpan={9} className="px-3 py-4 text-center text-slate-500">
-                  Cargando...
-                </td>
-              </tr>
-            )}
-            {!loading && error && (
-              <tr>
-                <td colSpan={9} className="px-3 py-4 text-center text-red-600">
-                  {error}
-                </td>
-              </tr>
-            )}
-            {!loading && !error && ledger.length === 0 && (
-              <tr>
-                <td colSpan={9} className="px-3 py-4 text-center text-slate-500">
-                  Sin movimientos para los filtros seleccionados.
-                </td>
-              </tr>
-            )}
-            {!loading &&
-              !error &&
-              ledger.map((row, idx) => (
-                <tr key={idx} className="border-t">
-                  <td className="px-3 py-2">
-                    {row?.issue_date?.slice(0, 10) || row?.created_at?.slice(0, 10) || '-'}
-                  </td>
-                  <td className="px-3 py-2">{row?.type || row?.kind || 'Factura'}</td>
-                  <td className="px-3 py-2">
-                    <a
-                      className="text-blue-600 hover:underline"
-                      href={`/invoices/${row.id || row.invoice_id || row.number || ''}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {row?.number || row?.invoice_number || '-'}
-                    </a>
-                  </td>
-                  <td className="px-3 py-2">
-                    {row?.reference ||
-                    row?.deal_reference ||
-                    row?.operation_reference ||
-                    row?.deal_ref ||
-                    row?.operation_ref ? (
-                      <a
-                        className="text-blue-600 hover:underline"
-                        href={`/operations/${row.deal_id || row.operation_id || ''}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {row?.reference ||
-                          row?.deal_reference ||
-                          row?.operation_reference ||
-                          row?.deal_ref ||
-                          row?.operation_ref}
-                      </a>
-                    ) : (
-                      '-'
-                    )}
-                  </td>
-                  <td className="px-3 py-2">{row?.first_item_desc || row?.description || '-'}</td>
-                  <td className="px-3 py-2">{row?.client_label || '-'}</td>
-                  <td
-                    className="px-3 py-2 text-right"
-                    title={`total: ${formatMoney(row.total, row.currency)} | pagado: ${formatMoney(row.paid, row.currency)} | notas: ${formatMoney(row.credited, row.currency)} | pendiente calc: ${formatMoney(row.pending, row.currency)}`}
-                  >
-                    {formatMoney(row.debit, row.currency)}
-                  </td>
-                  <td
-                    className="px-3 py-2 text-right"
-                    title={`recibos aplicados: ${formatMoney(row.credit, row.currency)} | pagado base: ${formatMoney(row.paid, row.currency)}`}
-                  >
-                    {formatMoney(row.credit, row.currency)}
-                  </td>
-                  <td
-                    className="px-3 py-2 text-right"
-                    title={`saldo pendiente: ${formatMoney(row.balance, row.currency)} | pendiente calc: ${formatMoney(row.pending, row.currency)} | pagos: ${formatMoney(row.paid, row.currency)} | nc: ${formatMoney(row.credited, row.currency)}`}
-                  >
-                    {formatMoney(row.balance, row.currency)}
-                  </td>
-                    <td className="px-3 py-2 capitalize">
-                      {row?.display_status || row?.status || '-'}
-                    </td>
-                  </tr>
-                ))}
-          </tbody>
-        </table>
-      </div>
-
       {htmlPreview && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl w-full max-w-4xl p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold">{htmlTitle || 'Tabla HTML'}</div>
-              <button className="text-sm px-3 py-1.5 border rounded" onClick={() => setHtmlPreview('')}>
-                Cerrar
-              </button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-5xl rounded-xl bg-white p-4 shadow-xl">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold">{htmlTitle}</div>
+                <div className="text-xs text-slate-500">Vista previa para copiar al correo.</div>
+              </div>
+              <button type="button" className="rounded border px-3 py-1.5 text-sm" onClick={() => setHtmlPreview('')}>Cerrar</button>
             </div>
-            <div className="text-xs text-slate-500">
-              Vista previa para copiar y pegar en el correo.
-            </div>
-            <div
-              ref={htmlRef}
-              className="border rounded p-3 bg-white overflow-auto max-h-[60vh]"
-              dangerouslySetInnerHTML={{ __html: htmlPreview }}
-            />
-            <div className="flex justify-end">
-              <button className="px-3 py-2 text-sm bg-slate-900 text-white rounded" onClick={copyHtml}>
-                Copiar HTML
-              </button>
+            <div ref={htmlRef} className="max-h-[60vh] overflow-auto rounded border p-3" dangerouslySetInnerHTML={{ __html: htmlPreview }} />
+            <div className="mt-3 flex justify-end">
+              <button type="button" className="rounded bg-black px-4 py-2 text-sm text-white" onClick={copyHtml}>Copiar tabla</button>
             </div>
           </div>
         </div>
@@ -831,3 +1193,4 @@ export default function AccountStatement() {
     </div>
   );
 }
+

@@ -2,8 +2,25 @@
 import { Link } from "react-router-dom";
 import { api } from "../../api";
 import OperationExpenseInvoices from "../../components/OperationExpenseInvoices.jsx";
+import {
+  companyBankAccountLabel,
+  companyBankAccountValue,
+  filterCompanyBankAccounts,
+  parseCompanyBankAccounts,
+} from "../../utils/companyBankAccounts";
 
 const PAYMENT_METHODS = ["Transferencia", "Efectivo", "Cheque", "Tarjeta", "Otro"];
+const STATUS_TABS = [
+  { value: "todos", label: "Todos" },
+  { value: "por_pagar", label: "Por pagar" },
+  { value: "vencido", label: "Vencidos" },
+  { value: "sin_op", label: "Sin OP" },
+  { value: "op_pendiente", label: "OP pendiente" },
+  { value: "listo_pago", label: "Listo para pagar" },
+  { value: "pagado", label: "Pagado" },
+  { value: "sin_comprobante", label: "Sin comprobante" },
+  { value: "sin_clasificar", label: "Sin clasificar" },
+];
 const PAYMENT_ORDER_LABELS = {
   pendiente: "Pendiente",
   aprobada: "Aprobada",
@@ -65,12 +82,56 @@ function formatInputMoney(input, currency) {
   return formatMoney(value, currency);
 }
 
+function statusTone(status) {
+  const key = String(status || "").toLowerCase();
+  if (["pagado", "listo_pago"].includes(key)) return "bg-emerald-100 text-emerald-700";
+  if (["vencido", "bloqueado"].includes(key)) return "bg-red-100 text-red-700";
+  if (["sin_op", "op_pendiente", "sin_comprobante", "sin_clasificar", "pago_parcial"].includes(key)) {
+    return "bg-amber-100 text-amber-700";
+  }
+  return "bg-slate-100 text-slate-700";
+}
+
+function statusLabel(status) {
+  const labels = {
+    por_pagar: "Por pagar",
+    vencido: "Vencido",
+    sin_op: "Sin OP",
+    op_pendiente: "OP pendiente",
+    listo_pago: "Listo para pagar",
+    pago_parcial: "Pago parcial",
+    pagado: "Pagado",
+    bloqueado: "Bloqueado",
+    sin_comprobante: "Sin comprobante",
+    sin_clasificar: "Sin clasificar",
+  };
+  return labels[String(status || "").toLowerCase()] || status || "Por pagar";
+}
+
+function hasSupplierBankData(row) {
+  return Boolean(
+    row?.supplier_bank_name ||
+      row?.supplier_bank_account ||
+      row?.supplier_bank_holder ||
+      row?.supplier_bank_cci_iban
+  );
+}
+
+function supplierBankLabel(row) {
+  return [row?.supplier_bank_name, row?.supplier_bank_account, row?.supplier_bank_currency]
+    .filter(Boolean)
+    .join(" - ");
+}
+
 export default function OperationalPurchases() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [rows, setRows] = useState([]);
+  const [companyAccounts, setCompanyAccounts] = useState([]);
+  const [actionsMenu, setActionsMenu] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [filters, setFilters] = useState({
+    status_tab: "por_pagar",
     from_date: "",
     to_date: "",
     search_q: "",
@@ -127,6 +188,7 @@ export default function OperationalPurchases() {
   const [selectedOperation, setSelectedOperation] = useState(null);
   const [openNewKey, setOpenNewKey] = useState(0);
   const [createType, setCreateType] = useState("deal");
+  const actionMenuRef = React.useRef(null);
 
   async function load() {
     setLoading(true);
@@ -144,19 +206,113 @@ export default function OperationalPurchases() {
     }
   }
 
+  async function loadCompanyAccounts() {
+    try {
+      const { data } = await api.get("/params", {
+        params: { keys: "company_bank_account", only_active: 1 },
+      });
+      setCompanyAccounts(parseCompanyBankAccounts(data?.company_bank_account || []));
+    } catch (e) {
+      console.error("Error loading company bank accounts", e);
+      setCompanyAccounts([]);
+    }
+  }
+
   useEffect(() => {
     load();
+    loadCompanyAccounts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const onClick = (event) => {
+      if (actionMenuRef.current && !actionMenuRef.current.contains(event.target)) {
+        setActionsMenu(null);
+      }
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+
+  function isOverdue(row) {
+    if (!row?.due_date || Number(row?.balance || 0) <= 0.009) return false;
+    const due = new Date(row.due_date);
+    if (Number.isNaN(due.getTime())) return false;
+    due.setHours(0, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return due < today;
+  }
+
+  function rowStatus(row) {
+    const backendStatus = String(row?.payable_status || "").toLowerCase();
+    if (backendStatus) return backendStatus;
+    const balance = Number(row?.balance || 0);
+    const paid = Math.max(0, Number(row?.amount_total || 0) - balance);
+    const isCredit = String(row?.condition_type || "").toUpperCase() === "CREDITO";
+    const poStatus = String(row?.payment_order_status || "").toLowerCase();
+    if (balance <= 0.009 || row?.payment_status === "pagado") return "pagado";
+    if (paid > 0 || row?.payment_status === "parcial") return "pago_parcial";
+    if (isCredit && !row?.due_date) return "bloqueado";
+    if (isCredit && !row?.payment_order_id) return "sin_op";
+    if (isCredit && poStatus === "pendiente") return "op_pendiente";
+    if (isCredit && ["aprobada", "pago_parcial"].includes(poStatus)) return "listo_pago";
+    if (isCredit && row?.due_date && new Date(row.due_date) < new Date()) return "vencido";
+    return "listo_pago";
+  }
+
+  function matchesTab(row, tab = filters.status_tab) {
+    const status = rowStatus(row);
+    if (tab === "todos") return true;
+    if (tab === "por_pagar") return Number(row?.balance || 0) > 0.009;
+    if (tab === "vencido") return isOverdue(row);
+    if (tab === "sin_comprobante") return Number(row?.attachment_count || 0) <= 0;
+    if (tab === "sin_clasificar") {
+      const rubros = String(row?.expense_rubros || row?.expense_rubro || "").toUpperCase();
+      return !rubros || rubros.includes("SIN CLASIFICAR");
+    }
+    return status === tab;
+  }
+
+  const visibleRows = useMemo(
+    () => rows.filter((row) => matchesTab(row)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, filters.status_tab]
+  );
+
   const totals = useMemo(() => {
     const sum = {};
-    for (const r of rows) {
+    for (const r of visibleRows) {
       const curr = (r.currency_code || "PYG").toUpperCase();
-      const val = Number(r.amount_total || 0);
+      const val = Number(r.balance ?? r.amount_total ?? 0);
       sum[curr] = (sum[curr] || 0) + (isNaN(val) ? 0 : val);
     }
     return sum;
+  }, [visibleRows]);
+
+  const dashboard = useMemo(() => {
+    const counts = {};
+    for (const tab of STATUS_TABS) counts[tab.value] = 0;
+    const byCurrency = {};
+    for (const row of rows) {
+      for (const tab of STATUS_TABS) {
+        if (matchesTab(row, tab.value)) counts[tab.value] += 1;
+      }
+      const curr = String(row.currency_code || "PYG").toUpperCase();
+      const status = rowStatus(row);
+      if (!byCurrency[curr]) {
+        byCurrency[curr] = { pending: 0, overdue: 0, paid: 0, sinOp: 0, opPending: 0, ready: 0 };
+      }
+      const balance = Number(row.balance || 0);
+      if (balance > 0.009) byCurrency[curr].pending += balance;
+      if (isOverdue(row)) byCurrency[curr].overdue += balance;
+      if (status === "pagado") byCurrency[curr].paid += Number(row.amount_total || 0);
+      if (status === "sin_op") byCurrency[curr].sinOp += balance;
+      if (status === "op_pendiente") byCurrency[curr].opPending += balance;
+      if (status === "listo_pago") byCurrency[curr].ready += balance;
+    }
+    return { counts, byCurrency };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows]);
 
   const searchSuggestions = useMemo(() => {
@@ -324,6 +480,8 @@ export default function OperationalPurchases() {
   }
 
   function canRegisterPaymentFromDetail(row) {
+    if (Number(row?.balance || 0) <= 0.009) return false;
+    if (String(row?.condition_type || "").toUpperCase() !== "CREDITO") return true;
     const poStatus = String(row.payment_order_status || "").toLowerCase();
     return row?.payment_order_id && ["aprobada", "pago_parcial"].includes(poStatus);
   }
@@ -338,7 +496,7 @@ export default function OperationalPurchases() {
   }
 
   function allSelected() {
-    const list = rows.filter((r) => isRowSelectable(r));
+    const list = visibleRows.filter((r) => isRowSelectable(r));
     if (!list.length) return false;
     return list.every((r) => selectedIds.has(r.id));
   }
@@ -346,7 +504,7 @@ export default function OperationalPurchases() {
   function toggleSelectAll() {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      const list = rows.filter((r) => isRowSelectable(r));
+      const list = visibleRows.filter((r) => isRowSelectable(r));
       const shouldSelect = !allSelected();
       list.forEach((r) => {
         if (shouldSelect) next.add(r.id);
@@ -459,14 +617,155 @@ export default function OperationalPurchases() {
       alert("No se pudo abrir el adjunto.");
     }
   }
+
+  async function deleteInvoice(inv) {
+    if (!inv?.id || !inv?.operation_id) return;
+    const label = [inv.receipt_type || "Factura", inv.receipt_number || "", inv.supplier_display || ""]
+      .filter(Boolean)
+      .join(" - ");
+    if (!window.confirm(`Eliminar factura de compra${label ? `: ${label}` : ""}?\n\nEsta accion no se puede deshacer.`)) {
+      return;
+    }
+    try {
+      await api.delete(`/operations/${inv.operation_id}/expense-invoices/${inv.id}`, {
+        params: { op_type: inv.operation_type || "deal" },
+      });
+      setActionsMenu(null);
+      setDetailOpen(false);
+      await load();
+    } catch (e) {
+      console.error("Error deleting operational purchase", e);
+      alert(e?.response?.data?.error || "No se pudo eliminar la factura.");
+    }
+  }
+
+  function openOperation(inv) {
+    if (!inv?.operation_id) return;
+    const href =
+      inv.operation_type === "service"
+        ? `/service/cases/${inv.operation_id}`
+        : `/operations/${inv.operation_id}`;
+    window.open(href, "_blank", "noopener,noreferrer");
+  }
+
+  function actionItems(inv) {
+    const items = [
+      { label: "Ver detalle", onClick: () => openDetail(inv) },
+      { label: "Ver operacion", onClick: () => openOperation(inv) },
+    ];
+    if (inv.attachment_url) {
+      items.push({
+        label: "Ver comprobante",
+        onClick: () => window.open(resolveUploadUrl(inv.attachment_url), "_blank", "noopener"),
+      });
+    }
+    if (!inv.payment_order_id && String(inv.condition_type || "").toUpperCase() === "CREDITO") {
+      items.push({ label: "Solicitar OP", onClick: () => openOrder(inv) });
+    }
+    if (inv.payment_order_id) {
+      items.push({ label: "Ver OP", onClick: () => openOrderPdf(inv, false) });
+    }
+    items.push({
+      label: canRegisterPaymentFromDetail(inv) ? "Registrar pago" : paymentGateLabel(inv),
+      disabled: !canRegisterPaymentFromDetail(inv),
+      onClick: () => openPayment(inv),
+    });
+    items.push({ label: "Ver pagos", onClick: () => openHistory(inv) });
+    items.push({ label: "Editar", onClick: () => openOperation(inv) });
+    items.push({ label: "Eliminar", danger: true, onClick: () => deleteInvoice(inv) });
+    return items;
+  }
+
+  const sameCurrencyPaymentAccounts = filterCompanyBankAccounts(companyAccounts, paymentInvoice?.currency_code || "PYG");
+  const fallbackPaymentAccounts = (companyAccounts || []).filter((account) => {
+    if (!account?.active) return false;
+    return !sameCurrencyPaymentAccounts.some((item) => companyBankAccountValue(item) === companyBankAccountValue(account));
+  });
+  const paymentAccountOptions = sameCurrencyPaymentAccounts.length ? sameCurrencyPaymentAccounts : fallbackPaymentAccounts;
+  const hasCurrentPaymentAccount =
+    paymentForm.account &&
+    !paymentAccountOptions.some((account) => companyBankAccountValue(account) === paymentForm.account);
+
   return (
-    <div className="p-6">
-      <div className="mb-4">
-        <h1 className="text-2xl font-bold text-slate-800">Compras operativas</h1>
-        <p className="text-slate-500 text-sm">Facturas de compra vinculadas a operaciones.</p>
+    <div className="p-6 space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">Compras operativas</h1>
+          <p className="text-slate-500 text-sm">Control operativo de facturas de compra vinculadas a operaciones.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button className="px-3 py-2 text-sm rounded bg-emerald-600 text-white" onClick={() => {
+            setCreateSearch(""); setCreateResults([]); setSelectedOperation(null); setCreateModalOpen(true);
+          }}>Nueva factura</button>
+          <button
+            className="px-3 py-2 text-sm rounded border bg-white"
+            onClick={async () => {
+              try {
+                const params = Object.entries(filters).reduce((acc, [k, v]) => {
+                  if (k === "status_tab" || v === "" || v === false) return acc;
+                  acc[k] = v === true ? "1" : v;
+                  return acc;
+                }, {});
+                const res = await api.get("/admin/ops/operation-expenses/export", {
+                  params,
+                  responseType: "blob",
+                });
+                const url = window.URL.createObjectURL(new Blob([res.data]));
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "compras-operativas.xlsx";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+              } catch (e) {
+                alert(e?.response?.data?.error || "No se pudo exportar.");
+              }
+            }}
+          >
+            Exportar Excel
+          </button>
+        </div>
       </div>
 
-      <div className="bg-white rounded-2xl shadow p-4 mb-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        {[
+          ["Pendiente", "pending", "bg-blue-50 text-blue-700"],
+          ["Vencido", "overdue", "bg-red-50 text-red-700"],
+          ["Pagado", "paid", "bg-emerald-50 text-emerald-700"],
+          ["Sin OP", "sinOp", "bg-amber-50 text-amber-700"],
+          ["OP pendiente", "opPending", "bg-amber-50 text-amber-700"],
+          ["Listo para pagar", "ready", "bg-emerald-50 text-emerald-700"],
+        ].map(([label, key, cls]) => (
+          <div key={key} className="rounded-xl border bg-white p-3 shadow-sm">
+            <div className="text-xs text-slate-500">{label}</div>
+            <div className={`mt-2 rounded-lg px-2 py-1 text-xs font-semibold ${cls}`}>
+              {Object.entries(dashboard.byCurrency)
+                .filter(([, values]) => Number(values[key] || 0) > 0)
+                .map(([currency, values]) => `${currency} ${formatMoney(values[key], currency)}`)
+                .join(" · ") || "--"}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="bg-white rounded-2xl shadow p-4">
+        <div className="mb-4 flex flex-wrap gap-2">
+          {STATUS_TABS.map((tab) => (
+            <button
+              key={tab.value}
+              className={`rounded-full border px-3 py-1.5 text-xs ${
+                filters.status_tab === tab.value ? "bg-black text-white" : "bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+              onClick={() => setFilters((f) => ({ ...f, status_tab: tab.value }))}
+            >
+              {tab.label}
+              <span className={`ml-2 rounded-full px-1.5 py-0.5 ${filters.status_tab === tab.value ? "bg-white/20" : "bg-slate-100"}`}>
+                {dashboard.counts[tab.value] || 0}
+              </span>
+            </button>
+          ))}
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <input
             className="border rounded px-2 py-1"
@@ -527,9 +826,6 @@ export default function OperationalPurchases() {
             Vencidas
           </label>
           <button className="px-3 py-2 text-sm rounded bg-black text-white" onClick={load}>Buscar</button>
-          <button className="px-3 py-2 text-sm rounded bg-emerald-600 text-white" onClick={() => {
-            setCreateSearch(""); setCreateResults([]); setSelectedOperation(null); setCreateModalOpen(true);
-          }}>Nueva factura</button>
           {selectedIds.size > 0 && (
             <>
               <button className="px-3 py-2 text-sm rounded border" onClick={createOrdersForSelected}>
@@ -540,34 +836,6 @@ export default function OperationalPurchases() {
               </div>
             </>
           )}
-          <button
-            className="px-3 py-2 text-sm rounded border"
-            onClick={async () => {
-              try {
-                const params = Object.entries(filters).reduce((acc, [k, v]) => {
-                  if (v === "" || v === false) return acc;
-                  acc[k] = v === true ? "1" : v;
-                  return acc;
-                }, {});
-                const res = await api.get("/admin/ops/operation-expenses/export", {
-                  params,
-                  responseType: "blob",
-                });
-                const url = window.URL.createObjectURL(new Blob([res.data]));
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = "compras-operativas.xlsx";
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                window.URL.revokeObjectURL(url);
-              } catch (e) {
-                alert(e?.response?.data?.error || "No se pudo exportar.");
-              }
-            }}
-          >
-            Exportar Excel
-          </button>
         </div>
       </div>
 
@@ -592,6 +860,7 @@ export default function OperationalPurchases() {
                   <th className="text-left px-3 py-2">Operacion</th>
                   <th className="text-left px-3 py-2">Cliente</th>
                   <th className="text-left px-3 py-2">Proveedor</th>
+                  <th className="text-left px-3 py-2">Rubro</th>
                   <th className="text-left px-3 py-2">Comprobante</th>
                   <th className="text-left px-3 py-2">Condicion</th>
                   <th className="text-left px-3 py-2">Vencimiento</th>
@@ -599,13 +868,14 @@ export default function OperationalPurchases() {
                   <th className="text-left px-3 py-2">IVA</th>
                   <th className="text-left px-3 py-2">Items</th>
                   <th className="text-left px-3 py-2">Adjuntos</th>
-                  <th className="text-left px-3 py-2">Pago</th>
+                  <th className="text-left px-3 py-2">Estado</th>
                   <th className="text-left px-3 py-2">Saldo</th>
+                  <th className="text-left px-3 py-2">OP</th>
                   <th className="text-left px-3 py-2">Acciones</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {visibleRows.map((r) => (
                   <tr key={r.id} className="border-t">
                     <td className="px-3 py-2">
                       <input type="checkbox" disabled={!isRowSelectable(r)} checked={selectedIds.has(r.id)}
@@ -618,7 +888,13 @@ export default function OperationalPurchases() {
                       </Link>
                     </td>
                     <td className="px-3 py-2">{r.client_name || "--"}{r.client_ruc ? ` (${r.client_ruc})` : ""}</td>
-                    <td className="px-3 py-2">{r.supplier_display || "--"}{r.supplier_ruc_display ? ` (${r.supplier_ruc_display})` : ""}</td>
+                    <td className="px-3 py-2">
+                      <div>{r.supplier_display || "--"}{r.supplier_ruc_display ? ` (${r.supplier_ruc_display})` : ""}</div>
+                      {!hasSupplierBankData(r) && Number(r.balance || 0) > 0 && (
+                        <span className="mt-1 inline-flex text-xs px-2 py-1 rounded bg-amber-100 text-amber-700">Proveedor sin cuenta</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-xs">{r.expense_rubros || r.expense_rubro || "Sin clasificar"}</td>
                     <td className="px-3 py-2">
                       {r.receipt_type || "--"}{r.receipt_number ? ` · ${r.receipt_number}` : ""}
                       {r.attachment_url ? (
@@ -643,8 +919,8 @@ export default function OperationalPurchases() {
                       )}
                     </td>
                     <td className="px-3 py-2">
-                      <span className={`text-xs px-2 py-1 rounded ${r.payment_status === "pagado" ? "bg-emerald-100 text-emerald-700" : r.payment_status === "parcial" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"}`}>
-                        {r.payment_status || "pendiente"}
+                      <span className={`text-xs px-2 py-1 rounded ${statusTone(rowStatus(r))}`}>
+                        {statusLabel(rowStatus(r))}
                       </span>
                       {r.condition_type && String(r.condition_type).toUpperCase() === "CREDITO" && r.due_date && Number(r.balance || 0) > 0 && new Date(r.due_date) < new Date() && (
                         <span className="ml-2 text-xs px-2 py-1 rounded bg-red-100 text-red-700">Vencida {daysOverdue(r.due_date)}d</span>
@@ -655,21 +931,58 @@ export default function OperationalPurchases() {
                     </td>
                     <td className="px-3 py-2">{r.currency_code || "PYG"} {formatMoney(r.balance, r.currency_code)}</td>
                     <td className="px-3 py-2">
+                      {r.payment_order_id ? <PaymentOrderBadge status={r.payment_order_status} /> : <span className="text-xs px-2 py-1 rounded bg-slate-100 text-slate-600">Sin OP</span>}
+                    </td>
+                    <td className="px-3 py-2 relative">
                       <button
-                        className="px-2 py-1 rounded border text-xs hover:bg-slate-50 text-left"
-                        onClick={() => openDetail(r)}
+                        className="px-2 py-1 rounded border text-xs hover:bg-slate-50"
+                        onClick={(event) => {
+                          const rect = event.currentTarget.getBoundingClientRect();
+                          setActionsMenu({
+                            id: r.id,
+                            row: r,
+                            top: Math.min(rect.bottom + 6, window.innerHeight - 260),
+                            left: Math.min(rect.left, window.innerWidth - 220),
+                          });
+                        }}
                       >
-                        Ver detalle
+                        Acciones
                       </button>
                     </td>
                   </tr>
                 ))}
-                {rows.length === 0 && (
-                  <tr><td colSpan={15} className="px-3 py-4 text-center text-slate-500">Sin resultados.</td></tr>
+                {visibleRows.length === 0 && (
+                  <tr><td colSpan={17} className="px-3 py-4 text-center text-slate-500">Sin resultados.</td></tr>
                 )}
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {actionsMenu && (
+        <div
+          ref={actionMenuRef}
+          className="fixed z-[120] w-52 rounded-xl border bg-white p-1 shadow-xl"
+          style={{ top: actionsMenu.top, left: actionsMenu.left }}
+        >
+          {actionItems(actionsMenu.row).map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              disabled={item.disabled}
+              className={`block w-full rounded-lg px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${
+                item.danger ? "text-red-700 hover:bg-red-50" : "text-slate-700 hover:bg-slate-50"
+              }`}
+              onClick={() => {
+                if (item.disabled) return;
+                setActionsMenu(null);
+                item.onClick();
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
       )}
 
@@ -735,9 +1048,13 @@ export default function OperationalPurchases() {
                   <div><span className="text-slate-500">Operacion:</span> <span className="font-medium">{detailInvoice.operation_reference || detailInvoice.operation_id}</span></div>
                   <div><span className="text-slate-500">Cliente:</span> <span className="font-medium">{detailInvoice.client_name || "--"}</span></div>
                   <div><span className="text-slate-500">Proveedor:</span> <span className="font-medium">{detailInvoice.supplier_display || "--"}</span></div>
+                  <div><span className="text-slate-500">RUC proveedor:</span> <span className="font-medium">{detailInvoice.supplier_ruc_display || "--"}</span></div>
+                  <div><span className="text-slate-500">Cuenta proveedor:</span> <span className="font-medium">{supplierBankLabel(detailInvoice) || "Sin cuenta bancaria"}</span></div>
                   <div><span className="text-slate-500">Vencimiento:</span> <span className="font-medium">{detailInvoice.due_date || "--"}</span></div>
                   <div><span className="text-slate-500">Condicion:</span> <span className="font-medium">{detailInvoice.condition_type || "--"}</span></div>
                   <div><span className="text-slate-500">Adjuntos:</span> <span className="font-medium">{detailInvoice.attachment_count || 0}</span></div>
+                  <div><span className="text-slate-500">Rubro:</span> <span className="font-medium">{detailInvoice.expense_rubros || detailInvoice.expense_rubro || "Sin clasificar"}</span></div>
+                  <div><span className="text-slate-500">Revision costos:</span> <span className="font-medium">{detailInvoice.quote_revision_id ? `Industrial #${detailInvoice.quote_revision_id}` : detailInvoice.cost_sheet_version_number ? `DET COS ${detailInvoice.cost_sheet_version_number}` : "Sin revision asignada"}</span></div>
                 </div>
                 {detailInvoice.attachment_url ? (
                   <div className="mt-3">
@@ -784,6 +1101,9 @@ export default function OperationalPurchases() {
                   <button className="rounded border px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50" onClick={() => openHistory(detailInvoice)}>
                     Ver pagos
                   </button>
+                  <button className="rounded border px-3 py-2 text-sm text-red-700 hover:bg-red-50" onClick={() => deleteInvoice(detailInvoice)}>
+                    Eliminar
+                  </button>
                 </div>
               </div>
             </div>
@@ -817,8 +1137,32 @@ export default function OperationalPurchases() {
                 <option value="">Metodo</option>
                 {PAYMENT_METHODS.map((m) => (<option key={m} value={m}>{m}</option>))}
               </select>
-              <input className="border rounded px-2 py-1" placeholder="Cuenta" value={paymentForm.account}
-                onChange={(e) => setPaymentForm((f) => ({ ...f, account: e.target.value }))} />
+              <div>
+                <select className="border rounded px-2 py-1 w-full" value={paymentForm.account}
+                  onChange={(e) => setPaymentForm((f) => ({ ...f, account: e.target.value }))}>
+                  <option value="">Cuenta origen de empresa</option>
+                  {hasCurrentPaymentAccount && <option value={paymentForm.account}>{paymentForm.account}</option>}
+                  {paymentAccountOptions.map((account) => (
+                    <option key={account.id || companyBankAccountValue(account)} value={companyBankAccountValue(account)}>
+                      {companyBankAccountLabel(account)}
+                    </option>
+                  ))}
+                </select>
+                {!sameCurrencyPaymentAccounts.length && fallbackPaymentAccounts.length > 0 && (
+                  <div className="mt-1 text-xs text-amber-700">
+                    No hay cuentas activas en {paymentInvoice?.currency_code || "PYG"}. Se muestran cuentas de otras monedas.
+                  </div>
+                )}
+                {!paymentAccountOptions.length && (
+                  <div className="mt-1 text-xs text-red-700">
+                    No hay cuentas de empresa activas cargadas en Parametros del sistema.
+                  </div>
+                )}
+              </div>
+              <div className="rounded-lg border bg-slate-50 p-3 text-sm">
+                <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Cuenta destino del proveedor</div>
+                <div className="mt-1 text-slate-700">{supplierBankLabel(paymentInvoice) || "Proveedor sin cuenta bancaria cargada."}</div>
+              </div>
               <input className="border rounded px-2 py-1" placeholder="Referencia" value={paymentForm.reference_number}
                 onChange={(e) => setPaymentForm((f) => ({ ...f, reference_number: e.target.value }))} />
               <textarea className="border rounded px-2 py-1 min-h-[80px]" placeholder="Notas" value={paymentForm.notes}

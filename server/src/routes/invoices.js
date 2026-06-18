@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { pool } from '../services/db.js';
 import { requireAuth, requireRole } from '../middlewares/auth.js';
+import PDFDocument from 'pdfkit';
 import generateInvoicePDF from '../services/invoiceTemplatePdfkit.js';
 import generateReceiptPDF from '../services/receiptTemplatePdfkit.js';
 
@@ -1962,6 +1963,461 @@ router.use(requireAuth, (req, res, next) => {
 });
 
 // GET /api/invoices
+function todayDateOnly() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+}
+
+function parseDateOnly(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function normalizeStatementCurrency(value) {
+  return String(value || 'USD').trim().toUpperCase() || 'USD';
+}
+
+function normalizeCustomerKey(row) {
+  if (row.organization_id) return `org:${row.organization_id}`;
+  const doc = String(row.customer_doc || row.organization_ruc || '').trim();
+  if (doc) return `doc:${doc}`;
+  const name = String(row.customer_name || row.organization_name || '').trim();
+  return name ? `name:${name.toLowerCase()}` : 'unknown';
+}
+
+function normalizeCustomerName(row) {
+  return row.customer_name || row.organization_name || (row.organization_id ? `Cliente #${row.organization_id}` : 'Sin cliente');
+}
+
+function customerStatementStatus(row) {
+  const raw = String(row.status || '').toLowerCase();
+  const balance = Number(row.balance || 0);
+  const paid = Number(row.paid_amount || 0);
+  const due = parseDateOnly(row.due_date);
+  const today = todayDateOnly();
+  if (raw === 'anulada' || raw === 'anulado') return 'anulado';
+  if (balance <= 0.009) return 'pagado';
+  if (paid > 0) return 'parcial';
+  if (due && due < today) return 'vencido';
+  if (due && due.getTime() === today.getTime()) return 'vence_hoy';
+  return 'pendiente';
+}
+
+function customerStatementStatusLabel(status) {
+  const labels = {
+    por_cobrar: 'Por cobrar',
+    pendiente: 'Pendiente',
+    parcial: 'Pago parcial',
+    vencido: 'Vencido',
+    vence_hoy: 'Vence hoy',
+    pagado: 'Pagado',
+    anulado: 'Anulado',
+    todos: 'Todos',
+  };
+  return labels[status] || status || '-';
+}
+
+function addCurrencyAmount(target, currency, amount) {
+  const key = normalizeStatementCurrency(currency);
+  target[key] = Number(((target[key] || 0) + Number(amount || 0)).toFixed(2));
+}
+
+function filterCustomerStatementDocument(row, filters = {}) {
+  const status = String(filters.status || 'por_cobrar').toLowerCase();
+  const currency = String(filters.currency_code || 'todas').toUpperCase();
+  const query = String(filters.search || '').trim().toLowerCase();
+  const clientQuery = String(filters.client_q || '').trim().toLowerCase();
+  if (currency && currency !== 'TODAS' && normalizeStatementCurrency(row.currency_code) !== currency) return false;
+  if (clientQuery) {
+    const haystack = [row.customer_name, row.organization_name, row.customer_doc, row.organization_ruc].filter(Boolean).join(' ').toLowerCase();
+    if (!haystack.includes(clientQuery)) return false;
+  }
+  if (query) {
+    const haystack = [row.invoice_number, row.operation_reference, row.customer_name, row.organization_name, row.customer_doc, row.organization_ruc, row.description, row.status].filter(Boolean).join(' ').toLowerCase();
+    if (!haystack.includes(query)) return false;
+  }
+  if (status === 'todos') return true;
+  if (status === 'por_cobrar') return Number(row.balance || 0) > 0.009 && row.normalized_status !== 'anulado';
+  if (status === 'due_7d') {
+    if (Number(row.balance || 0) <= 0.009 || row.normalized_status === 'anulado') return false;
+    const due = parseDateOnly(row.due_date);
+    if (!due) return false;
+    const today = todayDateOnly();
+    const max = new Date(today);
+    max.setDate(max.getDate() + 7);
+    return due >= today && due <= max;
+  }
+  return row.normalized_status === status;
+}
+
+async function fetchCustomerStatementInvoices(query = {}) {
+  await ensureReceiptTables();
+  await ensureInvoiceCreditColumns();
+  await ensureCreditNoteTables();
+  const params = [];
+  const buildQuery = (withService) => {
+    let sql = `
+      SELECT i.id, i.invoice_number, i.issue_date, i.due_date, i.created_at, i.status,
+             i.payment_condition, i.organization_id, i.customer_doc, i.customer_doc_type,
+             i.customer_email, i.customer_address, NULL AS customer_name, i.deal_id, i.service_case_id,
+             i.container_billing_cycle_id, i.total_amount, i.subtotal, i.tax_amount,
+             i.paid_amount AS paid_amount_db, i.credited_total AS credited_total_db,
+             i.net_total_amount AS net_total_amount_db, i.net_balance AS net_balance_db,
+             i.balance AS balance_db, COALESCE(i.currency_code, 'USD') AS currency_code,
+             o.name AS organization_name, o.ruc AS organization_ruc, o.email AS organization_email,
+             o.phone AS organization_phone,
+             COALESCE(d.reference, ${withService ? 'sc.reference' : "''"}, '') AS operation_reference,
+             it.first_item_desc AS description,
+             COALESCE(rc.paid_amount, 0) AS receipts_paid,
+             COALESCE(rc.last_payment_date, NULL) AS last_payment_date,
+             COALESCE(cn.credited_total, 0) AS credit_notes_total
+        FROM invoices i
+        LEFT JOIN organizations o ON o.id = i.organization_id
+        LEFT JOIN deals d ON d.id = i.deal_id
+        ${withService ? 'LEFT JOIN service_cases sc ON sc.id = i.service_case_id' : ''}
+        LEFT JOIN (
+          SELECT invoice_id, SUBSTRING_INDEX(GROUP_CONCAT(description ORDER BY item_order, id SEPARATOR '||'), '||', 1) AS first_item_desc
+            FROM invoice_items
+           GROUP BY invoice_id
+        ) it ON it.invoice_id = i.id
+        LEFT JOIN (
+          SELECT invoice_id, SUM(net_amount) AS paid_amount, MAX(issue_date) AS last_payment_date
+            FROM receipts
+           WHERE status = 'emitido'
+           GROUP BY invoice_id
+        ) rc ON rc.invoice_id = i.id
+        LEFT JOIN (
+          SELECT invoice_id, SUM(total_amount) AS credited_total
+            FROM credit_notes
+           WHERE status <> 'anulada'
+           GROUP BY invoice_id
+        ) cn ON cn.invoice_id = i.id
+       WHERE 1=1
+    `;
+    if (query.from_date) { sql += ' AND i.issue_date >= ?'; params.push(query.from_date); }
+    if (query.to_date) { sql += ' AND i.issue_date <= ?'; params.push(query.to_date); }
+    if (query.due_from) { sql += ' AND i.due_date >= ?'; params.push(query.due_from); }
+    if (query.due_to) { sql += ' AND i.due_date <= ?'; params.push(query.due_to); }
+    if (query.organization_id) { sql += ' AND i.organization_id = ?'; params.push(query.organization_id); }
+    sql += ' ORDER BY COALESCE(o.name, i.organization_id, i.id), i.issue_date ASC, i.id ASC';
+    return sql;
+  };
+  try {
+    const [rows] = await pool.query(buildQuery(true), params);
+    return rows;
+  } catch (err) {
+    if (err?.code !== 'ER_BAD_FIELD_ERROR' && err?.code !== 'ER_NO_SUCH_TABLE') throw err;
+    params.length = 0;
+    const [rows] = await pool.query(buildQuery(false), params);
+    return rows;
+  }
+}
+
+async function fetchCustomerStatementMovements(invoiceIds = []) {
+  if (!invoiceIds.length) return { receipts: [], creditNotes: [] };
+  const placeholders = invoiceIds.map(() => '?').join(',');
+  const [receipts] = await pool.query(`
+    SELECT r.id, r.receipt_number, r.invoice_id, r.issue_date, r.currency_code,
+           r.payment_method, r.bank_account, r.reference_number,
+           r.amount, r.retention_amount, r.net_amount, r.status
+      FROM receipts r
+     WHERE r.status = 'emitido' AND r.invoice_id IN (${placeholders})
+     ORDER BY r.issue_date ASC, r.id ASC
+  `, invoiceIds);
+  const [creditNotes] = await pool.query(`
+    SELECT cn.id, cn.credit_note_number, cn.invoice_id, cn.issue_date,
+           cn.total_amount, cn.status, cn.reason
+      FROM credit_notes cn
+     WHERE cn.status <> 'anulada' AND cn.invoice_id IN (${placeholders})
+     ORDER BY cn.issue_date ASC, cn.id ASC
+  `, invoiceIds);
+  return { receipts, creditNotes };
+}
+
+// GET /api/invoices/customer-statement
+router.get('/customer-statement', requireAuth, async (req, res) => {
+  try {
+    const rawInvoices = await fetchCustomerStatementInvoices(req.query || {});
+    const documents = rawInvoices.map((row) => {
+      const totalFromDb = Number(row.total_amount || 0);
+      const total = totalFromDb > 0 ? totalFromDb : Math.max(0, Number(row.subtotal || 0) + Number(row.tax_amount || 0));
+      const credited = Number(row.credit_notes_total || row.credited_total_db || 0);
+      const netTotal = Number(row.net_total_amount_db || 0) > 0 ? Number(row.net_total_amount_db || 0) : Math.max(0, total - credited);
+      const paid = Number(row.receipts_paid || 0) > 0 ? Number(row.receipts_paid || 0) : Number(row.paid_amount_db || 0);
+      const rawStatus = String(row.status || '').toLowerCase();
+      const isCanceled = rawStatus === 'anulada' || rawStatus === 'anulado';
+      const balance = isCanceled ? 0 : Math.max(0, netTotal - paid);
+      const normalized = customerStatementStatus({ ...row, balance, paid_amount: paid });
+      return {
+        ...row,
+        customer_key: normalizeCustomerKey(row),
+        customer_name: normalizeCustomerName(row),
+        customer_ruc: row.customer_doc || row.organization_ruc || '',
+        currency_code: normalizeStatementCurrency(row.currency_code),
+        total_amount: Number(total.toFixed(2)),
+        credited_total: Number(credited.toFixed(2)),
+        net_total_amount: Number(netTotal.toFixed(2)),
+        paid_amount: Number(paid.toFixed(2)),
+        balance: Number(balance.toFixed(2)),
+        normalized_status: normalized,
+        status_label: customerStatementStatusLabel(normalized),
+        days_overdue: normalized === 'vencido' && row.due_date ? Math.max(0, Math.floor((todayDateOnly() - parseDateOnly(row.due_date)) / 86400000)) : 0,
+      };
+    }).filter((row) => filterCustomerStatementDocument(row, req.query || {}));
+
+    const invoiceIds = documents.map((row) => Number(row.id)).filter(Boolean);
+    const { receipts, creditNotes } = await fetchCustomerStatementMovements(invoiceIds);
+    const docById = new Map(documents.map((row) => [Number(row.id), row]));
+    const movementRows = [];
+
+    for (const doc of documents) {
+      if (doc.normalized_status !== 'anulado') {
+        movementRows.push({ id: `invoice:${doc.id}`, source_type: 'invoice', source_id: doc.id, invoice_id: doc.id, date: doc.issue_date || doc.created_at, document_number: doc.invoice_number, reference: doc.operation_reference || '', description: doc.description || 'Factura', customer_key: doc.customer_key, customer_name: doc.customer_name, customer_ruc: doc.customer_ruc, currency_code: doc.currency_code, debit: doc.total_amount, credit: 0 });
+      }
+    }
+    for (const note of creditNotes) {
+      const doc = docById.get(Number(note.invoice_id));
+      if (!doc) continue;
+      movementRows.push({ id: `credit-note:${note.id}`, source_type: 'credit_note', source_id: note.id, invoice_id: note.invoice_id, date: note.issue_date, document_number: note.credit_note_number, reference: doc.invoice_number, description: note.reason || 'Nota de credito', customer_key: doc.customer_key, customer_name: doc.customer_name, customer_ruc: doc.customer_ruc, currency_code: doc.currency_code, debit: 0, credit: Number(note.total_amount || 0) });
+    }
+    for (const receipt of receipts) {
+      const doc = docById.get(Number(receipt.invoice_id));
+      if (!doc) continue;
+      movementRows.push({ id: `receipt:${receipt.id}`, source_type: 'receipt', source_id: receipt.id, invoice_id: receipt.invoice_id, date: receipt.issue_date, document_number: receipt.receipt_number, reference: doc.invoice_number, description: receipt.payment_method || 'Recibo', customer_key: doc.customer_key, customer_name: doc.customer_name, customer_ruc: doc.customer_ruc, currency_code: normalizeStatementCurrency(receipt.currency_code || doc.currency_code), debit: 0, credit: Number(receipt.net_amount || receipt.amount || 0) });
+    }
+
+    movementRows.sort((a, b) => {
+      const client = String(a.customer_name || '').localeCompare(String(b.customer_name || ''));
+      if (client) return client;
+      const currency = String(a.currency_code || '').localeCompare(String(b.currency_code || ''));
+      if (currency) return currency;
+      const dateA = new Date(a.date || 0).getTime();
+      const dateB = new Date(b.date || 0).getTime();
+      if (dateA !== dateB) return dateA - dateB;
+      return String(a.id).localeCompare(String(b.id));
+    });
+    const runningByClientCurrency = new Map();
+    const movements = movementRows.map((row) => {
+      const key = `${row.customer_key}:${row.currency_code}`;
+      const next = Number(((runningByClientCurrency.get(key) || 0) + Number(row.debit || 0) - Number(row.credit || 0)).toFixed(2));
+      runningByClientCurrency.set(key, next);
+      return { ...row, balance: next };
+    });
+
+    const clientMap = new Map();
+    const totals = { documents: documents.length, open_documents: 0, overdue_documents: 0, due_today_documents: 0, partial_documents: 0, invoiced_by_currency: {}, credited_by_currency: {}, paid_by_currency: {}, balance_by_currency: {}, overdue_by_currency: {} };
+    for (const doc of documents) {
+      const client = clientMap.get(doc.customer_key) || { customer_key: doc.customer_key, customer_name: doc.customer_name, customer_ruc: doc.customer_ruc, organization_id: doc.organization_id || null, documents: 0, open_documents: 0, overdue_documents: 0, last_payment_date: null, totals_by_currency: {}, paid_by_currency: {}, credited_by_currency: {}, balance_by_currency: {}, overdue_by_currency: {} };
+      client.documents += 1;
+      addCurrencyAmount(client.totals_by_currency, doc.currency_code, doc.total_amount);
+      addCurrencyAmount(client.paid_by_currency, doc.currency_code, doc.paid_amount);
+      addCurrencyAmount(client.credited_by_currency, doc.currency_code, doc.credited_total);
+      addCurrencyAmount(client.balance_by_currency, doc.currency_code, doc.balance);
+      if (doc.balance > 0.009) client.open_documents += 1;
+      if (doc.normalized_status === 'vencido') { client.overdue_documents += 1; addCurrencyAmount(client.overdue_by_currency, doc.currency_code, doc.balance); }
+      if (doc.last_payment_date && (!client.last_payment_date || String(doc.last_payment_date) > String(client.last_payment_date))) client.last_payment_date = doc.last_payment_date;
+      clientMap.set(doc.customer_key, client);
+      addCurrencyAmount(totals.invoiced_by_currency, doc.currency_code, doc.total_amount);
+      addCurrencyAmount(totals.credited_by_currency, doc.currency_code, doc.credited_total);
+      addCurrencyAmount(totals.paid_by_currency, doc.currency_code, doc.paid_amount);
+      addCurrencyAmount(totals.balance_by_currency, doc.currency_code, doc.balance);
+      if (doc.balance > 0.009) totals.open_documents += 1;
+      if (doc.normalized_status === 'vencido') { totals.overdue_documents += 1; addCurrencyAmount(totals.overdue_by_currency, doc.currency_code, doc.balance); }
+      if (doc.normalized_status === 'vence_hoy') totals.due_today_documents += 1;
+      if (doc.normalized_status === 'parcial') totals.partial_documents += 1;
+    }
+    const clients = Array.from(clientMap.values()).sort((a, b) => {
+      const aBalance = Object.values(a.balance_by_currency || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+      const bBalance = Object.values(b.balance_by_currency || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+      return bBalance - aBalance || String(a.customer_name || '').localeCompare(String(b.customer_name || ''));
+    });
+    res.json({ filters: req.query || {}, totals, clients, documents, movements });
+  } catch (e) {
+    console.error('[customer-statement] Error:', e);
+    res.status(500).json({ error: 'Error al generar estado de cuenta de clientes' });
+  }
+});
+function statementPdfMoney(value, currency = 'USD') {
+  const curr = normalizeStatementCurrency(currency);
+  const isPyg = curr === 'PYG' || curr === 'GS';
+  const amount = Number(value || 0).toLocaleString('es-PY', {
+    minimumFractionDigits: isPyg ? 0 : 2,
+    maximumFractionDigits: isPyg ? 0 : 2,
+  });
+  return `${curr === 'GS' ? 'PYG' : curr} ${amount}`;
+}
+
+function addStatementPdfPageHeader(doc, title, subtitle) {
+  doc.rect(36, 32, 540, 52).fill('#0f172a');
+  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(16).text(title, 52, 46, { width: 340 });
+  doc.font('Helvetica').fontSize(8).text(subtitle || '', 52, 66, { width: 340 });
+  doc.font('Helvetica-Bold').fontSize(10).text('ATM CARGO', 444, 46, { width: 112, align: 'right' });
+  doc.font('Helvetica').fontSize(8).text(formatDate(new Date()), 444, 62, { width: 112, align: 'right' });
+  doc.fillColor('#0f172a');
+}
+
+function drawStatementPdfTableHeader(doc, y) {
+  doc.rect(36, y, 540, 22).fill('#e2e8f0');
+  doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(7);
+  doc.text('Factura', 42, y + 7, { width: 58 });
+  doc.text('Cliente', 100, y + 7, { width: 110 });
+  doc.text('Emision', 214, y + 7, { width: 48 });
+  doc.text('Vence', 264, y + 7, { width: 48 });
+  doc.text('Total', 315, y + 7, { width: 58, align: 'right' });
+  doc.text('Cobrado', 378, y + 7, { width: 58, align: 'right' });
+  doc.text('NC', 442, y + 7, { width: 48, align: 'right' });
+  doc.text('Saldo', 496, y + 7, { width: 70, align: 'right' });
+  doc.fillColor('#0f172a');
+}
+
+// GET /api/invoices/customer-statement/pdf
+router.get('/customer-statement/pdf', requireAuth, async (req, res) => {
+  try {
+    const rawInvoices = await fetchCustomerStatementInvoices(req.query || {});
+    const documents = rawInvoices.map((row) => {
+      const totalFromDb = Number(row.total_amount || 0);
+      const total = totalFromDb > 0 ? totalFromDb : Math.max(0, Number(row.subtotal || 0) + Number(row.tax_amount || 0));
+      const credited = Number(row.credit_notes_total || row.credited_total_db || 0);
+      const netTotal = Number(row.net_total_amount_db || 0) > 0 ? Number(row.net_total_amount_db || 0) : Math.max(0, total - credited);
+      const paid = Number(row.receipts_paid || 0) > 0 ? Number(row.receipts_paid || 0) : Number(row.paid_amount_db || 0);
+      const rawStatus = String(row.status || '').toLowerCase();
+      const isCanceled = rawStatus === 'anulada' || rawStatus === 'anulado';
+      const balance = isCanceled ? 0 : Math.max(0, netTotal - paid);
+      const normalized = customerStatementStatus({ ...row, balance, paid_amount: paid });
+      return {
+        ...row,
+        customer_key: normalizeCustomerKey(row),
+        customer_name: normalizeCustomerName(row),
+        customer_ruc: row.customer_doc || row.organization_ruc || '',
+        currency_code: normalizeStatementCurrency(row.currency_code),
+        total_amount: Number(total.toFixed(2)),
+        credited_total: Number(credited.toFixed(2)),
+        paid_amount: Number(paid.toFixed(2)),
+        balance: Number(balance.toFixed(2)),
+        normalized_status: normalized,
+        status_label: customerStatementStatusLabel(normalized),
+      };
+    }).filter((row) => filterCustomerStatementDocument(row, req.query || {}));
+
+    const totals = { balance_by_currency: {}, overdue_by_currency: {}, paid_by_currency: {}, credited_by_currency: {}, invoiced_by_currency: {} };
+    for (const row of documents) {
+      addCurrencyAmount(totals.balance_by_currency, row.currency_code, row.balance);
+      addCurrencyAmount(totals.paid_by_currency, row.currency_code, row.paid_amount);
+      addCurrencyAmount(totals.credited_by_currency, row.currency_code, row.credited_total);
+      addCurrencyAmount(totals.invoiced_by_currency, row.currency_code, row.total_amount);
+      if (row.normalized_status === 'vencido') addCurrencyAmount(totals.overdue_by_currency, row.currency_code, row.balance);
+    }
+
+    const clientNames = Array.from(new Set(documents.map((row) => row.customer_name).filter(Boolean)));
+    const isSingleClient = clientNames.length === 1;
+    const primaryClient = isSingleClient ? documents[0] || {} : {};
+    const title = isSingleClient ? `Estado de cuenta - ${clientNames[0]}` : 'Estado de cuenta de clientes';
+    const subtitle = `Documentos: ${documents.length} | Filtro: ${customerStatementStatusLabel(String(req.query?.status || 'por_cobrar').toLowerCase())}`;
+    const fileSuffix = isSingleClient
+      ? String(clientNames[0] || 'cliente').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)
+      : 'clientes';
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="estado-cuenta-${fileSuffix || 'clientes'}.pdf"`);
+
+    const doc = new PDFDocument({ size: 'A4', margin: 36, bufferPages: true });
+    doc.pipe(res);
+    addStatementPdfPageHeader(doc, title, subtitle);
+
+    let y = 104;
+    if (isSingleClient) {
+      doc.roundedRect(36, y, 540, 86, 6).fillAndStroke('#f8fafc', '#dbe4ee');
+      doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(10).text('Datos del cliente', 50, y + 12, { width: 180 });
+      doc.font('Helvetica').fontSize(8).fillColor('#334155');
+      doc.text(`Cliente: ${primaryClient.customer_name || '-'}`, 50, y + 30, { width: 245 });
+      doc.text(`RUC: ${primaryClient.customer_ruc || primaryClient.organization_ruc || '-'}`, 50, y + 44, { width: 245 });
+      doc.text(`Email: ${primaryClient.customer_email || primaryClient.organization_email || '-'}`, 315, y + 30, { width: 230 });
+      doc.text(`Telefono: ${primaryClient.organization_phone || '-'}`, 315, y + 44, { width: 230 });
+      doc.text('Este estado de cuenta resume facturas, recibos y notas de credito registrados a la fecha de emision.', 50, y + 64, { width: 495 });
+      y += 104;
+    }
+
+    doc.font('Helvetica-Bold').fontSize(9).fillColor('#334155').text('Resumen financiero', 36, y);
+    y += 16;
+    const summaryRows = [
+      ['Saldo por cobrar', totals.balance_by_currency],
+      ['Vencido', totals.overdue_by_currency],
+      ['Cobrado', totals.paid_by_currency],
+      ['Notas de credito', totals.credited_by_currency],
+    ];
+    doc.font('Helvetica').fontSize(8).fillColor('#0f172a');
+    for (const [label, values] of summaryRows) {
+      const text = Object.entries(values || {}).map(([currency, amount]) => statementPdfMoney(amount, currency)).join('   ') || statementPdfMoney(0, 'USD');
+      doc.text(label, 48, y, { width: 120 });
+      doc.font('Helvetica-Bold').text(text, 172, y, { width: 360 });
+      doc.font('Helvetica');
+      y += 14;
+    }
+
+    if (isSingleClient) {
+      y += 10;
+      const balanceText = Object.entries(totals.balance_by_currency || {})
+        .map(([currency, amount]) => statementPdfMoney(amount, currency))
+        .join(' / ') || statementPdfMoney(0, 'USD');
+      doc.roundedRect(36, y, 540, 44, 6).fillAndStroke('#fff7ed', '#fed7aa');
+      doc.fillColor('#9a3412').font('Helvetica-Bold').fontSize(8).text('Solicitud de regularizacion', 50, y + 10, { width: 220 });
+      doc.font('Helvetica').fontSize(8).fillColor('#7c2d12').text(
+        `Favor verificar el saldo pendiente de ${balanceText}. En caso de contar con pagos no aplicados, remitir el comprobante para su conciliacion.`,
+        50,
+        y + 24,
+        { width: 500 }
+      );
+      y += 58;
+    }
+
+    y += 10;
+    drawStatementPdfTableHeader(doc, y);
+    y += 24;
+    doc.font('Helvetica').fontSize(7).fillColor('#0f172a');
+
+    const maxRows = documents.slice(0, 120);
+    for (const row of maxRows) {
+      if (y > 760) {
+        doc.addPage();
+        addStatementPdfPageHeader(doc, title, subtitle);
+        y = 104;
+        drawStatementPdfTableHeader(doc, y);
+        y += 24;
+        doc.font('Helvetica').fontSize(7).fillColor('#0f172a');
+      }
+      const fill = row.normalized_status === 'vencido' ? '#fff1f2' : '#ffffff';
+      doc.rect(36, y - 3, 540, 22).fill(fill).strokeColor('#e2e8f0').stroke();
+      doc.fillColor('#0f172a');
+      doc.text(row.invoice_number || String(row.id || ''), 42, y + 3, { width: 58, ellipsis: true });
+      doc.text(row.customer_name || '-', 100, y + 3, { width: 110, ellipsis: true });
+      doc.text(formatDate(row.issue_date || row.created_at) || '-', 214, y + 3, { width: 48 });
+      doc.text(formatDate(row.due_date) || '-', 264, y + 3, { width: 48 });
+      doc.text(statementPdfMoney(row.total_amount, row.currency_code), 315, y + 3, { width: 58, align: 'right' });
+      doc.text(statementPdfMoney(row.paid_amount, row.currency_code), 378, y + 3, { width: 58, align: 'right' });
+      doc.text(statementPdfMoney(row.credited_total, row.currency_code), 442, y + 3, { width: 48, align: 'right' });
+      doc.font('Helvetica-Bold').fillColor(row.normalized_status === 'vencido' ? '#b91c1c' : '#0f172a').text(statementPdfMoney(row.balance, row.currency_code), 496, y + 3, { width: 70, align: 'right' });
+      doc.font('Helvetica').fillColor('#0f172a');
+      y += 22;
+    }
+
+    if (documents.length > maxRows.length) {
+      y += 10;
+      doc.fontSize(8).fillColor('#64748b').text(`Se muestran ${maxRows.length} de ${documents.length} documentos. Use filtros para un PDF mas especifico.`, 36, y);
+    }
+
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i += 1) {
+      doc.switchToPage(i);
+      doc.font('Helvetica').fontSize(7).fillColor('#64748b').text(`Pagina ${i + 1} de ${range.count}`, 36, 812, { width: 540, align: 'right' });
+    }
+    doc.end();
+  } catch (e) {
+    console.error('[customer-statement-pdf] Error:', e);
+    res.status(500).json({ error: 'Error al generar PDF de estado de cuenta' });
+  }
+});
 router.get('/', requireAuth, async (req, res) => {
   try {
     const { status, organization_id, from_date, to_date, search } = req.query;
@@ -3604,6 +4060,10 @@ router.get('/credit-notes/:id/pdf', requireAuth, async (req, res) => {
 });
 
 export default router;
+
+
+
+
 
 
 

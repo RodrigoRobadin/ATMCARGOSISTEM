@@ -1,12 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../../api";
 import InvoiceCreateModal from "../InvoiceCreateModal.jsx";
-import {
-  companyBankAccountLabel,
-  companyBankAccountValue,
-  filterCompanyBankAccounts,
-  parseCompanyBankAccounts,
-} from "../../utils/companyBankAccounts";
+import CustomerReceiptModal from "../CustomerReceiptModal.jsx";
 
 function fmtDate(value) {
   if (!value) return "?";
@@ -561,7 +556,7 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, deal, costSheetVe
         />
       )}
       {paymentInvoice && (
-        <PaymentModal
+        <CustomerReceiptModal
           invoice={paymentInvoice}
           onClose={() => setPaymentInvoice(null)}
           onSuccess={() => {

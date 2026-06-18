@@ -117,7 +117,7 @@ function Layout({ children }) {
   const role = String(user?.role || '').toLowerCase();
   const isServiceRole = role === 'service';
   const canSeeAdminCore = role === 'admin' || role === 'manager';
-  const canSeeFinanceBlock = canSeeAdminCore || role === 'finanzas';
+  const canSeeFinanceBlock = role === 'admin' || role === 'finanzas';
   const canSeeAdminBlock = canSeeAdminCore || canSeeFinanceBlock;
   const canSeeContactsModules = true;
   const canSeeCommercialModules = !isServiceRole;
@@ -474,7 +474,7 @@ export default function App() {
                 <Route
                   path="/admin-ops"
                   element={
-                    <RequireRole allow={['admin', 'manager', 'finanzas']}>
+                    <RequireRole allow={['admin', 'finanzas']}>
                       <AdminWorkspace />
                     </RequireRole>
                   }
@@ -482,7 +482,7 @@ export default function App() {
                 <Route
                   path="/admin-ops/purchases"
                   element={
-                    <RequireRole allow={['admin', 'manager', 'finanzas']}>
+                    <RequireRole allow={['admin', 'finanzas']}>
                       <OperationalPurchases />
                     </RequireRole>
                   }
@@ -490,7 +490,7 @@ export default function App() {
                 <Route
                   path="/admin-ops/payment-orders"
                   element={
-                    <RequireRole allow={['admin', 'manager', 'finanzas']}>
+                    <RequireRole allow={['admin', 'finanzas']}>
                       <PaymentOrders />
                     </RequireRole>
                   }
@@ -498,7 +498,7 @@ export default function App() {
                 <Route
                   path="/admin-ops/accounts-payable"
                   element={
-                    <RequireRole allow={['admin', 'manager', 'finanzas']}>
+                    <RequireRole allow={['admin', 'finanzas']}>
                       <AccountsPayable />
                     </RequireRole>
                   }
@@ -506,7 +506,7 @@ export default function App() {
                 <Route
                   path="/payments"
                   element={
-                    <RequireRole allow={['admin', 'manager', 'finanzas']}>
+                    <RequireRole allow={['admin', 'finanzas']}>
                       <Payments />
                     </RequireRole>
                   }
@@ -514,7 +514,7 @@ export default function App() {
                 <Route
                   path="/admin-expenses"
                   element={
-                    <RequireRole allow={['admin', 'manager', 'finanzas']}>
+                    <RequireRole allow={['admin', 'finanzas']}>
                       <AdminExpenses />
                     </RequireRole>
                   }
@@ -522,7 +522,7 @@ export default function App() {
                 <Route
                   path="/account-statement"
                   element={
-                    <RequireRole allow={['admin', 'manager', 'finanzas']}>
+                    <RequireRole allow={['admin', 'finanzas']}>
                       <AccountStatement />
                     </RequireRole>
                   }

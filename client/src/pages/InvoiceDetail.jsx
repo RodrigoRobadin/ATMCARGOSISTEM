@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { api } from '../api';
+import CustomerReceiptModal from '../components/CustomerReceiptModal.jsx';
 
 function formatApiError(err, fallback) {
   const data = err?.response?.data;
@@ -470,7 +471,7 @@ export default function InvoiceDetail() {
       </div>
 
       {showPayment && (
-        <PaymentModal
+        <CustomerReceiptModal
           invoice={invoice}
           onClose={() => setShowPayment(false)}
           onSuccess={async () => {

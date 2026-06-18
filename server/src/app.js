@@ -39,6 +39,7 @@ import routeStopsRouter from './routes/routeStops.js';
 
 // ⭐️ NUEVO: Facturación
 import invoicesRouter from './routes/invoices.js';
+import receiptsAdminRouter from './routes/receiptsAdmin.js';
 
 // ⭐️ NUEVO: Órdenes de Compra y Facturas de Compra
 import purchaseOrdersRouter from './routes/purchaseOrders.js';
@@ -60,6 +61,7 @@ import adminFinanceRouter from './routes/adminFinance.js';
 import serviceRouter from './routes/service.js';
 import containerRouter from './routes/container.js';
 import accountsPayableRouter from './routes/accountsPayable.js';
+import customerCollectionsRouter from './routes/customerCollections.js';
 import assistantRouter from './routes/assistant.js';
 
 // ⭐️ NUEVO: solicitudes de flete
@@ -228,6 +230,7 @@ app.use('/api/routes', routesModuleRouter);
 app.use('/api/routes', routeStopsRouter);
 
 // ⭐️ NUEVO: Facturación
+app.use('/api/invoices', receiptsAdminRouter);
 app.use('/api/invoices', invoicesRouter);
 
 // ⭐️ NUEVO: Órdenes de Compra y Facturas de Compra
@@ -247,6 +250,7 @@ app.use('/api/messages', messagesRouter);
 app.use('/api/assistant', assistantRouter);
 app.use('/api/admin/finance', adminFinanceRouter);
 app.use('/api/accounts-payable', accountsPayableRouter);
+app.use('/api/customer-collections', customerCollectionsRouter);
 app.use('/api/service', serviceRouter);
 app.use('/api/container', containerRouter);
 

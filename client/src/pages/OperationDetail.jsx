@@ -6,6 +6,7 @@ import { useAuth } from "../auth.jsx";
 import DetCosSheet from "./DetCosSheet";
 import ReportPreview from "../components/op-details/ReportPreview";
 import OperationExpenseInvoices from "../components/OperationExpenseInvoices.jsx";
+import OperationFinancialStatement from "../components/OperationFinancialStatement.jsx";
 import AdminOpsPanel from "../components/op-details/AdminOpsPanel.jsx";
 import OrganizationLookupField from "../components/OrganizationLookupField.jsx";
 import LogisticsAutocomplete from "../components/LogisticsAutocomplete.jsx";
@@ -2214,6 +2215,7 @@ useEffect(() => {
     { id: "documentos", kind: "base", label: "Documentos" },
     { id: "gastos", kind: "base", label: "Gastos" },
     ...(canAccessAdminOps ? [{ id: "administracion", kind: "base", label: "Administración" }] : []),
+    { id: "estado-cuenta", kind: "base", label: "Estado de cuenta" },
     { id: "detcos", kind: "base", label: "Planilla de costos (DET COS)" },
     ...currentBudgetTab,
     ...budgetRevisionTabs,
@@ -2903,6 +2905,12 @@ function providerHasFreightTag(p = {}) {
                   .then(({ data }) => setOpDocs(Array.isArray(data) ? data : []))
                   .catch(() => setOpDocs([]));
               }}
+            />
+          ) : activeTab === "estado-cuenta" ? (
+            <OperationFinancialStatement
+              operationId={Number(id)}
+              operationType="deal"
+              costSheetVersionNumber={selectedCostSheetVersionNumber || currentCostSheetVersion?.version_number || null}
             />
           ) : isFileTab(activeTab) ? (
             <FileTabViewer context={getFileFromTab(activeTab)} />

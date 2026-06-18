@@ -3,6 +3,7 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import invoicesRouter from './routes/invoices.js';
+import receiptsAdminRouter from './routes/receiptsAdmin.js';
 import usersRouter from './routes/users.js';
 import dealsRouter from './routes/deals.js';
 import dealDocumentsRouter from './routes/dealDocuments.js';
@@ -19,6 +20,7 @@ app.get('/', (_req, res) => {
   res.send('API running');
 });
 
+app.use('/api/invoices', receiptsAdminRouter);
 app.use('/api/invoices', invoicesRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/deals', dealsRouter);

@@ -567,7 +567,7 @@ router.post('/:id/payments', requireAuth, requireRole(['admin', 'finanzas']), as
         }
 
         // Registrar pago
-        await pool.query(
+        const [paymentResult] = await pool.query(
             `INSERT INTO purchase_invoice_payments 
        (invoice_id, payment_date, amount, payment_method, account, reference_number, notes, registered_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -591,7 +591,7 @@ router.post('/:id/payments', requireAuth, requireRole(['admin', 'finanzas']), as
             [id]
         );
 
-        res.json(updated);
+        res.json({ ...updated, payment_id: paymentResult.insertId });
     } catch (e) {
         console.error('[purchase-invoices] Error registering payment:', e);
         res.status(500).json({ error: 'Error al registrar pago' });

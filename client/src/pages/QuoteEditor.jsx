@@ -2146,6 +2146,7 @@ export default function QuoteEditor({
               showList
               showExpenseControl
               showInvoiceTable={false}
+              quoteId={quoteId || undefined}
               quoteRevisionId={selectedRevisionId || undefined}
               title="Costos finales"
               subtitle="Compra presupuestada vs facturas reales, ordenes de pago y pagos a proveedores."
