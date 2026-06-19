@@ -1,5 +1,5 @@
 // client/src/pages/Workspace.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { api } from "../api";
@@ -166,6 +166,7 @@ export default function Workspace() {
   const nav = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
+  const isAdmin = String(user?.role || "").toLowerCase() === "admin";
 
   const [bu, setBu] = useState(null);
   const [pipelineId, setPipelineId] = useState(null);
@@ -178,11 +179,30 @@ export default function Workspace() {
   const [hiddenStageIds, setHiddenStageIds] = useState(new Set());
   const [dealCFMap, setDealCFMap] = useState({});
   const [quoteTotals, setQuoteTotals] = useState({});
+  const [advisorUsers, setAdvisorUsers] = useState([]);
+  const [selectedAdvisorUserId, setSelectedAdvisorUserId] = useState(() =>
+    isAdmin && user?.id ? String(user.id) : ""
+  );
+  const initializedAdvisorFilter = useRef(false);
 
   const isIndustrial =
     key === "atm-industrial" || (bu && bu.key_slug === "atm-industrial");
   const isContainer =
     key === "atm-container" || (bu && bu.key_slug === "atm-container");
+
+  useEffect(() => {
+    if (!isIndustrial || !isAdmin) return;
+    api
+      .get("/users/select", { params: { active: 1 } })
+      .then(({ data }) => setAdvisorUsers(Array.isArray(data) ? data : []))
+      .catch(() => setAdvisorUsers([]));
+  }, [isIndustrial, isAdmin]);
+
+  useEffect(() => {
+    if (!isIndustrial || !isAdmin || !user?.id || initializedAdvisorFilter.current) return;
+    initializedAdvisorFilter.current = true;
+    setSelectedAdvisorUserId((current) => current || String(user.id));
+  }, [isIndustrial, isAdmin, user?.id]);
 
   useEffect(() => {
     (async () => {
@@ -252,7 +272,13 @@ export default function Workspace() {
         const [{ data: s }, { data: d }] = await Promise.all([
           api.get(`/pipelines/${pid}/stages`),
           api.get("/deals", {
-            params: { pipeline_id: pid, business_unit_id: found?.id },
+            params: {
+              pipeline_id: pid,
+              business_unit_id: found?.id,
+              ...(key === "atm-industrial" && isAdmin && selectedAdvisorUserId
+                ? { deal_advisor_user_id: selectedAdvisorUserId }
+                : {}),
+            },
           }),
         ]);
 
@@ -268,6 +294,12 @@ export default function Workspace() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
+
+  useEffect(() => {
+    if (!isIndustrial || !isAdmin || !pipelineId || !bu?.id) return;
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAdvisorUserId, isIndustrial, isAdmin, pipelineId, bu?.id]);
 
   useEffect(() => {
     if (!deals.length) return;
@@ -369,7 +401,13 @@ export default function Workspace() {
   async function refresh() {
     if (!pipelineId || !bu?.id) return;
     const { data } = await api.get("/deals", {
-      params: { pipeline_id: pipelineId, business_unit_id: bu.id },
+      params: {
+        pipeline_id: pipelineId,
+        business_unit_id: bu.id,
+        ...(isIndustrial && isAdmin && selectedAdvisorUserId
+          ? { deal_advisor_user_id: selectedAdvisorUserId }
+          : {}),
+      },
     });
     setDeals(data || []);
   }
@@ -391,6 +429,21 @@ export default function Workspace() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {isIndustrial && isAdmin ? (
+            <select
+              className="px-3 py-2 text-sm rounded-lg border bg-white dark:bg-slate-950 dark:border-slate-700"
+              value={selectedAdvisorUserId}
+              onChange={(event) => setSelectedAdvisorUserId(event.target.value)}
+              title="Filtrar operaciones por comercial"
+            >
+              <option value="">Todos los comerciales</option>
+              {advisorUsers.map((advisor) => (
+                <option key={advisor.id} value={advisor.id}>
+                  {advisor.name || advisor.email || `Usuario ${advisor.id}`}
+                </option>
+              ))}
+            </select>
+          ) : null}
           <button
             onClick={() =>
               nav(
