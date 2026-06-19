@@ -248,6 +248,7 @@ export default function QuoteEditor({
     vendor_profit_pct: 0.15, // % profit vendedor
     rent_rate: 0.3, // ✅ 30% sobre CIF
     discount_rate: 0,
+    supplier_discount_rate: 0,
     freight_international_total_usd: 0,
     freight_buy_usd: 0,
 
@@ -1313,6 +1314,21 @@ export default function QuoteEditor({
         </div>
 
         <div>
+          <label className="text-xs text-slate-500">Descuento proveedor (productos)</label>
+          <select
+            className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
+            value={inputs.supplier_discount_rate ?? 0}
+            onChange={(e) => setField("supplier_discount_rate", n2(e.target.value))}
+          >
+            {DISCOUNT_RATE_OPTIONS.map((rate) => (
+              <option key={rate} value={rate}>
+                {rate === 0 ? "Sin descuento" : `${Math.round(rate * 100)}%`}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
           <label className="text-xs text-slate-500">TC ATM (Gs/USD)</label>
           <NumericInput
             className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
@@ -1708,6 +1724,12 @@ export default function QuoteEditor({
                       <b>-{fmtTotalSales(computed.oferta.totals.discount_amount_usd, computed.oferta.totals.discount_amount_installation_usd)}</b>
                     </div>
                   </>
+                ) : null}
+                {Number(computed.operacion?.totals?.supplier_discount_amount_usd || 0) > 0 ? (
+                  <div className="text-emerald-700">
+                    Descuento proveedor en productos ({Math.round(Number(computed.operacion.totals.supplier_discount_rate || 0) * 100)}%):{" "}
+                    <b>-{fmtOp(computed.operacion.totals.supplier_discount_amount_usd)}</b>
+                  </div>
                 ) : null}
                 <div>
                   Total ventas {currencyLabel}:{" "}
@@ -2152,6 +2174,21 @@ export default function QuoteEditor({
                     <option value="10">10%</option>
                   </select>
                 </div>
+                {Number(computed.operacion.totals.supplier_discount_amount_usd || 0) > 0 ? (
+                  <div className="rounded border border-emerald-200 bg-emerald-50 p-2 text-emerald-800">
+                    Compra productos antes de descuento: <b>{fmtOp(computed.operacion.totals.gross_product_purchase_usd)}</b>
+                    {" · "}Descuento proveedor ({Math.round(Number(computed.operacion.totals.supplier_discount_rate || 0) * 100)}%):{" "}
+                    <b>-{fmtOp(computed.operacion.totals.supplier_discount_amount_usd)}</b>
+                  </div>
+                ) : null}
+                {Number(computed.operacion.totals.discount_amount_usd || 0) > 0 ? (
+                  <div className="rounded border border-blue-200 bg-blue-50 p-2 text-blue-800">
+                    Venta antes de descuento: <b>{fmtTotalSales(computed.operacion.totals.gross_total_sell_usd, computed.oferta?.totals?.total_instal_usd)}</b>
+                    {" · "}Descuento cliente ({Math.round(Number(computed.operacion.totals.discount_rate || 0) * 100)}%):{" "}
+                    <b>-{fmtTotalSales(computed.operacion.totals.discount_amount_usd, computed.oferta?.totals?.discount_amount_installation_usd)}</b>
+                    {" · "}Venta neta: <b>{fmtTotalSales(computed.operacion.totals.total_sell_usd, computed.oferta?.totals?.net_total_instal_usd)}</b>
+                  </div>
+                ) : null}
                 <div>Total compra {currencyLabel}: <b>{fmtOp(computed.operacion.totals.total_buy_usd)}</b></div>
                 <div>Total venta {currencyLabel}: <b>{fmtOp(computed.operacion.totals.total_sell_usd)}</b></div>
                 <div>Profit total {currencyLabel}: <b>{fmtOp(computed.operacion.totals.profit_total_usd)}</b></div>

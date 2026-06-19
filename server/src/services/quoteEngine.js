@@ -57,6 +57,7 @@ export function computeQuote(inputs = {}) {
     // negocio
     rent_rate = 0.3, // 30% default
     discount_rate = 0,
+    supplier_discount_rate = 0,
     freight_international_total_usd = 0,
     insurance_sale_total_usd = 0,
 
@@ -104,6 +105,7 @@ export function computeQuote(inputs = {}) {
 
   const rentRate = Number(rent_rate || 0);
   const discountRate = Math.min(0.15, Math.max(0, Number(discount_rate || 0)));
+  const supplierDiscountRate = Math.min(0.15, Math.max(0, Number(supplier_discount_rate || 0)));
 
   /* ================= INSTALACION ================= */
   const instArray = Array.isArray(install_items) ? install_items : [];
@@ -399,7 +401,8 @@ export function computeQuote(inputs = {}) {
       : total_door_usd * Number(insurance_buy_rate || 0);
   const seguro_profit = total_seguro_usd - seguros_compra_usd;
 
-  const compra_puertas = total_door_usd;
+  const supplier_discount_amount_usd = total_door_usd * supplierDiscountRate;
+  const compra_puertas = total_door_usd - supplier_discount_amount_usd;
   const profit_puertas = venta_puertas - compra_puertas;
 
   const compra_flete = toUsdOp(freight_buy_usd);
@@ -532,6 +535,9 @@ export function computeQuote(inputs = {}) {
       },
       totals: {
         total_buy_usd: round2(total_buy_usd),
+        gross_product_purchase_usd: round2(total_door_usd),
+        supplier_discount_rate: supplierDiscountRate,
+        supplier_discount_amount_usd: round2(supplier_discount_amount_usd),
         gross_total_sell_usd: round2(gross_total_sales_usd),
         discount_rate: discountRate,
         discount_amount_usd: round2(discount_amount_usd),
