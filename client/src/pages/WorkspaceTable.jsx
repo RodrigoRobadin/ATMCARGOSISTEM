@@ -245,7 +245,7 @@ export default function WorkspaceTable() {
           const [{ data: s }, { data: d }] = await Promise.all([
             api.get(`/pipelines/${pid}/stages`),
             api.get("/deals", {
-              params: { pipeline_id: pid, business_unit_id: found?.id },
+              params: { pipeline_id: pid, business_unit_id: found?.id, commercial_outcome: "active" },
             }),
           ]);
           setStages(Array.isArray(s) ? s : []);
@@ -554,6 +554,7 @@ export default function WorkspaceTable() {
                   params: {
                     pipeline_id: pipelineId,
                     business_unit_id: bu.id,
+                    commercial_outcome: "active",
                   },
                 });
                 setDeals(Array.isArray(d) ? d : []);
@@ -573,6 +574,7 @@ export default function WorkspaceTable() {
                   params: {
                     pipeline_id: pipelineId,
                     business_unit_id: bu.id,
+                    commercial_outcome: "active",
                   },
                 });
                 setDeals(Array.isArray(d) ? d : []);
@@ -592,6 +594,7 @@ export default function WorkspaceTable() {
                   params: {
                     pipeline_id: pipelineId,
                     business_unit_id: bu.id,
+                    commercial_outcome: "active",
                   },
                 });
                 setDeals(Array.isArray(d) ? d : []);

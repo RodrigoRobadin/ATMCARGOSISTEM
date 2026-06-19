@@ -14,7 +14,9 @@ export default function General() {
   async function loadAll(pid, buId = "") {
     const [{ data: s }, { data: d }] = await Promise.all([
       api.get(`/pipelines/${pid}/stages`),
-      api.get("/deals", { params: { pipeline_id: pid, business_unit_id: buId || undefined } }),
+      api.get("/deals", {
+        params: { pipeline_id: pid, business_unit_id: buId || undefined, commercial_outcome: "active" },
+      }),
     ]);
     setStages(s);
     setDeals(d);

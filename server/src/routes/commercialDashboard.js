@@ -164,6 +164,7 @@ router.get('/', requireAuth, async (req, res) => {
     const where = [
       "LOWER(COALESCE(bu.key_slug, '')) IN ('atm-cargo', 'atm-industrial')",
       "LOWER(COALESCE(d.status, 'open')) <> 'closed'",
+      "COALESCE(NULLIF(LOWER(d.commercial_outcome), ''), 'active') = 'active'",
     ];
     const params = [];
 

@@ -68,7 +68,8 @@ const INSTALL_PACKAGES = {
   },
 };
 
-const RENT_RATE_OPTIONS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6];
+const RENT_RATE_OPTIONS = Array.from({ length: 9 }, (_, index) => index * 0.05);
+const DISCOUNT_RATE_OPTIONS = [0, ...Array.from({ length: 15 }, (_, index) => (index + 1) / 100)];
 const QUOTE_CATALOG_TYPES = new Set(["PRODUCTO", "SERVICIO"]);
 
 // ✅ TODOS los conceptos de despacho (editables)
@@ -246,6 +247,7 @@ export default function QuoteEditor({
     // params base
     vendor_profit_pct: 0.15, // % profit vendedor
     rent_rate: 0.3, // ✅ 30% sobre CIF
+    discount_rate: 0,
     freight_international_total_usd: 0,
     freight_buy_usd: 0,
 
@@ -1296,6 +1298,21 @@ export default function QuoteEditor({
         </div>
 
         <div>
+          <label className="text-xs text-slate-500">Descuento al cliente</label>
+          <select
+            className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
+            value={inputs.discount_rate ?? 0}
+            onChange={(e) => setField("discount_rate", n2(e.target.value))}
+          >
+            {DISCOUNT_RATE_OPTIONS.map((rate) => (
+              <option key={rate} value={rate}>
+                {rate === 0 ? "Sin descuento" : `${Math.round(rate * 100)}%`}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
           <label className="text-xs text-slate-500">TC ATM (Gs/USD)</label>
           <NumericInput
             className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
@@ -1680,9 +1697,21 @@ export default function QuoteEditor({
               </table>
               <div className="p-3 text-sm border-t bg-slate-50">
                 <div>CIF total (Valor Imponible): <b>{cifUsd != null ? fmtOp(cifUsd) : "-"}</b></div>
+                {Number(computed.oferta.totals.discount_amount_usd || 0) > 0 ? (
+                  <>
+                    <div>
+                      Subtotal antes de descuento {currencyLabel}:{" "}
+                      <b>{fmtTotalSales(computed.oferta.totals.gross_total_sales_usd, computed.oferta.totals.total_instal_usd)}</b>
+                    </div>
+                    <div className="text-red-700">
+                      Descuento ({Math.round(Number(computed.oferta.totals.discount_rate || 0) * 100)}%):{" "}
+                      <b>-{fmtTotalSales(computed.oferta.totals.discount_amount_usd, computed.oferta.totals.discount_amount_installation_usd)}</b>
+                    </div>
+                  </>
+                ) : null}
                 <div>
                   Total ventas {currencyLabel}:{" "}
-                  <b>{fmtTotalSales(computed.oferta.totals.total_sales_usd, computed.oferta.totals.total_instal_usd)}</b>
+                  <b>{fmtTotalSales(computed.oferta.totals.total_sales_usd, computed.oferta.totals.net_total_instal_usd)}</b>
                 </div>
               </div>
             </div>

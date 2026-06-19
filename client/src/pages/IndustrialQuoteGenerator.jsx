@@ -1099,7 +1099,11 @@ CORDIALES SALUDOS`,
 
         const qInputs = quoteRes?.data?.quote?.inputs || quoteRes?.data?.inputs || {};
         const cur = String(qInputs.operation_currency || 'USD').toUpperCase();
-        const rate = Number(qInputs.exchange_rate_operation_sell_usd || 1) || 1;
+        const rate = Number(
+          qInputs.exchange_rate_atm_gs_per_usd ||
+          qInputs.exchange_rate_operation_sell_usd ||
+          1
+        ) || 1;
         setOpCurrency(cur);
         setOpRate(rate);
 
@@ -3768,7 +3772,14 @@ function Row({ label, value, className = '' }){
 
 /** Tabla de ítems separada (para mantener limpio el componente) */
 
-function ItemsTable({ items, setItems, totalCurrency, totalDecimals, currencyCode = 'USD', currencyLabel = 'USD' }) {
+function ItemsTable({
+  items,
+  setItems,
+  totalCurrency,
+  totalDecimals,
+  currencyCode = 'USD',
+  currencyLabel = 'USD',
+}) {
 
   const included = items.filter((it) => it.include !== false);
 

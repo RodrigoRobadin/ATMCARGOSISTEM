@@ -36,6 +36,17 @@ function normalizeCurrency(value, fallback = 'PYG') {
   return code === 'GS' ? 'PYG' : code;
 }
 
+const LOSS_REASON_CATEGORIES = new Set([
+  'precio',
+  'competencia',
+  'plazo',
+  'sin_presupuesto',
+  'sin_respuesta',
+  'requisito_tecnico',
+  'postergado',
+  'otro',
+]);
+
 function sumCostSheetRows(rows = []) {
   if (!Array.isArray(rows)) return 0;
   return rows.reduce((sum, row) => {
@@ -225,6 +236,53 @@ async function computeNextGlobalReference(conn = pool, advance = true) {
   }
 })();
 
+// Resultado comercial e historial: las oportunidades perdidas se conservan y pueden reabrirse.
+(async () => {
+  try {
+    const [cols] = await pool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'deals'
+        AND COLUMN_NAME IN (
+          'commercial_outcome', 'lost_at', 'lost_by_user_id',
+          'lost_reason_category', 'lost_reason_detail', 'last_active_stage_id',
+          'reopened_at', 'reopened_by_user_id'
+        )
+    `);
+    const names = new Set(cols.map((col) => col.COLUMN_NAME));
+    const additions = [
+      ['commercial_outcome', "ALTER TABLE deals ADD COLUMN commercial_outcome VARCHAR(24) NOT NULL DEFAULT 'active' AFTER status"],
+      ['lost_at', 'ALTER TABLE deals ADD COLUMN lost_at DATETIME NULL AFTER commercial_outcome'],
+      ['lost_by_user_id', 'ALTER TABLE deals ADD COLUMN lost_by_user_id BIGINT NULL AFTER lost_at'],
+      ['lost_reason_category', 'ALTER TABLE deals ADD COLUMN lost_reason_category VARCHAR(48) NULL AFTER lost_by_user_id'],
+      ['lost_reason_detail', 'ALTER TABLE deals ADD COLUMN lost_reason_detail TEXT NULL AFTER lost_reason_category'],
+      ['last_active_stage_id', 'ALTER TABLE deals ADD COLUMN last_active_stage_id INT NULL AFTER lost_reason_detail'],
+      ['reopened_at', 'ALTER TABLE deals ADD COLUMN reopened_at DATETIME NULL AFTER last_active_stage_id'],
+      ['reopened_by_user_id', 'ALTER TABLE deals ADD COLUMN reopened_by_user_id BIGINT NULL AFTER reopened_at'],
+    ];
+    for (const [name, sql] of additions) {
+      if (!names.has(name)) await pool.query(sql);
+    }
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS deal_commercial_outcome_history (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        deal_id INT NOT NULL,
+        event_type VARCHAR(24) NOT NULL,
+        reason_category VARCHAR(48) NULL,
+        reason_detail TEXT NULL,
+        from_stage_id INT NULL,
+        to_stage_id INT NULL,
+        actor_user_id BIGINT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_deal_commercial_outcome_history_deal (deal_id),
+        INDEX idx_deal_commercial_outcome_history_created (created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+  } catch (e) {
+    console.error('No se pudo asegurar el estado comercial de operaciones:', e?.message || e);
+  }
+})();
+
 const storage = multer.diskStorage({
   destination(req, file, cb) {
     const dealId = String(req.params.id);
@@ -353,6 +411,7 @@ router.get('/', requireAuth, async (req, res) => {
     stage_id,
     business_unit_id,
     status,
+    commercial_outcome,
     q,
     org_budget_status,
     advisor_user_id,
@@ -373,6 +432,10 @@ router.get('/', requireAuth, async (req, res) => {
   if (stage_id)         { where.push('d.stage_id = ?');            params.push(stage_id); }
   if (business_unit_id) { where.push('d.business_unit_id = ?');    params.push(business_unit_id); }
   if (status)           { where.push('d.status = ?');              params.push(status); }
+  if (commercial_outcome) {
+    where.push("COALESCE(NULLIF(LOWER(d.commercial_outcome), ''), 'active') = ?");
+    params.push(String(commercial_outcome).trim().toLowerCase());
+  }
   if (q)                { where.push('d.title LIKE ?');            params.push(`%${q}%`); }
 
   if (org_budget_status) { where.push('o.budget_status = ?');      params.push(org_budget_status); }
@@ -397,12 +460,17 @@ router.get('/', requireAuth, async (req, res) => {
 
   const [rows] = await pool.query(
     `SELECT
-       d.id, d.reference, d.title, d.value, d.status, d.stage_id, d.pipeline_id, d.business_unit_id,
+       d.id, d.reference, d.title, d.value, d.status, d.commercial_outcome,
+       d.lost_at, d.lost_by_user_id, d.lost_reason_category, d.lost_reason_detail,
+       d.last_active_stage_id, d.reopened_at, d.reopened_by_user_id,
+       d.stage_id, d.pipeline_id, d.business_unit_id,
        d.contact_id, d.org_id, d.org_branch_id, d.created_at,
        d.advisor_user_id          AS deal_advisor_user_id,
        du.name                    AS deal_advisor_name,
        d.created_by_user_id,
        cu.name                    AS created_by_name,
+       lu.name                    AS lost_by_name,
+       ru.name                    AS reopened_by_name,
 
        c.name  AS contact_name, c.email AS contact_email,
        o.name  AS org_name,
@@ -420,6 +488,7 @@ router.get('/', requireAuth, async (req, res) => {
        qs.last_quote_at,
 
        bu.name AS business_unit_name, bu.key_slug AS business_unit_key,
+       s.name AS stage_name,
 
        o.budget_status  AS org_budget_status,
        o.budget_profit  AS org_budget_profit_value,
@@ -477,7 +546,10 @@ router.get('/', requireAuth, async (req, res) => {
      LEFT JOIN users          u  ON u.id  = o.advisor_user_id
      LEFT JOIN users          du ON du.id = d.advisor_user_id
      LEFT JOIN users          cu ON cu.id = d.created_by_user_id
+     LEFT JOIN users          lu ON lu.id = d.lost_by_user_id
+     LEFT JOIN users          ru ON ru.id = d.reopened_by_user_id
      LEFT JOIN business_units bu ON bu.id = d.business_unit_id
+     LEFT JOIN stages         s  ON s.id = d.stage_id
      ${whereSql}
      ORDER BY d.${sortCol} ${sortDir}
      LIMIT ? OFFSET ?`,
@@ -485,6 +557,199 @@ router.get('/', requireAuth, async (req, res) => {
   );
 
   res.json(await attachCargoExpenseControl(rows));
+});
+
+async function getDealForCommercialOutcome(conn, dealId, user) {
+  const [[deal]] = await conn.query(
+    `SELECT id, reference, pipeline_id, stage_id, advisor_user_id,
+            COALESCE(NULLIF(LOWER(commercial_outcome), ''), 'active') AS commercial_outcome
+       FROM deals
+      WHERE id = ?
+      LIMIT 1`,
+    [dealId]
+  );
+  if (!deal) return { error: 'Operación no encontrada', status: 404 };
+  const isAdmin = String(user?.role || '').toLowerCase() === 'admin';
+  if (!isAdmin && Number(deal.advisor_user_id || 0) !== Number(user?.id || 0)) {
+    return { error: 'No tienes permiso para actualizar esta operación', status: 403 };
+  }
+  return { deal, isAdmin };
+}
+
+async function hasIssuedSalesInvoice(conn, dealId) {
+  try {
+    const [[row]] = await conn.query(
+      `SELECT COUNT(*) AS total
+         FROM invoices
+        WHERE deal_id = ?
+          AND LOWER(COALESCE(status, '')) NOT IN ('anulada', 'borrador')
+          AND COALESCE(net_total_amount, total_amount, 0) > 0.01`,
+      [dealId]
+    );
+    return Number(row?.total || 0) > 0;
+  } catch (error) {
+    if (error?.code !== 'ER_BAD_FIELD_ERROR') throw error;
+    const [[row]] = await conn.query(
+      `SELECT COUNT(*) AS total
+         FROM invoices
+        WHERE deal_id = ?
+          AND LOWER(COALESCE(status, '')) NOT IN ('anulada', 'borrador')`,
+      [dealId]
+    );
+    return Number(row?.total || 0) > 0;
+  }
+}
+
+router.post('/:id/mark-not-closed', requireAuth, async (req, res) => {
+  const dealId = Number(req.params.id || 0);
+  const reasonCategory = String(req.body?.reason_category || '').trim().toLowerCase();
+  const reasonDetail = String(req.body?.reason_detail || '').trim();
+  if (!dealId) return res.status(400).json({ error: 'Operación inválida' });
+  if (!LOSS_REASON_CATEGORIES.has(reasonCategory)) {
+    return res.status(400).json({ error: 'Selecciona un motivo válido' });
+  }
+  if (!reasonDetail) {
+    return res.status(400).json({ error: 'Explica por qué no se cerró la venta' });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const result = await getDealForCommercialOutcome(conn, dealId, req.user);
+    if (result.error) {
+      await conn.rollback();
+      return res.status(result.status).json({ error: result.error });
+    }
+    if (result.deal.commercial_outcome === 'lost') {
+      await conn.rollback();
+      return res.status(409).json({ error: 'La operación ya está marcada como no cerrada' });
+    }
+    if (await hasIssuedSalesInvoice(conn, dealId)) {
+      await conn.rollback();
+      return res.status(409).json({ error: 'No se puede marcar como no cerrada una operación con factura de venta emitida' });
+    }
+
+    await conn.query(
+      `UPDATE deals
+          SET commercial_outcome = 'lost',
+              lost_at = NOW(),
+              lost_by_user_id = ?,
+              lost_reason_category = ?,
+              lost_reason_detail = ?,
+              last_active_stage_id = stage_id,
+              updated_at = NOW()
+        WHERE id = ?`,
+      [req.user?.id || null, reasonCategory, reasonDetail, dealId]
+    );
+    await conn.query(
+      `INSERT INTO deal_commercial_outcome_history
+        (deal_id, event_type, reason_category, reason_detail, from_stage_id, actor_user_id)
+       VALUES (?, 'lost', ?, ?, ?, ?)`,
+      [dealId, reasonCategory, reasonDetail, result.deal.stage_id || null, req.user?.id || null]
+    );
+    await conn.commit();
+    await logAudit({
+      req,
+      action: 'mark_not_closed',
+      entity: 'deal',
+      entityId: dealId,
+      description: `Marcó la operación ${result.deal.reference || dealId} como no cerrada`,
+      meta: { reason_category: reasonCategory, reason_detail: reasonDetail },
+    });
+    res.json({ ok: true, commercial_outcome: 'lost' });
+  } catch (error) {
+    await conn.rollback();
+    console.error('POST /deals/:id/mark-not-closed error:', error);
+    res.status(500).json({ error: 'No se pudo marcar la operación como no cerrada' });
+  } finally {
+    conn.release();
+  }
+});
+
+router.post('/:id/reopen-commercial', requireAuth, async (req, res) => {
+  const dealId = Number(req.params.id || 0);
+  const stageId = Number(req.body?.stage_id || 0);
+  if (!dealId || !stageId) return res.status(400).json({ error: 'Selecciona la etapa para rehabilitar la operación' });
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const result = await getDealForCommercialOutcome(conn, dealId, req.user);
+    if (result.error) {
+      await conn.rollback();
+      return res.status(result.status).json({ error: result.error });
+    }
+    if (result.deal.commercial_outcome !== 'lost') {
+      await conn.rollback();
+      return res.status(409).json({ error: 'La operación no está marcada como no cerrada' });
+    }
+    const [[stage]] = await conn.query(
+      'SELECT id FROM stages WHERE id = ? AND pipeline_id = ? LIMIT 1',
+      [stageId, result.deal.pipeline_id]
+    );
+    if (!stage) {
+      await conn.rollback();
+      return res.status(400).json({ error: 'La etapa seleccionada no pertenece al pipeline de la operación' });
+    }
+
+    await conn.query(
+      `UPDATE deals
+          SET commercial_outcome = 'active',
+              stage_id = ?,
+              reopened_at = NOW(),
+              reopened_by_user_id = ?,
+              updated_at = NOW()
+        WHERE id = ?`,
+      [stageId, req.user?.id || null, dealId]
+    );
+    await conn.query(
+      `INSERT INTO deal_commercial_outcome_history
+        (deal_id, event_type, from_stage_id, to_stage_id, actor_user_id)
+       VALUES (?, 'reopened', ?, ?, ?)`,
+      [dealId, result.deal.stage_id || null, stageId, req.user?.id || null]
+    );
+    await conn.commit();
+    await logAudit({
+      req,
+      action: 'reopen_commercial',
+      entity: 'deal',
+      entityId: dealId,
+      description: `Rehabilitó la operación ${result.deal.reference || dealId}`,
+      meta: { from_stage_id: result.deal.stage_id || null, to_stage_id: stageId },
+    });
+    res.json({ ok: true, commercial_outcome: 'active', stage_id: stageId });
+  } catch (error) {
+    await conn.rollback();
+    console.error('POST /deals/:id/reopen-commercial error:', error);
+    res.status(500).json({ error: 'No se pudo rehabilitar la operación' });
+  } finally {
+    conn.release();
+  }
+});
+
+router.get('/:id/commercial-outcome-history', requireAuth, async (req, res) => {
+  const dealId = Number(req.params.id || 0);
+  const conn = await pool.getConnection();
+  try {
+    const result = await getDealForCommercialOutcome(conn, dealId, req.user);
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    const [rows] = await conn.query(
+      `SELECT h.*, u.name AS actor_name, fs.name AS from_stage_name, ts.name AS to_stage_name
+         FROM deal_commercial_outcome_history h
+         LEFT JOIN users u ON u.id = h.actor_user_id
+         LEFT JOIN stages fs ON fs.id = h.from_stage_id
+         LEFT JOIN stages ts ON ts.id = h.to_stage_id
+        WHERE h.deal_id = ?
+        ORDER BY h.created_at DESC, h.id DESC`,
+      [dealId]
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error('GET /deals/:id/commercial-outcome-history error:', error);
+    res.status(500).json({ error: 'No se pudo cargar el historial comercial' });
+  } finally {
+    conn.release();
+  }
 });
 
 router.get('/:id', async (req, res) => {

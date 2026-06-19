@@ -7,6 +7,10 @@ import NewOperationModal from "../components/NewOperationModal";
 import NewIndustrialOperationModal from "../components/NewIndustrialOperationModal";
 import NewContainerOperationModal from "../components/NewContainerOperationModal";
 import { useAuth } from "../auth.jsx";
+import {
+  DealOutcomeContextMenu,
+  MarkDealNotClosedModal,
+} from "../components/DealCommercialOutcomeControls.jsx";
 
 /* helpers */
 const msPerDay = 24 * 60 * 60 * 1e3;
@@ -184,6 +188,8 @@ export default function Workspace() {
     isAdmin && user?.id ? String(user.id) : ""
   );
   const initializedAdvisorFilter = useRef(false);
+  const [outcomeMenu, setOutcomeMenu] = useState(null);
+  const [dealToMarkNotClosed, setDealToMarkNotClosed] = useState(null);
 
   const isIndustrial =
     key === "atm-industrial" || (bu && bu.key_slug === "atm-industrial");
@@ -275,6 +281,7 @@ export default function Workspace() {
             params: {
               pipeline_id: pid,
               business_unit_id: found?.id,
+              commercial_outcome: "active",
               ...(key === "atm-industrial" && isAdmin && selectedAdvisorUserId
                 ? { deal_advisor_user_id: selectedAdvisorUserId }
                 : {}),
@@ -404,12 +411,19 @@ export default function Workspace() {
       params: {
         pipeline_id: pipelineId,
         business_unit_id: bu.id,
+        commercial_outcome: "active",
         ...(isIndustrial && isAdmin && selectedAdvisorUserId
           ? { deal_advisor_user_id: selectedAdvisorUserId }
           : {}),
       },
     });
     setDeals(data || []);
+  }
+
+  function openOutcomeMenu(event, deal) {
+    event.preventDefault();
+    event.stopPropagation();
+    setOutcomeMenu({ deal, position: { x: event.clientX, y: event.clientY } });
   }
 
   if (loading)
@@ -574,6 +588,7 @@ export default function Workspace() {
                                 event.stopPropagation();
                                 openInNewTab(detailUrl);
                               }}
+                              onContextMenu={(event) => openOutcomeMenu(event, deal)}
                               className={`relative block w-full border rounded-xl p-3 hover:shadow transition cursor-pointer ${
                                 hasOverBudget ? "border-red-300 bg-red-50" : "bg-white"
                               }${isAged ? " deal-alert" : ""}`}
@@ -644,6 +659,19 @@ export default function Workspace() {
           ))}
         </div>
       </DragDropContext>
+
+      <DealOutcomeContextMenu
+        deal={outcomeMenu?.deal}
+        position={outcomeMenu?.position}
+        onClose={() => setOutcomeMenu(null)}
+        onMarkNotClosed={setDealToMarkNotClosed}
+      />
+
+      <MarkDealNotClosedModal
+        deal={dealToMarkNotClosed}
+        onClose={() => setDealToMarkNotClosed(null)}
+        onSaved={() => refresh()}
+      />
 
       {openModal &&
         (isIndustrial ? (

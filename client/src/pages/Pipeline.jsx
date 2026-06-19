@@ -5,6 +5,10 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { api } from "../api";
 import NewOperationModal from "../components/NewOperationModal";
 import { useAuth } from "../auth.jsx";
+import {
+  DealOutcomeContextMenu,
+  MarkDealNotClosedModal,
+} from "../components/DealCommercialOutcomeControls.jsx";
 
 /* helpers */
 const msPerDay = 24 * 60 * 60 * 1e3;
@@ -117,6 +121,8 @@ export default function Pipeline() {
   const [dealCFMap, setDealCFMap] = useState({});
   const [quoteTotals, setQuoteTotals] = useState({});
   const [openModal, setOpenModal] = useState(false);
+  const [outcomeMenu, setOutcomeMenu] = useState(null);
+  const [dealToMarkNotClosed, setDealToMarkNotClosed] = useState(null);
 
   const [stageAliasMap, setStageAliasMap] = useState({});
   const [hiddenStageIds, setHiddenStageIds] = useState(new Set());
@@ -151,6 +157,7 @@ export default function Pipeline() {
         api.get("/deals", {
           params: {
             pipeline_id: pid,
+            commercial_outcome: "active",
             ...(isAdmin && selectedAdvisorUserId ? { deal_advisor_user_id: selectedAdvisorUserId } : {}),
           },
         }),
@@ -255,10 +262,17 @@ export default function Pipeline() {
     const { data } = await api.get("/deals", {
       params: {
         pipeline_id: pid ?? pipelineId,
+        commercial_outcome: "active",
         ...(isAdmin && selectedAdvisorUserId ? { deal_advisor_user_id: selectedAdvisorUserId } : {}),
       },
     });
     setDeals(data || []);
+  }
+
+  function openOutcomeMenu(event, deal) {
+    event.preventDefault();
+    event.stopPropagation();
+    setOutcomeMenu({ deal, position: { x: event.clientX, y: event.clientY } });
   }
 
   return (
@@ -363,6 +377,7 @@ export default function Pipeline() {
                                 event.stopPropagation();
                                 openInNewTab(getOperationUrl(deal.id));
                               }}
+                              onContextMenu={(event) => openOutcomeMenu(event, deal)}
                               className={`block w-full border rounded-xl p-3 hover:shadow transition cursor-pointer ${
                                 hasOverBudget
                                   ? "border-red-300 bg-red-50 dark:bg-red-950/30 dark:border-red-800"
@@ -408,6 +423,19 @@ export default function Pipeline() {
           ))}
         </div>
       </DragDropContext>
+
+      <DealOutcomeContextMenu
+        deal={outcomeMenu?.deal}
+        position={outcomeMenu?.position}
+        onClose={() => setOutcomeMenu(null)}
+        onMarkNotClosed={setDealToMarkNotClosed}
+      />
+
+      <MarkDealNotClosedModal
+        deal={dealToMarkNotClosed}
+        onClose={() => setDealToMarkNotClosed(null)}
+        onSaved={() => refreshDeals()}
+      />
 
       {openModal && (
         <NewOperationModal

@@ -56,6 +56,7 @@ export function computeQuote(inputs = {}) {
     operation_currency = 'USD',
     // negocio
     rent_rate = 0.3, // 30% default
+    discount_rate = 0,
     freight_international_total_usd = 0,
     insurance_sale_total_usd = 0,
 
@@ -102,6 +103,7 @@ export function computeQuote(inputs = {}) {
   };
 
   const rentRate = Number(rent_rate || 0);
+  const discountRate = Math.min(0.15, Math.max(0, Number(discount_rate || 0)));
 
   /* ================= INSTALACION ================= */
   const instArray = Array.isArray(install_items) ? install_items : [];
@@ -323,7 +325,7 @@ export function computeQuote(inputs = {}) {
   const total_finan_usd = financing_total_sale_usd;
   const total_despacho_usd = customs_total_sale_usd;
 
-  const ofertaItemsFull = ofertaBase.map((r) => {
+  const ofertaItemsGross = ofertaBase.map((r) => {
     const flete_i = total_flete_usd * r.participation;
     const seguro_i = total_seguro_usd * r.participation;
     const despacho_i = total_despacho_usd * r.participation;
@@ -359,8 +361,24 @@ export function computeQuote(inputs = {}) {
       sub_total: round2(sub_total_i),
       rent: round2(rent_i),
       adicional: round2(adicional_i),
+      total_sales_gross: round2(total_sales_i),
+      discount_amount: 0,
       total_sales: round2(total_sales_i),
       unit_price: unit_price_i !== null ? round2(unit_price_i) : null,
+    };
+  });
+
+  const gross_total_sales_usd = sumNum(ofertaItemsGross.map((r) => r.total_sales_gross));
+  const discount_amount_usd = gross_total_sales_usd * discountRate;
+  const discount_amount_installation_usd = total_instal_usd * discountRate;
+  const ofertaItemsFull = ofertaItemsGross.map((r) => {
+    const itemDiscount = r.total_sales_gross * discountRate;
+    const netSales = r.total_sales_gross - itemDiscount;
+    return {
+      ...r,
+      discount_amount: round2(itemDiscount),
+      total_sales: round2(netSales),
+      unit_price: r.qty > 0 ? round2(netSales / r.qty) : null,
     };
   });
 
@@ -434,6 +452,11 @@ export function computeQuote(inputs = {}) {
       items: ofertaItemsFull,
       totals: {
         total_sales_usd: round2(total_sales_usd),
+        gross_total_sales_usd: round2(gross_total_sales_usd),
+        discount_rate: discountRate,
+        discount_amount_usd: round2(discount_amount_usd),
+        discount_amount_installation_usd: round2(discount_amount_installation_usd),
+        net_total_instal_usd: round2(total_instal_usd - discount_amount_installation_usd),
         total_valor_imp_usd: round2(total_valor_imp_usd),
         total_flete_usd: round2(total_flete_usd),
         total_seguro_usd: round2(total_seguro_usd),
@@ -505,9 +528,13 @@ export function computeQuote(inputs = {}) {
         FINANCIACION: { compra: round2(compra_finan), venta: round2(venta_finan), profit: round2(profit_finan) },
         INSTALACION: { compra: round2(local_buy_usd), venta: round2(local_sell_usd), profit: round2(local_profit_usd) },
         SEGURO: { compra: round2(seguros_compra_usd), venta: round2(total_seguro_usd), profit: round2(seguro_profit) },
+        DESCUENTO: { compra: 0, venta: round2(-discount_amount_usd), profit: round2(-discount_amount_usd) },
       },
       totals: {
         total_buy_usd: round2(total_buy_usd),
+        gross_total_sell_usd: round2(gross_total_sales_usd),
+        discount_rate: discountRate,
+        discount_amount_usd: round2(discount_amount_usd),
         total_sell_usd: round2(total_sell_usd),
         profit_total_usd: round2(profit_total_usd),
       },

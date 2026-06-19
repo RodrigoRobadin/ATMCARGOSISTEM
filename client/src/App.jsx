@@ -4,6 +4,7 @@ import { NavLink, Routes, Route } from 'react-router-dom';
 
 import Pipeline from './pages/Pipeline';
 import CommercialDashboard from './pages/CommercialDashboard.jsx';
+import LostDeals from './pages/LostDeals.jsx';
 import Contacts from './pages/Contacts';
 import General from './pages/General.jsx';
 import Organizations from './pages/Organizations';
@@ -164,7 +165,10 @@ function Layout({ children }) {
         {/* Navegación */}
         <nav className="p-3 space-y-1">
           {canSeeCommercialModules && (
-            <SideLink to="/commercial-dashboard" icon={sidebarIcons.commercial} label="Dashboard comercial" />
+            <>
+              <SideLink to="/commercial-dashboard" icon={sidebarIcons.commercial} label="Dashboard comercial" />
+              <SideLink to="/lost-deals" icon={sidebarIcons.followup} label="No cerradas" />
+            </>
           )}
           <SideLink to="/general" icon={sidebarIcons.general} label="Vista general" />
           <SideLink to="/" icon={sidebarIcons.kanban} label="Kanban" />
@@ -426,6 +430,7 @@ export default function App() {
               <Routes>
                 <Route path="/" element={<Pipeline />} />
                 <Route path="/commercial-dashboard" element={<CommercialDashboard />} />
+                <Route path="/lost-deals" element={<LostDeals />} />
                 <Route path="/general" element={<General />} />
 
                 {/* Contactos */}
