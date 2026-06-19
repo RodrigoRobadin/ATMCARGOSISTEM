@@ -23,6 +23,36 @@ const PAYMENT_METHODS = ['Transferencia', 'Efectivo', 'Cheque', 'Tarjeta', 'Déb
 const PAYMENT_ACCOUNTS = ['Caja', 'Banco Itaú', 'Banco Continental', 'Banco Visión', 'Banco Regional'];
 
 const today = () => new Date().toISOString().slice(0, 10);
+const dateOnly = (value) => (value ? String(value).slice(0, 10) : '');
+const isBeforeToday = (value) => Boolean(value) && dateOnly(value) < today();
+
+const EXPENSE_TABS = [
+  { key: 'por_pagar', label: 'Por pagar' },
+  { key: 'vencidos', label: 'Vencidos' },
+  { key: 'recurrentes', label: 'Recurrentes' },
+  { key: 'pagados', label: 'Pagados' },
+  { key: 'anulados', label: 'Anulados' },
+  { key: 'reportes', label: 'Reportes' },
+];
+
+function statusBadgeClass(status) {
+  const key = String(status || '').toLowerCase();
+  if (key === 'pagado') return 'bg-emerald-50 text-emerald-700';
+  if (key === 'anulado') return 'bg-red-50 text-red-700';
+  if (key === 'observado') return 'bg-amber-50 text-amber-700';
+  if (key === 'borrador') return 'bg-slate-100 text-slate-700';
+  return 'bg-blue-50 text-blue-700';
+}
+
+function SummaryCard({ label, children, tone = 'slate' }) {
+  const toneClass = tone === 'red' ? 'text-red-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-slate-900';
+  return (
+    <div className="rounded-lg border bg-white p-4">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className={`mt-2 text-lg font-semibold ${toneClass}`}>{children}</div>
+    </div>
+  );
+}
 
 export default function AdminExpenses() {
   const [meta, setMeta] = useState({
@@ -36,8 +66,14 @@ export default function AdminExpenses() {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [expenses, setExpenses] = useState([]);
-  const [report, setReport] = useState({ byCostCenter: [] });
+  const [report, setReport] = useState({
+    byCostCenter: [],
+    byCategory: [],
+    byProvider: [],
+    byMonth: [],
+  });
   const [upcomingRecurrences, setUpcomingRecurrences] = useState([]);
+  const [recurrences, setRecurrences] = useState([]);
   const [error, setError] = useState('');
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
   const [newInvoiceOpen, setNewInvoiceOpen] = useState(false);
@@ -104,6 +140,7 @@ export default function AdminExpenses() {
     receipt_type: 'Recibo',
     receipt_number: '',
     timbrado_number: '',
+    notes: '',
   });
   const [paymentFile, setPaymentFile] = useState(null);
   const [paymentSaving, setPaymentSaving] = useState(false);
@@ -113,6 +150,11 @@ export default function AdminExpenses() {
   const [providerLoading, setProviderLoading] = useState(false);
   const [mastersOpen, setMastersOpen] = useState(false);
   const [companyAccounts, setCompanyAccounts] = useState([]);
+  const [activeTab, setActiveTab] = useState('por_pagar');
+  const [detailExpense, setDetailExpense] = useState(null);
+  const [detailData, setDetailData] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [actionsMenu, setActionsMenu] = useState(null);
 
   const [filters, setFilters] = useState({
     from_date: '',
@@ -122,6 +164,7 @@ export default function AdminExpenses() {
     cost_center_id: '',
     provider_id: '',
     currency_code: '',
+    q: '',
   });
 
   const [form, setForm] = useState({
@@ -233,10 +276,18 @@ export default function AdminExpenses() {
     setUpcomingRecurrences(Array.isArray(data) ? data : []);
   }
 
+  async function loadRecurrences() {
+    const { data } = await api.get('/admin-expenses/recurrences');
+    setRecurrences(Array.isArray(data) ? data : []);
+  }
+
   async function loadReport() {
     const { data } = await api.get('/admin-expenses/report', { params: filters });
     setReport({
       byCostCenter: Array.isArray(data?.byCostCenter) ? data.byCostCenter : [],
+      byCategory: Array.isArray(data?.byCategory) ? data.byCategory : [],
+      byProvider: Array.isArray(data?.byProvider) ? data.byProvider : [],
+      byMonth: Array.isArray(data?.byMonth) ? data.byMonth : [],
     });
   }
 
@@ -434,18 +485,44 @@ export default function AdminExpenses() {
     }
   }
 
+  function getExpenseBalance(expense) {
+    if (!expense) return 0;
+    const amount = Number(expense.amount || 0);
+    const paid = Number(expense.paid_amount || 0);
+    const balance = expense.balance ?? Math.max(0, amount - paid);
+    return Math.max(0, Number(balance || 0));
+  }
+
+  function paymentMethodRequiresAccount(method) {
+    const normalized = String(method || '').trim().toLowerCase();
+    return Boolean(normalized) && !['efectivo', 'tarjeta'].includes(normalized);
+  }
+
+  function supplierBankSummary(expense) {
+    if (!expense) return '';
+    const parts = [
+      expense.supplier_bank_name,
+      expense.supplier_bank_account,
+      expense.supplier_bank_currency,
+      expense.supplier_bank_holder,
+    ].filter(Boolean);
+    return parts.join(' - ');
+  }
+
   function openPaymentModal(expense) {
+    const balance = getExpenseBalance(expense);
     setPaymentExpense(expense);
     setPaymentForm({
       payment_date: today(),
       method: '',
       account: '',
       reference_number: '',
-      amount: expense?.amount || '',
+      amount: balance ? Number(balance.toFixed(2)) : '',
       currency_code: expense?.currency_code || 'PYG',
       receipt_type: 'Recibo',
       receipt_number: '',
       timbrado_number: '',
+      notes: '',
     });
     setPaymentFile(null);
     setPaymentModalOpen(true);
@@ -453,6 +530,24 @@ export default function AdminExpenses() {
 
   async function handleSavePayment() {
     if (!paymentExpense?.id) return;
+    const amount = Number(paymentForm.amount || 0);
+    const balance = getExpenseBalance(paymentExpense);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      alert('El monto del pago debe ser mayor a cero.');
+      return;
+    }
+    if (amount - balance > 0.009) {
+      alert('El pago no puede superar el saldo pendiente.');
+      return;
+    }
+    if (String(paymentForm.currency_code || '').toUpperCase() !== String(paymentExpense.currency_code || '').toUpperCase()) {
+      alert('La moneda del pago debe coincidir con la moneda del gasto.');
+      return;
+    }
+    if (paymentMethodRequiresAccount(paymentForm.method) && !paymentForm.account) {
+      alert('Debe seleccionar la cuenta origen de la empresa.');
+      return;
+    }
     setPaymentSaving(true);
     try {
       const { data } = await api.post(`/admin-expenses/${paymentExpense.id}/payments`, {
@@ -465,6 +560,7 @@ export default function AdminExpenses() {
         receipt_type: paymentForm.receipt_type || null,
         receipt_number: paymentForm.receipt_number || null,
         timbrado_number: paymentForm.timbrado_number || null,
+        notes: paymentForm.notes || null,
         status: 'confirmado',
       });
       if (data?.id && paymentFile) {
@@ -499,6 +595,7 @@ export default function AdminExpenses() {
         await loadExpenses();
         await loadReport();
         await loadUpcomingRecurrences();
+        await loadRecurrences();
       } catch (e) {
         console.error('Error loading admin expenses', e);
         setError('No se pudo cargar gastos administrativos.');
@@ -685,6 +782,7 @@ export default function AdminExpenses() {
       setNewInvoiceOpen(false);
       await loadExpenses();
       await loadUpcomingRecurrences();
+      await loadRecurrences();
     } catch (e) {
       console.error('Error creating expense', e);
       setError(e?.response?.data?.error || 'No se pudo crear el gasto.');
@@ -694,6 +792,143 @@ export default function AdminExpenses() {
   }
 
   const paymentAccountOptions = filterCompanyBankAccounts(companyAccounts, paymentForm.currency_code);
+  const activeCompanyAccountOptions = filterCompanyBankAccounts(companyAccounts, '');
+  const visiblePaymentAccountOptions = paymentAccountOptions.length
+    ? paymentAccountOptions
+    : activeCompanyAccountOptions;
+  const hasCompanyAccounts = activeCompanyAccountOptions.length > 0;
+  const hasPaymentCurrencyAccountWarning =
+    hasCompanyAccounts && !paymentAccountOptions.length && Boolean(paymentForm.currency_code);
+  const paymentBalance = getExpenseBalance(paymentExpense);
+  const paymentPaidAmount = Number(paymentExpense?.paid_amount || 0);
+  const paymentAmount = Number(paymentForm.amount || 0);
+
+  const visibleExpenses = useMemo(() => {
+    return expenses.filter((e) => {
+      const status = String(e.status || '').toLowerCase();
+      const balance = Number(e.balance ?? (Number(e.amount || 0) - Number(e.paid_amount || 0)));
+      const overdue = Boolean(e.is_overdue) || (balance > 0.009 && isBeforeToday(e.due_date) && status !== 'pagado' && status !== 'anulado');
+      if (activeTab === 'vencidos') return overdue;
+      if (activeTab === 'pagados') return status === 'pagado' || balance <= 0.009;
+      if (activeTab === 'anulados') return status === 'anulado';
+      if (activeTab === 'reportes' || activeTab === 'recurrentes') return true;
+      return status !== 'anulado' && status !== 'pagado' && balance > 0.009;
+    });
+  }, [activeTab, expenses]);
+
+  const summary = useMemo(() => {
+    const pending = {};
+    const overdue = {};
+    const paid = {};
+    let missingAttachments = 0;
+    expenses.forEach((e) => {
+      const currency = e.currency_code || 'PYG';
+      const amount = Number(e.amount || 0);
+      const paidAmount = Number(e.paid_amount || 0);
+      const balance = Number(e.balance ?? Math.max(0, amount - paidAmount));
+      const status = String(e.status || '').toLowerCase();
+      if (status !== 'anulado' && balance > 0.009) pending[currency] = (pending[currency] || 0) + balance;
+      if ((e.is_overdue || isBeforeToday(e.due_date)) && status !== 'anulado' && balance > 0.009) {
+        overdue[currency] = (overdue[currency] || 0) + balance;
+      }
+      if (paidAmount > 0 && status !== 'anulado') paid[currency] = (paid[currency] || 0) + paidAmount;
+      if (!e.has_attachment) missingAttachments += 1;
+    });
+    return { pending, overdue, paid, missingAttachments };
+  }, [expenses]);
+
+  const renderMoneyStack = (values) => {
+    const entries = Object.entries(values || {}).filter(([, amount]) => Math.abs(Number(amount || 0)) > 0.009);
+    if (!entries.length) return <span>{fmtMoney(0)} PYG</span>;
+    return (
+      <div className="space-y-0.5">
+        {entries.map(([currency, amount]) => (
+          <div key={currency}>{fmtMoney(amount)} {currency}</div>
+        ))}
+      </div>
+    );
+  };
+
+  const renderReportTable = (title, rows, labelKey, labelHeader) => (
+    <div className="border rounded-lg overflow-hidden">
+      <div className="bg-slate-50 px-3 py-2 text-sm font-semibold">{title}</div>
+      <div className="overflow-auto">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-100 text-slate-600">
+            <tr>
+              <th className="text-left px-3 py-2">{labelHeader}</th>
+              <th className="text-left px-3 py-2">Moneda</th>
+              <th className="text-right px-3 py-2">Cantidad</th>
+              <th className="text-right px-3 py-2">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(rows || []).map((row, idx) => (
+              <tr key={`${row[labelKey] || 'sin'}-${row.currency_code}-${idx}`} className="border-t">
+                <td className="px-3 py-2">{row[labelKey] || 'Sin dato'}</td>
+                <td className="px-3 py-2">{row.currency_code || '-'}</td>
+                <td className="px-3 py-2 text-right">{row.count || 0}</td>
+                <td className="px-3 py-2 text-right">{fmtMoney(row.total)}</td>
+              </tr>
+            ))}
+            {!(rows || []).length && (
+              <tr>
+                <td colSpan={4} className="px-3 py-4 text-center text-slate-500">
+                  Sin datos.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  async function openDetailDrawer(expense) {
+    if (!expense?.id) return;
+    setDetailExpense(expense);
+    setDetailData(null);
+    setDetailLoading(true);
+    try {
+      const { data } = await api.get(`/admin-expenses/${expense.id}/detail`);
+      setDetailData(data || null);
+    } catch (e) {
+      console.error('Error loading expense detail', e);
+      alert('No se pudo cargar el detalle del gasto.');
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  async function cancelExpense(expense) {
+    if (!expense?.id) return;
+    const reason = window.prompt('Motivo de anulacion del gasto:');
+    if (!reason || !reason.trim()) return;
+    if (!window.confirm('Anular este gasto tambien anulara sus pagos administrativos. Deseas continuar?')) return;
+    try {
+      await api.post(`/admin-expenses/${expense.id}/cancel`, { reason: reason.trim() });
+      setActionsMenu(null);
+      setDetailExpense(null);
+      setDetailData(null);
+      await loadExpenses();
+      await loadReport();
+    } catch (e) {
+      console.error('Error canceling admin expense', e);
+      alert(e?.response?.data?.error || 'No se pudo anular el gasto.');
+    }
+  }
+
+  async function toggleRecurrence(rec, active) {
+    if (!rec?.id) return;
+    try {
+      await api.patch(`/admin-expenses/recurrences/${rec.id}`, { active: active ? 1 : 0 });
+      await loadUpcomingRecurrences();
+      await loadRecurrences();
+    } catch (e) {
+      console.error('Error updating recurrence', e);
+      alert('No se pudo actualizar la recurrencia.');
+    }
+  }
 
   if (loading) return <div className="text-sm text-slate-600">Cargando...</div>;
 
@@ -702,7 +937,7 @@ export default function AdminExpenses() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-semibold">Gastos administrativos</h1>
-          <p className="text-sm text-slate-500">Registro y control de gastos internos.</p>
+          <p className="text-sm text-slate-500">Carga, clasificacion y control de gastos internos.</p>
         </div>
         <div className="flex items-center gap-3">
           <div>
@@ -727,6 +962,31 @@ export default function AdminExpenses() {
           >
             Exportar libro compras
           </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <SummaryCard label="Pendiente">{renderMoneyStack(summary.pending)}</SummaryCard>
+        <SummaryCard label="Vencido" tone="red">{renderMoneyStack(summary.overdue)}</SummaryCard>
+        <SummaryCard label="Pagado" tone="emerald">{renderMoneyStack(summary.paid)}</SummaryCard>
+        <SummaryCard label="Sin comprobante">{summary.missingAttachments}</SummaryCard>
+        <SummaryCard label="Recurrencias proximas">{upcomingRecurrences.length}</SummaryCard>
+      </div>
+
+      <div className="bg-white border rounded-lg p-2 overflow-x-auto">
+        <div className="flex gap-2 min-w-max">
+          {EXPENSE_TABS.map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              className={`px-3 py-2 rounded-md text-sm ${
+                activeTab === tab.key ? 'bg-black text-white' : 'hover:bg-slate-100 text-slate-700'
+              }`}
+              onClick={() => setActiveTab(tab.key)}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -864,7 +1124,6 @@ export default function AdminExpenses() {
               onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}
             >
               <option value="borrador">Borrador</option>
-              <option value="validado">Validado</option>
               <option value="observado">Observado</option>
               <option value="pendiente">Pendiente</option>
               <option value="pagado">Pagado</option>
@@ -937,6 +1196,15 @@ export default function AdminExpenses() {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <div>
+            <label className="text-xs text-slate-500">Buscar</label>
+            <input
+              className="mt-1 w-full border rounded px-2 py-1 text-sm"
+              placeholder="Proveedor, RUC, comprobante, descripcion"
+              value={filters.q}
+              onChange={(e) => setFilters((f) => ({ ...f, q: e.target.value }))}
+            />
+          </div>
+          <div>
             <label className="text-xs text-slate-500">Desde</label>
             <input
               type="date"
@@ -999,12 +1267,12 @@ export default function AdminExpenses() {
                 <th className="text-right px-3 py-2">Saldo</th>
                 <th className="text-left px-3 py-2">Moneda</th>
                 <th className="text-left px-3 py-2">Estado</th>
-                <th className="text-left px-3 py-2">Factura</th>
-                <th className="text-left px-3 py-2">Pago</th>
+                <th className="text-left px-3 py-2">Alertas</th>
+                <th className="text-left px-3 py-2">Acciones</th>
               </tr>
             </thead>
             <tbody>
-              {expenses.map((e) => (
+              {visibleExpenses.map((e) => (
                 <tr key={e.id} className="border-t">
                   <td className="px-3 py-2">{e.expense_date}</td>
                   <td className="px-3 py-2">{e.provider_name || '-'}</td>
@@ -1016,40 +1284,44 @@ export default function AdminExpenses() {
                   <td className="px-3 py-2 text-right">{fmtMoney(e.amount)}</td>
                   <td className="px-3 py-2 text-right">{fmtMoney(e.paid_amount || 0)}</td>
                   <td className="px-3 py-2 text-right">
-                    {fmtMoney(Number(e.amount || 0) - Number(e.paid_amount || 0))}
+                    {fmtMoney(e.balance ?? (Number(e.amount || 0) - Number(e.paid_amount || 0)))}
                   </td>
                   <td className="px-3 py-2">{e.currency_code || '-'}</td>
-                  <td className="px-3 py-2 capitalize">{e.status || '-'}</td>
+                  <td className="px-3 py-2 capitalize">
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs ${statusBadgeClass(e.status)}`}>
+                      {e.status || '-'}
+                    </span>
+                  </td>
                   <td className="px-3 py-2">
-                    <div className="flex gap-2">
-                      <button
-                        className="text-xs text-blue-600 hover:underline"
-                        type="button"
-                        onClick={() => openInvoiceModal(e)}
-                      >
-                        Cargar
-                      </button>
-                      <button
-                        className="text-xs text-blue-600 hover:underline"
-                        type="button"
-                        onClick={() => handleViewReceipt(e.id)}
-                      >
-                        Ver
-                      </button>
+                    <div className="flex flex-wrap gap-1">
+                      {e.is_overdue ? <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700">Vencido</span> : null}
+                      {!e.has_attachment ? <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700">Sin comprobante</span> : null}
+                      {e.recurrence_id ? <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700">Recurrente</span> : null}
                     </div>
                   </td>
                   <td className="px-3 py-2">
-                    <button
-                      className="text-xs text-blue-600 hover:underline"
-                      type="button"
-                      onClick={() => openPaymentModal(e)}
-                    >
-                      Registrar
-                    </button>
+                    <div className="relative">
+                      <button
+                        className="text-xs border rounded px-2 py-1 hover:bg-slate-50"
+                        type="button"
+                        onClick={() => setActionsMenu((prev) => (prev === e.id ? null : e.id))}
+                      >
+                        Acciones
+                      </button>
+                      {actionsMenu === e.id && (
+                        <div className="absolute right-0 z-30 mt-1 w-44 rounded-lg border bg-white py-1 shadow-lg">
+                          <button className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-50" type="button" onClick={() => { setActionsMenu(null); openDetailDrawer(e); }}>Ver detalle</button>
+                          <button className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-50" type="button" onClick={() => { setActionsMenu(null); openInvoiceModal(e); }}>Editar factura</button>
+                          <button className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-50" type="button" onClick={() => { setActionsMenu(null); handleViewReceipt(e.id); }}>Ver comprobante</button>
+                          <button className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-50" type="button" onClick={() => { setActionsMenu(null); openPaymentModal(e); }}>Registrar pago</button>
+                          <button className="block w-full px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50" type="button" onClick={() => { setActionsMenu(null); cancelExpense(e); }}>Anular</button>
+                        </div>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
-              {!expenses.length && (
+              {!visibleExpenses.length && (
                 <tr>
                   <td colSpan={14} className="px-3 py-4 text-center text-slate-500">
                     Sin gastos registrados.
@@ -1061,6 +1333,7 @@ export default function AdminExpenses() {
         </div>
       </div>
 
+      {activeTab === 'recurrentes' && (
       <div className="bg-white border rounded-lg p-4 space-y-3">
         <div className="text-sm font-semibold">Próximas recurrencias</div>
         <div className="overflow-auto">
@@ -1071,11 +1344,13 @@ export default function AdminExpenses() {
                 <th className="text-left px-3 py-2">Proveedor</th>
                 <th className="text-left px-3 py-2">Centro</th>
                 <th className="text-left px-3 py-2">Monto</th>
+                <th className="text-left px-3 py-2">Estado</th>
                 <th className="text-left px-3 py-2">Próximas fechas</th>
+                <th className="text-left px-3 py-2">Accion</th>
               </tr>
             </thead>
             <tbody>
-              {upcomingRecurrences.map((r) => (
+              {recurrences.map((r) => (
                 <tr key={r.id} className="border-t">
                   <td className="px-3 py-2">{r.description || '-'}</td>
                   <td className="px-3 py-2">{r.provider_name || '-'}</td>
@@ -1083,15 +1358,29 @@ export default function AdminExpenses() {
                   <td className="px-3 py-2">
                     {fmtMoney(r.amount)} {r.currency_code || 'PYG'}
                   </td>
+                  <td className="px-3 py-2">
+                    <span className={`rounded-full px-2 py-0.5 text-xs ${Number(r.active || 0) ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-700'}`}>
+                      {Number(r.active || 0) ? 'Activa' : 'Pausada'}
+                    </span>
+                  </td>
                   <td className="px-3 py-2 text-xs text-slate-600">
                     {(r.next_dates || []).join(', ') || '-'}
                   </td>
+                  <td className="px-3 py-2">
+                    <button
+                      className="text-xs border rounded px-2 py-1 hover:bg-slate-50"
+                      type="button"
+                      onClick={() => toggleRecurrence(r, !Number(r.active || 0))}
+                    >
+                      {Number(r.active || 0) ? 'Pausar' : 'Reactivar'}
+                    </button>
+                  </td>
                 </tr>
               ))}
-              {!upcomingRecurrences.length && (
+              {!recurrences.length && (
                 <tr>
-                  <td colSpan={5} className="px-3 py-4 text-center text-slate-500">
-                    Sin recurrencias activas.
+                  <td colSpan={7} className="px-3 py-4 text-center text-slate-500">
+                    Sin recurrencias registradas.
                   </td>
                 </tr>
               )}
@@ -1099,38 +1388,125 @@ export default function AdminExpenses() {
           </table>
         </div>
       </div>
+      )}
 
+      {activeTab === 'reportes' && (
       <div className="bg-white border rounded-lg p-4 space-y-4">
-        <div className="text-sm font-semibold">Reporte por centro de costo</div>
-        <div className="overflow-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-100 text-slate-600">
-              <tr>
-                <th className="text-left px-3 py-2">Centro</th>
-                <th className="text-left px-3 py-2">Moneda</th>
-                <th className="text-right px-3 py-2">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {report.byCostCenter.map((row, idx) => (
-                <tr key={`${row.cost_center_name || 'sin'}-${row.currency_code}-${idx}`} className="border-t">
-                  <td className="px-3 py-2">{row.cost_center_name || 'Sin centro'}</td>
-                  <td className="px-3 py-2">{row.currency_code || '-'}</td>
-                  <td className="px-3 py-2 text-right">{fmtMoney(row.total)}</td>
-                </tr>
-              ))}
-              {!report.byCostCenter.length && (
-                <tr>
-                  <td colSpan={3} className="px-3 py-4 text-center text-slate-500">
-                    Sin datos para el reporte.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        <div>
+          <div className="text-sm font-semibold">Reportes administrativos</div>
+          <div className="text-xs text-slate-500">Los cortes usan los filtros aplicados arriba.</div>
         </div>
-
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          {renderReportTable('Por centro de costo', report.byCostCenter, 'cost_center_name', 'Centro')}
+          {renderReportTable('Por categoria', report.byCategory, 'category_name', 'Categoria')}
+          {renderReportTable('Por proveedor', report.byProvider, 'provider_name', 'Proveedor')}
+          {renderReportTable('Por mes', report.byMonth, 'month', 'Mes')}
+        </div>
       </div>
+      )}
+
+      {detailExpense && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/20" onClick={() => setDetailExpense(null)}>
+          <aside className="h-full w-full max-w-2xl overflow-y-auto bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="sticky top-0 bg-white border-b p-4 flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs uppercase tracking-wide text-slate-500">Detalle de gasto</div>
+                <h2 className="text-xl font-semibold">{detailData?.expense?.description || detailExpense.description || `Gasto #${detailExpense.id}`}</h2>
+                <div className="mt-1 text-sm text-slate-500">{detailData?.expense?.provider_name || detailExpense.provider_name || 'Sin proveedor'}</div>
+              </div>
+              <button type="button" className="text-2xl leading-none" onClick={() => setDetailExpense(null)}>x</button>
+            </div>
+            <div className="p-4 space-y-4">
+              {detailLoading ? (
+                <div className="text-sm text-slate-500">Cargando detalle...</div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <SummaryCard label="Total">{fmtMoney(detailData?.expense?.amount || detailExpense.amount)} {detailData?.expense?.currency_code || detailExpense.currency_code}</SummaryCard>
+                    <SummaryCard label="Pagado" tone="emerald">{fmtMoney(detailData?.expense?.paid_amount || detailExpense.paid_amount || 0)} {detailData?.expense?.currency_code || detailExpense.currency_code}</SummaryCard>
+                    <SummaryCard label="Saldo" tone={Number(detailData?.expense?.balance || detailExpense.balance || 0) > 0 ? 'red' : 'emerald'}>{fmtMoney(detailData?.expense?.balance ?? detailExpense.balance ?? 0)} {detailData?.expense?.currency_code || detailExpense.currency_code}</SummaryCard>
+                  </div>
+
+                  <div className="rounded-lg border p-4 text-sm">
+                    <div className="font-semibold mb-2">Comprobante</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div><span className="text-slate-500">Tipo:</span> {detailData?.expense?.receipt_type || '-'}</div>
+                      <div><span className="text-slate-500">Numero:</span> {detailData?.expense?.receipt_number || '-'}</div>
+                      <div><span className="text-slate-500">Timbrado:</span> {detailData?.expense?.timbrado_number || '-'}</div>
+                      <div><span className="text-slate-500">Fecha:</span> {detailData?.expense?.invoice_date || detailData?.expense?.expense_date || '-'}</div>
+                      <div><span className="text-slate-500">Condicion:</span> {detailData?.expense?.condition_type || '-'}</div>
+                      <div><span className="text-slate-500">Vencimiento:</span> {detailData?.expense?.due_date || '-'}</div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border p-4 text-sm">
+                    <div className="font-semibold mb-2">Clasificacion</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div><span className="text-slate-500">Categoria:</span> {detailData?.expense?.category_name || '-'}</div>
+                      <div><span className="text-slate-500">Subcategoria:</span> {detailData?.expense?.subcategory_name || '-'}</div>
+                      <div><span className="text-slate-500">Centro:</span> {detailData?.expense?.cost_center_name || '-'}</div>
+                      <div><span className="text-slate-500">Estado:</span> {detailData?.expense?.status || '-'}</div>
+                    </div>
+                  </div>
+
+                  {detailData?.recurrence ? (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+                      <div className="font-semibold">Recurrencia asociada</div>
+                      <div>Proxima fecha: {detailData.recurrence.next_run_date || '-'}</div>
+                      <div>Estado: {detailData.recurrence.active ? 'Activa' : 'Pausada'}</div>
+                    </div>
+                  ) : null}
+
+                  <div className="rounded-lg border p-4">
+                    <div className="font-semibold mb-2">Adjuntos</div>
+                    {detailData?.attachments?.length ? (
+                      <div className="space-y-2">
+                        {detailData.attachments.map((att) => {
+                          const url = att.file_url?.startsWith('http') ? att.file_url : `${backendBase}${att.file_url}`;
+                          return <a key={att.id} href={url} target="_blank" rel="noreferrer" className="block text-sm text-blue-600 hover:underline">{att.file_name || att.file_url}</a>;
+                        })}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-slate-500">Sin adjuntos.</div>
+                    )}
+                  </div>
+
+                  <div className="rounded-lg border p-4">
+                    <div className="font-semibold mb-2">Pagos</div>
+                    {detailData?.payments?.length ? (
+                      <div className="overflow-auto">
+                        <table className="min-w-full text-sm">
+                          <thead className="bg-slate-50 text-slate-600">
+                            <tr><th className="px-2 py-1 text-left">Fecha</th><th className="px-2 py-1 text-left">Metodo</th><th className="px-2 py-1 text-right">Monto</th><th className="px-2 py-1 text-left">Cuenta</th></tr>
+                          </thead>
+                          <tbody>
+                            {detailData.payments.map((p) => (
+                              <tr key={p.id} className="border-t">
+                                <td className="px-2 py-1">{p.payment_date || '-'}</td>
+                                <td className="px-2 py-1">{p.method || '-'}</td>
+                                <td className="px-2 py-1 text-right">{fmtMoney(p.amount)} {p.currency_code}</td>
+                                <td className="px-2 py-1">{p.account || '-'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div className="text-sm text-slate-500">Sin pagos registrados.</div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <button className="px-3 py-2 text-sm border rounded" type="button" onClick={() => openInvoiceModal(detailData?.expense || detailExpense)}>Editar factura</button>
+                    <button className="px-3 py-2 text-sm border rounded" type="button" onClick={() => openPaymentModal(detailData?.expense || detailExpense)}>Registrar pago</button>
+                    <button className="px-3 py-2 text-sm border border-red-200 text-red-700 rounded" type="button" onClick={() => cancelExpense(detailData?.expense || detailExpense)}>Anular</button>
+                  </div>
+                </>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
 
       {newInvoiceOpen && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
@@ -1972,8 +2348,35 @@ export default function AdminExpenses() {
 
       {paymentModalOpen && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg w-full max-w-xl p-4 space-y-3">
-            <div className="text-sm font-semibold">Registrar pago</div>
+          <div className="bg-white rounded-lg w-full max-w-2xl p-4 space-y-3">
+            <div>
+              <div className="text-sm font-semibold">Registrar pago</div>
+              <div className="text-xs text-slate-500">
+                {paymentExpense?.provider_name || 'Sin proveedor'} · {paymentExpense?.receipt_number || paymentExpense?.description || `Gasto #${paymentExpense?.id || ''}`}
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <SummaryCard label="Total">
+                {fmtMoney(paymentExpense?.amount || 0)} {paymentExpense?.currency_code || ''}
+              </SummaryCard>
+              <SummaryCard label="Pagado" tone="emerald">
+                {fmtMoney(paymentPaidAmount)} {paymentExpense?.currency_code || ''}
+              </SummaryCard>
+              <SummaryCard label="Saldo" tone={paymentBalance > 0 ? 'red' : 'emerald'}>
+                {fmtMoney(paymentBalance)} {paymentExpense?.currency_code || ''}
+              </SummaryCard>
+              <SummaryCard label="Tipo de pago">
+                {paymentAmount > 0 && paymentAmount < paymentBalance ? 'Parcial' : 'Total'}
+              </SummaryCard>
+            </div>
+            <div className="rounded-lg border bg-slate-50 p-3 text-xs text-slate-600">
+              <div className="font-semibold text-slate-700">Cuenta destino proveedor</div>
+              {supplierBankSummary(paymentExpense) ? (
+                <div>{supplierBankSummary(paymentExpense)}</div>
+              ) : (
+                <div className="text-amber-700">Proveedor sin cuenta bancaria cargada.</div>
+              )}
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
                 <label className="text-xs text-slate-500">Fecha</label>
@@ -2002,18 +2405,18 @@ export default function AdminExpenses() {
                 </select>
               </div>
               <div>
-                <label className="text-xs text-slate-500">Cuenta</label>
+                <label className="text-xs text-slate-500">Cuenta origen empresa</label>
                 <select
                   className="mt-1 w-full border rounded px-2 py-1 text-sm"
                   value={paymentForm.account}
                   onChange={(e) => setPaymentForm((f) => ({ ...f, account: e.target.value }))}
                 >
                   <option value="">Seleccionar</option>
-                  {paymentForm.account && !paymentAccountOptions.some((account) => companyBankAccountValue(account) === paymentForm.account) ? (
+                  {paymentForm.account && !visiblePaymentAccountOptions.some((account) => companyBankAccountValue(account) === paymentForm.account) ? (
                     <option value={paymentForm.account}>{paymentForm.account}</option>
                   ) : null}
-                  {paymentAccountOptions.length
-                    ? paymentAccountOptions.map((account) => (
+                  {visiblePaymentAccountOptions.length
+                    ? visiblePaymentAccountOptions.map((account) => (
                         <option key={account.id || companyBankAccountValue(account)} value={companyBankAccountValue(account)}>
                           {companyBankAccountLabel(account)}
                         </option>
@@ -2024,6 +2427,14 @@ export default function AdminExpenses() {
                         </option>
                       ))}
                 </select>
+                {hasPaymentCurrencyAccountWarning ? (
+                  <div className="mt-1 text-xs text-amber-700">
+                    No hay cuenta activa en {paymentForm.currency_code}; se muestran otras cuentas activas.
+                  </div>
+                ) : null}
+                {paymentMethodRequiresAccount(paymentForm.method) ? (
+                  <div className="mt-1 text-xs text-slate-500">Obligatoria para este metodo.</div>
+                ) : null}
               </div>
               <div>
                 <label className="text-xs text-slate-500">Referencia</label>
@@ -2036,14 +2447,19 @@ export default function AdminExpenses() {
                 />
               </div>
               <div>
-                <label className="text-xs text-slate-500">Monto</label>
+                <label className="text-xs text-slate-500">Monto a pagar</label>
                 <input
                   type="number"
                   step="0.01"
+                  min="0.01"
+                  max={paymentBalance || undefined}
                   className="mt-1 w-full border rounded px-2 py-1 text-sm"
                   value={paymentForm.amount}
                   onChange={(e) => setPaymentForm((f) => ({ ...f, amount: e.target.value }))}
                 />
+                <div className="mt-1 text-xs text-slate-500">
+                  Maximo: {fmtMoney(paymentBalance)} {paymentExpense?.currency_code || paymentForm.currency_code}
+                </div>
               </div>
               <div>
                 <label className="text-xs text-slate-500">Moneda</label>
@@ -2051,12 +2467,15 @@ export default function AdminExpenses() {
                   className="mt-1 w-full border rounded px-2 py-1 text-sm"
                   value={paymentForm.currency_code}
                   onChange={(e) =>
-                    setPaymentForm((f) => ({ ...f, currency_code: e.target.value }))
+                    setPaymentForm((f) => ({ ...f, currency_code: e.target.value, account: '' }))
                   }
                 >
                   <option value="PYG">PYG</option>
                   <option value="USD">USD</option>
                 </select>
+                {String(paymentForm.currency_code || '').toUpperCase() !== String(paymentExpense?.currency_code || '').toUpperCase() ? (
+                  <div className="mt-1 text-xs text-red-600">Debe coincidir con la moneda del gasto.</div>
+                ) : null}
               </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -2090,6 +2509,15 @@ export default function AdminExpenses() {
                   }
                 />
               </div>
+            </div>
+            <div>
+              <label className="text-xs text-slate-500">Observacion del pago</label>
+              <textarea
+                rows={2}
+                className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                value={paymentForm.notes}
+                onChange={(e) => setPaymentForm((f) => ({ ...f, notes: e.target.value }))}
+              />
             </div>
             <div>
               <label className="text-xs text-slate-500">Adjuntar recibo (PDF/imagen)</label>

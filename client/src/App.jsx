@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { NavLink, Routes, Route } from 'react-router-dom';
 
 import Pipeline from './pages/Pipeline';
+import CommercialDashboard from './pages/CommercialDashboard.jsx';
 import Contacts from './pages/Contacts';
 import General from './pages/General.jsx';
 import Organizations from './pages/Organizations';
@@ -74,6 +75,7 @@ const sidebarIcons = {
   themeOn: String.fromCodePoint(0x2600),
   themeOff: String.fromCodePoint(0x1F319),
   general: String.fromCodePoint(0x1F4CB),
+  commercial: String.fromCodePoint(0x1F4C8),
   kanban: String.fromCodePoint(0x1F9E9),
   cargo: String.fromCodePoint(0x1F69A),
   container: String.fromCodePoint(0x1F4E6),
@@ -161,6 +163,9 @@ function Layout({ children }) {
 
         {/* Navegación */}
         <nav className="p-3 space-y-1">
+          {canSeeCommercialModules && (
+            <SideLink to="/commercial-dashboard" icon={sidebarIcons.commercial} label="Dashboard comercial" />
+          )}
           <SideLink to="/general" icon={sidebarIcons.general} label="Vista general" />
           <SideLink to="/" icon={sidebarIcons.kanban} label="Kanban" />
 
@@ -420,6 +425,7 @@ export default function App() {
             <Layout>
               <Routes>
                 <Route path="/" element={<Pipeline />} />
+                <Route path="/commercial-dashboard" element={<CommercialDashboard />} />
                 <Route path="/general" element={<General />} />
 
                 {/* Contactos */}

@@ -120,9 +120,16 @@ function drawHeader(doc, data, y) {
 
   const logoX = header.x + 12;
   const logoY = header.y + 18;
+  let logoDrawn = false;
   if (data.logoPath && fs.existsSync(data.logoPath)) {
-    doc.image(data.logoPath, logoX, logoY, { fit: [150, 70], align: 'left', valign: 'center' });
-  } else {
+    try {
+      doc.image(data.logoPath, logoX, logoY, { fit: [150, 70], align: 'left', valign: 'center' });
+      logoDrawn = true;
+    } catch (err) {
+      console.warn('[receipt-pdf] logo ignored:', err?.message || err);
+    }
+  }
+  if (!logoDrawn) {
     doc.font('Helvetica').fontSize(24).fillColor(COLORS.gray).text('grupo', logoX, logoY + 10);
     doc.font('Helvetica-Bold').fillColor('#D94545').text('atm', logoX + 70, logoY + 10);
   }

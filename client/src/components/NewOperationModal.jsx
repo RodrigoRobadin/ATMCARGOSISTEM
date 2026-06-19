@@ -1,6 +1,7 @@
 // client/src/components/NewOperationModal.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import { useAuth } from "../auth.jsx";
 import useParamOptions from "../hooks/useParamOptions";
 import { LOGISTICS_COUNTRIES, LOGISTICS_LOCATION_OPTIONS } from "../data/logisticsCatalog";
 
@@ -357,6 +358,8 @@ export default function NewOperationModal({
   onCreated,
   defaultBusinessUnitId,
 }) {
+  const { user } = useAuth();
+  const isAdmin = String(user?.role || "").toLowerCase() === "admin";
   const [referencePreview, setReferencePreview] = useState("—");
 
   // Transporte / carga
@@ -742,7 +745,7 @@ async function handleCreate(e) {
         title: safeTitle,
         value: 0,
         business_unit_id: businessUnitId || null,
-        account_exec_id: execId || null, // opcional
+        ...(isAdmin ? { account_exec_id: execId || null } : {}),
         org_name: orgName || null,
         org_ruc: orgRuc || null,
         contact_name: contactName || null,
@@ -1300,11 +1303,12 @@ async function handleCreate(e) {
                 </Select>
               </label>
 
-              {/* Ejecutivo de cuenta (opcional) */}
-              <label className="text-sm">
-                Ejecutivo de cuenta (opcional)
-                <ExecSelect value={execId} onChange={setExecId} />
-              </label>
+              {isAdmin && (
+                <label className="text-sm">
+                  Ejecutivo de cuenta (opcional)
+                  <ExecSelect value={execId} onChange={setExecId} />
+                </label>
+              )}
             </div>
           </div>
 

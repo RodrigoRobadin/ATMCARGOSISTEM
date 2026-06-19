@@ -63,6 +63,7 @@ import containerRouter from './routes/container.js';
 import accountsPayableRouter from './routes/accountsPayable.js';
 import customerCollectionsRouter from './routes/customerCollections.js';
 import assistantRouter from './routes/assistant.js';
+import commercialDashboardRouter from './routes/commercialDashboard.js';
 
 // ⭐️ NUEVO: solicitudes de flete
 import freightRequestsRouter from './routes/freightRequests.js';
@@ -251,6 +252,7 @@ app.use('/api/assistant', assistantRouter);
 app.use('/api/admin/finance', adminFinanceRouter);
 app.use('/api/accounts-payable', accountsPayableRouter);
 app.use('/api/customer-collections', customerCollectionsRouter);
+app.use('/api/commercial-dashboard', commercialDashboardRouter);
 app.use('/api/service', serviceRouter);
 app.use('/api/container', containerRouter);
 

@@ -186,6 +186,7 @@ async function ensureAdminExpenseTables() {
       receipt_type VARCHAR(32) NULL,
       receipt_number VARCHAR(64) NULL,
       timbrado_number VARCHAR(64) NULL,
+      notes TEXT NULL,
       amount DECIMAL(15,2) NOT NULL DEFAULT 0,
       currency_code VARCHAR(8) NOT NULL DEFAULT 'PYG',
       status VARCHAR(20) NOT NULL DEFAULT 'confirmado',
@@ -242,6 +243,7 @@ async function ensurePaymentReceiptColumns() {
     if (!have.has('receipt_type')) add.push('ADD COLUMN receipt_type VARCHAR(32) NULL');
     if (!have.has('receipt_number')) add.push('ADD COLUMN receipt_number VARCHAR(64) NULL');
     if (!have.has('timbrado_number')) add.push('ADD COLUMN timbrado_number VARCHAR(64) NULL');
+    if (!have.has('notes')) add.push('ADD COLUMN notes TEXT NULL');
     if (add.length) {
       await pool.query(`ALTER TABLE admin_expense_payments ${add.join(', ')}`);
     }
@@ -743,7 +745,7 @@ router.get('/meta', requireAuth, async (_req, res) => {
 router.get('/', requireAuth, async (req, res) => {
   try {
     await generateRecurringExpenses(pool);
-    const { from_date, to_date, status, category_id, cost_center_id, provider_id, currency_code, recurrence_id } =
+    const { from_date, to_date, status, category_id, cost_center_id, provider_id, currency_code, recurrence_id, q } =
       req.query || {};
 
     const where = [];
@@ -780,12 +782,34 @@ router.get('/', requireAuth, async (req, res) => {
       where.push('e.recurrence_id = ?');
       params.push(recurrence_id);
     }
+    if (q) {
+      const like = `%${String(q).trim()}%`;
+      where.push(`(
+        e.description LIKE ?
+        OR e.receipt_number LIKE ?
+        OR e.timbrado_number LIKE ?
+        OR e.supplier_name LIKE ?
+        OR e.supplier_ruc LIKE ?
+        OR COALESCE(p.razon_social, p.name) LIKE ?
+        OR p.ruc LIKE ?
+      )`);
+      params.push(like, like, like, like, like, like, like);
+    }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const [rows] = await pool.query(
       `
       SELECT e.*,
              COALESCE(p.razon_social, p.name) AS provider_name,
+             p.ruc AS provider_ruc,
+             p.supplier_bank_name,
+             p.supplier_bank_account,
+             p.supplier_bank_currency,
+             p.supplier_bank_account_type,
+             p.supplier_bank_holder,
+             p.supplier_bank_holder_ruc,
+             p.supplier_bank_cci_iban,
+             p.supplier_bank_swift,
              c.name AS category_name,
              sc.name AS subcategory_name,
              cc.name AS cost_center_name,
@@ -793,7 +817,13 @@ router.get('/', requireAuth, async (req, res) => {
                SELECT COALESCE(SUM(amount),0)
                FROM admin_expense_payments pay
                WHERE pay.expense_id = e.id AND pay.status <> 'anulado'
-             ) AS paid_amount
+             ) AS paid_amount,
+             EXISTS(
+               SELECT 1
+               FROM admin_expense_attachments att
+               WHERE att.expense_id = e.id
+               LIMIT 1
+             ) AS has_attachment
         FROM admin_expenses e
         LEFT JOIN organizations p ON p.id = e.provider_id
         LEFT JOIN admin_expense_categories c ON c.id = e.category_id
@@ -804,7 +834,34 @@ router.get('/', requireAuth, async (req, res) => {
       `,
       params
     );
-    res.json(rows);
+    const out = (rows || []).map((row) => {
+      const amount = Number(row.amount || 0);
+      const paid = Number(row.paid_amount || 0);
+      const balance = Math.max(0, amount - paid);
+      const statusRaw = String(row.status || '').toLowerCase();
+      const condition = String(row.condition_type || '').toUpperCase();
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const isOverdue =
+        statusRaw !== 'anulado' &&
+        statusRaw !== 'pagado' &&
+        balance > 0.009 &&
+        row.due_date &&
+        String(row.due_date).slice(0, 10) < todayIso;
+      let payableStatus = 'por_pagar';
+      if (statusRaw === 'anulado') payableStatus = 'anulado';
+      else if (balance <= 0.009 || statusRaw === 'pagado') payableStatus = 'pagado';
+      else if (isOverdue) payableStatus = 'vencido';
+      else if (condition === 'CONTADO') payableStatus = 'contado_pendiente';
+      return {
+        ...row,
+        paid_amount: Number(paid.toFixed(2)),
+        balance: Number(balance.toFixed(2)),
+        is_overdue: Boolean(isOverdue),
+        has_attachment: Number(row.has_attachment || 0) > 0,
+        payable_status: payableStatus,
+      };
+    });
+    res.json(out);
   } catch (e) {
     console.error('[admin-expenses] list error', e);
     res.status(500).json({ error: 'Error listing expenses' });
@@ -959,6 +1016,125 @@ router.patch('/:id', requireAuth, async (req, res) => {
   }
 });
 
+router.get('/:id/detail', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await ensureAdminExpenseTables();
+    const [[expense]] = await pool.query(
+      `
+      SELECT e.*,
+             COALESCE(p.razon_social, p.name) AS provider_name,
+             p.ruc AS provider_ruc,
+             p.supplier_bank_name,
+             p.supplier_bank_account,
+             p.supplier_bank_currency,
+             p.supplier_bank_account_type,
+             p.supplier_bank_holder,
+             p.supplier_bank_holder_ruc,
+             p.supplier_bank_cci_iban,
+             p.supplier_bank_swift,
+             c.name AS category_name,
+             sc.name AS subcategory_name,
+             cc.name AS cost_center_name,
+             r.description AS recurrence_description,
+             r.active AS recurrence_active,
+             r.next_run_date AS recurrence_next_run_date,
+             creator.name AS created_by_name,
+             (
+               SELECT COALESCE(SUM(amount),0)
+               FROM admin_expense_payments pay
+               WHERE pay.expense_id = e.id AND pay.status <> 'anulado'
+             ) AS paid_amount
+        FROM admin_expenses e
+        LEFT JOIN organizations p ON p.id = e.provider_id
+        LEFT JOIN admin_expense_categories c ON c.id = e.category_id
+        LEFT JOIN admin_expense_subcategories sc ON sc.id = e.subcategory_id
+        LEFT JOIN admin_expense_cost_centers cc ON cc.id = e.cost_center_id
+        LEFT JOIN admin_expense_recurrences r ON r.id = e.recurrence_id
+        LEFT JOIN users creator ON creator.id = e.created_by
+       WHERE e.id = ?
+       LIMIT 1
+      `,
+      [id]
+    );
+    if (!expense) return res.status(404).json({ error: 'Gasto no encontrado' });
+
+    const [items] = await pool.query(
+      `SELECT * FROM admin_expense_items WHERE expense_id = ? ORDER BY id ASC`,
+      [id]
+    );
+    const [attachments] = await pool.query(
+      `SELECT * FROM admin_expense_attachments WHERE expense_id = ? ORDER BY id DESC`,
+      [id]
+    );
+    const [payments] = await pool.query(
+      `SELECT p.*, u.name AS created_by_name
+         FROM admin_expense_payments p
+         LEFT JOIN users u ON u.id = p.created_by
+        WHERE p.expense_id = ?
+        ORDER BY p.id DESC`,
+      [id]
+    );
+
+    const amount = Number(expense.amount || 0);
+    const paid = Number(expense.paid_amount || 0);
+    const balance = Math.max(0, amount - paid);
+    res.json({
+      expense: {
+        ...expense,
+        paid_amount: Number(paid.toFixed(2)),
+        balance: Number(balance.toFixed(2)),
+      },
+      items: items || [],
+      attachments: attachments || [],
+      payments: payments || [],
+      recurrence: expense.recurrence_id
+        ? {
+            id: expense.recurrence_id,
+            description: expense.recurrence_description,
+            active: expense.recurrence_active,
+            next_run_date: expense.recurrence_next_run_date,
+          }
+        : null,
+    });
+  } catch (e) {
+    console.error('[admin-expenses] detail error', e);
+    res.status(500).json({ error: 'Error loading expense detail' });
+  }
+});
+
+router.post('/:id/cancel', requireAuth, requireAnyRole('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const reason = String(req.body?.reason || '').trim();
+    if (!reason) return res.status(400).json({ error: 'Debe cargar un motivo de anulacion' });
+
+    const [[expense]] = await pool.query('SELECT * FROM admin_expenses WHERE id = ?', [id]);
+    if (!expense) return res.status(404).json({ error: 'Gasto no encontrado' });
+    if (String(expense.status || '').toLowerCase() === 'anulado') {
+      return res.status(400).json({ error: 'El gasto ya esta anulado' });
+    }
+
+    const note = [expense.description, `Anulado: ${reason}`].filter(Boolean).join('\n');
+    await pool.query(
+      `UPDATE admin_expenses
+          SET status = 'anulado',
+              description = ?
+        WHERE id = ?`,
+      [note, id]
+    );
+    await pool.query(
+      `UPDATE admin_expense_payments SET status = 'anulado' WHERE expense_id = ?`,
+      [id]
+    );
+    const [[updated]] = await pool.query('SELECT * FROM admin_expenses WHERE id = ?', [id]);
+    res.json(updated);
+  } catch (e) {
+    console.error('[admin-expenses] cancel error', e);
+    res.status(500).json({ error: 'Error canceling expense' });
+  }
+});
+
 router.post('/:id/payments', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
@@ -970,14 +1146,53 @@ router.post('/:id/payments', requireAuth, async (req, res) => {
       receipt_type,
       receipt_number,
       timbrado_number,
+      notes,
       amount,
       currency_code,
       status,
     } = req.body || {};
+    await ensureAdminExpenseTables();
+    const [[expense]] = await pool.query(
+      `
+      SELECT e.*,
+             (
+               SELECT COALESCE(SUM(pay.amount),0)
+               FROM admin_expense_payments pay
+               WHERE pay.expense_id = e.id AND pay.status <> 'anulado'
+             ) AS paid_amount
+        FROM admin_expenses e
+       WHERE e.id = ?
+       LIMIT 1
+      `,
+      [id]
+    );
+    if (!expense) return res.status(404).json({ error: 'Gasto no encontrado' });
+    if (String(expense.status || '').toLowerCase() === 'anulado') {
+      return res.status(400).json({ error: 'No se puede registrar pago de un gasto anulado' });
+    }
+    const paymentAmount = Number(amount || 0);
+    if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
+      return res.status(400).json({ error: 'El monto del pago debe ser mayor a cero' });
+    }
+    const expenseCurrency = String(expense.currency_code || 'PYG').toUpperCase();
+    const paymentCurrency = String(currency_code || expenseCurrency).toUpperCase();
+    if (paymentCurrency !== expenseCurrency) {
+      return res.status(400).json({ error: 'La moneda del pago debe coincidir con la moneda del gasto' });
+    }
+    const paidAmount = Number(expense.paid_amount || 0);
+    const balance = Math.max(0, Number(expense.amount || 0) - paidAmount);
+    if (paymentAmount - balance > 0.009) {
+      return res.status(400).json({ error: 'El pago no puede superar el saldo pendiente' });
+    }
+    const normalizedMethod = String(method || '').trim().toLowerCase();
+    const requiresAccount = normalizedMethod && !['efectivo', 'tarjeta'].includes(normalizedMethod);
+    if (requiresAccount && !String(account || '').trim()) {
+      return res.status(400).json({ error: 'Debe seleccionar la cuenta origen de la empresa' });
+    }
     const [result] = await pool.query(
       `INSERT INTO admin_expense_payments
-       (expense_id, payment_date, method, account, reference_number, receipt_type, receipt_number, timbrado_number, amount, currency_code, status, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (expense_id, payment_date, method, account, reference_number, receipt_type, receipt_number, timbrado_number, notes, amount, currency_code, status, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         payment_date || null,
@@ -987,13 +1202,20 @@ router.post('/:id/payments', requireAuth, async (req, res) => {
         receipt_type || null,
         receipt_number || null,
         timbrado_number || null,
-        Number(amount || 0),
-        currency_code || 'PYG',
+        notes || null,
+        paymentAmount,
+        paymentCurrency,
         status || 'confirmado',
         req.user?.id || null,
       ]
     );
-    res.status(201).json({ id: result.insertId });
+    const nextBalance = Math.max(0, balance - paymentAmount);
+    if (nextBalance <= 0.009) {
+      await pool.query(`UPDATE admin_expenses SET status = 'pagado' WHERE id = ?`, [id]);
+    } else if (String(expense.status || '').toLowerCase() === 'pagado') {
+      await pool.query(`UPDATE admin_expenses SET status = 'pendiente' WHERE id = ?`, [id]);
+    }
+    res.status(201).json({ id: result.insertId, balance: Number(nextBalance.toFixed(2)) });
   } catch (e) {
     console.error('[admin-expenses] payment error', e);
     res.status(500).json({ error: 'Error creating payment' });
@@ -1229,9 +1451,23 @@ router.post('/recurrences', requireAuth, async (req, res) => {
 router.get('/recurrences', requireAuth, async (_req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT * FROM admin_expense_recurrences ORDER BY id DESC`
+      `SELECT r.*, c.name AS category_name, sc.name AS subcategory_name,
+              cc.name AS cost_center_name, org.name AS provider_name, org.razon_social AS provider_razon
+         FROM admin_expense_recurrences r
+         LEFT JOIN admin_expense_categories c ON c.id = r.category_id
+         LEFT JOIN admin_expense_subcategories sc ON sc.id = r.subcategory_id
+         LEFT JOIN admin_expense_cost_centers cc ON cc.id = r.cost_center_id
+         LEFT JOIN organizations org ON org.id = r.provider_id
+        ORDER BY r.active DESC, r.next_run_date ASC, r.id DESC`
     );
-    res.json(rows);
+    const out = await Promise.all(
+      rows.map(async (r) => ({
+        ...r,
+        provider_name: r.provider_razon || r.provider_name || '',
+        next_dates: Number(r.active || 0) ? await getUpcomingRecurrenceDates(r, 6) : [],
+      }))
+    );
+    res.json(out);
   } catch (e) {
     console.error('[admin-expenses] recurrence list error', e);
     res.status(500).json({ error: 'Error listing recurrences' });
@@ -1620,7 +1856,17 @@ router.get('/export', requireAuth, async (req, res) => {
 
 router.get('/report', requireAuth, async (req, res) => {
   try {
-    const { from_date, to_date, status, currency_code } = req.query || {};
+    const {
+      from_date,
+      to_date,
+      status,
+      currency_code,
+      category_id,
+      subcategory_id,
+      cost_center_id,
+      provider_id,
+      q,
+    } = req.query || {};
     const where = [];
     const params = [];
     if (from_date) {
@@ -1639,21 +1885,95 @@ router.get('/report', requireAuth, async (req, res) => {
       where.push('e.currency_code = ?');
       params.push(currency_code);
     }
+    if (category_id) {
+      where.push('e.category_id = ?');
+      params.push(category_id);
+    }
+    if (subcategory_id) {
+      where.push('e.subcategory_id = ?');
+      params.push(subcategory_id);
+    }
+    if (cost_center_id) {
+      where.push('e.cost_center_id = ?');
+      params.push(cost_center_id);
+    }
+    if (provider_id) {
+      where.push('e.provider_id = ?');
+      params.push(provider_id);
+    }
+    if (q) {
+      const like = `%${String(q).trim()}%`;
+      where.push(`(
+        e.description LIKE ?
+        OR e.receipt_number LIKE ?
+        OR e.timbrado_number LIKE ?
+        OR e.supplier_name LIKE ?
+        OR e.supplier_ruc LIKE ?
+        OR COALESCE(p.razon_social, p.name) LIKE ?
+        OR p.ruc LIKE ?
+      )`);
+      params.push(like, like, like, like, like, like, like);
+    }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const [byCostCenter] = await pool.query(
       `
-      SELECT cc.name AS cost_center_name, e.currency_code, SUM(e.amount) AS total
+      SELECT COALESCE(cc.name, 'Sin centro') AS cost_center_name, e.currency_code, SUM(e.amount) AS total, COUNT(*) AS count
         FROM admin_expenses e
         LEFT JOIN admin_expense_cost_centers cc ON cc.id = e.cost_center_id
+        LEFT JOIN organizations p ON p.id = e.provider_id
+        LEFT JOIN admin_expense_categories c ON c.id = e.category_id
         ${whereSql}
-       GROUP BY cc.name, e.currency_code
+       GROUP BY COALESCE(cc.name, 'Sin centro'), e.currency_code
        ORDER BY total DESC
       `,
       params
     );
 
-    res.json({ byCostCenter });
+    const [byCategory] = await pool.query(
+      `
+      SELECT COALESCE(c.name, 'Sin categoria') AS category_name, e.currency_code, SUM(e.amount) AS total, COUNT(*) AS count
+        FROM admin_expenses e
+        LEFT JOIN organizations p ON p.id = e.provider_id
+        LEFT JOIN admin_expense_categories c ON c.id = e.category_id
+        ${whereSql}
+       GROUP BY COALESCE(c.name, 'Sin categoria'), e.currency_code
+       ORDER BY total DESC
+      `,
+      params
+    );
+
+    const [byProvider] = await pool.query(
+      `
+      SELECT COALESCE(p.razon_social, p.name, e.supplier_name, 'Sin proveedor') AS provider_name,
+             e.currency_code,
+             SUM(e.amount) AS total,
+             COUNT(*) AS count
+        FROM admin_expenses e
+        LEFT JOIN organizations p ON p.id = e.provider_id
+        LEFT JOIN admin_expense_categories c ON c.id = e.category_id
+        ${whereSql}
+       GROUP BY COALESCE(p.razon_social, p.name, e.supplier_name, 'Sin proveedor'), e.currency_code
+       ORDER BY total DESC
+       LIMIT 30
+      `,
+      params
+    );
+
+    const [byMonth] = await pool.query(
+      `
+      SELECT DATE_FORMAT(e.expense_date, '%Y-%m') AS month, e.currency_code, SUM(e.amount) AS total, COUNT(*) AS count
+        FROM admin_expenses e
+        LEFT JOIN organizations p ON p.id = e.provider_id
+        LEFT JOIN admin_expense_categories c ON c.id = e.category_id
+        ${whereSql}
+       GROUP BY DATE_FORMAT(e.expense_date, '%Y-%m'), e.currency_code
+       ORDER BY month DESC
+      `,
+      params
+    );
+
+    res.json({ byCostCenter, byCategory, byProvider, byMonth });
   } catch (e) {
     console.error('[admin-expenses] report error', e);
     res.status(500).json({ error: 'No se pudo cargar el reporte' });

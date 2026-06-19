@@ -1,7 +1,7 @@
 // client/src/pages/QuoteGenerator.jsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { api } from '../api';
+import { api, API_BASE } from '../api';
 import { useAuth } from '../auth.jsx';
 import useParamOptions from '../hooks/useParamOptions';
 import LogisticsAutocomplete from '../components/LogisticsAutocomplete.jsx';
@@ -78,8 +78,24 @@ const num = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 
+function taxRateToQuoteLabel(value) {
+  const rate = Number(value ?? 0);
+  if (rate >= 9) return '10%';
+  if (rate >= 4) return '5%';
+  return 'EXENTA';
+}
+
 // Paleta de branding
 const BRAND_BLUE = '#2F4866';
+const PUBLIC_BASE = String(API_BASE || '').replace(/\/api$/, '');
+
+const resolvePublicAssetUrl = (value = '') => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^(data:|https?:\/\/)/i.test(raw)) return raw;
+  if (raw.startsWith('/')) return `${PUBLIC_BASE}${raw}`;
+  return raw;
+};
 
 // =================== helpers de normalización y búsqueda ===================
 const DEBUG_PREFILL = false;
@@ -359,9 +375,10 @@ export default function QuoteGenerator(){
   const [terminos, setTerminos] = useState({
     validez: '7 DIAS',
     condicionVenta: 'CREDITO',
-    plazoCredito: '30 DIAS',
+    plazoCredito: '',
     formaPago: 'TRANSFERENCIA',
   });
+  const [quoteBranding, setQuoteBranding] = useState({ logoUrl: '' });
 
   // ✨ NUEVOS estados como TAGS
   const [incluyeTags, setIncluyeTags] = useState([]);     // string[]
@@ -384,6 +401,22 @@ export default function QuoteGenerator(){
     ],
     { onlyActive: true, asValues: true }
   );
+
+  useEffect(() => {
+    api
+      .get('/params', {
+        params: {
+          keys: 'quote_brand_logo_url',
+          only_active: 1,
+        },
+      })
+      .then(({ data }) => {
+        const entries = Array.isArray(data?.quote_brand_logo_url) ? data.quote_brand_logo_url : [];
+        const logo = entries.find((row) => String(row?.value || '').trim() !== '')?.value || '';
+        setQuoteBranding({ logoUrl: resolvePublicAssetUrl(logo) });
+      })
+      .catch(() => setQuoteBranding({ logoUrl: '' }));
+  }, []);
 
   // =================== Carga + PREFILL robusto ===================
   useEffect(() => {
@@ -522,7 +555,7 @@ export default function QuoteGenerator(){
           condicionVenta:
             pick(merged, ['cf:condicion_venta', /condici.*venta/], 'Condición de venta') || 'CREDITO',
           plazoCredito:
-            pick(merged, ['cf:plazo_credito', /plazo.*credit|credit.*term/], 'Plazo de crédito') || '30 DIAS',
+            pick(merged, ['cf:plazo_credito', /plazo.*credit|credit.*term/], 'Plazo de crédito') || '',
           formaPago:
             pick(merged, ['cf:forma_pago', /forma.*pago|payment.*method/], 'Forma de pago') || 'TRANSFERENCIA',
         });
@@ -582,7 +615,7 @@ export default function QuoteGenerator(){
               observacion: '',
               moneda: opCurrency,
               precio: 0,
-              impuesto: 'EXENTA',
+              impuesto: taxRateToQuoteLabel(v.tax_rate),
             }));
 
             if (hasTarget) {
@@ -601,7 +634,7 @@ export default function QuoteGenerator(){
                   observacion: '',
                   moneda: opCurrency,
                   precio: ventaBaseTotal,
-                  impuesto: 'EXENTA',
+                  impuesto: '10%',
                 },
               ];
             }
@@ -621,7 +654,7 @@ export default function QuoteGenerator(){
                 observacion: '',
                 moneda: opCurrency,
                 precio: valor,
-                impuesto: 'EXENTA',
+                impuesto: taxRateToQuoteLabel(v.tax_rate),
               };
             });
           }
@@ -636,7 +669,7 @@ export default function QuoteGenerator(){
               observacion: '',
               moneda: opCurrency,
               precio,
-              impuesto: 'EXENTA',
+              impuesto: taxRateToQuoteLabel(v.tax_rate),
             };
           });
 
@@ -649,7 +682,7 @@ export default function QuoteGenerator(){
               observacion: '',
               moneda: opCurrency,
               precio,
-              impuesto: '10%',
+              impuesto: taxRateToQuoteLabel(v.tax_rate),
             };
           });
 
@@ -1183,7 +1216,7 @@ export default function QuoteGenerator(){
       {/* ================= PREVIEW / PDF (A4) ================= */}
       <div id="quote-print" className="bg-white border rounded-xl p-0">
         <div className="mx-auto text-[14px] leading-6" style={{ width: `${CONTENT_W_MM}mm`, paddingRight: '3mm', boxSizing: 'border-box' }}>
-          <FormalHeader />
+          <FormalHeader logoUrl={quoteBranding.logoUrl} />
 
           <div className="flex justify-between items-start px-1 mt-3 avoid-break">
             <div className="text-[16px]">
@@ -1463,6 +1496,7 @@ function ItemsTable({ items, setItems, totalAmount, totalDecimals, currency = "U
               <td>
                 <select className="border rounded px-1" value={it.impuesto} onChange={e=>updateItem(idx, { impuesto: e.target.value })}>
                   <option>EXENTA</option>
+                  <option>5%</option>
                   <option>10%</option>
                 </select>
               </td>
@@ -1592,13 +1626,17 @@ function ListFromText({ text }) {
   );
 }
 
-function FormalHeader() {
+function FormalHeader({ logoUrl }) {
   return (
     <div className="formal-header">
       <div className="formal-logo-box">
-        <div className="formal-logo-fallback">
-          <span className="grupo">grupo</span><span className="atm">atm</span>
-        </div>
+        {logoUrl ? (
+          <img src={logoUrl} alt="Logo" />
+        ) : (
+          <div className="formal-logo-fallback">
+            <span className="grupo">grupo</span><span className="atm">atm</span>
+          </div>
+        )}
       </div>
       <div className="formal-title-box">
         <div className="formal-title-orange"></div>

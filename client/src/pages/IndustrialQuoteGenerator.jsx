@@ -829,7 +829,7 @@ export default function QuoteGenerator(){
 
     condicionVenta: 'CREDITO',
 
-    plazoCredito: '30 DIAS',
+    plazoCredito: '',
 
     formaPago: 'TRANSFERENCIA',
 
@@ -1354,7 +1354,7 @@ CORDIALES SALUDOS`,
 
           plazoCredito:
 
-            pick(merged, ['cf:plazo_credito', /plazo.*credit|credit.*term/], 'Plazo de crédito') || '30 DIAS',
+            pick(merged, ['cf:plazo_credito', /plazo.*credit|credit.*term/], 'Plazo de crédito') || '',
 
           formaPago:
 

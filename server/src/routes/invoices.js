@@ -5,6 +5,7 @@ import { requireAuth, requireRole } from '../middlewares/auth.js';
 import PDFDocument from 'pdfkit';
 import generateInvoicePDF from '../services/invoiceTemplatePdfkit.js';
 import generateReceiptPDF from '../services/receiptTemplatePdfkit.js';
+import { getBrandLogoPath } from '../services/brandingAssets.js';
 
 const router = Router();
 
@@ -3319,7 +3320,10 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
       paidAmount: Number(row.amount_applied || amount),
     }));
 
+    const logoPath = await getBrandLogoPath();
+
     const data = {
+      logoPath,
       issuer: {
         name: issuer.name,
         address: issuer.address,
@@ -3617,7 +3621,9 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
     );
 
     const issueDate = invoice.issue_date ? new Date(invoice.issue_date) : new Date();
+    const logoPath = await getBrandLogoPath();
     const data = {
+      logoPath,
       issuer: {
         name: issuer.name,
         address: issuer.address,
@@ -4012,7 +4018,9 @@ router.get('/credit-notes/:id/pdf', requireAuth, async (req, res) => {
     );
 
     const issueDate = note.issue_date ? new Date(note.issue_date) : new Date();
+    const logoPath = await getBrandLogoPath();
     const data = {
+      logoPath,
       headerTitle: 'NOTA DE CREDITO',
       invoiceNumber: note.credit_note_number || '',
       issuer: {

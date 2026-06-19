@@ -381,6 +381,12 @@ router.get('/', requireAuth, async (req, res) => {
   if (deal_advisor_user_id) { where.push('d.advisor_user_id = ?');    params.push(deal_advisor_user_id); }
   if (created_by_user_id)   { where.push('d.created_by_user_id = ?'); params.push(created_by_user_id); }
 
+  const userRole = String(req.user?.role || '').toLowerCase();
+  if (userRole !== 'admin') {
+    where.push('d.advisor_user_id = ?');
+    params.push(req.user?.id || 0);
+  }
+
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -875,28 +881,33 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     const createdById = req.user?.id ?? null;
+    const isAdmin = String(req.user?.role || '').toLowerCase() === 'admin';
     let dealAdvisorId = null;
 
-    if (body.account_exec_id != null && body.account_exec_id !== '') {
-      dealAdvisorId = Number(body.account_exec_id) || null;
-    } else if (body.deal_advisor_user_id != null && body.deal_advisor_user_id !== '') {
-      dealAdvisorId = Number(body.deal_advisor_user_id) || null;
-    } else if (body.advisor_user_id != null && body.advisor_user_id !== '') {
-      dealAdvisorId = Number(body.advisor_user_id) || null;
-    }
-
-    if (!dealAdvisorId && orgId) {
-      const [[oAdv] = []] = await conn.query(
-        'SELECT advisor_user_id FROM organizations WHERE id = ? LIMIT 1',
-        [orgId]
-      );
-      if (oAdv && oAdv.advisor_user_id) {
-        dealAdvisorId = Number(oAdv.advisor_user_id) || null;
-      }
-    }
-
-    if (!dealAdvisorId) {
+    if (!isAdmin) {
       dealAdvisorId = createdById;
+    } else {
+      if (body.account_exec_id != null && body.account_exec_id !== '') {
+        dealAdvisorId = Number(body.account_exec_id) || null;
+      } else if (body.deal_advisor_user_id != null && body.deal_advisor_user_id !== '') {
+        dealAdvisorId = Number(body.deal_advisor_user_id) || null;
+      } else if (body.advisor_user_id != null && body.advisor_user_id !== '') {
+        dealAdvisorId = Number(body.advisor_user_id) || null;
+      }
+
+      if (!dealAdvisorId && orgId) {
+        const [[oAdv] = []] = await conn.query(
+          'SELECT advisor_user_id FROM organizations WHERE id = ? LIMIT 1',
+          [orgId]
+        );
+        if (oAdv && oAdv.advisor_user_id) {
+          dealAdvisorId = Number(oAdv.advisor_user_id) || null;
+        }
+      }
+
+      if (!dealAdvisorId) {
+        dealAdvisorId = createdById;
+      }
     }
 
     const tmpRef = `TMP-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`.slice(0, 32);
@@ -1023,6 +1034,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
 
   const fields = [];
   const params = [];
+  const isAdmin = String(req.user?.role || '').toLowerCase() === 'admin';
   let promotedToOperation = false;
   let promotedReference = null;
 
@@ -1079,7 +1091,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
     if (org_id !== undefined)          { fields.push('org_id = ?');           params.push(org_id); }
     if (org_branch_id !== undefined)   { fields.push('org_branch_id = ?');    params.push(org_branch_id || null); }
     if (business_unit_id !== undefined){ fields.push('business_unit_id = ?'); params.push(business_unit_id); }
-    if (advisor_user_id !== undefined) { fields.push('advisor_user_id = ?');  params.push(advisor_user_id || null); }
+    if (isAdmin && advisor_user_id !== undefined) { fields.push('advisor_user_id = ?');  params.push(advisor_user_id || null); }
 
     if (!fields.length) {
       await conn.rollback();
@@ -1087,8 +1099,20 @@ router.patch('/:id', requireAuth, async (req, res) => {
     }
 
     fields.push('updated_at = NOW()');
-    params.push(id);
-    await conn.query(`UPDATE deals SET ${fields.join(', ')} WHERE id = ?`, params);
+    const updateWhere = ['id = ?'];
+    const updateParams = [...params, id];
+    if (!isAdmin) {
+      updateWhere.push('advisor_user_id = ?');
+      updateParams.push(req.user?.id || 0);
+    }
+    const [upd] = await conn.query(
+      `UPDATE deals SET ${fields.join(', ')} WHERE ${updateWhere.join(' AND ')}`,
+      updateParams
+    );
+    if (!upd.affectedRows) {
+      await conn.rollback();
+      return res.status(403).json({ error: 'No tienes permiso para modificar esta operación' });
+    }
 
     await conn.commit();
 

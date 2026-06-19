@@ -4,6 +4,7 @@ import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { useNavigate, useLocation } from "react-router-dom";
 import { api } from "../api";
 import NewOperationModal from "../components/NewOperationModal";
+import { useAuth } from "../auth.jsx";
 
 /* helpers */
 const msPerDay = 24 * 60 * 60 * 1e3;
@@ -105,10 +106,14 @@ function pickQuoteProfitSummary(row) {
 export default function Pipeline() {
   const nav = useNavigate();
   const location = useLocation();
+  const { user } = useAuth();
+  const isAdmin = String(user?.role || "").toLowerCase() === "admin";
 
   const [pipelineId, setPipelineId] = useState(null);
   const [stages, setStages] = useState([]);
   const [deals, setDeals] = useState([]);
+  const [advisorUsers, setAdvisorUsers] = useState([]);
+  const [selectedAdvisorUserId, setSelectedAdvisorUserId] = useState("");
   const [dealCFMap, setDealCFMap] = useState({});
   const [quoteTotals, setQuoteTotals] = useState({});
   const [openModal, setOpenModal] = useState(false);
@@ -118,6 +123,14 @@ export default function Pipeline() {
 
   useEffect(() => {
     (async () => {
+      if (isAdmin) {
+        try {
+          const { data } = await api.get("/users/select", { params: { active: 1 } });
+          setAdvisorUsers(Array.isArray(data) ? data : []);
+        } catch {
+          setAdvisorUsers([]);
+        }
+      }
       let chosenPid = null;
       try {
         const { data: params } = await api.get("/params", {
@@ -135,7 +148,12 @@ export default function Pipeline() {
 
       const [{ data: s }, { data: d }] = await Promise.all([
         api.get(`/pipelines/${pid}/stages`),
-        api.get("/deals", { params: { pipeline_id: pid } }),
+        api.get("/deals", {
+          params: {
+            pipeline_id: pid,
+            ...(isAdmin && selectedAdvisorUserId ? { deal_advisor_user_id: selectedAdvisorUserId } : {}),
+          },
+        }),
       ]);
 
       const visibleStages = (s || []).filter((st) => !hiddenStageIds.has(String(st.id)));
@@ -144,6 +162,12 @@ export default function Pipeline() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!pipelineId || !isAdmin) return;
+    refreshDeals(pipelineId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAdvisorUserId]);
 
   useEffect(() => {
     if (!deals.length) return;
@@ -228,7 +252,12 @@ export default function Pipeline() {
   }
 
   async function refreshDeals(pid) {
-    const { data } = await api.get("/deals", { params: { pipeline_id: pid ?? pipelineId } });
+    const { data } = await api.get("/deals", {
+      params: {
+        pipeline_id: pid ?? pipelineId,
+        ...(isAdmin && selectedAdvisorUserId ? { deal_advisor_user_id: selectedAdvisorUserId } : {}),
+      },
+    });
     setDeals(data || []);
   }
 
@@ -237,6 +266,21 @@ export default function Pipeline() {
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold">Pipeline</h2>
         <div className="flex gap-2">
+          {isAdmin && (
+            <select
+              className="px-3 py-2 text-sm rounded-lg border bg-white dark:bg-slate-950 dark:border-slate-700"
+              value={selectedAdvisorUserId}
+              onChange={(e) => setSelectedAdvisorUserId(e.target.value)}
+              title="Filtrar por comercial"
+            >
+              <option value="">Todos los comerciales</option>
+              {advisorUsers.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name || u.email || `Usuario ${u.id}`}
+                </option>
+              ))}
+            </select>
+          )}
           {/* ✏️ Editor en pantalla completa */}
           <button
             onClick={() =>

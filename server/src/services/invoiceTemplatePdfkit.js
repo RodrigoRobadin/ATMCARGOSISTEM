@@ -112,9 +112,16 @@ function drawHeader(doc, data, y) {
   // Logo / placeholder
   const logoX = header.x + 10;
   const logoY = header.y + 15;
+  let logoDrawn = false;
   if (data.logoPath && fs.existsSync(data.logoPath)) {
-    doc.image(data.logoPath, logoX, logoY, { fit: [150, 80], align: 'left', valign: 'center' });
-  } else {
+    try {
+      doc.image(data.logoPath, logoX, logoY, { fit: [150, 80], align: 'left', valign: 'center' });
+      logoDrawn = true;
+    } catch (err) {
+      console.warn('[invoice-pdf] logo ignored:', err?.message || err);
+    }
+  }
+  if (!logoDrawn) {
     doc
       .font('Helvetica-Bold')
       .fontSize(18)
