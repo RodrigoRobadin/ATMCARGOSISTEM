@@ -3,11 +3,37 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth.jsx";
 
-const fmtMoney = (value) =>
-  new Intl.NumberFormat("es-PY", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(Number(value || 0));
+const fmtMoney = (value, currency = "USD") => {
+  const code = String(currency || "").toUpperCase();
+  if (!code) return "-";
+  const decimals = code === "PYG" || code === "GS" ? 0 : 2;
+  return `${code} ${new Intl.NumberFormat("es-PY", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(Number(value || 0))}`;
+};
+
+const formatCurrencyTotals = (amounts = {}) =>
+  Object.entries(amounts || {})
+    .filter(([currency]) => String(currency || "").trim())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([currency, amount]) => fmtMoney(amount, currency))
+    .join(" | ") || "-";
+
+function MoneyTotal({ amounts }) {
+  const entries = Object.entries(amounts || {})
+    .filter(([currency]) => String(currency || "").trim())
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  if (!entries.length) return <>-</>;
+  return (
+    <div className="space-y-0.5 text-base leading-tight">
+      {entries.map(([currency, amount]) => (
+        <div key={currency}>{fmtMoney(amount, currency)}</div>
+      ))}
+    </div>
+  );
+}
 
 function KpiCard({ label, value, hint, tone = "slate" }) {
   const toneClass =
@@ -55,8 +81,8 @@ function DealTable({ title, rows, emptyText }) {
                 </td>
                 <td className="px-3 py-2">{row.org_name || "-"}</td>
                 <td className="px-3 py-2">{row.stage_name || "-"}</td>
-                <td className="px-3 py-2 text-right">USD {fmtMoney(row.sales_amount || row.value)}</td>
-                <td className="px-3 py-2 text-right">USD {fmtMoney(row.profit_amount)}</td>
+                <td className="px-3 py-2 text-right">{fmtMoney(row.sales_amount, row.currency_code)}</td>
+                <td className="px-3 py-2 text-right">{fmtMoney(row.profit_amount, row.currency_code)}</td>
                 <td className="px-3 py-2 text-right">{row.age_days ?? "-"}</td>
               </tr>
             ))}
@@ -118,8 +144,8 @@ export default function CommercialDashboard() {
 
   const summary = data?.summary || {};
   const byStage = data?.by_stage || [];
-  const maxStageValue = useMemo(
-    () => Math.max(1, ...byStage.map((row) => Number(row.value || 0))),
+  const maxStageCount = useMemo(
+    () => Math.max(1, ...byStage.map((row) => Number(row.count || 0))),
     [byStage]
   );
 
@@ -169,8 +195,8 @@ export default function CommercialDashboard() {
         <>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             <KpiCard label="Operaciones abiertas" value={summary.open_deals || 0} />
-            <KpiCard label="Valor pipeline" value={`USD ${fmtMoney(summary.pipeline_value)}`} />
-            <KpiCard label="Profit estimado" value={`USD ${fmtMoney(summary.estimated_profit)}`} tone="emerald" />
+            <KpiCard label="Valor pipeline" value={<MoneyTotal amounts={summary.pipeline_value_by_currency} />} />
+            <KpiCard label="Profit estimado" value={<MoneyTotal amounts={summary.estimated_profit_by_currency} />} tone="emerald" />
             <KpiCard label="Por cerrar" value={summary.closing_soon_count || 0} hint="Etapas de alta probabilidad" />
             <KpiCard label="Cotizadas" value={summary.quoted_deals || 0} />
             <KpiCard label="Sin cotizar" value={summary.unquoted_deals || 0} tone="red" />
@@ -182,12 +208,12 @@ export default function CommercialDashboard() {
             <div className="font-semibold text-sm mb-3">Pipeline por etapa</div>
             <div className="space-y-3">
               {byStage.map((row) => {
-                const pct = Math.max(4, Math.round((Number(row.value || 0) / maxStageValue) * 100));
+                const pct = Math.max(4, Math.round((Number(row.count || 0) / maxStageCount) * 100));
                 return (
                   <div key={row.stage_id || row.stage_name}>
                     <div className="flex justify-between text-xs mb-1">
                       <span>{row.stage_name}</span>
-                      <span>{row.count} ops - USD {fmtMoney(row.value)}</span>
+                      <span>{row.count} ops - {formatCurrencyTotals(row.value_by_currency)}</span>
                     </div>
                     <div className="h-2 rounded bg-slate-100 overflow-hidden dark:bg-slate-800">
                       <div className="h-full bg-black dark:bg-white" style={{ width: `${pct}%` }} />
@@ -204,7 +230,7 @@ export default function CommercialDashboard() {
             <DealTable title="Operaciones estancadas" rows={data?.stuck || []} emptyText="Sin operaciones estancadas." />
           </div>
 
-          <DealTable title="Top operaciones" rows={data?.top_deals || []} emptyText="Sin operaciones." />
+          <DealTable title="Operaciones recientes" rows={data?.top_deals || []} emptyText="Sin operaciones." />
         </>
       )}
     </div>

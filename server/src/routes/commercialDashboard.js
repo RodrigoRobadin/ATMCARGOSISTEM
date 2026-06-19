@@ -19,7 +19,30 @@ function num(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function summarizeQuoteComputed(computed = {}) {
+function normalizeCurrency(value, fallback = 'USD') {
+  const source = value == null || String(value).trim() === '' ? fallback : value;
+  const code = String(source == null ? '' : source).trim().toUpperCase();
+  return code === 'GS' ? 'PYG' : code;
+}
+
+function toOperationCurrency(value, currencyCode, exchangeRate) {
+  const amount = num(value);
+  const currency = normalizeCurrency(currencyCode);
+  const rate = num(exchangeRate);
+  return currency === 'PYG' && rate > 0 ? amount * rate : amount;
+}
+
+function summarizeQuoteComputed(computed = {}, inputs = {}) {
+  const currencyCode = normalizeCurrency(
+    computed?.meta?.operation_currency || inputs?.operation_currency || 'USD'
+  );
+  const exchangeRate =
+    num(
+      computed?.meta?.exchange_rate_atm_gs_per_usd ||
+        computed?.meta?.exchange_rate_operation_sell_usd ||
+        inputs?.exchange_rate_atm_gs_per_usd ||
+        inputs?.exchange_rate_operation_sell_usd
+    ) || 1;
   const totalSales =
     computed?.oferta?.totals?.total_sales_usd ??
     computed?.operacion?.totals?.total_sales_usd ??
@@ -32,8 +55,9 @@ function summarizeQuoteComputed(computed = {}) {
     computed?.totals?.profit_total_usd ??
     null;
   return {
-    total_sales_usd: totalSales == null ? null : num(totalSales),
-    profit_total_usd: profit == null ? null : num(profit),
+    currency_code: currencyCode,
+    total_sales: totalSales == null ? null : toOperationCurrency(totalSales, currencyCode, exchangeRate),
+    profit_total: profit == null ? null : toOperationCurrency(profit, currencyCode, exchangeRate),
   };
 }
 
@@ -45,14 +69,17 @@ function toSheetNumber(value) {
 }
 
 function summarizeCostSheetData(data = {}) {
+  const header = data?.header || {};
   const totals = data?.totals || {};
+  const currencyCode = normalizeCurrency(header.operationCurrency || header.currency || 'USD');
   const profit = toSheetNumber(totals.profitGeneral ?? totals.profit_total_usd ?? totals.profit);
   const sales =
     toSheetNumber(totals.totalVentas ?? totals.total_sales_usd ?? totals.totalVenta) ||
     toSheetNumber(totals.totalVentaCliente);
   return {
-    total_sales_usd: sales || null,
-    profit_total_usd: profit || null,
+    currency_code: currencyCode,
+    total_sales: sales || null,
+    profit_total: profit || null,
   };
 }
 
@@ -62,8 +89,9 @@ function pickDealMetrics(deal, quoteByDeal, costSheetByDeal) {
   const source = quote || costSheet || {};
   return {
     has_quote: Boolean(deal.has_quote || quote || costSheet),
-    sales: num(source.total_sales_usd ?? deal.value),
-    profit: num(source.profit_total_usd),
+    currency_code: source.currency_code || null,
+    sales: num(source.total_sales),
+    profit: num(source.profit_total),
   };
 }
 
@@ -205,13 +233,16 @@ router.get('/', requireAuth, async (req, res) => {
 
     if (dealIds.length) {
       const [quoteRows] = await pool.query(
-        `SELECT deal_id, computed_json
+        `SELECT deal_id, computed_json, inputs_json
            FROM quotes
           WHERE deal_id IN (?)`,
         [dealIds]
       ).catch(() => [[]]);
       for (const row of quoteRows || []) {
-        quoteByDeal.set(Number(row.deal_id), summarizeQuoteComputed(safeJson(row.computed_json, {}) || {}));
+        quoteByDeal.set(
+          Number(row.deal_id),
+          summarizeQuoteComputed(safeJson(row.computed_json, {}) || {}, safeJson(row.inputs_json, {}) || {})
+        );
       }
 
       const [costRows] = await pool.query(
@@ -239,6 +270,7 @@ router.get('/', requireAuth, async (req, res) => {
       const baseDeal = {
         ...deal,
         has_quote: metrics.has_quote,
+        currency_code: metrics.currency_code,
         sales_amount: metrics.sales,
         profit_amount: metrics.profit,
         age_days: ageDays,
@@ -257,8 +289,8 @@ router.get('/', requireAuth, async (req, res) => {
     const byStageMap = new Map();
     const summary = {
       open_deals: enriched.length,
-      pipeline_value: 0,
-      estimated_profit: 0,
+      pipeline_value_by_currency: {},
+      estimated_profit_by_currency: {},
       quoted_deals: 0,
       unquoted_deals: 0,
       overdue_activities: 0,
@@ -269,9 +301,15 @@ router.get('/', requireAuth, async (req, res) => {
       high_priority_actions: 0,
     };
 
+    const addCurrencyAmount = (bucket, currencyCode, amount) => {
+      const currency = normalizeCurrency(currencyCode, '');
+      if (!currency) return;
+      bucket[currency] = num(bucket[currency]) + num(amount);
+    };
+
     for (const deal of enriched) {
-      summary.pipeline_value += num(deal.sales_amount || deal.value);
-      summary.estimated_profit += num(deal.profit_amount);
+      addCurrencyAmount(summary.pipeline_value_by_currency, deal.currency_code, deal.sales_amount);
+      addCurrencyAmount(summary.estimated_profit_by_currency, deal.currency_code, deal.profit_amount);
       summary.quoted_deals += deal.has_quote ? 1 : 0;
       summary.unquoted_deals += deal.has_quote ? 0 : 1;
       summary.overdue_activities += Number(deal.overdue_activities || 0);
@@ -286,12 +324,12 @@ router.get('/', requireAuth, async (req, res) => {
         stage_id: deal.stage_id,
         stage_name: deal.stage_name || 'Sin etapa',
         count: 0,
-        value: 0,
-        profit: 0,
+        value_by_currency: {},
+        profit_by_currency: {},
       };
       current.count += 1;
-      current.value += num(deal.sales_amount || deal.value);
-      current.profit += num(deal.profit_amount);
+      addCurrencyAmount(current.value_by_currency, deal.currency_code, deal.sales_amount);
+      addCurrencyAmount(current.profit_by_currency, deal.currency_code, deal.profit_amount);
       byStageMap.set(key, current);
     }
 
@@ -330,7 +368,7 @@ router.get('/', requireAuth, async (req, res) => {
       closing_soon: enriched.filter((d) => d.is_closing_soon).slice(0, 12),
       stuck: enriched.filter((d) => d.is_stuck).slice(0, 12),
       top_deals: [...enriched]
-        .sort((a, b) => num(b.profit_amount || b.sales_amount || b.value) - num(a.profit_amount || a.sales_amount || a.value))
+        .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
         .slice(0, 12),
     });
   } catch (e) {
