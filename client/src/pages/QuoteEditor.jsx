@@ -313,26 +313,22 @@ export default function QuoteEditor({
   const currencyLabel = isPyg ? "Gs" : "USD";
   const hasUnsavedChanges = Boolean(savedInputsKey) && stableStringify(inputs) !== savedInputsKey;
   const toOp = (usd) => (isPyg ? Number(usd || 0) * opRate : Number(usd || 0));
-  const toInstal = (usd) => (isPyg ? Number(usd || 0) * installRate : Number(usd || 0));
   const fmtOp = (usd) => {
     const val = toOp(usd);
     if (!Number.isFinite(val)) return "-";
     return isPyg ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 0 }) : fmt2(val);
   };
   const fmtInstal = (usd) => {
-    const val = toInstal(usd);
+    const val = isPyg ? Number(usd || 0) * opRate : Number(usd || 0);
     if (!Number.isFinite(val)) return "-";
     return isPyg ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 0 }) : fmt2(val);
   };
   const filteredCatalogItems = catalogItems;
-  const fmtTotalSales = (totalUsd, instalUsd) => {
+  const fmtTotalSales = (totalUsd) => {
     const total = Number(totalUsd || 0);
-    const inst = Number(instalUsd || 0);
     if (!Number.isFinite(total)) return "-";
     if (!isPyg) return fmt2(total);
-    const baseUsd = total - inst;
-    const valGs = baseUsd * opRate + inst * installRate;
-    return Number(valGs).toLocaleString(undefined, { maximumFractionDigits: 0 });
+    return Number(total * opRate).toLocaleString(undefined, { maximumFractionDigits: 0 });
   };
 
   async function refreshBudgetStatus(orgIdToUse) {
@@ -1963,13 +1959,17 @@ export default function QuoteEditor({
         <div className={`space-y-3 ${lockClass}`}>
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
             <div>
-              <label className="text-xs text-slate-500">TC ATM (Gs/USD)</label>
+              <label className="text-xs text-slate-500">{isPyg ? "TC ATM global (Gs/USD)" : "TC Instalación (Gs/USD)"}</label>
               <NumericInput
-                className="w-full mt-1 border rounded-lg px-3 py-2 bg-white"
-                value={installRate}
-                onChange={(v) => setField("exchange_rate_install_gs_per_usd", v || 1)}
+                className="w-full mt-1 border rounded-lg px-3 py-2 bg-white disabled:bg-slate-100"
+                value={isPyg ? tcAtm : installRate}
+                onChange={(v) => {
+                  if (!isPyg) setField("exchange_rate_install_gs_per_usd", v || 1);
+                }}
                 decimals={0}
+                disabled={isPyg}
               />
+              {isPyg ? <div className="mt-1 text-xs text-slate-500">Instalación se mantiene en PYG; usa el TC global solo como referencia interna.</div> : null}
             </div>
           </div>
 
@@ -2077,8 +2077,8 @@ export default function QuoteEditor({
                     <th className="px-3 py-2 text-right">Costo Gs</th>
                     <th className="px-3 py-2 text-right">Venta Gs</th>
                     <th className="px-3 py-2 text-right">Profit Gs</th>
-                    <th className="px-3 py-2 text-right">Venta USD</th>
-                    <th className="px-3 py-2 text-right">Profit USD</th>
+                    {!isPyg ? <th className="px-3 py-2 text-right">Venta USD</th> : null}
+                    {!isPyg ? <th className="px-3 py-2 text-right">Profit USD</th> : null}
                   </tr>
                 </thead>
                 <tbody>
@@ -2088,8 +2088,8 @@ export default function QuoteEditor({
                       <td className="px-3 py-2 text-right">{Number(l.total_cost_gs || 0).toLocaleString()}</td>
                       <td className="px-3 py-2 text-right">{Number(l.total_sale_gs || 0).toLocaleString()}</td>
                       <td className="px-3 py-2 text-right">{Number(l.profit_gs || 0).toLocaleString()}</td>
-                      <td className="px-3 py-2 text-right">{fmt2(l.sale_usd)}</td>
-                      <td className="px-3 py-2 text-right">{fmt2(l.profit_usd)}</td>
+                      {!isPyg ? <td className="px-3 py-2 text-right">{fmt2(l.sale_usd)}</td> : null}
+                      {!isPyg ? <td className="px-3 py-2 text-right">{fmt2(l.profit_usd)}</td> : null}
                     </tr>
                   ))}
                 </tbody>
@@ -2105,12 +2105,8 @@ export default function QuoteEditor({
                       <td className="px-3 py-2 text-right font-semibold">
                         {Number(computed.instalacion.totals.installation_total_profit_gs || 0).toLocaleString()}
                       </td>
-                      <td className="px-3 py-2 text-right font-semibold">
-                        {fmt2(computed.instalacion.totals.installation_total_sale_usd)}
-                      </td>
-                      <td className="px-3 py-2 text-right font-semibold">
-                        {fmt2(computed.instalacion.totals.installation_total_profit_usd)}
-                      </td>
+                      {!isPyg ? <td className="px-3 py-2 text-right font-semibold">{fmt2(computed.instalacion.totals.installation_total_sale_usd)}</td> : null}
+                      {!isPyg ? <td className="px-3 py-2 text-right font-semibold">{fmt2(computed.instalacion.totals.installation_total_profit_usd)}</td> : null}
                     </tr>
                   </tfoot>
                 </table>

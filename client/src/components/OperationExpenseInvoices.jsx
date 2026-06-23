@@ -2279,7 +2279,7 @@ function ExpenseControlPanel({ data, loading, manualExchangeRate, onManualExchan
                           <div className="text-xs text-slate-500">Cant. {Number(line.qty || 0).toLocaleString("es-PY")}</div>
                         </td>
                         <td className="px-3 py-2 text-right">
-                          {money(line.total_cost_usd || 0, "USD")}
+                          {money(line.total_cost ?? line.total_cost_usd ?? 0, budgetCurrency || "USD")}
                         </td>
                         <td className="px-3 py-2 text-xs">
                           {related.length ? (

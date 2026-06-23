@@ -1552,41 +1552,56 @@ function getRubroAmount(source, kind = 'buy') {
 }
 
 function buildIndustrialBudgetFromComputed(computed = {}, revisionLabel = 'Revision seleccionada') {
+  const currencyCode = normCurrency(computed?.meta?.operation_currency || 'USD');
+  const atmRate = pickNumber(computed?.meta?.exchange_rate_atm_gs_per_usd, 1) || 1;
+  // The quote engine keeps its working totals normalized in USD. For a PYG
+  // operation, expose the budget in PYG so it can be compared to real bills.
+  const budgetAmount = (value) => {
+    const amount = pickNumber(value);
+    return currencyCode === 'PYG' ? amount * atmRate : amount;
+  };
   const rubros = {};
   const sellRubros = {};
   const opRubros = computed?.operacion?.rubros || {};
   for (const [key, value] of Object.entries(opRubros)) {
-    addBudgetRubro(rubros, key, getRubroAmount(value, 'buy'));
-    addBudgetRubro(sellRubros, key, getRubroAmount(value, 'sell'));
+    addBudgetRubro(rubros, key, budgetAmount(getRubroAmount(value, 'buy')));
+    addBudgetRubro(sellRubros, key, budgetAmount(getRubroAmount(value, 'sell')));
   }
-  addBudgetRubro(rubros, 'FLETE', computed?.despacho?.totals?.freight_buy_usd);
-  addBudgetRubro(rubros, 'DESPACHO', computed?.despacho?.totals?.customs_total_usd_theoretical);
-  addBudgetRubro(rubros, 'FINANCIACION', computed?.financiacion?.totals?.financing_total_buy_usd);
-  addBudgetRubro(rubros, 'INSTALACION', computed?.instalacion?.totals?.installation_total_cost_usd);
-  addBudgetRubro(sellRubros, 'DESPACHO', computed?.despacho?.totals?.customs_total_sale_usd);
-  addBudgetRubro(sellRubros, 'FINANCIACION', computed?.financiacion?.totals?.financing_total_sale_usd);
-  addBudgetRubro(sellRubros, 'INSTALACION', computed?.instalacion?.totals?.installation_total_sale_usd);
+  addBudgetRubro(rubros, 'FLETE', budgetAmount(computed?.despacho?.totals?.freight_buy_usd));
+  addBudgetRubro(rubros, 'DESPACHO', budgetAmount(computed?.despacho?.totals?.customs_total_usd_theoretical));
+  addBudgetRubro(rubros, 'FINANCIACION', budgetAmount(computed?.financiacion?.totals?.financing_total_buy_usd));
+  addBudgetRubro(rubros, 'INSTALACION', budgetAmount(computed?.instalacion?.totals?.installation_total_cost_usd));
+  addBudgetRubro(sellRubros, 'DESPACHO', budgetAmount(computed?.despacho?.totals?.customs_total_sale_usd));
+  addBudgetRubro(sellRubros, 'FINANCIACION', budgetAmount(computed?.financiacion?.totals?.financing_total_sale_usd));
+  addBudgetRubro(sellRubros, 'INSTALACION', budgetAmount(computed?.instalacion?.totals?.installation_total_sale_usd));
 
   const installationLines = Array.isArray(computed?.instalacion?.lines)
-    ? computed.instalacion.lines.map((line, idx) => ({
-        line_no: idx + 1,
-        description: line.description || line.concept || line.item || `Instalacion ${idx + 1}`,
-        qty: pickNumber(line.qty, line.quantity, 1),
-        total_cost_usd: pickNumber(line.total_cost_usd, line.cost_usd, line.buy_usd, line.total_cost),
-      }))
+    ? computed.instalacion.lines.map((line, idx) => {
+        const costUsd = pickNumber(line.total_cost_usd, line.cost_usd, line.buy_usd, line.total_cost);
+        return {
+          line_no: idx + 1,
+          description: line.description || line.concept || line.item || `Instalacion ${idx + 1}`,
+          qty: pickNumber(line.qty, line.quantity, 1),
+          total_cost: budgetAmount(costUsd),
+          total_cost_usd: costUsd,
+        };
+      })
     : [];
 
-  const budgetedBuy = pickNumber(
-    computed?.operacion?.totals?.total_buy_usd,
-    Object.values(rubros).reduce((a, b) => a + Number(b || 0), 0)
-  );
-  const budgetedSell = pickNumber(
-    computed?.operacion?.totals?.total_sell_usd,
-    computed?.oferta?.totals?.total_sales_usd
-  );
+  const totalBuyUsd = Number(computed?.operacion?.totals?.total_buy_usd);
+  const totalSellUsd = Number(computed?.operacion?.totals?.total_sell_usd);
+  const offerSellUsd = Number(computed?.oferta?.totals?.total_sales_usd);
+  const budgetedBuy = Number.isFinite(totalBuyUsd)
+    ? budgetAmount(totalBuyUsd)
+    : Object.values(rubros).reduce((a, b) => a + Number(b || 0), 0);
+  const budgetedSell = Number.isFinite(totalSellUsd)
+    ? budgetAmount(totalSellUsd)
+    : Number.isFinite(offerSellUsd)
+      ? budgetAmount(offerSellUsd)
+      : Object.values(sellRubros).reduce((a, b) => a + Number(b || 0), 0);
 
   return {
-    currency_code: 'USD',
+    currency_code: currencyCode,
     revision_label: revisionLabel,
     budgeted_purchase: budgetedBuy,
     budgeted_sell: budgetedSell,

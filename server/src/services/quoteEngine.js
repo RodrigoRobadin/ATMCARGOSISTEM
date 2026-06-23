@@ -97,6 +97,13 @@ export function computeQuote(inputs = {}) {
   const installRate = Number(exchange_rate_install_gs_per_usd || atmRate || 1) || 1;
   const opRate = atmRate || 1;
   const isPyg = opCurrency === 'PYG' || opCurrency === 'GS';
+  // PYG is normalized internally to USD. Retain enough precision in the
+  // serialized calculation so converting back to guaranies does not add a
+  // rounding difference per line.
+  const outputAmount = (value) => (isPyg ? Number(Number(value || 0).toFixed(8)) : round2(value));
+  // En operaciones PYG, instalación ya nace en guaraníes y debe seguir el TC ATM global.
+  // El TC independiente de instalación se conserva solo para operaciones cotizadas en USD.
+  const installationCalculationRate = isPyg ? opRate : installRate;
   const toUsdOp = (v) => {
     const num = Number(v || 0);
     if (!Number.isFinite(num)) return 0;
@@ -116,13 +123,15 @@ export function computeQuote(inputs = {}) {
     const totalCostGs = mul(qty, unitCost);
     const totalSaleGs = mul(qty, unitPrice);
     const profitGs = sub(totalSaleGs, totalCostGs);
-    const saleUsd = div(totalSaleGs, toBig(installRate || 1));
-    const profitUsd = div(profitGs, toBig(installRate || 1));
+    const costUsd = div(totalCostGs, toBig(installationCalculationRate || 1));
+    const saleUsd = div(totalSaleGs, toBig(installationCalculationRate || 1));
+    const profitUsd = div(profitGs, toBig(installationCalculationRate || 1));
     return {
       ...l,
       total_cost_gs: fromBig(totalCostGs),
       total_sale_gs: fromBig(totalSaleGs),
       profit_gs: fromBig(profitGs),
+      cost_usd: fromBig(costUsd),
       sale_usd: fromBig(saleUsd),
       profit_usd: fromBig(profitUsd),
     };
@@ -132,9 +141,9 @@ export function computeQuote(inputs = {}) {
   const installation_total_sale_gs = fromBig(sumBig(instLines.map((l) => toBig(l.total_sale_gs))));
   const installation_total_profit_gs = fromBig(sumBig(instLines.map((l) => toBig(l.profit_gs))));
 
-  const installation_total_cost_usd = installation_total_cost_gs / (installRate || 1);
-  const installation_total_sale_usd = installation_total_sale_gs / (installRate || 1);
-  const installation_total_profit_usd = installation_total_profit_gs / (installRate || 1);
+  const installation_total_cost_usd = installation_total_cost_gs / (installationCalculationRate || 1);
+  const installation_total_sale_usd = installation_total_sale_gs / (installationCalculationRate || 1);
+  const installation_total_profit_usd = installation_total_profit_gs / (installationCalculationRate || 1);
 
   /* ================= OFERTA (prorrateo por puerta) ================= */
   const itemsArr = Array.isArray(items) ? items : [];
@@ -347,26 +356,31 @@ export function computeQuote(inputs = {}) {
     // ✅ adicional por item (no prorrateo / no solo item 1) - solo si auto
     const adicional_i = isManual ? 0 : Number(r.adicional_input || 0);
 
-    const total_sales_i = isManual ? Number(r.sale_price_input || 0) : sub_total_i + rent_i + adicional_i;
+    // El precio manual corresponde a la venta unitaria del producto. Los rubros
+    // operativos prorrateados (incluida instalación) siguen formando parte de
+    // la venta total de la operación.
+    const total_sales_i = isManual
+      ? Number(r.sale_price_input || 0) + flete_i + seguro_i + despacho_i + finan_i + instal_i
+      : sub_total_i + rent_i + adicional_i;
     const unit_price_i = r.qty > 0 ? total_sales_i / r.qty : null;
 
     return {
       ...r,
       sale_price: isManual ? Number(r.sale_unit_price_input || 0) : null,
       sale_total_input: isManual ? Number(r.sale_price_input || 0) : null,
-      flete: round2(flete_i),
-      seguro: round2(seguro_i),
-      despacho: round2(despacho_i),
-      finan: round2(finan_i),
-      instal: round2(instal_i),
-      valor_imp: round2(valor_imp_i),
-      sub_total: round2(sub_total_i),
-      rent: round2(rent_i),
-      adicional: round2(adicional_i),
-      total_sales_gross: round2(total_sales_i),
+      flete: outputAmount(flete_i),
+      seguro: outputAmount(seguro_i),
+      despacho: outputAmount(despacho_i),
+      finan: outputAmount(finan_i),
+      instal: outputAmount(instal_i),
+      valor_imp: outputAmount(valor_imp_i),
+      sub_total: outputAmount(sub_total_i),
+      rent: outputAmount(rent_i),
+      adicional: outputAmount(adicional_i),
+      total_sales_gross: outputAmount(total_sales_i),
       discount_amount: 0,
-      total_sales: round2(total_sales_i),
-      unit_price: unit_price_i !== null ? round2(unit_price_i) : null,
+      total_sales: outputAmount(total_sales_i),
+      unit_price: unit_price_i !== null ? outputAmount(unit_price_i) : null,
     };
   });
 
@@ -378,9 +392,9 @@ export function computeQuote(inputs = {}) {
     const netSales = r.total_sales_gross - itemDiscount;
     return {
       ...r,
-      discount_amount: round2(itemDiscount),
-      total_sales: round2(netSales),
-      unit_price: r.qty > 0 ? round2(netSales / r.qty) : null,
+      discount_amount: outputAmount(itemDiscount),
+      total_sales: outputAmount(netSales),
+      unit_price: r.qty > 0 ? outputAmount(netSales / r.qty) : null,
     };
   });
 
@@ -450,24 +464,25 @@ export function computeQuote(inputs = {}) {
       exchange_rate_atm_gs_per_usd: atmRate,
       exchange_rate_customs_internal_gs_per_usd: customsInternalRate,
       exchange_rate_install_gs_per_usd: installRate,
+      installation_calculation_rate: installationCalculationRate,
     },
     oferta: {
       items: ofertaItemsFull,
       totals: {
-        total_sales_usd: round2(total_sales_usd),
-        gross_total_sales_usd: round2(gross_total_sales_usd),
+        total_sales_usd: outputAmount(total_sales_usd),
+        gross_total_sales_usd: outputAmount(gross_total_sales_usd),
         discount_rate: discountRate,
-        discount_amount_usd: round2(discount_amount_usd),
-        discount_amount_installation_usd: round2(discount_amount_installation_usd),
-        net_total_instal_usd: round2(total_instal_usd - discount_amount_installation_usd),
-        total_valor_imp_usd: round2(total_valor_imp_usd),
-        total_flete_usd: round2(total_flete_usd),
-        total_seguro_usd: round2(total_seguro_usd),
-        total_despacho_usd: round2(total_despacho_usd),
-        total_finan_usd: round2(total_finan_usd),
-        total_instal_usd: round2(total_instal_usd),
-        total_rent_usd: round2(total_rent_usd),
-        total_additional_usd: round2(total_additional_usd),
+        discount_amount_usd: outputAmount(discount_amount_usd),
+        discount_amount_installation_usd: outputAmount(discount_amount_installation_usd),
+        net_total_instal_usd: outputAmount(total_instal_usd - discount_amount_installation_usd),
+        total_valor_imp_usd: outputAmount(total_valor_imp_usd),
+        total_flete_usd: outputAmount(total_flete_usd),
+        total_seguro_usd: outputAmount(total_seguro_usd),
+        total_despacho_usd: outputAmount(total_despacho_usd),
+        total_finan_usd: outputAmount(total_finan_usd),
+        total_instal_usd: outputAmount(total_instal_usd),
+        total_rent_usd: outputAmount(total_rent_usd),
+        total_additional_usd: outputAmount(total_additional_usd),
       },
       cif: {
         cif_total_usd: round2(valorImpTotal),
@@ -493,9 +508,9 @@ export function computeQuote(inputs = {}) {
         installation_total_cost_gs: Math.round(installation_total_cost_gs),
         installation_total_sale_gs: Math.round(installation_total_sale_gs),
         installation_total_profit_gs: Math.round(installation_total_profit_gs),
-        installation_total_cost_usd: round2(installation_total_cost_usd),
-        installation_total_sale_usd: round2(installation_total_sale_usd),
-        installation_total_profit_usd: round2(installation_total_profit_usd),
+        installation_total_cost_usd: outputAmount(installation_total_cost_usd),
+        installation_total_sale_usd: outputAmount(installation_total_sale_usd),
+        installation_total_profit_usd: outputAmount(installation_total_profit_usd),
         exchange_rate_install_gs_per_usd: installRate,
       },
     },
@@ -524,29 +539,29 @@ export function computeQuote(inputs = {}) {
     },
     operacion: {
       rubros: {
-        PRODUCTO: { compra: round2(compra_puertas), venta: round2(venta_puertas), profit: round2(profit_puertas) },
-        FLETE: { compra: round2(compra_flete), venta: round2(venta_flete), profit: round2(profit_flete) },
-        DESPACHO: { compra: round2(compra_despacho), venta: round2(venta_despacho_op), profit: round2(profit_despacho_op) },
-        ADICIONAL: { compra: round2(compra_adic), venta: round2(venta_adic), profit: round2(profit_adic) },
-        FINANCIACION: { compra: round2(compra_finan), venta: round2(venta_finan), profit: round2(profit_finan) },
-        INSTALACION: { compra: round2(local_buy_usd), venta: round2(local_sell_usd), profit: round2(local_profit_usd) },
-        SEGURO: { compra: round2(seguros_compra_usd), venta: round2(total_seguro_usd), profit: round2(seguro_profit) },
-        DESCUENTO: { compra: 0, venta: round2(-discount_amount_usd), profit: round2(-discount_amount_usd) },
+        PRODUCTO: { compra: outputAmount(compra_puertas), venta: outputAmount(venta_puertas), profit: outputAmount(profit_puertas) },
+        FLETE: { compra: outputAmount(compra_flete), venta: outputAmount(venta_flete), profit: outputAmount(profit_flete) },
+        DESPACHO: { compra: outputAmount(compra_despacho), venta: outputAmount(venta_despacho_op), profit: outputAmount(profit_despacho_op) },
+        ADICIONAL: { compra: outputAmount(compra_adic), venta: outputAmount(venta_adic), profit: outputAmount(profit_adic) },
+        FINANCIACION: { compra: outputAmount(compra_finan), venta: outputAmount(venta_finan), profit: outputAmount(profit_finan) },
+        INSTALACION: { compra: outputAmount(local_buy_usd), venta: outputAmount(local_sell_usd), profit: outputAmount(local_profit_usd) },
+        SEGURO: { compra: outputAmount(seguros_compra_usd), venta: outputAmount(total_seguro_usd), profit: outputAmount(seguro_profit) },
+        DESCUENTO: { compra: 0, venta: outputAmount(-discount_amount_usd), profit: outputAmount(-discount_amount_usd) },
       },
       totals: {
-        total_buy_usd: round2(total_buy_usd),
-        gross_product_purchase_usd: round2(total_door_usd),
+        total_buy_usd: outputAmount(total_buy_usd),
+        gross_product_purchase_usd: outputAmount(total_door_usd),
         supplier_discount_rate: supplierDiscountRate,
-        supplier_discount_amount_usd: round2(supplier_discount_amount_usd),
-        gross_total_sell_usd: round2(gross_total_sales_usd),
+        supplier_discount_amount_usd: outputAmount(supplier_discount_amount_usd),
+        gross_total_sell_usd: outputAmount(gross_total_sales_usd),
         discount_rate: discountRate,
-        discount_amount_usd: round2(discount_amount_usd),
-        total_sell_usd: round2(total_sell_usd),
-        profit_total_usd: round2(profit_total_usd),
+        discount_amount_usd: outputAmount(discount_amount_usd),
+        total_sell_usd: outputAmount(total_sell_usd),
+        profit_total_usd: outputAmount(profit_total_usd),
       },
       distribution: {
-        vendor_profit_usd: round2(vendor_profit_usd),
-        final_profit_usd: round2(final_profit_usd),
+        vendor_profit_usd: outputAmount(vendor_profit_usd),
+        final_profit_usd: outputAmount(final_profit_usd),
       },
     },
   };
