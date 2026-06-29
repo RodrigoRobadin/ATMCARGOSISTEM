@@ -1215,6 +1215,28 @@ router.post('/:id/payments', requireAuth, async (req, res) => {
     } else if (String(expense.status || '').toLowerCase() === 'pagado') {
       await pool.query(`UPDATE admin_expenses SET status = 'pendiente' WHERE id = ?`, [id]);
     }
+    // When this administrative expense originated from a commercial
+    // commission, mirror the payment in that operation's audit trail.
+    try {
+      const [commissionRows] = await pool.query(
+        `SELECT a.liquidation_id, ci.id AS commission_invoice_id, a.amount
+           FROM commission_invoices ci
+           JOIN commission_invoice_allocations a ON a.commission_invoice_id = ci.id
+          WHERE ci.admin_expense_id = ?`, [id]
+      );
+      for (const row of commissionRows) {
+        const proportionalAmount = Number(expense.amount || 0) > 0
+          ? paymentAmount * (Number(row.amount || 0) / Number(expense.amount || 0))
+          : 0;
+        await pool.query(
+          `INSERT INTO commission_audit_events (liquidation_id, commission_invoice_id, event_type, detail, payload_json, actor_user_id)
+           VALUES (?, ?, 'payment_registered', ?, ?, ?)`,
+          [row.liquidation_id, row.commission_invoice_id, 'Pago de comisión registrado', JSON.stringify({ payment_id: result.insertId, amount: proportionalAmount, currency_code: paymentCurrency }), req.user?.id || null]
+        );
+      }
+    } catch (auditError) {
+      if (auditError?.code !== 'ER_NO_SUCH_TABLE') throw auditError;
+    }
     res.status(201).json({ id: result.insertId, balance: Number(nextBalance.toFixed(2)) });
   } catch (e) {
     console.error('[admin-expenses] payment error', e);

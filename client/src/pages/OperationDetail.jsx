@@ -6,6 +6,7 @@ import { useAuth } from "../auth.jsx";
 import DetCosSheet from "./DetCosSheet";
 import ReportPreview from "../components/op-details/ReportPreview";
 import OperationExpenseInvoices from "../components/OperationExpenseInvoices.jsx";
+import CommissionPanel from "../components/CommissionPanel.jsx";
 import OperationFinancialStatement from "../components/OperationFinancialStatement.jsx";
 import AdminOpsPanel from "../components/op-details/AdminOpsPanel.jsx";
 import OrganizationLookupField from "../components/OrganizationLookupField.jsx";
@@ -567,6 +568,7 @@ export default function OperationDetail() {
 
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState(null);
+  const canAccessCommissions = userRole === "admin" || Number(deal?.advisor_user_id || 0) === Number(user?.id || 0);
 
   const [notesList, setNotesList] = useState([]);
   const [notesLoading, setNotesLoading] = useState(false);
@@ -2217,6 +2219,7 @@ useEffect(() => {
     ...(canAccessAdminOps ? [{ id: "administracion", kind: "base", label: "Administración" }] : []),
     { id: "estado-cuenta", kind: "base", label: "Estado de cuenta" },
     { id: "detcos", kind: "base", label: "Planilla de costos (DET COS)" },
+    ...(canAccessCommissions ? [{ id: "comisiones", kind: "base", label: "Comisiones" }] : []),
     ...currentBudgetTab,
     ...budgetRevisionTabs,
     ...docTabs,
@@ -3736,6 +3739,12 @@ function providerHasFreightTag(p = {}) {
             </>
           )}
         
+          {activeTab === "comisiones" ? (
+            <CommissionPanel
+              operationId={Number(id)}
+              source={{ cost_sheet_version_number: selectedCostSheetVersionNumber || currentCostSheetVersion?.version_number || undefined }}
+            />
+          ) : null}
           <OperationExpenseInvoices
             operationId={Number(id)}
             showList={activeTab === "gastos"}

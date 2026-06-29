@@ -5,6 +5,7 @@ import { api } from "../api";
 import { useAuth } from "../auth.jsx";
 import { RichTextDialogField } from "../components/RichTextEditor.jsx";
 import OperationExpenseInvoices from "../components/OperationExpenseInvoices.jsx";
+import CommissionPanel from "../components/CommissionPanel.jsx";
 
 function quoteRevisionSelectionStorageKey({ dealId = null, serviceCaseId = null } = {}) {
   if (Number.isFinite(Number(serviceCaseId)) && Number(serviceCaseId) > 0) {
@@ -236,6 +237,7 @@ export default function QuoteEditor({
   const quoteBase = quoteBaseOverride || (isService ? "/service/quotes" : "/quotes");
 
   const [quoteId, setQuoteId] = useState(null);
+  const [dealAdvisorUserId, setDealAdvisorUserId] = useState(null);
 
   const [inputs, setInputs] = useState(() => ({
     ref_code: "",
@@ -456,6 +458,7 @@ export default function QuoteEditor({
     if (data?.service_case_id != null) setServiceCaseId(data.service_case_id);
 
     const ctx = serviceCaseData || dealData || null;
+    if (dealData?.advisor_user_id != null) setDealAdvisorUserId(Number(dealData.advisor_user_id));
     if (ctx?.org_id) setOrgId(ctx.org_id);
     if (ctx?.org_budget_status) setBudgetStatus(ctx.org_budget_status);
     const branchIdFromCtx = ctx?.org_branch_id ?? null;
@@ -1355,6 +1358,11 @@ export default function QuoteEditor({
         <TabButton active={activeTab === "costos-finales"} onClick={() => setActiveTab("costos-finales")}>
           Costos finales
         </TabButton>
+        {dealId && !isService && (String(user?.role || '').toLowerCase() === 'admin' || Number(dealAdvisorUserId || 0) === Number(user?.id || 0)) ? (
+          <TabButton active={activeTab === "comisiones"} onClick={() => setActiveTab("comisiones")}>
+            Comisiones
+          </TabButton>
+        ) : null}
       </div>
 
       {/* ---------------- TAB: OFERTA ---------------- */}
@@ -2220,6 +2228,13 @@ export default function QuoteEditor({
           )}
         </div>
       )}
+
+      {activeTab === "comisiones" && dealId && !isService ? (
+        <CommissionPanel
+          operationId={Number(dealId)}
+          source={{ quote_id: quoteId || undefined, quote_revision_id: selectedRevisionId || undefined }}
+        />
+      ) : null}
     </div>
   );
 }

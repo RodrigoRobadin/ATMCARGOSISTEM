@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "ATMCARGOSISTEM",
+    "slug": "atmcargosistem-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "atmcargosistem",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.atmcargosistem.mobile",
+      "infoPlist": {
+        "NSCameraUsageDescription": "La app usa la camara para adjuntar fotos a contactos, organizaciones, operaciones y cotizaciones.",
+        "NSContactsUsageDescription": "La app usa contactos del telefono para importar datos de clientes y contactos al sistema.",
+        "NSPhotoLibraryUsageDescription": "La app usa la galeria para adjuntar imagenes al sistema."
+      }
+    },
+    "android": {
+      "package": "com.atmcargosistem.mobile",
+      "permissions": ["CAMERA", "READ_CONTACTS", "READ_MEDIA_IMAGES"]
+    },
+    "extra": {
+      "apiUrl": "https://atmcargosoft.com/api"
+    }
+  }
+}

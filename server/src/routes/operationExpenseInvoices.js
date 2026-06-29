@@ -1781,7 +1781,50 @@ async function buildExpenseControlData(operationId, opType, query = {}) {
     }
   }
 
-  const rubroOrder = ['FLETE', 'SEGURO', 'DESPACHO', 'PRODUCTO', 'ADICIONAL', 'INSTALACION', 'FINANCIACION', 'SIN CLASIFICAR'];
+  // Las comisiones aprobadas son un costo comercial de la operación. Se
+  // registran como gasto administrativo para no duplicar facturas operativas,
+  // pero se reflejan aquí para obtener el profit real completo.
+  let commissionBudget = 0;
+  let commissionActual = 0;
+  try {
+    const commissionWhere = ["l.operation_id = ?", "l.status <> 'anulada'"];
+    const commissionParams = [operationId];
+    if (industrialRevisionId) {
+      commissionWhere.push('l.quote_revision_id = ?');
+      commissionParams.push(industrialRevisionId);
+    } else if (query.cost_sheet_version_number) {
+      commissionWhere.push('l.cost_sheet_version_number = ?');
+      commissionParams.push(Number(query.cost_sheet_version_number));
+    }
+    const [commissionRows] = await pool.query(
+      `SELECT l.id, l.commission_gross, l.currency_code,
+              COALESCE(SUM(a.amount), 0) AS invoiced_amount,
+              MAX(ci.currency_code) AS invoice_currency_code
+         FROM commission_liquidations l
+         LEFT JOIN commission_invoice_allocations a ON a.liquidation_id = l.id
+         LEFT JOIN commission_invoices ci ON ci.id = a.commission_invoice_id
+        WHERE ${commissionWhere.join(' AND ')}
+        GROUP BY l.id, l.commission_gross, l.currency_code`,
+      commissionParams
+    );
+    for (const row of commissionRows) {
+      const planned = convertAmount(row.commission_gross, row.currency_code, budget.currency_code, exchangeRate);
+      if (planned != null) commissionBudget += planned;
+      const actual = convertAmount(row.invoiced_amount, row.invoice_currency_code || row.currency_code, budget.currency_code, exchangeRate);
+      if (actual != null) commissionActual += actual;
+      addCurrencyAmount(actualByCurrency, row.invoice_currency_code || row.currency_code, row.invoiced_amount);
+    }
+  } catch (error) {
+    if (error?.code !== 'ER_NO_SUCH_TABLE') throw error;
+  }
+  if (commissionBudget > 0) {
+    budget.rubros = { ...(budget.rubros || {}), COMISION: Number(commissionBudget.toFixed(2)) };
+    budget.budgeted_purchase = Number((Number(budget.budgeted_purchase || 0) + commissionBudget).toFixed(2));
+    budget.budgeted_profit = Number((Number(budget.budgeted_sell || 0) - Number(budget.budgeted_purchase || 0)).toFixed(2));
+  }
+  if (commissionActual > 0) actualByRubro.COMISION = Number(((actualByRubro.COMISION || 0) + commissionActual).toFixed(2));
+
+  const rubroOrder = ['FLETE', 'SEGURO', 'DESPACHO', 'PRODUCTO', 'ADICIONAL', 'INSTALACION', 'FINANCIACION', 'COMISION', 'SIN CLASIFICAR'];
   const rubroKeys = Array.from(new Set([...rubroOrder, ...Object.keys(budget.rubros || {}), ...Object.keys(actualByRubro)]));
   const rubros = rubroKeys.map((rubro) => {
     const budgeted = Number(budget.rubros?.[rubro] || 0);
@@ -1801,7 +1844,7 @@ async function buildExpenseControlData(operationId, opType, query = {}) {
   const totalActualInBudget = invoices.reduce((sum, invoice) => {
     const converted = convertAmount(invoice.amount_total, invoice.currency_code, budget.currency_code, exchangeRate);
     return converted == null ? sum : sum + converted;
-  }, 0);
+  }, 0) + commissionActual;
   const comparisons = Object.entries(actualByCurrency).map(([currency, actual]) => {
     const convertedBudget = convertAmount(budget.budgeted_purchase, budget.currency_code, currency, exchangeRate);
     const difference = convertedBudget == null ? null : Number((actual - convertedBudget).toFixed(2));

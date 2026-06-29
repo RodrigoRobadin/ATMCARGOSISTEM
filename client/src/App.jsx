@@ -4,6 +4,7 @@ import { NavLink, Routes, Route } from 'react-router-dom';
 
 import Pipeline from './pages/Pipeline';
 import CommercialDashboard from './pages/CommercialDashboard.jsx';
+import CommissionSheet from './pages/CommissionSheet.jsx';
 import LostDeals from './pages/LostDeals.jsx';
 import Contacts from './pages/Contacts';
 import General from './pages/General.jsx';
@@ -77,6 +78,7 @@ const sidebarIcons = {
   themeOff: String.fromCodePoint(0x1F319),
   general: String.fromCodePoint(0x1F4CB),
   commercial: String.fromCodePoint(0x1F4C8),
+  commissions: String.fromCodePoint(0x1F4B0),
   kanban: String.fromCodePoint(0x1F9E9),
   cargo: String.fromCodePoint(0x1F69A),
   container: String.fromCodePoint(0x1F4E6),
@@ -126,6 +128,7 @@ function Layout({ children }) {
   const canSeeCommercialModules = !isServiceRole;
   const [darkMode, setDarkMode] = useState(false);
   const [containerMenuOpen, setContainerMenuOpen] = useState(false);
+  const [commercialMenuOpen, setCommercialMenuOpen] = useState(false);
   const [adminOpsMenuOpen, setAdminOpsMenuOpen] = useState(false);
 
   useEffect(() => {
@@ -166,7 +169,17 @@ function Layout({ children }) {
         <nav className="p-3 space-y-1">
           {canSeeCommercialModules && (
             <>
-              <SideLink to="/commercial-dashboard" icon={sidebarIcons.commercial} label="Dashboard comercial" />
+              <div>
+                <button type="button" onClick={() => setCommercialMenuOpen((open) => !open)} className="w-full flex items-center rounded-lg text-sm px-3 py-2 transition-all justify-center group-hover:justify-start gap-0 group-hover:gap-2 hover:bg-slate-100 dark:hover:bg-slate-800 dark:text-slate-200" title="Dashboard comercial">
+                  <span className="text-base w-6 text-center">{sidebarIcons.commercial}</span>
+                  <span className="hidden group-hover:inline flex-1 text-left">Dashboard comercial</span>
+                  <span className="hidden group-hover:inline text-[10px] text-slate-500">{commercialMenuOpen ? '▲' : '▼'}</span>
+                </button>
+                <div className={`${commercialMenuOpen ? 'block' : 'hidden'} ml-8 mt-1 space-y-1`}>
+                  <SideLink to="/commercial-dashboard" icon={sidebarIcons.commercial} label="Dashboard" />
+                  <SideLink to="/commercial-dashboard/commissions" icon={sidebarIcons.commissions} label="Planilla de comisiones" />
+                </div>
+              </div>
               <SideLink to="/lost-deals" icon={sidebarIcons.followup} label="No cerradas" />
             </>
           )}
@@ -430,6 +443,7 @@ export default function App() {
               <Routes>
                 <Route path="/" element={<Pipeline />} />
                 <Route path="/commercial-dashboard" element={<CommercialDashboard />} />
+                <Route path="/commercial-dashboard/commissions" element={<CommissionSheet />} />
                 <Route path="/lost-deals" element={<LostDeals />} />
                 <Route path="/general" element={<General />} />
 
