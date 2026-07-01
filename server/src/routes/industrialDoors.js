@@ -13,6 +13,15 @@ function toInt(v, d = 0) {
   return Number.isFinite(n) ? n : d;
 }
 
+function escapeHtml(value = "") {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // Configuración de multer para imágenes de puertas
 const storage = multer.diskStorage({
   destination(req, file, cb) {
@@ -48,6 +57,18 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB máximo
 });
 
+(async () => {
+  try {
+    await db.query("ALTER TABLE industrial_doors ADD COLUMN quantity DECIMAL(12,2) NULL DEFAULT 1");
+  } catch (_) {}
+  try {
+    await db.query("ALTER TABLE industrial_doors ADD COLUMN place VARCHAR(255) NULL");
+  } catch (_) {}
+  try {
+    await db.query("ALTER TABLE industrial_doors ADD COLUMN canvas_color VARCHAR(120) NULL");
+  } catch (_) {}
+})();
+
 /**
  * GET /api/deals/:dealId/industrial-doors
  * Lista todas las puertas / productos industriales de una operación
@@ -79,6 +100,9 @@ router.get("/deals/:dealId/industrial-doors", async (req, res) => {
              actuators,
              visor_lines,
              right_leg,
+             quantity,
+             place,
+             canvas_color,
              notes,
              created_at,
              updated_at
@@ -140,10 +164,56 @@ router.post("/deals/:dealId/industrial-doors", async (req, res) => {
     const [r] = await db.query(
       `
       INSERT INTO industrial_doors
-        (deal_id, product_id, product_name, brand, identifier)
-      VALUES (?,?,?,?,?)
+        (deal_id,
+         product_id,
+         product_name,
+         brand,
+         identifier,
+         width_available,
+         height_available,
+         side_install,
+         overheight_available,
+         frame_type,
+         canvas_type,
+         frame_material,
+         finish,
+         clearance_right,
+         clearance_left,
+         motor_side,
+         actuators,
+         visor_lines,
+         right_leg,
+         quantity,
+         place,
+         canvas_color,
+         notes)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       `,
-      [dealId, productId || null, productName, brand, identifier]
+      [
+        dealId,
+        productId || null,
+        productName,
+        brand,
+        identifier,
+        b.width_available ?? null,
+        b.height_available ?? null,
+        b.side_install || null,
+        b.overheight_available ?? null,
+        b.frame_type || null,
+        b.canvas_type || null,
+        b.frame_material || null,
+        b.finish || null,
+        b.clearance_right ?? null,
+        b.clearance_left ?? null,
+        b.motor_side || null,
+        b.actuators || null,
+        b.visor_lines || null,
+        b.right_leg || null,
+        b.quantity ?? null,
+        b.place || identifier || null,
+        b.canvas_color || null,
+        b.notes || null,
+      ]
     );
 
     res.status(201).json({ id: r.insertId });
@@ -199,6 +269,9 @@ router.put("/industrial-doors/:id", async (req, res) => {
              actuators           = ?,
              visor_lines         = ?,
              right_leg           = ?,
+             quantity            = ?,
+             place               = ?,
+             canvas_color        = ?,
              notes               = ?
        WHERE id = ?
       `,
@@ -221,6 +294,9 @@ router.put("/industrial-doors/:id", async (req, res) => {
         b.actuators || null,
         b.visor_lines || null,
         b.right_leg || null,
+        b.quantity ?? null,
+        b.place || b.identifier || null,
+        b.canvas_color || null,
         b.notes || null,
         id,
       ]
@@ -448,14 +524,14 @@ router.post("/deals/:dealId/industrial-quote-email", async (req, res) => {
       .map((d, idx) => {
         const item = String(idx + 1).padStart(2, "0");
         const qty = d.quantity || 1;
-        const tipo = (d.product_name || d.frame_type || d.canvas_type || "-").toUpperCase();
-        const dim = `ANCHO: ${d.width_available ?? "-"} mm / ALTO: ${d.height_available ?? "-"} mm`;
-        const lugar = (d.identifier || "-").toUpperCase();
-        const marco = (d.frame_material || d.frame_type || "-").toUpperCase();
-        const acc = (d.actuators || "-").toUpperCase();
-        const vis = (d.visor_lines || "-").toUpperCase();
-        const acab = (d.finish || "-").toUpperCase();
-        const color = (d.canvas_color || d.canvas_type || "-").toUpperCase();
+        const tipo = escapeHtml((d.product_name || d.frame_type || d.canvas_type || "-").toUpperCase());
+        const dim = escapeHtml(`ANCHO: ${d.width_available ?? "-"} mm / ALTO: ${d.height_available ?? "-"} mm`);
+        const lugar = escapeHtml((d.place || d.identifier || "-").toUpperCase());
+        const marco = escapeHtml((d.frame_material || d.frame_type || "-").toUpperCase());
+        const acc = escapeHtml((d.actuators || "-").toUpperCase());
+        const vis = escapeHtml((d.visor_lines || "-").toUpperCase());
+        const acab = escapeHtml((d.finish || "-").toUpperCase());
+        const color = escapeHtml((d.canvas_color || d.canvas_type || "-").toUpperCase());
 
         return `
           <tr>

@@ -1788,6 +1788,7 @@ export default function OperationDetailIndustrial() {
       ) {
         const item = new ClipboardItem({
           "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([quotePreviewText || ""], { type: "text/plain" }),
         });
         await navigator.clipboard.write([item]);
       } else {
@@ -1883,7 +1884,7 @@ export default function OperationDetailIndustrial() {
     );
   }
 
-  function sendQuoteEmail() {
+  async function sendQuoteEmail() {
     const chosen = quoteDoors.filter((d) =>
       selectedDoorIds.includes(d.id)
     );
@@ -1898,15 +1899,21 @@ export default function OperationDetailIndustrial() {
       chosen,
       deal?.reference || id
     );
+    const { html } = buildQuoteEmailHtml(
+      chosen,
+      deal?.reference || id
+    );
+    await copyHtmlToClipboard(html);
     const to = quoteTo
       ? `mailto:${encodeURIComponent(quoteTo)}`
       : "mailto:";
     const params = [];
     params.push(`subject=${encodeURIComponent(subj)}`);
-    params.push(`body=${encodeURIComponent(body)}`);
+    params.push(`body=${encodeURIComponent("Pegue aqui el contenido copiado para conservar la tabla de productos.")}`);
     if (quoteCc)
       params.push(`cc=${encodeURIComponent(quoteCc)}`);
     window.location.href = `${to}?${params.join("&")}`;
+    alert("Copie la tabla en formato enriquecido. Cuando se abra Outlook, pegue en el cuerpo del mensaje para conservar la tabla visible.");
     setShowQuoteModal(false);
   }
 
@@ -3472,6 +3479,9 @@ export default function OperationDetailIndustrial() {
                     dangerouslySetInnerHTML={{ __html: quotePreviewHtml }}
                   />
                   <div className="mt-2 text-[11px] text-slate-500">
+                    Para Outlook, use <b>Abrir en mail</b> y luego pegue en el cuerpo del correo. La tabla se copia como HTML enriquecido.
+                  </div>
+                  <div className="mt-2 text-[11px] text-slate-500">
                     Texto plano:
                     <pre className="whitespace-pre-wrap border rounded p-2 bg-white mt-1">
                       {quotePreviewText}
@@ -3492,7 +3502,7 @@ export default function OperationDetailIndustrial() {
                 onClick={copyQuoteHtml}
                 disabled={!quotePreviewHtml}
               >
-                Copiar HTML
+                Copiar tabla
               </button>
               <button
                 className="px-3 py-1.5 text-xs rounded-lg border"

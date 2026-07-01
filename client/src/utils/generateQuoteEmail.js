@@ -7,6 +7,15 @@ function normalize(value) {
   return txt || "-";
 }
 
+function escapeHtml(value) {
+  return normalize(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function fmtNumberMm(n) {
   const num = Number(n);
   if (!Number.isFinite(num)) return null;
@@ -30,7 +39,7 @@ function buildPlainTable(doors = []) {
         return "-";
       }
     },
-    { label: "LUGAR DESTINADO", value: d => (d.identifier || "-").toUpperCase() },
+    { label: "LUGAR DESTINADO", value: d => (d.place || d.identifier || "-").toUpperCase() },
     { label: "TIPO MARCO", value: d => (d.frame_material || d.frame_type || "-").toUpperCase() },
     { label: "ACCIONADORES", value: d => (d.actuators || "-").toUpperCase() },
     { label: "VISORES", value: d => (d.visor_lines || "-").toUpperCase() },
@@ -81,14 +90,14 @@ export function buildQuoteEmailHtml(doors, dealReference) {
   const rows = (Array.isArray(doors) ? doors : []).map((d, idx) => {
     const item = String(idx + 1).padStart(2, "0");
     const qty = d.quantity || 1;
-    const tipo = (d.product_name || d.frame_type || d.canvas_type || "-").toUpperCase();
-    const dim = `ANCHO: ${d.width_available ?? "-"} mm / ALTO: ${d.height_available ?? "-"} mm`;
-    const lugar = (d.identifier || "-").toUpperCase();
-    const marco = (d.frame_material || d.frame_type || "-").toUpperCase();
-    const acc = (d.actuators || "-").toUpperCase();
-    const vis = (d.visor_lines || "-").toUpperCase();
-    const acab = (d.finish || "-").toUpperCase();
-    const color = (d.canvas_color || d.canvas_type || "-").toUpperCase();
+    const tipo = escapeHtml((d.product_name || d.frame_type || d.canvas_type || "-").toUpperCase());
+    const dim = escapeHtml(`ANCHO: ${d.width_available ?? "-"} mm / ALTO: ${d.height_available ?? "-"} mm`);
+    const lugar = escapeHtml((d.place || d.identifier || "-").toUpperCase());
+    const marco = escapeHtml((d.frame_material || d.frame_type || "-").toUpperCase());
+    const acc = escapeHtml((d.actuators || "-").toUpperCase());
+    const vis = escapeHtml((d.visor_lines || "-").toUpperCase());
+    const acab = escapeHtml((d.finish || "-").toUpperCase());
+    const color = escapeHtml((d.canvas_color || d.canvas_type || "-").toUpperCase());
 
     return `
       <tr>
@@ -199,7 +208,10 @@ export async function generateQuoteEmail(doors, dealReference) {
     copied = await safeCopy(`${subject}\n\n${body}`);
   }
 
-  const mailtoLink = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  const mailtoBody = copied
+    ? "Pegue aqui el contenido copiado para conservar la tabla de productos."
+    : body;
+  const mailtoLink = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(mailtoBody)}`;
   window.location.href = mailtoLink;
   return { subject, body, copied };
 }

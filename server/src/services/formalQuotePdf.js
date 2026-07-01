@@ -33,6 +33,21 @@ function toNumber(value) {
   return Number(text.replace(/,/g, '')) || 0;
 }
 
+function plainTextFromHtml(value = '') {
+  return String(value || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function formatMoney(value, currencyCode = 'USD') {
   const currency = String(currencyCode || 'USD').toUpperCase();
   const amount = Number(value || 0);
@@ -88,7 +103,11 @@ function normalizeItems(items = [], fallbackCurrency = 'USD') {
         product: item.product || item.servicio || item.name || 'Item',
         quantity,
         unit: item.unit || item.unidad || 'UNIDAD',
-        description: item.description || item.observacion || '',
+        description:
+          item.description ||
+          item.observacion ||
+          item.observation ||
+          plainTextFromHtml(item.observacion_html || item.observation_html || item.description_html || ''),
         currency,
         unitPrice,
         total,

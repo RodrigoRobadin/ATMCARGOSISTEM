@@ -4,6 +4,7 @@ import { api, setAuthToken } from '../api/client';
 
 const TOKEN_KEY = 'atmcargosistem.token';
 const USER_KEY = 'atmcargosistem.user';
+const RESTORE_TIMEOUT_MS = 18000;
 
 const AuthContext = createContext(null);
 
@@ -14,10 +15,26 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     let mounted = true;
+    function withTimeout(promise, ms, message) {
+      return Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error(message)), ms);
+        }),
+      ]);
+    }
     async function restore() {
       try {
-        const savedToken = await SecureStore.getItemAsync(TOKEN_KEY);
-        const savedUser = await SecureStore.getItemAsync(USER_KEY);
+        const savedToken = await withTimeout(
+          SecureStore.getItemAsync(TOKEN_KEY),
+          RESTORE_TIMEOUT_MS,
+          'No se pudo leer la sesion guardada'
+        );
+        const savedUser = await withTimeout(
+          SecureStore.getItemAsync(USER_KEY),
+          RESTORE_TIMEOUT_MS,
+          'No se pudo leer el usuario guardado'
+        );
         if (!mounted) return;
         if (savedToken) {
           setAuthToken(savedToken);
@@ -30,14 +47,20 @@ export function AuthProvider({ children }) {
               await SecureStore.setItemAsync(USER_KEY, JSON.stringify(boot.user));
             }
           } catch {
-            await SecureStore.deleteItemAsync(TOKEN_KEY);
-            await SecureStore.deleteItemAsync(USER_KEY);
+            await SecureStore.deleteItemAsync(TOKEN_KEY).catch(() => null);
+            await SecureStore.deleteItemAsync(USER_KEY).catch(() => null);
             setAuthToken(null);
             if (mounted) {
               setToken(null);
               setUser(null);
             }
           }
+        }
+      } catch {
+        setAuthToken(null);
+        if (mounted) {
+          setToken(null);
+          setUser(null);
         }
       } finally {
         if (mounted) setLoading(false);

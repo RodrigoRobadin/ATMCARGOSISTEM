@@ -128,6 +128,9 @@ export default function IndustrialDoorList({ dealId, editMode, dealReference }) 
             product_id: door.product_id || "",
             product_name: door.product_name || "",
             brand: door.brand || "",
+            quantity: door.quantity || 1,
+            place: door.place || "",
+            canvas_color: door.canvas_color || "",
         });
     }
 
@@ -155,6 +158,9 @@ export default function IndustrialDoorList({ dealId, editMode, dealReference }) 
                 product_id: doorFormData.product_id || null,
                 product_name: doorFormData.product_name || null,
                 brand: doorFormData.brand || null,
+                quantity: doorFormData.quantity ? Number(doorFormData.quantity) : 1,
+                place: doorFormData.place || doorFormData.identifier || null,
+                canvas_color: doorFormData.canvas_color || null,
             };
 
             await api.put(`/industrial-doors/${editingDoorId}`, payload);
@@ -245,7 +251,7 @@ export default function IndustrialDoorList({ dealId, editMode, dealReference }) 
         try {
             const { subject, copied } = await generateQuoteEmail(doors, dealReference);
             const msg = copied
-                ? "Texto copiado al portapapeles y correo listo."
+                ? "Tabla copiada al portapapeles. Pegue en el cuerpo de Outlook para conservar el formato."
                 : "No se pudo copiar automaticamente; revisa el borrador abierto.";
             alert(`${msg}
 Asunto: ${subject}`);
@@ -364,6 +370,25 @@ Asunto: ${subject}`);
                                             />
                                         </Field>
 
+                                        <Field label="Cantidad">
+                                            <Input
+                                                type="number"
+                                                min="1"
+                                                step="1"
+                                                value={doorFormData.quantity || ""}
+                                                onChange={(e) => updateFormField("quantity", e.target.value)}
+                                                placeholder="Ej: 1"
+                                            />
+                                        </Field>
+
+                                        <Field label="Lugar destinado">
+                                            <Input
+                                                value={doorFormData.place || ""}
+                                                onChange={(e) => updateFormField("place", e.target.value)}
+                                                placeholder="Ej: Deposito, acceso principal"
+                                            />
+                                        </Field>
+
                                         <Field label="Tipo de puerta">
                                             <Select
                                                 value={doorFormData.frame_type || ""}
@@ -389,6 +414,14 @@ Asunto: ${subject}`);
                                                 <option value="VINIL">Vinil</option>
                                                 <option value="X-FORCE">X-Force</option>
                                             </Select>
+                                        </Field>
+
+                                        <Field label="Color lona">
+                                            <Input
+                                                value={doorFormData.canvas_color || ""}
+                                                onChange={(e) => updateFormField("canvas_color", e.target.value)}
+                                                placeholder="Ej: Azul, Gris, Blanco"
+                                            />
                                         </Field>
 
                                         <Field label="Tipo de marco">
@@ -608,6 +641,18 @@ Asunto: ${subject}`);
                                                 <span className="font-medium">{door.brand}</span>
                                             </div>
                                         )}
+                                        {door.quantity && (
+                                            <div>
+                                                <span className="text-slate-500">Cantidad:</span>{" "}
+                                                <span className="font-medium">{door.quantity}</span>
+                                            </div>
+                                        )}
+                                        {door.place && (
+                                            <div>
+                                                <span className="text-slate-500">Lugar destinado:</span>{" "}
+                                                <span className="font-medium">{door.place}</span>
+                                            </div>
+                                        )}
                                         {door.frame_type && (
                                             <div>
                                                 <span className="text-slate-500">Tipo:</span>{" "}
@@ -618,6 +663,12 @@ Asunto: ${subject}`);
                                             <div>
                                                 <span className="text-slate-500">Tipo de lona:</span>{" "}
                                                 <span className="font-medium">{door.canvas_type}</span>
+                                            </div>
+                                        )}
+                                        {door.canvas_color && (
+                                            <div>
+                                                <span className="text-slate-500">Color lona:</span>{" "}
+                                                <span className="font-medium">{door.canvas_color}</span>
                                             </div>
                                         )}
                                         {door.frame_material && (
