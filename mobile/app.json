@@ -4,9 +4,27 @@
     "slug": "atmcargosistem-mobile",
     "version": "0.1.0",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
     "scheme": "atmcargosistem",
     "userInterfaceStyle": "automatic",
-    "assetBundlePatterns": ["**/*"],
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "plugins": [
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/MaterialCommunityIcons.ttf"
+          ]
+        }
+      ]
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.atmcargosistem.mobile",
@@ -18,10 +36,22 @@
     },
     "android": {
       "package": "com.atmcargosistem.mobile",
-      "permissions": ["CAMERA", "READ_CONTACTS", "READ_MEDIA_IMAGES"]
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "permissions": [
+        "CAMERA",
+        "READ_CONTACTS",
+        "READ_EXTERNAL_STORAGE",
+        "READ_MEDIA_IMAGES"
+      ]
     },
     "extra": {
-      "apiUrl": "https://atmcargosoft.com/api"
+      "apiUrl": "https://atmcargosoft.com/api",
+      "eas": {
+        "projectId": "b351bd61-2b9d-462e-9fde-f50f1a218a59"
+      }
     }
   }
 }

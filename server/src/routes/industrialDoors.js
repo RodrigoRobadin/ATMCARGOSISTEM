@@ -23,6 +23,47 @@ function escapeHtml(value = "") {
 }
 
 // Configuración de multer para imágenes de puertas
+function safeImageExtension(name = "", mimeType = "") {
+  const ext = path.extname(String(name || "")).toLowerCase();
+  if ([".jpg", ".jpeg", ".png", ".gif", ".webp"].includes(ext)) return ext;
+  if (String(mimeType).includes("png")) return ".png";
+  if (String(mimeType).includes("gif")) return ".gif";
+  if (String(mimeType).includes("webp")) return ".webp";
+  return ".jpg";
+}
+
+function safeImageBaseName(name = "imagen") {
+  const ext = path.extname(String(name || ""));
+  return path
+    .basename(String(name || "imagen"), ext)
+    .replace(/\s+/g, "_")
+    .replace(/[^a-zA-Z0-9_.-]/g, "_")
+    .slice(0, 80) || "imagen";
+}
+
+function saveBase64DoorImage(doorId, body = {}) {
+  const raw = String(body.image_base64 || "");
+  if (!raw) return null;
+  const match = raw.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  const mimeType = body.mime_type || match?.[1] || "image/jpeg";
+  const base64 = match?.[2] || raw;
+  const buffer = Buffer.from(base64, "base64");
+  if (!buffer.length) return null;
+  if (buffer.length > 10 * 1024 * 1024) {
+    const error = new Error("Imagen demasiado grande");
+    error.statusCode = 413;
+    throw error;
+  }
+  const dir = path.resolve("uploads", "industrial-doors", String(doorId));
+  fs.mkdirSync(dir, { recursive: true });
+  const ext = safeImageExtension(body.name, mimeType);
+  const base = safeImageBaseName(body.name);
+  const unique = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+  const filename = `${base}-${unique}${ext}`;
+  fs.writeFileSync(path.join(dir, filename), buffer);
+  return filename;
+}
+
 const storage = multer.diskStorage({
   destination(req, file, cb) {
     const doorId = String(req.params.doorId);
@@ -54,7 +95,10 @@ const upload = multer({
       cb(new Error("Solo se permiten imágenes (JPEG, PNG, GIF, WEBP)"));
     }
   },
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB máximo
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+    fieldSize: 15 * 1024 * 1024,
+  },
 });
 
 (async () => {
@@ -340,6 +384,33 @@ router.delete("/industrial-doors/:id", async (req, res) => {
   } catch (e) {
     console.error("[industrial-doors:delete] Error:", e);
     res.status(400).json({ error: "Delete failed" });
+  }
+});
+
+router.post("/industrial-doors/:doorId/images", upload.single("image"), async (req, res, next) => {
+  try {
+    const doorId = toInt(req.params.doorId, 0);
+    if (!doorId) return res.status(400).json({ error: "doorId invalido" });
+
+    const filename = req.file?.filename || saveBase64DoorImage(doorId, req.body);
+    if (!filename) return res.status(400).json({ error: "No se recibio imagen" });
+
+    const relUrl = `/uploads/industrial-doors/${doorId}/${filename}`;
+    const [ins] = await db.query(
+      `INSERT INTO industrial_door_images (door_id, filename, url) VALUES (?,?,?)`,
+      [doorId, filename, relUrl]
+    );
+
+    return res.status(201).json({
+      id: ins.insertId,
+      door_id: doorId,
+      filename,
+      url: relUrl,
+      created_at: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.error("[industrial-doors:upload-image] Error:", e);
+    return res.status(e.statusCode || 500).json({ error: e.message || "No se pudo subir la imagen" });
   }
 });
 

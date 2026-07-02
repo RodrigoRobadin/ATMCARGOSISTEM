@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -16,9 +17,9 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as DocumentPicker from 'expo-document-picker';
+import * as Font from 'expo-font';
 import * as ImagePicker from 'expo-image-picker';
 import * as Linking from 'expo-linking';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -28,6 +29,14 @@ import { pickDeviceContact } from './src/utils/deviceContacts';
 import { openPhone, openWhatsapp } from './src/utils/phone';
 
 const Tab = createBottomTabNavigator();
+const brandLogo = require('./assets/grupo-atm-logo.jpeg');
+const materialCommunityFont = require('./node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/MaterialCommunityIcons.ttf');
+const materialCommunityGlyphs = require('./node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/glyphmaps/MaterialCommunityIcons.json');
+
+const iconAliases = {
+  'office-building-plus': 'office-building',
+  'phone-clock': 'phone',
+};
 
 const colors = {
   bg: '#f6f7f9',
@@ -68,6 +77,29 @@ function PrimaryButton({ title, icon, onPress, disabled, variant = 'primary' }) 
   );
 }
 
+function MaterialCommunityIcons({ name, size = 20, color = colors.ink, style }) {
+  const glyphName = iconAliases[name] || name;
+  const code = materialCommunityGlyphs[glyphName];
+  if (!code) return null;
+  return (
+    <Text
+      style={[
+        styles.iconFont,
+        {
+          color,
+          fontSize: size,
+          lineHeight: size,
+          width: size,
+          height: size,
+        },
+        style,
+      ]}
+    >
+      {String.fromCodePoint(code)}
+    </Text>
+  );
+}
+
 function Field({ label, value, onChangeText, placeholder, keyboardType = 'default', multiline = false }) {
   return (
     <View style={styles.field}>
@@ -92,6 +124,40 @@ function EmptyState({ text }) {
       <Text style={styles.emptyText}>{text}</Text>
     </View>
   );
+}
+
+async function ensureMediaLibraryPermission() {
+  const current = await ImagePicker.getMediaLibraryPermissionsAsync();
+  const permission = current.granted ? current : await ImagePicker.requestMediaLibraryPermissionsAsync();
+  if (!permission.granted) {
+    Alert.alert('ATMCARGOSISTEM', 'Permiso de galeria requerido para seleccionar imagenes');
+    return false;
+  }
+  return true;
+}
+
+function imageUploadPart(asset, fallbackName = 'imagen.jpg') {
+  const uri = asset?.uri || '';
+  const rawName = asset?.name || asset?.fileName || uri.split('/').pop() || fallbackName;
+  const rawMimeType = asset?.mimeType || asset?.type || '';
+  let name = String(rawName || fallbackName).split('?')[0] || fallbackName;
+  const lowerName = name.toLowerCase();
+  const mimeType = rawMimeType.includes('/')
+    ? rawMimeType
+    : lowerName.endsWith('.png')
+      ? 'image/png'
+      : lowerName.endsWith('.webp')
+        ? 'image/webp'
+        : lowerName.endsWith('.gif')
+          ? 'image/gif'
+          : 'image/jpeg';
+
+  if (!/\.(jpe?g|png|webp|gif)$/i.test(name)) {
+    const ext = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : mimeType === 'image/gif' ? 'gif' : 'jpg';
+    name = `${name.replace(/\.[^/.]+$/, '') || 'imagen'}.${ext}`;
+  }
+
+  return { uri, name, type: mimeType };
 }
 
 function LoginScreen() {
@@ -119,6 +185,7 @@ function LoginScreen() {
     <Screen>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.loginWrap}>
         <View style={styles.loginCard}>
+          <Image source={brandLogo} style={styles.loginLogo} resizeMode="contain" />
           <Text style={styles.brand}>ATMCARGOSISTEM</Text>
           <Text style={styles.subtitle}>Acceso movil operativo</Text>
           <Field label="Email" value={email} onChangeText={setEmail} placeholder="usuario@empresa.com" keyboardType="email-address" />
@@ -168,9 +235,12 @@ function HomeScreen({ navigation }) {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} />}
       >
         <View style={styles.headerRow}>
-          <View>
-            <Text style={styles.kicker}>Hola</Text>
-            <Text style={styles.title}>{user?.name || 'Usuario'}</Text>
+          <View style={styles.homeBrandRow}>
+            <Image source={brandLogo} style={styles.homeLogo} resizeMode="contain" />
+            <View>
+              <Text style={styles.kicker}>Hola</Text>
+              <Text style={styles.title}>{user?.name || 'Usuario'}</Text>
+            </View>
           </View>
           <Pressable onPress={logout} style={styles.logoutButton}>
             <MaterialCommunityIcons name="logout" size={20} color={colors.danger} />
@@ -1258,19 +1328,15 @@ function OperationListScreen({ route, navigation }) {
 
   async function uploadDoorImage(doorId, asset) {
     if (!doorId || !asset) return;
-    const uri = asset.uri;
-    const name = asset.name || asset.fileName || uri?.split('/').pop() || 'imagen.jpg';
-    const rawMimeType = asset.mimeType || asset.type || '';
-    const lowerName = String(name || '').toLowerCase();
-    const mimeType = rawMimeType.includes('/')
-      ? rawMimeType
-      : lowerName.endsWith('.png')
-        ? 'image/png'
-        : lowerName.endsWith('.webp')
-          ? 'image/webp'
-          : 'image/jpeg';
     const form = new FormData();
-    form.append('image', { uri, name, type: mimeType });
+    const imagePart = imageUploadPart(asset, `producto-${doorId}.jpg`);
+    if (asset.base64) {
+      form.append('image_base64', asset.base64);
+      form.append('name', imagePart.name);
+      form.append('mime_type', imagePart.type);
+    } else {
+      form.append('image', imagePart);
+    }
     setSaving(true);
     try {
       await api.uploadIndustrialDoorImage(doorId, form);
@@ -1293,7 +1359,14 @@ function OperationListScreen({ route, navigation }) {
   }
 
   async function pickDoorImage(doorId) {
-    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.75 });
+    const allowed = await ensureMediaLibraryPermission();
+    if (!allowed) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.75,
+      allowsEditing: false,
+      base64: true,
+    });
     if (!result.canceled && result.assets?.[0]) uploadDoorImage(doorId, result.assets[0]);
   }
 
@@ -1340,7 +1413,13 @@ function OperationListScreen({ route, navigation }) {
   }
 
   async function pickDetailImage() {
-    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.75 });
+    const allowed = await ensureMediaLibraryPermission();
+    if (!allowed) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.75,
+      allowsEditing: false,
+    });
     if (!result.canceled && result.assets?.[0]) uploadDetailAsset(result.assets[0]);
   }
 
@@ -1910,7 +1989,13 @@ function OperationsScreen({ navigation }) {
   }
 
   async function pickPendingImage() {
-    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.75 });
+    const allowed = await ensureMediaLibraryPermission();
+    if (!allowed) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.75,
+      allowsEditing: false,
+    });
     if (!result.canceled && result.assets?.[0]) setPendingFiles((prev) => [...prev, result.assets[0]]);
   }
 
@@ -2477,7 +2562,13 @@ function AttachmentsScreen({ route }) {
   }
 
   async function pickImage() {
-    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.75 });
+    const allowed = await ensureMediaLibraryPermission();
+    if (!allowed) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.75,
+      allowsEditing: false,
+    });
     if (!result.canceled && result.assets?.[0]) uploadAsset(result.assets[0]);
   }
 
@@ -2564,6 +2655,33 @@ function Root() {
 }
 
 export default function App() {
+  const [iconFontsReady, setIconFontsReady] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    Font.loadAsync({ MaterialCommunityIcons: materialCommunityFont })
+      .catch(() => null)
+      .finally(() => {
+        if (mounted) setIconFontsReady(true);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  if (!iconFontsReady) {
+    return (
+      <SafeAreaProvider>
+        <Screen>
+          <View style={styles.center}>
+            <ActivityIndicator color={colors.accent} />
+            <Text style={styles.meta}>Cargando aplicacion...</Text>
+          </View>
+        </Screen>
+      </SafeAreaProvider>
+    );
+  }
+
   return (
     <SafeAreaProvider>
       <AuthProvider>
@@ -2587,6 +2705,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 12,
   },
+  iconFont: {
+    fontFamily: 'MaterialCommunityIcons',
+    fontWeight: 'normal',
+    fontStyle: 'normal',
+    textAlign: 'center',
+    includeFontPadding: false,
+  },
   content: {
     padding: 16,
     gap: 14,
@@ -2606,6 +2731,11 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     padding: 18,
     gap: 12,
+  },
+  loginLogo: {
+    width: '100%',
+    height: 112,
+    marginBottom: 4,
   },
   brand: {
     fontSize: 24,
@@ -2632,6 +2762,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  homeBrandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 1,
+    gap: 10,
+  },
+  homeLogo: {
+    width: 88,
+    height: 42,
   },
   logoutButton: {
     width: 42,
