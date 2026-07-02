@@ -209,6 +209,57 @@ export default function AdminParams() {
     setMap((prev) => ({ ...prev, [key]: updater(prev[key] || []) }));
   }
 
+  function changeFirstParamValue(key, value) {
+    setKeyList(key, (list) => {
+      if (!list.length) return [{ id: null, value, ord: 0, active: 1 }];
+      return list.map((row, idx) =>
+        idx === 0 ? { ...row, value, active: 1 } : row
+      );
+    });
+  }
+
+  async function saveFirstParamValue(key) {
+    const row = (map[key] || [])[0];
+    if (row?.id) {
+      await updateParam({ ...row, active: 1 });
+      return row;
+    }
+    const created = await createParam(key, {
+      value: row?.value || "",
+      ord: 0,
+      active: 1,
+    });
+    setKeyList(key, (list) => {
+      const rest = list.filter((item) => item.id);
+      return [{ ...created, active: created.active ? 1 : 0 }, ...rest];
+    });
+    return created;
+  }
+
+  async function saveFiscalStampSettings(unit) {
+    const suffix = unit === "industrial" ? "industrial" : "cargo";
+    const keys = [
+      `invoice_timbre_number_${suffix}`,
+      `invoice_timbre_valid_from_${suffix}`,
+      `invoice_timbre_valid_to_${suffix}`,
+    ];
+    const hasMissingValue = keys.some((key) => !String((map[key] || [])[0]?.value || "").trim());
+    if (hasMissingValue) {
+      alert("Completa numero de timbrado, inicio y fin de vigencia antes de guardar.");
+      return;
+    }
+    setSaving(true);
+    try {
+      for (const key of keys) {
+        await saveFirstParamValue(key);
+      }
+      await loadInvoiceNumberingStatus();
+      alert("Timbrado actualizado.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function addRow(key, newValue) {
     if (!String(newValue || "").trim()) return;
     setSaving(true);
@@ -380,6 +431,12 @@ export default function AdminParams() {
                   <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                     {group.title === "Facturaci?n" && (
                       <div className="lg:col-span-2">
+                        <FiscalStampQuickEditor
+                          map={map}
+                          saving={saving}
+                          onChange={changeFirstParamValue}
+                          onSave={saveFiscalStampSettings}
+                        />
                         <InvoiceNumberingStatusPanel status={invoiceNumbering} />
                   </div>
                 )}
@@ -985,6 +1042,90 @@ function prettyLabel(key) {
     kanban_hide_stages: "Ocultar columnas",
   };
   return map[key] || key;
+}
+
+function FiscalStampQuickEditor({ map, saving, onChange, onSave }) {
+  const sections = [
+    {
+      key: "cargo",
+      label: "ATM CARGO",
+      numberKey: "invoice_timbre_number_cargo",
+      fromKey: "invoice_timbre_valid_from_cargo",
+      toKey: "invoice_timbre_valid_to_cargo",
+    },
+    {
+      key: "industrial",
+      label: "ATM INDUSTRIAL",
+      numberKey: "invoice_timbre_number_industrial",
+      fromKey: "invoice_timbre_valid_from_industrial",
+      toKey: "invoice_timbre_valid_to_industrial",
+    },
+  ];
+  const valueOf = (key) => (map[key] || [])[0]?.value || "";
+
+  return (
+    <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50/60 p-3">
+      <div className="mb-3">
+        <div className="font-semibold text-slate-900">Timbrado vigente</div>
+        <div className="text-sm text-slate-600">
+          Estos datos se usan al crear facturas nuevas. Las facturas ya creadas conservan el timbrado que tenian al emitirse.
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+        {sections.map((section) => (
+          <div key={section.key} className="rounded-xl border bg-white p-3">
+            <div className="mb-3 font-semibold text-slate-900">{section.label}</div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <label className="text-sm">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Numero
+                </span>
+                <input
+                  type="text"
+                  value={valueOf(section.numberKey)}
+                  onChange={(e) => onChange(section.numberKey, e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                  placeholder="18954219"
+                />
+              </label>
+              <label className="text-sm">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Inicio vigencia
+                </span>
+                <input
+                  type="date"
+                  value={valueOf(section.fromKey)}
+                  onChange={(e) => onChange(section.fromKey, e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                />
+              </label>
+              <label className="text-sm">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Fin vigencia
+                </span>
+                <input
+                  type="date"
+                  value={valueOf(section.toKey)}
+                  onChange={(e) => onChange(section.toKey, e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                />
+              </label>
+            </div>
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={() => onSave(section.key)}
+                disabled={saving}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Guardar timbrado
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function InvoiceNumberingStatusPanel({ status }) {

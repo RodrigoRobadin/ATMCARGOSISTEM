@@ -258,12 +258,21 @@ async function fetchQuoteTotalUsd(dealId, conn, costSheetVersionNumber = null, q
   if (snapshot) return snapshot.total_usd;
   const row = await fetchDealQuoteJsonForInvoice(dealId, conn, quoteRevisionId);
   if (!row?.computed_json) return null;
+  const inputs = asJson(row.inputs_json) || {};
   const computed = asJson(row.computed_json);
-  return (
+  const rawTotal = (
     computed?.oferta?.totals?.total_sales_usd ??
     computed?.operacion?.totals?.total_sell_usd ??
     null
   );
+  const currency = String(inputs.operation_currency || computed?.meta?.operation_currency || 'USD').toUpperCase();
+  const exchangeRate = Number(
+    inputs.exchange_rate_atm_gs_per_usd ||
+    computed?.meta?.exchange_rate_atm_gs_per_usd ||
+    inputs.exchange_rate_operation_sell_usd ||
+    1
+  ) || 1;
+  return rawTotal == null ? null : normalizeAmountToUsd(rawTotal, currency, exchangeRate);
 }
 
 async function fetchInvoiceLockStatus({ deal_id, service_case_id, cost_sheet_version_number, quote_revision_id }) {
@@ -303,30 +312,48 @@ async function fetchInvoiceLockStatus({ deal_id, service_case_id, cost_sheet_ver
 }
 async function fetchServiceQuoteTotalUsd(serviceCaseId, conn) {
   const [[row]] = await conn.query(
-    'SELECT computed_json FROM service_quotes WHERE service_case_id = ? LIMIT 1',
+    'SELECT inputs_json, computed_json FROM service_quotes WHERE service_case_id = ? LIMIT 1',
     [serviceCaseId]
   );
   if (!row?.computed_json) return null;
+  const inputs = asJson(row.inputs_json) || {};
   const computed = asJson(row.computed_json);
-  return (
+  const rawTotal = (
     computed?.oferta?.totals?.total_sales_usd ??
     computed?.operacion?.totals?.total_sell_usd ??
     null
   );
+  const currency = String(inputs.operation_currency || computed?.meta?.operation_currency || 'USD').toUpperCase();
+  const exchangeRate = Number(
+    inputs.exchange_rate_atm_gs_per_usd ||
+    computed?.meta?.exchange_rate_atm_gs_per_usd ||
+    inputs.exchange_rate_operation_sell_usd ||
+    1
+  ) || 1;
+  return rawTotal == null ? null : normalizeAmountToUsd(rawTotal, currency, exchangeRate);
 }
 
 async function fetchServiceQuoteAdditionTotalUsd(additionId, conn) {
   const [[row]] = await conn.query(
-    'SELECT computed_json FROM service_quote_additions WHERE id = ? LIMIT 1',
+    'SELECT inputs_json, computed_json FROM service_quote_additions WHERE id = ? LIMIT 1',
     [additionId]
   );
   if (!row?.computed_json) return null;
+  const inputs = asJson(row.inputs_json) || {};
   const computed = asJson(row.computed_json);
-  return (
+  const rawTotal = (
     computed?.oferta?.totals?.total_sales_usd ??
     computed?.operacion?.totals?.total_sell_usd ??
     null
   );
+  const currency = String(inputs.operation_currency || computed?.meta?.operation_currency || 'USD').toUpperCase();
+  const exchangeRate = Number(
+    inputs.exchange_rate_atm_gs_per_usd ||
+    computed?.meta?.exchange_rate_atm_gs_per_usd ||
+    inputs.exchange_rate_operation_sell_usd ||
+    1
+  ) || 1;
+  return rawTotal == null ? null : normalizeAmountToUsd(rawTotal, currency, exchangeRate);
 }
 
 async function ensureInvoiceMoneyColumns() {

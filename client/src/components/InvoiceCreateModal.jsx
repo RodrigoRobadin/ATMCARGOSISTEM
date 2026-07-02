@@ -403,7 +403,13 @@ export default function InvoiceCreateModal({
       });
       const inputs = data?.quote?.inputs || data?.inputs || {};
       const curr = String(inputs.operation_currency || 'USD').toUpperCase();
-      const rate = Number(inputs.exchange_rate_operation_sell_usd || 1) || 1;
+      const rate = Number(
+        inputs.exchange_rate_atm_gs_per_usd ||
+        inputs.exchange_rate_operation_sell_usd ||
+        inputs.exchange_rate_customs_internal_gs_per_usd ||
+        inputs.exchange_rate_install_gs_per_usd ||
+        1
+      ) || 1;
       setQuoteCurrencyInfo({ currency: curr || 'USD', exchange_rate: rate || 1 });
       setForm((prev) => {
         if (currencyTouched) return prev;
@@ -446,7 +452,13 @@ export default function InvoiceCreateModal({
       const { data } = await api.get(`/service/cases/${serviceCaseId}/quote`);
       const inputs = data?.inputs || {};
       const curr = String(inputs.operation_currency || 'USD').toUpperCase();
-      const rate = Number(inputs.exchange_rate_operation_sell_usd || 1) || 1;
+      const rate = Number(
+        inputs.exchange_rate_atm_gs_per_usd ||
+        inputs.exchange_rate_operation_sell_usd ||
+        inputs.exchange_rate_customs_internal_gs_per_usd ||
+        inputs.exchange_rate_install_gs_per_usd ||
+        1
+      ) || 1;
       setQuoteCurrencyInfo({ currency: curr || 'USD', exchange_rate: rate || 1 });
       setForm((prev) => {
         if (currencyTouched) return prev;
@@ -467,14 +479,26 @@ export default function InvoiceCreateModal({
       const { data } = await api.get(`/service/additional-quotes/${additionId}`);
       const inputs = data?.inputs || {};
       let curr = String(inputs.operation_currency || '').toUpperCase();
-      let rate = Number(inputs.exchange_rate_operation_sell_usd || 0) || 0;
+      let rate = Number(
+        inputs.exchange_rate_atm_gs_per_usd ||
+        inputs.exchange_rate_operation_sell_usd ||
+        inputs.exchange_rate_customs_internal_gs_per_usd ||
+        inputs.exchange_rate_install_gs_per_usd ||
+        0
+      ) || 0;
       if (!curr || !rate) {
         const caseId = data?.service_case_id;
         if (caseId) {
           const base = await api.get(`/service/cases/${caseId}/quote`).catch(() => null);
           const baseInputs = base?.data?.inputs || {};
           curr = String(baseInputs.operation_currency || 'USD').toUpperCase();
-          rate = Number(baseInputs.exchange_rate_operation_sell_usd || 1) || 1;
+          rate = Number(
+            baseInputs.exchange_rate_atm_gs_per_usd ||
+            baseInputs.exchange_rate_operation_sell_usd ||
+            baseInputs.exchange_rate_customs_internal_gs_per_usd ||
+            baseInputs.exchange_rate_install_gs_per_usd ||
+            1
+          ) || 1;
         }
       }
       setQuoteCurrencyInfo({ currency: curr || 'USD', exchange_rate: rate || 1 });
