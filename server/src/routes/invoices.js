@@ -105,6 +105,26 @@ function toSheetNumber(value) {
   const num = Number(normalized);
   return Number.isFinite(num) ? num : 0;
 }
+function normalizeTaxRate(value, fallback = 0) {
+  if (value === '' || value === null || value === undefined) return fallback;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['exento', 'exenta', 'exentas', 'exempt', 'sin iva'].includes(normalized)) return 0;
+    if (normalized.includes('10')) return 10;
+    if (normalized.includes('5')) return 5;
+    const parsed = Number(normalized.replace('%', '').replace(',', '.'));
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function readTaxRate(row = {}, fallback = 0) {
+  return normalizeTaxRate(
+    row.tax_rate ?? row.taxRate ?? row.iva_rate ?? row.ivaRate ?? row.iva ?? row.tax ?? row.vat_rate ?? row.vatRate,
+    fallback
+  );
+}
 
 async function fetchCostSheetInvoiceSnapshot(dealId, conn, versionNumber = null) {
   const requestedVersion = Number(versionNumber || 0) || null;
@@ -167,7 +187,7 @@ async function fetchCostSheetInvoiceSnapshot(dealId, conn, versionNumber = null)
     const zeroItems = saleRows.map((row) => ({
       description: row?.concepto || 'Servicio',
       unit_price: 0,
-      tax_rate: Number(row?.tax_rate ?? 0) || 0,
+      tax_rate: readTaxRate(row, 0),
     }));
     const hasTarget = zeroItems.some((item) => String(item.description || '').trim().toLowerCase() === target);
     saleItems = hasTarget
@@ -184,20 +204,20 @@ async function fetchCostSheetInvoiceSnapshot(dealId, conn, versionNumber = null)
     saleItems = saleRows.map((row) => ({
       description: row?.concepto || 'Servicio',
       unit_price: valueToUsd(rowSaleAmount(row)),
-      tax_rate: Number(row?.tax_rate ?? 0) || 0,
+      tax_rate: readTaxRate(row, 0),
     }));
   }
 
   const localItems = localClientRows.map((row) => ({
     description: row?.concepto || 'Gasto local',
     unit_price: valueToUsd(toSheetNumber(row?.gs)),
-    tax_rate: Number(row?.tax_rate ?? 0) || 0,
+    tax_rate: readTaxRate(row, 0),
   }));
 
   const insuranceItems = insuranceRows.map((row) => ({
     description: row?.concepto || 'Seguro',
     unit_price: valueToUsd(toSheetNumber(row?.usd ?? row?.monto ?? 0)),
-    tax_rate: Number(row?.tax_rate ?? 10) || 10,
+    tax_rate: readTaxRate(row, 10),
   }));
 
   const items = [...saleItems, ...localItems, ...insuranceItems]
@@ -206,7 +226,7 @@ async function fetchCostSheetInvoiceSnapshot(dealId, conn, versionNumber = null)
       description: item.description || 'Item',
       quantity: 1,
       unit_price: round2(item.unit_price),
-      tax_rate: Number(item.tax_rate ?? 0) || 0,
+      tax_rate: readTaxRate(item, 0),
       item_order: idx + 1,
       source_item_key: `deal_quote:${idx + 1}`,
       cost_sheet_version_number: row.version_number || null,
@@ -652,7 +672,7 @@ async function fetchQuoteItemsForInvoice(dealId, conn, costSheetVersionNumber = 
       const qty = Number(it.qty || 0) || 1;
       const unitPrice = Number(it.unit_price || it.unitPrice || 0) ||
         Number(it.door_value_usd || 0) + Number(it.additional_usd || 0);
-      const rate = Number(it.tax_rate ?? it.taxRate ?? 10) || 0;
+      const rate = readTaxRate(it, 10);
       const itemOrder = it.item_order ?? it.line_no ?? idx;
       return {
         description: it.description || 'Item',
@@ -673,7 +693,7 @@ async function fetchQuoteItemsForInvoice(dealId, conn, costSheetVersionNumber = 
     const qty = Number(it.qty || match.qty || 0) || 1;
     const unitPrice = Number(it.unit_price ?? match.unit_price ?? match.unitPrice ?? 0) ||
       (Number(it.total_sales || 0) && qty ? Number(it.total_sales || 0) / qty : 0);
-    const rate = Number(match.tax_rate ?? match.taxRate ?? 10) || 0;
+    const rate = readTaxRate(match, readTaxRate(it, 10));
     const itemOrder = it.item_order ?? it.line_no ?? idx;
     return {
       description: it.description || match.description || 'Item',
@@ -705,7 +725,7 @@ async function fetchServiceQuoteItemsForInvoice(serviceCaseId, conn) {
       const qty = Number(it.qty || 0) || 1;
       const unitPrice = Number(it.unit_price || it.unitPrice || 0) ||
         Number(it.door_value_usd || 0) + Number(it.additional_usd || 0);
-      const rate = Number(it.tax_rate ?? it.taxRate ?? 10) || 0;
+      const rate = readTaxRate(it, 10);
       return {
         description: it.description || 'Item',
         quantity: qty,
@@ -724,7 +744,7 @@ async function fetchServiceQuoteItemsForInvoice(serviceCaseId, conn) {
     const qty = Number(it.qty || match.qty || 0) || 1;
     const unitPrice = Number(it.unit_price ?? match.unit_price ?? match.unitPrice ?? 0) ||
       (Number(it.total_sales || 0) && qty ? Number(it.total_sales || 0) / qty : 0);
-    const rate = Number(match.tax_rate ?? match.taxRate ?? 10) || 0;
+    const rate = readTaxRate(match, readTaxRate(it, 10));
     return {
       description: it.description || match.description || 'Item',
       quantity: qty,
@@ -751,7 +771,7 @@ async function fetchServiceQuoteAdditionItemsForInvoice(additionId, conn) {
       const qty = Number(it.qty || 0) || 1;
       const unitPrice = Number(it.unit_price || it.unitPrice || 0) ||
         Number(it.door_value_usd || 0) + Number(it.additional_usd || 0);
-      const rate = Number(it.tax_rate ?? it.taxRate ?? 10) || 0;
+      const rate = readTaxRate(it, 10);
       const itemOrder = it.item_order ?? it.line_no ?? idx;
       return {
         description: it.description || 'Item',
@@ -772,7 +792,7 @@ async function fetchServiceQuoteAdditionItemsForInvoice(additionId, conn) {
     const qty = Number(it.qty || match.qty || 0) || 1;
     const unitPrice = Number(it.unit_price ?? match.unit_price ?? match.unitPrice ?? 0) ||
       (Number(it.total_sales || 0) && qty ? Number(it.total_sales || 0) / qty : 0);
-    const rate = Number(match.tax_rate ?? match.taxRate ?? 10) || 0;
+    const rate = readTaxRate(match, readTaxRate(it, 10));
     const itemOrder = it.item_order ?? it.line_no ?? idx;
     return {
       description: it.description || match.description || 'Item',
@@ -840,7 +860,7 @@ async function fetchDealQuoteBillableItems(dealId, conn, costSheetVersionNumber 
       quantity,
       unit_price: unitPrice,
       total,
-      tax_rate: Number(item.tax_rate ?? 0) || 0,
+      tax_rate: readTaxRate(item, 0),
       currency_code: billCurrency,
       used_percentage: usedPercentage,
       remaining_percentage: Math.max(0, round2(100 - usedPercentage)),
@@ -915,7 +935,7 @@ async function fetchServiceCaseBillableItems(serviceCaseId, conn) {
       quantity,
       unit_price: unitPrice,
       total,
-      tax_rate: Number(item.tax_rate ?? 0) || 0,
+      tax_rate: readTaxRate(item, 0),
       currency_code: billCurrency,
       used_percentage: usedPercentage,
       remaining_percentage: Math.max(0, round2(100 - usedPercentage)),
@@ -3021,7 +3041,7 @@ router.post('/', requireAuth, async (req, res) => {
           quantity: qty,
           unit_price: unitPriceAdj,
           subtotal,
-          tax_rate: Number(it.tax_rate ?? 0) || 0,
+          tax_rate: readTaxRate(it, 0),
           item_order: Number.isFinite(Number(it.item_order)) ? Number(it.item_order) : idx,
           source_type: deal_id ? 'deal_quote' : effectiveServiceCaseId ? 'service_quote' : null,
           source_parent_id: deal_id ? Number(deal_id) : effectiveServiceCaseId ? Number(effectiveServiceCaseId) : null,
@@ -3036,7 +3056,7 @@ router.post('/', requireAuth, async (req, res) => {
           quantity: 1,
           unit_price: gross,
           subtotal: gross,
-          tax_rate: Number(containerBilling.tax_rate ?? 10) || 10,
+          tax_rate: readTaxRate(containerBilling, 10),
           item_order: 0,
         },
       ];
@@ -3743,7 +3763,7 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
         description: it.description || 'Item',
         quantity: Number(it.quantity || 0),
         unit_price: Number(it.unit_price || 0),
-        tax_rate: Number(it.tax_rate ?? 0),
+        tax_rate: readTaxRate(it, 0),
       })),
       totalEnLetras: invoice.total_in_words || '',
       notes: invoice.notes || '',
@@ -3877,7 +3897,7 @@ router.post('/credit-notes', requireAuth, async (req, res) => {
         const qty = parseFloat(it.quantity || it.qty || 1) || 1;
         const price = parseFloat(it.unit_price || it.price || 0) || 0;
         const subtotal = parseFloat((qty * price).toFixed(2));
-        const rate = parseFloat(it.tax_rate ?? it.rate ?? 10) || 0;
+        const rate = readTaxRate(it, 10);
         return {
           description: it.description || 'Item',
           quantity: qty,
@@ -3897,7 +3917,7 @@ router.post('/credit-notes', requireAuth, async (req, res) => {
         quantity: it.quantity,
         unit_price: it.unit_price,
         subtotal: it.subtotal,
-        tax_rate: it.tax_rate ?? 10,
+        tax_rate: readTaxRate(it, 10),
         item_order: it.item_order ?? idx,
       }));
     }
@@ -4141,7 +4161,7 @@ router.get('/credit-notes/:id/pdf', requireAuth, async (req, res) => {
         description: it.description || 'Item',
         quantity: Number(it.quantity || 0),
         unit_price: Number(it.unit_price || 0),
-        tax_rate: Number(it.tax_rate ?? 0),
+        tax_rate: readTaxRate(it, 0),
       })),
       totalEnLetras: '',
       notes: note.reason || note.observations || '',
