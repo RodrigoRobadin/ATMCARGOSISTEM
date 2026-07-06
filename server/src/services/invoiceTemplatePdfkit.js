@@ -204,10 +204,15 @@ function drawHeader(doc, data, y) {
 }
 
 function drawClientBox(doc, data, y) {
-  const box = { x: M, y, w: W, h: CLIENT_BOX_H };
+  const leftX = M + 10;
+  const rightX = M + 340;
+  const notesY = y + 10 + (14 * 6);
+  const notesText = data.notas || '-';
+  doc.font('Helvetica').fontSize(9);
+  const notesW = W - 145;
+  const notesH = Math.max(14, doc.heightOfString(notesText, { width: notesW }));
+  const box = { x: M, y, w: W, h: Math.max(CLIENT_BOX_H, (notesY - y) + notesH + 14) };
   drawBox(doc, box);
-  const leftX = box.x + 10;
-  const rightX = box.x + 340;
   let ly = box.y + 10;
   let ry = box.y + 10;
   drawLabelValueRow(doc, { label: 'FECHA DE EMISION:', value: data.fechaEmision, x: leftX, y: ly });
@@ -224,7 +229,8 @@ function drawClientBox(doc, data, y) {
   drawLabelValueRow(doc, { label: 'CONDICION DE VENTA:', value: data.condicionVenta, x: rightX, y: ry });
   drawLabelValueRow(doc, { label: 'CORREO ELECTRONICO:', value: data.clienteEmail, x: leftX, y: (ly += 14) });
   drawLabelValueRow(doc, { label: 'MONEDA:', value: data.moneda, x: rightX, y: (ry += 14) });
-  drawLabelValueRow(doc, { label: 'NOTAS:', value: data.notas, x: leftX, y: (ly += 14), wLabel: 120, wValue: 470 });
+  drawLabelValueRow(doc, { label: 'NOTAS:', value: data.notas, x: leftX, y: Math.max(ly, ry) + 16, wLabel: 120, wValue: notesW });
+  return box.y + box.h;
 }
 
 function drawReference(doc, data, y) {
@@ -453,7 +459,7 @@ export async function generateInvoicePDF(data, outputStream) {
       }, M);
 
       // Client box
-      drawClientBox(doc, {
+      const clientBoxBottom = drawClientBox(doc, {
         fechaEmision: data.fechaEmision,
         hora: data.hora,
         clienteNombre: data.client?.name || '',
@@ -467,7 +473,7 @@ export async function generateInvoicePDF(data, outputStream) {
       }, M + 115 + 16);
 
       // Reference
-      const refY = M + 115 + 16 + CLIENT_BOX_H + 8;
+      const refY = clientBoxBottom + 8;
       drawReference(doc, { refNumero: data.refNumero, refDetalle: data.refDetalle }, refY);
 
       // Table
