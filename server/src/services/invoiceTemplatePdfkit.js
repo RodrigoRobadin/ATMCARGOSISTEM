@@ -6,6 +6,7 @@ const PAGE_W = 290 * 2.83465; // ~822.05 pt
 const PAGE_H = 406 * 2.83465; // ~1150.87 pt
 const M = 24;
 const W = PAGE_W - 2 * M;
+const CLIENT_BOX_H = 130;
 
 const COLORS = {
   navy: '#3F556E',
@@ -203,7 +204,7 @@ function drawHeader(doc, data, y) {
 }
 
 function drawClientBox(doc, data, y) {
-  const box = { x: M, y, w: W, h: 115 };
+  const box = { x: M, y, w: W, h: CLIENT_BOX_H };
   drawBox(doc, box);
   const leftX = box.x + 10;
   const rightX = box.x + 340;
@@ -223,6 +224,7 @@ function drawClientBox(doc, data, y) {
   drawLabelValueRow(doc, { label: 'CONDICION DE VENTA:', value: data.condicionVenta, x: rightX, y: ry });
   drawLabelValueRow(doc, { label: 'CORREO ELECTRONICO:', value: data.clienteEmail, x: leftX, y: (ly += 14) });
   drawLabelValueRow(doc, { label: 'MONEDA:', value: data.moneda, x: rightX, y: (ry += 14) });
+  drawLabelValueRow(doc, { label: 'NOTAS:', value: data.notas, x: leftX, y: (ly += 14), wLabel: 120, wValue: 470 });
 }
 
 function drawReference(doc, data, y) {
@@ -333,7 +335,7 @@ function drawFooter(doc, data) {
   let y = 800;
   doc.font('Helvetica').fontSize(8).fillColor(COLORS.grayLight).text(
     data.footer?.autoimpresor ||
-      'Autorizado como Autoimpresor por la SET - Nro. de solicitud ___ de fecha ___ - ORIGINAL',
+      'Autorizado como Autoimpresor por la SET - Nro. de solicitud 350050031843 de fecha 01/07/2026 - ORIGINAL',
     M,
     y,
     { width: W }
@@ -461,10 +463,11 @@ export async function generateInvoicePDF(data, outputStream) {
         clienteRuc: data.client?.ruc || '',
         condicionVenta: data.condicionVenta || '',
         moneda: data.moneda || 'GS',
+        notas: data.notes || data.notas || '',
       }, M + 115 + 16);
 
       // Reference
-      const refY = M + 115 + 16 + 85 + 22;
+      const refY = M + 115 + 16 + CLIENT_BOX_H + 8;
       drawReference(doc, { refNumero: data.refNumero, refDetalle: data.refDetalle }, refY);
 
       // Table
