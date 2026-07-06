@@ -499,6 +499,19 @@ function round2(n) {
   return Number((Number(n || 0)).toFixed(2));
 }
 
+const PARAGUAY_TIME_ZONE = 'America/Asuncion';
+
+function formatParaguayTime(value = new Date()) {
+  const date = value ? new Date(value) : new Date();
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  return safeDate.toLocaleTimeString('es-PY', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: PARAGUAY_TIME_ZONE,
+  });
+}
 function parsePercentageList(value) {
   return String(value || '')
     .split(',')
@@ -3713,7 +3726,7 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
       },
       invoiceNumber: invoice.invoice_number || '',
       fechaEmision: formatDate(issueDate),
-      hora: new Date().toLocaleTimeString('es-PY', { hour12: false }),
+      hora: formatParaguayTime(new Date()),
       client: {
         name: invoice.customer_name || invoice.organization_name || '',
         address: invoice.customer_address || invoice.organization_address || '',
@@ -4111,7 +4124,7 @@ router.get('/credit-notes/:id/pdf', requireAuth, async (req, res) => {
         timbrado_end: issuer.timbrado_end,
       },
       fechaEmision: formatDate(issueDate),
-      hora: new Date().toLocaleTimeString('es-PY', { hour12: false }),
+      hora: formatParaguayTime(new Date()),
       client: {
         name: note.organization_name || '',
         address: note.organization_address || '',
