@@ -3231,6 +3231,53 @@ router.delete('/:id', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/invoices/:id/cancel - Anular factura desde el detalle
+router.post('/:id/cancel', requireAuth, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const { id } = req.params;
+    const reason = String(req.body?.reason || '').trim().slice(0, 255);
+    if (!reason) return res.status(400).json({ error: 'Debe cargar un motivo de anulacion' });
+
+    const [[invoice]] = await conn.query('SELECT * FROM invoices WHERE id = ?', [id]);
+    if (!invoice) return res.status(404).json({ error: 'Factura no encontrada' });
+    if (!canManageInvoice(req.user, invoice)) {
+      return res.status(403).json({ error: 'No tienes permiso para anular esta factura' });
+    }
+    if (String(invoice.status || '').toLowerCase() === 'anulada') {
+      return res.status(400).json({ error: 'La factura ya esta anulada' });
+    }
+
+    await conn.beginTransaction();
+    await conn.query(
+      `UPDATE invoices
+          SET status = 'anulada',
+              cancellation_reason = ?,
+              canceled_by_credit_note_id = NULL,
+              balance = 0,
+              net_balance = 0
+        WHERE id = ?`,
+      [reason, id]
+    );
+    await conn.commit();
+    await syncContainerBillingCycleFromInvoice(id);
+
+    const [[updated]] = await pool.query(
+      `SELECT i.*, o.name as organization_name
+         FROM invoices i
+         LEFT JOIN organizations o ON o.id = i.organization_id
+        WHERE i.id = ?`,
+      [id]
+    );
+    res.json(updated);
+  } catch (e) {
+    await conn.rollback();
+    console.error('[invoices] Error canceling invoice:', e);
+    res.status(500).json({ error: 'Error al anular factura' });
+  } finally {
+    conn.release();
+  }
+});
 // GET /api/invoices/receipts - Lista de recibos
 router.get('/receipts', requireAuth, async (req, res) => {
   try {
