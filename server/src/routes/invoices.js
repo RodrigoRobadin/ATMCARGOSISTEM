@@ -332,7 +332,7 @@ async function fetchInvoiceLockStatus({ deal_id, service_case_id, cost_sheet_ver
 }
 async function fetchServiceQuoteTotalUsd(serviceCaseId, conn) {
   const [[row]] = await conn.query(
-    'SELECT inputs_json, computed_json FROM service_quotes WHERE service_case_id = ? LIMIT 1',
+    'SELECT inputs_json, computed_json FROM service_quotes WHERE service_case_id = ? ORDER BY id DESC LIMIT 1',
     [serviceCaseId]
   );
   if (!row?.computed_json) return null;
@@ -421,7 +421,7 @@ async function fetchQuoteCurrencyInfo(dealId, conn, costSheetVersionNumber = nul
 
 async function fetchServiceQuoteCurrencyInfo(serviceCaseId, conn) {
   const [[row]] = await conn.query(
-    'SELECT inputs_json FROM service_quotes WHERE service_case_id = ? LIMIT 1',
+    'SELECT inputs_json FROM service_quotes WHERE service_case_id = ? ORDER BY id DESC LIMIT 1',
     [serviceCaseId]
   );
   if (!row?.inputs_json) return { currency: 'USD', exchange_rate: 1 };
@@ -708,7 +708,7 @@ async function fetchQuoteItemsForInvoice(dealId, conn, costSheetVersionNumber = 
 
 async function fetchServiceQuoteItemsForInvoice(serviceCaseId, conn) {
   const [[row]] = await conn.query(
-    'SELECT inputs_json, computed_json FROM service_quotes WHERE service_case_id = ? LIMIT 1',
+    'SELECT inputs_json, computed_json FROM service_quotes WHERE service_case_id = ? ORDER BY id DESC LIMIT 1',
     [serviceCaseId]
   );
   if (!row) return [];
@@ -726,12 +726,14 @@ async function fetchServiceQuoteItemsForInvoice(serviceCaseId, conn) {
       const unitPrice = Number(it.unit_price || it.unitPrice || 0) ||
         Number(it.door_value_usd || 0) + Number(it.additional_usd || 0);
       const rate = readTaxRate(it, 10);
+      const itemOrder = it.item_order ?? it.line_no ?? idx;
       return {
         description: it.description || 'Item',
         quantity: qty,
         unit_price: unitPrice,
         tax_rate: rate,
-        item_order: it.item_order ?? it.line_no ?? idx,
+        item_order: itemOrder,
+        source_item_key: 'service_quote:' + itemOrder,
       };
     });
   }
@@ -745,12 +747,14 @@ async function fetchServiceQuoteItemsForInvoice(serviceCaseId, conn) {
     const unitPrice = Number(it.unit_price ?? match.unit_price ?? match.unitPrice ?? 0) ||
       (Number(it.total_sales || 0) && qty ? Number(it.total_sales || 0) / qty : 0);
     const rate = readTaxRate(match, readTaxRate(it, 10));
+    const itemOrder = it.item_order ?? it.line_no ?? idx;
     return {
       description: it.description || match.description || 'Item',
       quantity: qty,
       unit_price: unitPrice,
       tax_rate: rate,
-      item_order: it.item_order ?? it.line_no ?? idx,
+      item_order: itemOrder,
+      source_item_key: 'service_quote:' + itemOrder,
     };
   });
 }
