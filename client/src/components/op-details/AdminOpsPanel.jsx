@@ -62,7 +62,7 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, deal, costSheetVe
             cost_sheet_version_number: costSheetVersionNumber || undefined,
             quote_revision_id: quoteRevisionId || undefined,
           }
-        : { service_case_id: serviceCaseId };
+        : { service_case_id: serviceCaseId, quote_revision_id: quoteRevisionId || undefined };
       const [docsRes, lockRes, itemsRes] = await Promise.all([
         api.get("/invoices/operation-docs", { params }),
         api.get("/invoices/lock-status", { params }),
@@ -545,7 +545,7 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, deal, costSheetVe
           defaultDealId={dealId ? Number(dealId) : undefined}
           defaultServiceCaseId={serviceCaseId ? Number(serviceCaseId) : undefined}
           defaultCostSheetVersionNumber={dealId ? costSheetVersionNumber : undefined}
-          defaultQuoteRevisionId={dealId ? quoteRevisionId : undefined}
+          defaultQuoteRevisionId={quoteRevisionId || undefined}
           defaultSelectedQuoteItems={selectedPendingItems.map((item) => item.source_item_key)}
           onClose={() => setShowInvoiceModal(false)}
           onSuccess={() => {

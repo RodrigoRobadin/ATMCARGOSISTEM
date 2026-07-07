@@ -635,7 +635,7 @@ export default function InvoiceCreateModal({
           cost_sheet_version_number: defaultCostSheetVersionNumber || undefined,
           quote_revision_id: defaultQuoteRevisionId || undefined,
         }
-      : { service_case_id: serviceCaseId };
+      : { service_case_id: serviceCaseId, quote_revision_id: defaultQuoteRevisionId || undefined };
 
     try {
       const { data } = await api.get('/invoices/billable-items', { params });

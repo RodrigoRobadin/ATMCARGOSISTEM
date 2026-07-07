@@ -283,7 +283,8 @@ export default function QuoteEditor({
   const [revisions, setRevisions] = useState([]); // [{id,name,created_at}]
   const [selectedRevisionId, setSelectedRevisionId] = useState(() => {
     const parsed = Number(initialRevisionId || 0);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    return getStoredQuoteRevisionId({ dealId: dealIdProp, serviceCaseId: serviceCaseIdProp });
   });
   const [orgId, setOrgId] = useState(null);
   const [branches, setBranches] = useState([]);
@@ -605,7 +606,10 @@ export default function QuoteEditor({
           return;
         }
         if (isEmbedded && Number.isFinite(serviceCaseIdProp) && serviceCaseIdProp > 0) {
-          await loadOrCreateByCase(serviceCaseIdProp);
+          await loadOrCreateByCase(
+            serviceCaseIdProp,
+            preferredRevisionId || getStoredQuoteRevisionId({ dealId: dealIdProp, serviceCaseId: serviceCaseIdProp })
+          );
           return;
         }
 
@@ -615,7 +619,10 @@ export default function QuoteEditor({
           return;
         }
         if (Number.isFinite(serviceCaseId) && serviceCaseId > 0) {
-          await loadOrCreateByCase(serviceCaseId);
+          await loadOrCreateByCase(
+            serviceCaseId,
+            preferredRevisionId || getStoredQuoteRevisionId({ serviceCaseId })
+          );
           return;
         }
 
@@ -674,13 +681,19 @@ export default function QuoteEditor({
       setLoading(false);
     }
   
-  async function loadOrCreateByCase(caseIdToLoad) {
+  async function loadOrCreateByCase(caseIdToLoad, revisionId = null) {
     const [quoteRes, caseRes] = await Promise.all([
       api.get(caseQuoteEndpointOverride || `/service/cases/${caseIdToLoad}/quote`),
       api.get(`/service/cases/${caseIdToLoad}`).catch(() => ({ data: null })),
     ]);
-    const data = quoteRes.data;
+    let data = quoteRes.data;
     const caseData = caseRes?.data?.case || caseRes?.data || caseRes || null;
+    if (revisionId && data?.id) {
+      const revisionRes = await api.get(`${quoteBase}/${data.id}`, {
+        params: { revision_id: revisionId },
+      });
+      data = revisionRes.data;
+    }
 
     applyLoadedData(data, null, caseData);
     if (caseData?.org_id) {

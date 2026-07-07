@@ -405,7 +405,8 @@ export default function ServiceCaseDetail() {
   };
   const getStoredIndustrialRevisionId = () => {
     try {
-      const raw = window.sessionStorage.getItem(`industrial-quote-revision:service:${Number(caseId)}`);
+      const key = `industrial-quote-revision:service:${Number(caseId)}`;
+      const raw = window.localStorage.getItem(key) || window.sessionStorage.getItem(key);
       const parsed = Number(raw || 0);
       return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
     } catch (_) {
@@ -422,7 +423,18 @@ export default function ServiceCaseDetail() {
   useEffect(() => {
     function handleQuoteRevisionSelected(e) {
       if (Number(e?.detail?.serviceCaseId || 0) !== Number(caseId)) return;
-      setSelectedQuoteRevisionId(e?.detail?.revisionId || null);
+      const nextRevisionId = e?.detail?.revisionId || null;
+      setSelectedQuoteRevisionId(nextRevisionId);
+      try {
+        const key = `industrial-quote-revision:service:${Number(caseId)}`;
+        if (nextRevisionId) {
+          window.localStorage.setItem(key, String(nextRevisionId));
+          window.sessionStorage.setItem(key, String(nextRevisionId));
+        } else {
+          window.localStorage.removeItem(key);
+          window.sessionStorage.removeItem(key);
+        }
+      } catch (_) {}
     }
     window.addEventListener("quote-revision-selected", handleQuoteRevisionSelected);
     return () => window.removeEventListener("quote-revision-selected", handleQuoteRevisionSelected);
@@ -1409,7 +1421,12 @@ export default function ServiceCaseDetail() {
 
           {tab === "oferta" && (
             <div className="bg-white border rounded-lg p-3">
-              <QuoteEditor key={quoteReloadKey} embedded serviceCaseId={caseId} />
+              <QuoteEditor
+                key={`${quoteReloadKey}-${currentIndustrialRevisionId || "current"}`}
+                embedded
+                serviceCaseId={caseId}
+                initialRevisionId={currentIndustrialRevisionId}
+              />
             </div>
           )}
 
@@ -1543,6 +1560,7 @@ export default function ServiceCaseDetail() {
           {tab === "administracion" && (
             <AdminOpsPanel
               serviceCaseId={caseId}
+              quoteRevisionId={currentIndustrialRevisionId || null}
               deal={{
                 reference: data.reference || `#${data.id}`,
                 org_name: data.org_name || "-",

@@ -71,18 +71,57 @@ async function ensureInvoiceExtraColumns() {
   }
 }
 
+let invoiceItemSourceColumnsReady = false;
+let invoiceItemSourceColumnsPromise = null;
+
 async function ensureInvoiceItemSourceColumns() {
-  const alters = [
-    "ALTER TABLE invoice_items ADD COLUMN source_type VARCHAR(32) NULL",
-    "ALTER TABLE invoice_items ADD COLUMN source_parent_id INT NULL",
-    "ALTER TABLE invoice_items ADD COLUMN source_item_key VARCHAR(64) NULL",
-  ];
-  for (const sql of alters) {
-    try {
-      await pool.query(sql);
-    } catch (err) {
-      if (err?.code !== 'ER_DUP_FIELDNAME') throw err;
+  if (invoiceItemSourceColumnsReady) return;
+  if (invoiceItemSourceColumnsPromise) return invoiceItemSourceColumnsPromise;
+
+  invoiceItemSourceColumnsPromise = (async () => {
+    const columns = [
+      { name: 'source_type', ddl: "ALTER TABLE invoice_items ADD COLUMN source_type VARCHAR(32) NULL" },
+      { name: 'source_parent_id', ddl: "ALTER TABLE invoice_items ADD COLUMN source_parent_id INT NULL" },
+      { name: 'source_item_key', ddl: "ALTER TABLE invoice_items ADD COLUMN source_item_key VARCHAR(64) NULL" },
+    ];
+
+    const [existingRows] = await pool.query(
+      `SELECT COLUMN_NAME
+         FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'invoice_items'
+          AND COLUMN_NAME IN ('source_type','source_parent_id','source_item_key')`
+    );
+    const existing = new Set((existingRows || []).map((row) => String(row.COLUMN_NAME || '').toLowerCase()));
+
+    for (const col of columns) {
+      if (existing.has(col.name)) continue;
+      try {
+        await pool.query(col.ddl);
+      } catch (err) {
+        if (err?.code === 'ER_DUP_FIELDNAME') continue;
+        if (err?.code === 'ER_LOCK_DEADLOCK' || err?.code === 'ER_LOCK_WAIT_TIMEOUT') {
+          const [checkRows] = await pool.query(
+            `SELECT COLUMN_NAME
+               FROM information_schema.COLUMNS
+              WHERE TABLE_SCHEMA = DATABASE()
+                AND TABLE_NAME = 'invoice_items'
+                AND COLUMN_NAME = ?
+              LIMIT 1`,
+            [col.name]
+          );
+          if (checkRows?.length) continue;
+        }
+        throw err;
+      }
     }
+    invoiceItemSourceColumnsReady = true;
+  })();
+
+  try {
+    await invoiceItemSourceColumnsPromise;
+  } finally {
+    invoiceItemSourceColumnsPromise = null;
   }
 }
 
@@ -124,6 +163,53 @@ function readTaxRate(row = {}, fallback = 0) {
     row.tax_rate ?? row.taxRate ?? row.iva_rate ?? row.ivaRate ?? row.iva ?? row.tax ?? row.vat_rate ?? row.vatRate,
     fallback
   );
+}
+
+function firstPositiveSheetNumber(...values) {
+  for (const value of values) {
+    const num = toSheetNumber(value);
+    if (Number.isFinite(num) && num > 0) return num;
+  }
+  return 0;
+}
+
+function readQuoteSellUnitPrice(item = {}, match = {}, qty = 1) {
+  const quantity = Number(qty || 0) || 1;
+  const direct = firstPositiveSheetNumber(
+    item.unit_price,
+    item.unitPrice,
+    item.sale_unit_price,
+    item.sale_unit_price_input,
+    item.sale_price,
+    item.sale_price_input,
+    item.price,
+    item.precio,
+    match.unit_price,
+    match.unitPrice,
+    match.sale_unit_price,
+    match.sale_unit_price_input,
+    match.sale_price,
+    match.sale_price_input,
+    match.price,
+    match.precio
+  );
+  if (direct > 0) return direct;
+
+  const total = firstPositiveSheetNumber(
+    item.total_sales,
+    item.total_sales_gross,
+    item.sale_total_input,
+    item.total_sale,
+    item.total_sell,
+    item.total,
+    match.total_sales,
+    match.total_sales_gross,
+    match.sale_total_input,
+    match.total_sale,
+    match.total_sell,
+    match.total
+  );
+  return total > 0 ? total / quantity : 0;
 }
 
 async function fetchCostSheetInvoiceSnapshot(dealId, conn, versionNumber = null) {
@@ -295,6 +381,37 @@ async function fetchQuoteTotalUsd(dealId, conn, costSheetVersionNumber = null, q
   return rawTotal == null ? null : normalizeAmountToUsd(rawTotal, currency, exchangeRate);
 }
 
+async function fetchServiceQuoteJsonForInvoice(serviceCaseId, conn, quoteRevisionId = null) {
+  const [[quote]] = await conn.query(
+    'SELECT id, inputs_json, computed_json FROM service_quotes WHERE service_case_id = ? ORDER BY id DESC LIMIT 1',
+    [serviceCaseId]
+  );
+  if (!quote) return null;
+
+  const revisionId = Number(quoteRevisionId || 0) || null;
+  if (revisionId) {
+    const [[rev]] = await conn.query(
+      'SELECT inputs_json, computed_json FROM service_quote_revisions WHERE id = ? AND quote_id = ? LIMIT 1',
+      [revisionId, quote.id]
+    );
+    if (rev) {
+      return {
+        inputs_json: rev.inputs_json,
+        computed_json: rev.computed_json,
+        quote_id: quote.id,
+        quote_revision_id: revisionId,
+      };
+    }
+  }
+
+  return {
+    inputs_json: quote.inputs_json,
+    computed_json: quote.computed_json,
+    quote_id: quote.id,
+    quote_revision_id: null,
+  };
+}
+
 async function fetchInvoiceLockStatus({ deal_id, service_case_id, cost_sheet_version_number, quote_revision_id }) {
   if (!deal_id && !service_case_id) return { locked: false, count: 0 };
   try {
@@ -330,11 +447,8 @@ async function fetchInvoiceLockStatus({ deal_id, service_case_id, cost_sheet_ver
     throw err;
   }
 }
-async function fetchServiceQuoteTotalUsd(serviceCaseId, conn) {
-  const [[row]] = await conn.query(
-    'SELECT inputs_json, computed_json FROM service_quotes WHERE service_case_id = ? ORDER BY id DESC LIMIT 1',
-    [serviceCaseId]
-  );
+async function fetchServiceQuoteTotalUsd(serviceCaseId, conn, quoteRevisionId = null) {
+  const row = await fetchServiceQuoteJsonForInvoice(serviceCaseId, conn, quoteRevisionId);
   if (!row?.computed_json) return null;
   const inputs = asJson(row.inputs_json) || {};
   const computed = asJson(row.computed_json);
@@ -419,11 +533,8 @@ async function fetchQuoteCurrencyInfo(dealId, conn, costSheetVersionNumber = nul
   return { currency, exchange_rate };
 }
 
-async function fetchServiceQuoteCurrencyInfo(serviceCaseId, conn) {
-  const [[row]] = await conn.query(
-    'SELECT inputs_json FROM service_quotes WHERE service_case_id = ? ORDER BY id DESC LIMIT 1',
-    [serviceCaseId]
-  );
+async function fetchServiceQuoteCurrencyInfo(serviceCaseId, conn, quoteRevisionId = null) {
+  const row = await fetchServiceQuoteJsonForInvoice(serviceCaseId, conn, quoteRevisionId);
   if (!row?.inputs_json) return { currency: 'USD', exchange_rate: 1 };
   const inputs = asJson(row.inputs_json) || {};
   const currency = String(inputs.operation_currency || 'USD').toUpperCase();
@@ -670,7 +781,7 @@ async function fetchQuoteItemsForInvoice(dealId, conn, costSheetVersionNumber = 
     // fallback a inputs si no hay computed
     return inputItems.map((it, idx) => {
       const qty = Number(it.qty || 0) || 1;
-      const unitPrice = Number(it.unit_price || it.unitPrice || 0) ||
+      const unitPrice = readQuoteSellUnitPrice(it, {}, qty) ||
         Number(it.door_value_usd || 0) + Number(it.additional_usd || 0);
       const rate = readTaxRate(it, 10);
       const itemOrder = it.item_order ?? it.line_no ?? idx;
@@ -691,8 +802,7 @@ async function fetchQuoteItemsForInvoice(dealId, conn, costSheetVersionNumber = 
       inputItems[idx] ||
       {};
     const qty = Number(it.qty || match.qty || 0) || 1;
-    const unitPrice = Number(it.unit_price ?? match.unit_price ?? match.unitPrice ?? 0) ||
-      (Number(it.total_sales || 0) && qty ? Number(it.total_sales || 0) / qty : 0);
+    const unitPrice = readQuoteSellUnitPrice(it, match, qty);
     const rate = readTaxRate(match, readTaxRate(it, 10));
     const itemOrder = it.item_order ?? it.line_no ?? idx;
     return {
@@ -706,11 +816,8 @@ async function fetchQuoteItemsForInvoice(dealId, conn, costSheetVersionNumber = 
   });
 }
 
-async function fetchServiceQuoteItemsForInvoice(serviceCaseId, conn) {
-  const [[row]] = await conn.query(
-    'SELECT inputs_json, computed_json FROM service_quotes WHERE service_case_id = ? ORDER BY id DESC LIMIT 1',
-    [serviceCaseId]
-  );
+async function fetchServiceQuoteItemsForInvoice(serviceCaseId, conn, quoteRevisionId = null) {
+  const row = await fetchServiceQuoteJsonForInvoice(serviceCaseId, conn, quoteRevisionId);
   if (!row) return [];
   const inputs = asJson(row.inputs_json) || {};
   const computed = asJson(row.computed_json) || {};
@@ -723,7 +830,7 @@ async function fetchServiceQuoteItemsForInvoice(serviceCaseId, conn) {
   if (!Array.isArray(computedItems) || computedItems.length === 0) {
     return inputItems.map((it, idx) => {
       const qty = Number(it.qty || 0) || 1;
-      const unitPrice = Number(it.unit_price || it.unitPrice || 0) ||
+      const unitPrice = readQuoteSellUnitPrice(it, {}, qty) ||
         Number(it.door_value_usd || 0) + Number(it.additional_usd || 0);
       const rate = readTaxRate(it, 10);
       const itemOrder = it.item_order ?? it.line_no ?? idx;
@@ -744,8 +851,7 @@ async function fetchServiceQuoteItemsForInvoice(serviceCaseId, conn) {
       inputItems[idx] ||
       {};
     const qty = Number(it.qty || match.qty || 0) || 1;
-    const unitPrice = Number(it.unit_price ?? match.unit_price ?? match.unitPrice ?? 0) ||
-      (Number(it.total_sales || 0) && qty ? Number(it.total_sales || 0) / qty : 0);
+    const unitPrice = readQuoteSellUnitPrice(it, match, qty);
     const rate = readTaxRate(match, readTaxRate(it, 10));
     const itemOrder = it.item_order ?? it.line_no ?? idx;
     return {
@@ -773,7 +879,7 @@ async function fetchServiceQuoteAdditionItemsForInvoice(additionId, conn) {
   if (!Array.isArray(computedItems) || computedItems.length === 0) {
     return inputItems.map((it, idx) => {
       const qty = Number(it.qty || 0) || 1;
-      const unitPrice = Number(it.unit_price || it.unitPrice || 0) ||
+      const unitPrice = readQuoteSellUnitPrice(it, {}, qty) ||
         Number(it.door_value_usd || 0) + Number(it.additional_usd || 0);
       const rate = readTaxRate(it, 10);
       const itemOrder = it.item_order ?? it.line_no ?? idx;
@@ -794,8 +900,7 @@ async function fetchServiceQuoteAdditionItemsForInvoice(additionId, conn) {
       inputItems[idx] ||
       {};
     const qty = Number(it.qty || match.qty || 0) || 1;
-    const unitPrice = Number(it.unit_price ?? match.unit_price ?? match.unitPrice ?? 0) ||
-      (Number(it.total_sales || 0) && qty ? Number(it.total_sales || 0) / qty : 0);
+    const unitPrice = readQuoteSellUnitPrice(it, match, qty);
     const rate = readTaxRate(match, readTaxRate(it, 10));
     const itemOrder = it.item_order ?? it.line_no ?? idx;
     return {
@@ -897,11 +1002,11 @@ async function assertDealQuoteItemsAvailable(dealId, selectedKeys, percentage, c
 }
 
 
-async function fetchServiceCaseBillableItems(serviceCaseId, conn) {
+async function fetchServiceCaseBillableItems(serviceCaseId, conn, quoteRevisionId = null) {
   await ensureInvoiceItemSourceColumns();
-  const quoteItems = await fetchServiceQuoteItemsForInvoice(serviceCaseId, conn);
+  const quoteItems = await fetchServiceQuoteItemsForInvoice(serviceCaseId, conn, quoteRevisionId);
   if (!quoteItems.length) return [];
-  const quoteCurrency = await fetchServiceQuoteCurrencyInfo(serviceCaseId, conn);
+  const quoteCurrency = await fetchServiceQuoteCurrencyInfo(serviceCaseId, conn, quoteRevisionId);
   const billCurrency = String(quoteCurrency?.currency || 'USD').toUpperCase();
 
   const [rows] = await conn.query(
@@ -916,11 +1021,12 @@ async function fetchServiceCaseBillableItems(serviceCaseId, conn) {
        INNER JOIN invoices i ON i.id = ii.invoice_id
       WHERE i.service_case_id = ?
         AND i.status <> 'anulada'
+        AND (? IS NULL OR i.quote_revision_id = ?)
         AND ii.source_type = 'service_quote'
         AND ii.source_parent_id = ?
         AND ii.source_item_key IS NOT NULL
       GROUP BY ii.source_item_key`,
-    [serviceCaseId, serviceCaseId]
+    [serviceCaseId, quoteRevisionId || null, quoteRevisionId || null, serviceCaseId]
   );
   const usedMap = new Map((rows || []).map((row) => [String(row.source_item_key || ''), row]));
   return quoteItems.map((item, idx) => {
@@ -953,8 +1059,8 @@ async function fetchServiceCaseBillableItems(serviceCaseId, conn) {
   });
 }
 
-async function assertServiceQuoteItemsAvailable(serviceCaseId, selectedKeys, percentage, conn) {
-  const billableItems = await fetchServiceCaseBillableItems(serviceCaseId, conn);
+async function assertServiceQuoteItemsAvailable(serviceCaseId, selectedKeys, percentage, conn, quoteRevisionId = null) {
+  const billableItems = await fetchServiceCaseBillableItems(serviceCaseId, conn, quoteRevisionId);
   const wanted = new Set((selectedKeys || []).map((key) => String(key || '')));
   const pct = Number(percentage || 100);
   const selected = billableItems.filter((item) => wanted.has(String(item.source_item_key)));
@@ -2676,7 +2782,7 @@ router.get('/billable-items', requireAuth, async (req, res) => {
     }
     const items = dealId
       ? await fetchDealQuoteBillableItems(dealId, conn, costSheetVersionNumber, quoteRevisionId)
-      : await fetchServiceCaseBillableItems(serviceCaseId, conn);
+      : await fetchServiceCaseBillableItems(serviceCaseId, conn, quoteRevisionId);
     res.json(items);
   } catch (e) {
     console.error('[invoices] billable-items error:', e);
@@ -2891,14 +2997,14 @@ router.post('/', requireAuth, async (req, res) => {
       ? await fetchQuoteCurrencyInfo(deal_id, conn, costSheetVersionNumber, quoteRevisionId)
       : useAddition
       ? await fetchServiceQuoteAdditionCurrencyInfo(Number(service_quote_addition_id), conn)
-      : await fetchServiceQuoteCurrencyInfo(effectiveServiceCaseId, conn);
+      : await fetchServiceQuoteCurrencyInfo(effectiveServiceCaseId, conn, quoteRevisionId);
     const quoteTotalUsd = containerBilling
       ? null
       : deal_id
       ? await fetchQuoteTotalUsd(deal_id, conn, costSheetVersionNumber, quoteRevisionId)
       : useAddition
       ? await fetchServiceQuoteAdditionTotalUsd(Number(service_quote_addition_id), conn)
-      : await fetchServiceQuoteTotalUsd(effectiveServiceCaseId, conn);
+      : await fetchServiceQuoteTotalUsd(effectiveServiceCaseId, conn, quoteRevisionId);
     const fallbackDealValueUsd =
       deal && quoteTotalUsd == null
         ? normalizeAmountToUsd(deal.deal_value, quoteCurrency.currency, quoteCurrency.exchange_rate)
@@ -3014,11 +3120,11 @@ router.post('/', requireAuth, async (req, res) => {
       ? await fetchQuoteItemsForInvoice(deal_id, conn, costSheetVersionNumber, quoteRevisionId)
       : useAddition
       ? await fetchServiceQuoteAdditionItemsForInvoice(Number(service_quote_addition_id), conn)
-      : await fetchServiceQuoteItemsForInvoice(effectiveServiceCaseId, conn);
+      : await fetchServiceQuoteItemsForInvoice(effectiveServiceCaseId, conn, quoteRevisionId);
     if (hasSelectedQuoteItems) {
       const selectedPendingItems = deal_id
         ? await assertDealQuoteItemsAvailable(Number(deal_id), selectedQuoteItems, perc, conn, costSheetVersionNumber, quoteRevisionId)
-        : await assertServiceQuoteItemsAvailable(Number(effectiveServiceCaseId), selectedQuoteItems, perc, conn);
+        : await assertServiceQuoteItemsAvailable(Number(effectiveServiceCaseId), selectedQuoteItems, perc, conn, quoteRevisionId);
       if (!selectedPendingItems.length) {
         await conn.rollback();
         return res.status(400).json({ error: 'Los items seleccionados ya no estan pendientes de facturar.' });
