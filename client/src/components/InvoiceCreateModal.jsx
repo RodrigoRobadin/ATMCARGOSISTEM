@@ -1,4 +1,4 @@
-﻿// client/src/components/InvoiceCreateModal.jsx
+// client/src/components/InvoiceCreateModal.jsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { api, fetchUsersByRole } from '../api';
 
@@ -64,6 +64,7 @@ export default function InvoiceCreateModal({
   const [dueDateTouched, setDueDateTouched] = useState(false);
   const [currencyTouched, setCurrencyTouched] = useState(false);
   const [invoiceProgress, setInvoiceProgress] = useState({ usedPercentages: [], usedTotal: 0 });
+  const [invoicePreview, setInvoicePreview] = useState({ loading: false, items: [], totals: null, error: "" });
   const hasSelectedQuoteItems = Array.isArray(defaultSelectedQuoteItems) && defaultSelectedQuoteItems.length > 0;
   const isContainerBilling = Boolean(defaultContainerBillingCycleId || form.container_billing_cycle_id);
   const isContainerInitialInvoice = !isContainerBilling && String(businessUnitKey || "").toLowerCase() === "atm-container";
@@ -105,6 +106,40 @@ export default function InvoiceCreateModal({
   const normalizeCurrencyCode = (value) => {
     const code = String(value || 'USD').toUpperCase();
     return code === 'GS' ? 'PYG' : code;
+  };
+
+  const formatMoney = (value, currency = form.currency_code) => {
+    const code = normalizeCurrencyCode(currency);
+    const decimals = code === "PYG" ? 0 : 2;
+    return `${code} ${Number(value || 0).toLocaleString("es-PY", {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    })}`;
+  };
+
+  const splitTaxFromGross = (grossValue, taxRateValue) => {
+    const gross = Number(grossValue || 0) || 0;
+    const rate = Number(taxRateValue || 0) || 0;
+    if (rate >= 9) {
+      const tax = gross / 11;
+      return { base: gross - tax, tax };
+    }
+    if (rate >= 4) {
+      const tax = gross / 21;
+      return { base: gross - tax, tax };
+    }
+    return { base: gross, tax: 0 };
+  };
+
+  const convertPreviewAmount = (amount, fromCurrency, toCurrency) => {
+    const from = normalizeCurrencyCode(fromCurrency);
+    const to = normalizeCurrencyCode(toCurrency);
+    const value = Number(amount || 0) || 0;
+    if (from === to) return value;
+    const rate = Number(form.exchange_rate || quoteCurrencyInfo.exchange_rate || 0) || 0;
+    if (from === "USD" && to === "PYG") return value * (rate || 1);
+    if (from === "PYG" && to === "USD") return rate > 0 ? value / rate : 0;
+    return value;
   };
 
   const getSuggestedExchangeRate = (info, fallback = 1) => {
@@ -170,7 +205,7 @@ export default function InvoiceCreateModal({
     if (defaultServiceQuoteAdditionId) {
       loadServiceAdditionQuoteCurrency(defaultServiceQuoteAdditionId);
     } else if (serviceCaseId) {
-      loadServiceQuoteCurrency(serviceCaseId);
+      loadServiceQuoteCurrency(serviceCaseId, defaultQuoteRevisionId || null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultDealId, defaultServiceCaseId, defaultServiceQuoteAdditionId, defaultContainerBillingCycleId, defaultContainerBillingCycle, defaultCostSheetVersionNumber, defaultQuoteRevisionId, containerBilling, form.deal_id, form.service_case_id, businessUnitKey, currencyTouched]);
@@ -447,8 +482,23 @@ export default function InvoiceCreateModal({
     }
   }
 
-  async function loadServiceQuoteCurrency(serviceCaseId) {
+  async function loadServiceQuoteCurrency(serviceCaseId, revisionId = null) {
     try {
+      if (revisionId) {
+        const { data: items } = await api.get('/invoices/billable-items', {
+          params: { service_case_id: serviceCaseId, quote_revision_id: revisionId },
+        });
+        const firstCurrency = Array.isArray(items) ? items.find((item) => item?.currency_code)?.currency_code : null;
+        if (firstCurrency) {
+          const curr = normalizeCurrencyCode(firstCurrency);
+          setQuoteCurrencyInfo({ currency: curr, exchange_rate: Number(form.exchange_rate || 1) || 1 });
+          setForm((prev) => {
+            if (currencyTouched) return prev;
+            return { ...prev, currency_code: curr, exchange_rate: prev.exchange_rate || 1 };
+          });
+          return;
+        }
+      }
       const { data } = await api.get(`/service/cases/${serviceCaseId}/quote`);
       const inputs = data?.inputs || {};
       const curr = String(inputs.operation_currency || 'USD').toUpperCase();
@@ -613,6 +663,95 @@ export default function InvoiceCreateModal({
     })();
   }, [timbreFetched]);
 
+  const buildBillableItemsParams = () => {
+    const dealId = form.deal_id ? Number(form.deal_id) : null;
+    const serviceCaseId = form.service_case_id ? Number(form.service_case_id) : null;
+    if (!dealId && !serviceCaseId) return null;
+    return dealId
+      ? {
+          deal_id: dealId,
+          cost_sheet_version_number: defaultCostSheetVersionNumber || undefined,
+          quote_revision_id: defaultQuoteRevisionId || undefined,
+        }
+      : { service_case_id: serviceCaseId, quote_revision_id: defaultQuoteRevisionId || undefined };
+  };
+
+  const buildPreview = (items, pct) => {
+    const selectedKeys = new Set(defaultSelectedQuoteItems.map((key) => String(key || '')));
+    const sourceItems = hasSelectedQuoteItems
+      ? items.filter((item) => selectedKeys.has(String(item.source_item_key || '')))
+      : items.filter((item) => item.pending);
+    const factor = Number(pct || 100) / 100;
+    const rows = sourceItems.map((item, idx) => {
+      const sourceCurrency = normalizeCurrencyCode(item.currency_code || quoteCurrencyInfo.currency || form.currency_code);
+      const targetCurrency = normalizeCurrencyCode(form.currency_code || sourceCurrency);
+      const sourceTotal = Number(item.total || 0) || 0;
+      const gross = convertPreviewAmount(sourceTotal, sourceCurrency, targetCurrency) * factor;
+      const taxRate = Number(item.tax_rate ?? 0) || 0;
+      const split = splitTaxFromGross(gross, taxRate);
+      return {
+        key: item.source_item_key || `${idx}`,
+        description: item.description || 'Item',
+        quantity: Number(item.quantity || 1) || 1,
+        tax_rate: taxRate,
+        gross,
+        base: split.base,
+        tax: split.tax,
+        currency_code: targetCurrency,
+      };
+    });
+    const totals = rows.reduce((acc, row) => {
+      acc.gross += row.gross;
+      acc.tax += row.tax;
+      if (row.tax_rate >= 9) acc.vat10 += row.gross;
+      else if (row.tax_rate >= 4) acc.vat5 += row.gross;
+      else acc.exempt += row.gross;
+      return acc;
+    }, { gross: 0, tax: 0, vat10: 0, vat5: 0, exempt: 0 });
+    return { rows, totals };
+  };
+
+  useEffect(() => {
+    let live = true;
+    const pct = form.mode === 'percentage' ? Number(form.percentage || 100) : 100;
+
+    if (isContainerBilling) {
+      const amount = Number(containerBilling?.amount ?? containerBilling?.total_amount ?? containerBilling?.monthly_amount ?? containerBilling?.billing_amount ?? 0) || 0;
+      const currency = normalizeCurrencyCode(containerBilling?.currency_code || form.currency_code || 'PYG');
+      const split = splitTaxFromGross(amount, 10);
+      setInvoicePreview({
+        loading: false,
+        error: '',
+        items: [{ key: 'container', description: containerSourceLabel || 'Mensualidad ATM CONTAINER', quantity: 1, tax_rate: 10, gross: amount, base: split.base, tax: split.tax, currency_code: currency }],
+        totals: { gross: amount, tax: split.tax, vat10: amount, vat5: 0, exempt: 0 },
+      });
+      return undefined;
+    }
+
+    const params = buildBillableItemsParams();
+    if (!params) {
+      setInvoicePreview({ loading: false, items: [], totals: null, error: '' });
+      return undefined;
+    }
+
+    setInvoicePreview((prev) => ({ ...prev, loading: true, error: '' }));
+    api.get('/invoices/billable-items', { params })
+      .then(({ data }) => {
+        if (!live) return;
+        const items = Array.isArray(data) ? data : [];
+        const preview = buildPreview(items, pct);
+        setInvoicePreview({ loading: false, error: '', items: preview.rows, totals: preview.totals });
+      })
+      .catch((err) => {
+        if (!live) return;
+        setInvoicePreview({ loading: false, items: [], totals: null, error: err?.response?.data?.error || 'No se pudo cargar la vista previa.' });
+      });
+
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.deal_id, form.service_case_id, form.currency_code, form.exchange_rate, form.mode, form.percentage, defaultCostSheetVersionNumber, defaultQuoteRevisionId, defaultSelectedQuoteItems.join('|'), containerBilling?.id]);
   async function validateInvoiceHasAmount(pct) {
     if (isContainerBilling) {
       const amount = Number(
@@ -718,14 +857,96 @@ export default function InvoiceCreateModal({
     }
   }
 
+  const InvoicePreviewPanel = () => (
+    <aside className="w-full max-w-5xl xl:w-[430px] xl:max-w-[430px] xl:sticky xl:top-6 max-h-[90vh] overflow-y-auto rounded-lg border bg-white p-4 shadow-xl">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <h4 className="text-sm font-semibold text-slate-900">Vista previa de factura</h4>
+          <p className="text-xs text-slate-500">Items, impuestos y montos antes de crear.</p>
+        </div>
+        {invoicePreview.loading && <span className="text-xs text-slate-500">Cargando...</span>}
+      </div>
+
+      {invoicePreview.error ? (
+        <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {invoicePreview.error}
+        </div>
+      ) : invoicePreview.items.length === 0 ? (
+        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
+          Selecciona una operacion, servicio o items para ver la vista previa.
+        </div>
+      ) : (
+        <>
+          <div className="overflow-auto rounded border bg-white">
+            <table className="min-w-full text-xs">
+              <thead className="bg-slate-800 text-white">
+                <tr>
+                  <th className="px-2 py-2 text-center">Cant.</th>
+                  <th className="px-2 py-2 text-left">Descripcion</th>
+                  <th className="px-2 py-2 text-right">Precio unit.</th>
+                  <th className="px-2 py-2 text-right">IVA</th>
+                  <th className="px-2 py-2 text-right">Valor</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {invoicePreview.items.map((item, index) => {
+                  const quantity = Number(item.quantity || 1) || 1;
+                  const gross = Number(item.gross || 0) || 0;
+                  const unitPrice = quantity ? gross / quantity : gross;
+                  return (
+                    <tr key={`${item.key || item.source_item_key || item.description || 'item'}-${index}`}>
+                      <td className="px-2 py-2 align-top text-center text-slate-700">{quantity.toLocaleString('es-PY')}</td>
+                      <td className="px-2 py-2 align-top text-slate-800">
+                        <div className="font-medium">{item.description || 'Item'}</div>
+                        {item.source_label && <div className="text-[11px] text-slate-500">{item.source_label}</div>}
+                      </td>
+                      <td className="px-2 py-2 align-top text-right text-slate-700">{formatMoney(unitPrice, item.currency_code || form.currency_code)}</td>
+                      <td className="px-2 py-2 align-top text-right text-slate-700">
+                        {Number(item.tax_rate || 0) > 0 ? `${Number(item.tax_rate)}%` : 'Exenta'}
+                      </td>
+                      <td className="px-2 py-2 align-top text-right font-semibold text-slate-900">
+                        {formatMoney(gross, item.currency_code || form.currency_code)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {invoicePreview.totals && (
+            <div className="mt-3 rounded border bg-slate-50 p-3 text-sm">
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                <span className="text-slate-600">Exentas</span>
+                <span className="text-right font-medium">{formatMoney(invoicePreview.totals.exempt, form.currency_code)}</span>
+                <span className="text-slate-600">Gravadas 5%</span>
+                <span className="text-right font-medium">{formatMoney(invoicePreview.totals.vat5, form.currency_code)}</span>
+                <span className="text-slate-600">Gravadas 10%</span>
+                <span className="text-right font-medium">{formatMoney(invoicePreview.totals.vat10, form.currency_code)}</span>
+                <span className="text-slate-600">IVA incluido</span>
+                <span className="text-right font-medium">{formatMoney(invoicePreview.totals.tax, form.currency_code)}</span>
+                <span className="border-t pt-2 font-semibold text-slate-900">Total</span>
+                <span className="border-t pt-2 text-right font-bold text-slate-900">{formatMoney(invoicePreview.totals.gross, form.currency_code)}</span>
+              </div>
+              {requiresExchangeRate && (
+                <p className="pt-2 text-[11px] text-slate-500">
+                  Convertido desde {quoteCurrencyInfo.currency || 'la moneda del presupuesto'} con TC {form.exchange_rate || '-'}.
+                </p>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </aside>
+  );
   return (
-    <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 md:p-6 z-50">
+    <div className="fixed inset-0 bg-black/30 z-50 overflow-y-auto">
+      <div className="flex min-h-full w-full flex-col xl:flex-row items-start justify-center gap-4 p-4 md:p-6">
       <div className="bg-white rounded-lg p-6 w-full max-w-5xl shadow-xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-bold">Nueva factura</h3>
           <button onClick={onClose} className="text-2xl leading-none">×</button>
         </div>
-
         <form onSubmit={handleSubmit} className="space-y-4">
           {isContainerBilling && (
             <div className="rounded-lg border bg-slate-50 px-4 py-3 text-sm">
@@ -1172,6 +1393,8 @@ export default function InvoiceCreateModal({
           </div>
         </form>
       </div>
+      <InvoicePreviewPanel />
     </div>
+  </div>
   );
 }
