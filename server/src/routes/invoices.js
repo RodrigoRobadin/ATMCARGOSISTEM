@@ -3688,7 +3688,15 @@ router.post('/:id/issue', requireAuth, async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const { id } = req.params;
-    const [[invoice]] = await conn.query('SELECT * FROM invoices WHERE id = ?', [id]);
+    const [[invoice]] = await conn.query(
+      `SELECT i.*,
+              COALESCE(bu.key_slug, CASE WHEN i.service_case_id IS NOT NULL THEN 'atm-industrial' ELSE '' END) AS business_unit_key
+         FROM invoices i
+         LEFT JOIN deals d ON d.id = i.deal_id
+         LEFT JOIN business_units bu ON bu.id = d.business_unit_id
+        WHERE i.id = ?`,
+      [id]
+    );
     if (!invoice) {
       conn.release();
       return res.status(404).json({ error: 'Factura no encontrada' });
@@ -3702,14 +3710,32 @@ router.post('/:id/issue', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Solo se puede emitir desde borrador' });
     }
 
+    const fiscalDefaults = await peekInvoiceDefaults({ buKey: invoice.business_unit_key || '' }, conn);
+    const fiscalValidation = validateInvoiceFiscalConfig(fiscalDefaults, new Date());
+    if (!fiscalValidation.ok) {
+      return res.status(400).json({
+        error: 'La configuracion fiscal de facturacion esta incompleta o invalida.',
+        details: fiscalValidation.problems,
+      });
+    }
+
     await conn.beginTransaction();
     await conn.query(
       `UPDATE invoices 
          SET status = 'emitida',
              issue_date = CURDATE(),
-             issued_by = ?
+             issued_by = ?,
+             timbrado_number = ?,
+             timbrado_start_date = ?,
+             timbrado_expires_at = ?
        WHERE id = ?`,
-      [req.user.id, id]
+      [
+        req.user.id,
+        fiscalDefaults.timbrado_number || invoice.timbrado_number || '',
+        fiscalDefaults.timbrado_start_date || invoice.timbrado_start_date || null,
+        fiscalDefaults.timbrado_expires_at || invoice.timbrado_expires_at || null,
+        id,
+      ]
     );
     await conn.commit();
 
