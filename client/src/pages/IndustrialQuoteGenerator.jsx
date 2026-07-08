@@ -76,8 +76,15 @@ const money = (n, decimalsHint) => {
 
 };
 
+const moneyByCurrency = (n, currencyCode = 'USD', decimalsHint) => {
 
+  const curr = String(currencyCode || 'USD').toUpperCase();
 
+  const isPyg = curr === 'PYG' || curr === 'GS';
+
+  return money(n, isPyg ? 0 : decimalsHint);
+
+};
 const num = (v) => {
 
   if (v === '' || v === null || v === undefined) return 0;
@@ -763,7 +770,7 @@ export default function QuoteGenerator(){
   const [quoteRecordId, setQuoteRecordId] = useState(null);
   const [opCurrency, setOpCurrency] = useState('USD');
   const [opRate, setOpRate] = useState(1);
-  const currencyLabel = (opCurrency === 'PYG' || opCurrency === 'GS') ? 'Gs' : 'USD';
+  const currencyLabel = (opCurrency === 'PYG' || opCurrency === 'GS') ? 'PYG' : 'USD';
 
 
 
@@ -3392,15 +3399,17 @@ CORDIALES SALUDOS`,
 
                     <td className="px-2 py-1 text-right">
 
-                      {money(num(it.precio), decimalsFrom(it.precio))}
+                      {moneyByCurrency(num(it.precio), opCurrency, decimalsFrom(it.precio))}
 
                     </td>
 
                     <td className="px-2 py-1 text-right">
 
-                      {money(
+                      {moneyByCurrency(
 
                         (num(it.cantidad) || 1) * num(it.precio),
+
+                        opCurrency,
 
                         Math.max(decimalsFrom(it.precio), decimalsFrom(it.cantidad))
 
@@ -3420,7 +3429,7 @@ CORDIALES SALUDOS`,
 
                   <td colSpan={5} className="px-2 py-2 font-semibold text-right">TOTAL {currencyLabel}</td>
 
-                  <td className="px-2 py-2 font-extrabold text-right">{money(totalCurrency, totalCurrencyDecimals)}</td>
+                  <td className="px-2 py-2 font-extrabold text-right">{moneyByCurrency(totalCurrency, opCurrency, totalCurrencyDecimals)}</td>
 
                 </tr>
 
@@ -3931,7 +3940,7 @@ function ItemsTable({
 
         <button className="px-3 py-1 rounded bg-blue-600 text-white" onClick={addItem}>+ Agregar ítem</button>
 
-        <div className="text-sm font-bold">TOTAL {currencyLabel} {money(totalCurrency, decimalsForTotal)}</div>
+        <div className="text-sm font-bold">TOTAL {currencyLabel} {moneyByCurrency(totalCurrency, currencyCode, decimalsForTotal)}</div>
 
       </div>
 
@@ -4418,8 +4427,8 @@ function FormalQuoteDocument({
                     <RichTextContent html={it?.observacion_html || it?.observacion} />
                   </td>
                   <td className="formal-center">{it?.moneda || currencyCode}</td>
-                  <td className="formal-right">{money(unitPrice, decimalsFrom(it?.precio))}</td>
-                  <td className="formal-right">{money(total, Math.max(decimalsFrom(it?.precio), decimalsFrom(it?.cantidad)))}</td>
+                  <td className="formal-right">{moneyByCurrency(unitPrice, currencyCode, decimalsFrom(it?.precio))}</td>
+                  <td className="formal-right">{moneyByCurrency(total, currencyCode, Math.max(decimalsFrom(it?.precio), decimalsFrom(it?.cantidad)))}</td>
                 </tr>
               );
             }) : (
@@ -4433,7 +4442,7 @@ function FormalQuoteDocument({
         <div className="formal-total-box">
           <div className="formal-total-label">Total</div>
           <div className="formal-center">{currencyLabel}</div>
-          <div className="formal-right">{money(totalCurrency, totalCurrencyDecimals)}</div>
+          <div className="formal-right">{moneyByCurrency(totalCurrency, currencyCode, totalCurrencyDecimals)}</div>
         </div>
 
         {String(observations || '').trim() ? (

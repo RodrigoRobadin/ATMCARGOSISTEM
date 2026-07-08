@@ -1720,6 +1720,13 @@ function validateInvoiceFiscalConfig(defaults, issueDate = new Date()) {
   };
 }
 
+const DEFAULT_INVOICE_ISSUER_RUC = '80056641-6';
+
+function resolveInvoiceIssuerRuc() {
+  const configured = String(process.env.INVOICE_ISSUER_RUC || '').trim();
+  if (!configured || configured === '80056841-6') return DEFAULT_INVOICE_ISSUER_RUC;
+  return configured;
+}
 async function resolveInvoiceFiscalForPdf(invoice, conn = pool) {
   const status = String(invoice?.status || '').toLowerCase();
   const isDraft = !status || status === 'borrador' || status === 'draft';
@@ -3521,7 +3528,7 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
 
     const issuer = {
       name: process.env.INVOICE_ISSUER_NAME || 'ATM CARGO S.R.L.',
-      ruc: process.env.INVOICE_ISSUER_RUC || '80056841-6',
+      ruc: resolveInvoiceIssuerRuc(),
       phone: process.env.INVOICE_ISSUER_PHONE || '+595 21 490382',
       address:
         process.env.INVOICE_ISSUER_ADDRESS || 'Cap. Milciades Urbieta 175 e/ Rio de Janeiro y Mcal. Lopez',
@@ -3873,7 +3880,7 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
 
     const issuer = {
       name: process.env.INVOICE_ISSUER_NAME || 'ATM CARGO S.R.L.',
-      ruc: process.env.INVOICE_ISSUER_RUC || '80056841-6',
+      ruc: resolveInvoiceIssuerRuc(),
       phone: process.env.INVOICE_ISSUER_PHONE || '+595 21 490382',
       address:
         process.env.INVOICE_ISSUER_ADDRESS || 'Cap. Milciades Urbieta 175 e/ Rio de Janeiro y Mcal. Lopez',
@@ -4272,7 +4279,7 @@ router.get('/credit-notes/:id/pdf', requireAuth, async (req, res) => {
 
     const issuer = {
       name: process.env.INVOICE_ISSUER_NAME || 'ATM CARGO S.R.L.',
-      ruc: process.env.INVOICE_ISSUER_RUC || '80056841-6',
+      ruc: resolveInvoiceIssuerRuc(),
       phone: process.env.INVOICE_ISSUER_PHONE || '+595 21 490382',
       address:
         process.env.INVOICE_ISSUER_ADDRESS || 'Cap. Milciades Urbieta 175 e/ Rio de Janeiro y Mcal. Lopez',

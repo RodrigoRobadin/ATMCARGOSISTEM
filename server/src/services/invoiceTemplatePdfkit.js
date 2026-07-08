@@ -26,12 +26,20 @@ function fmtGs(n, { decimals = false } = {}) {
 
 function normalizeCurrencyLabel(code = '') {
   const c = String(code || '').trim().toUpperCase();
-  if (!c) return 'GS';
-  if (c === 'PYG' || c === 'GS' || c === '₲') return 'GS';
+  if (!c) return 'PYG';
+  if (c === 'PYG' || c === 'GS' || c === '₲' || c === 'â‚²') return 'PYG';
   if (c === 'USD' || c === 'US$' || c === '$') return 'USD';
   return c;
 }
 
+function currencyHasDecimals(currencyLabel) {
+  const c = String(currencyLabel || '').trim().toUpperCase();
+  return !(c === 'PYG' || c === 'GS' || c === '₲' || c === 'â‚²');
+}
+
+function fmtMoneyByCurrency(value, currencyLabel) {
+  return fmtGs(value, { decimals: currencyHasDecimals(currencyLabel) });
+}
 function numberToWordsEs(n) {
   const num = Math.floor(Number(n || 0));
   if (!Number.isFinite(num)) return '';
@@ -87,8 +95,9 @@ function amountToWords(amount, currencyLabel) {
   const words = numberToWordsEs(whole);
   const curr =
     currencyLabel === 'USD' ? 'DOLARES' :
-    currencyLabel === 'GS' ? 'GUARANIES' :
+    (currencyLabel === 'PYG' || currencyLabel === 'GS') ? 'GUARANIES' :
     currencyLabel;
+  if (currencyLabel === 'PYG' || currencyLabel === 'GS') return `${words} ${curr}`;
   const centsWords = cents ? numberToWordsEs(cents) : 'CERO';
   return `${words} CON ${centsWords} CENTAVOS ${curr}`;
 }
@@ -204,35 +213,76 @@ function drawHeader(doc, data, y) {
 }
 
 function drawClientBox(doc, data, y) {
+  const boxX = M;
+  const boxW = W;
   const leftX = M + 10;
   const rightX = M + 340;
-  const notesY = y + 10 + (14 * 6);
-  const notesText = data.notas || '-';
-  doc.font('Helvetica').fontSize(9);
-  const notesW = W - 145;
-  const notesH = Math.max(14, doc.heightOfString(notesText, { width: notesW }));
-  const box = { x: M, y, w: W, h: Math.max(CLIENT_BOX_H, (notesY - y) + notesH + 14) };
+  const topPad = 10;
+  const bottomPad = 14;
+  const rowGap = 4;
+  const minRowH = 14;
+
+  const leftLabelW = 120;
+  const rightLabelW = 130;
+  const leftValueW = Math.max(120, rightX - leftX - leftLabelW - 18);
+  const rightValueW = Math.max(120, M + W - rightX - rightLabelW - 12);
+  const notesValueW = Math.max(240, W - leftLabelW - 24);
+
+  const pairs = [
+    [
+      { label: 'FECHA DE EMISION:', value: data.fechaEmision, x: leftX, labelW: leftLabelW, valueW: leftValueW },
+      { label: 'HORA:', value: data.hora, x: rightX, labelW: rightLabelW, valueW: rightValueW },
+    ],
+    [
+      { label: 'RAZON SOCIAL:', value: data.clienteNombre, x: leftX, labelW: leftLabelW, valueW: leftValueW },
+      { label: 'RUC:', value: data.clienteRuc, x: rightX, labelW: rightLabelW, valueW: rightValueW },
+    ],
+    [
+      { label: 'DIRECCION:', value: data.clienteDireccion, x: leftX, labelW: leftLabelW, valueW: leftValueW },
+      { label: 'FACTURA AFECTADA:', value: data.facturaAfectada, x: rightX, labelW: rightLabelW, valueW: rightValueW },
+    ],
+    [
+      { label: 'TELEFONO:', value: data.clienteTelefono, x: leftX, labelW: leftLabelW, valueW: leftValueW },
+      { label: 'CONDICION DE VENTA:', value: data.condicionVenta, x: rightX, labelW: rightLabelW, valueW: rightValueW },
+    ],
+    [
+      { label: 'CORREO ELECTRONICO:', value: data.clienteEmail, x: leftX, labelW: leftLabelW, valueW: leftValueW },
+      { label: 'MONEDA:', value: data.moneda, x: rightX, labelW: rightLabelW, valueW: rightValueW },
+    ],
+  ];
+
+  const measureValue = (row) => {
+    doc.font('Helvetica').fontSize(9);
+    return Math.max(minRowH, doc.heightOfString(row.value || '-', { width: row.valueW }));
+  };
+  const rowHeights = pairs.map(([left, right]) => Math.max(minRowH, measureValue(left), measureValue(right)));
+  const notesRow = { label: 'NOTAS:', value: data.notas || '-', x: leftX, labelW: leftLabelW, valueW: notesValueW };
+  const notesH = Math.max(minRowH, measureValue(notesRow));
+  const contentH = rowHeights.reduce((acc, h) => acc + h + rowGap, 0) + notesH;
+  const box = { x: boxX, y, w: boxW, h: Math.max(CLIENT_BOX_H, topPad + contentH + bottomPad) };
+
   drawBox(doc, box);
-  let ly = box.y + 10;
-  let ry = box.y + 10;
-  drawLabelValueRow(doc, { label: 'FECHA DE EMISION:', value: data.fechaEmision, x: leftX, y: ly });
-  drawLabelValueRow(doc, { label: 'HORA:', value: data.hora, x: rightX, y: ry });
-  ly += 14; ry += 14;
-  drawLabelValueRow(doc, { label: 'RAZON SOCIAL:', value: data.clienteNombre, x: leftX, y: ly });
-  drawLabelValueRow(doc, { label: 'RUC:', value: data.clienteRuc, x: rightX, y: ry });
-  ly += 14; ry += 14;
-  drawLabelValueRow(doc, { label: 'DIRECCION:', value: data.clienteDireccion, x: leftX, y: ly });
-  ry += 14;
-  drawLabelValueRow(doc, { label: 'FACTURA AFECTADA:', value: data.facturaAfectada, x: rightX, y: ry });
-  ry += 14;
-  drawLabelValueRow(doc, { label: 'TELEFONO:', value: data.clienteTelefono, x: leftX, y: (ly += 14) });
-  drawLabelValueRow(doc, { label: 'CONDICION DE VENTA:', value: data.condicionVenta, x: rightX, y: ry });
-  drawLabelValueRow(doc, { label: 'CORREO ELECTRONICO:', value: data.clienteEmail, x: leftX, y: (ly += 14) });
-  drawLabelValueRow(doc, { label: 'MONEDA:', value: data.moneda, x: rightX, y: (ry += 14) });
-  drawLabelValueRow(doc, { label: 'NOTAS:', value: data.notas, x: leftX, y: Math.max(ly, ry) + 16, wLabel: 120, wValue: notesW });
+
+  const drawRow = (row, rowY) => {
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(COLORS.gray).text(row.label, row.x, rowY, {
+      width: row.labelW,
+      lineBreak: false,
+    });
+    doc.font('Helvetica').fontSize(9).fillColor(COLORS.grayLight).text(row.value || '-', row.x + row.labelW, rowY, {
+      width: row.valueW,
+    });
+  };
+
+  let cursorY = box.y + topPad;
+  pairs.forEach(([left, right], idx) => {
+    drawRow(left, cursorY);
+    drawRow(right, cursorY);
+    cursorY += rowHeights[idx] + rowGap;
+  });
+  drawRow(notesRow, cursorY);
+
   return box.y + box.h;
 }
-
 function drawReference(doc, data, y) {
   doc
     .font('Helvetica-Bold')
@@ -267,14 +317,14 @@ function drawItems(doc, items, yStart, colX, colW, currencyLabel) {
   let y = yStart;
   const rowH = 22;
   items.forEach((it) => {
-    const exentasText = it.taxType === 'EXENTA' ? fmtGs(it.total, { decimals: true }) : '';
-    const vat5Text = it.taxType === 'IVA5' ? fmtGs(it.total, { decimals: true }) : '';
-    const vat10Text = it.taxType === 'IVA10' ? fmtGs(it.total, { decimals: true }) : '';
+    const exentasText = it.taxType === 'EXENTA' ? fmtMoneyByCurrency(it.total, currencyLabel) : '';
+    const vat5Text = it.taxType === 'IVA5' ? fmtMoneyByCurrency(it.total, currencyLabel) : '';
+    const vat10Text = it.taxType === 'IVA10' ? fmtMoneyByCurrency(it.total, currencyLabel) : '';
     const textY = y + 4;
     doc.font('Helvetica').fontSize(9).fillColor(COLORS.gray);
     doc.text(it.qty, colX.qty, textY, { width: colW.qty, align: 'center' });
     doc.text(it.description || 'Item', colX.desc, textY, { width: colW.desc });
-    doc.text(`${currencyLabel} ${fmtGs(it.unitPrice, { decimals: true })}`, colX.pu, textY, {
+    doc.text(`${currencyLabel} ${fmtMoneyByCurrency(it.unitPrice, currencyLabel)}`, colX.pu, textY, {
       width: colW.pu,
       align: 'right',
     });
@@ -288,19 +338,19 @@ function drawItems(doc, items, yStart, colX, colW, currencyLabel) {
   return y;
 }
 
-function drawTotalsBox(doc, data, colX, colW) {
-  const box = { x: M, y: 690, w: W, h: 95 };
+function drawTotalsBox(doc, data, colX, colW, yPos = 690) {
+  const box = { x: M, y: yPos, w: W, h: 95 };
+  const currencyLabel = normalizeCurrencyLabel(data.moneda);
   drawBox(doc, box);
   let y = box.y + 10;
   doc.font('Helvetica-Bold').fontSize(10).fillColor(COLORS.gray).text('SUBTOTAL:', box.x + 6, y);
   doc.font('Helvetica').fontSize(10).fillColor(COLORS.grayLight);
-  doc.text(fmtGs(data.subtotales.exentas, { decimals: true }), colX.ex, y, { width: colW.ex, align: 'right' });
-  doc.text(fmtGs(data.subtotales.vat5, { decimals: true }), colX.five, y, { width: colW.five, align: 'right' });
-  doc.text(fmtGs(data.subtotales.vat10, { decimals: true }), colX.ten, y, { width: colW.ten, align: 'right' });
+  doc.text(fmtMoneyByCurrency(data.subtotales.exentas, currencyLabel), colX.ex, y, { width: colW.ex, align: 'right' });
+  doc.text(fmtMoneyByCurrency(data.subtotales.vat5, currencyLabel), colX.five, y, { width: colW.five, align: 'right' });
+  doc.text(fmtMoneyByCurrency(data.subtotales.vat10, currencyLabel), colX.ten, y, { width: colW.ten, align: 'right' });
 
   y += 18;
   doc.font('Helvetica-Bold').fillColor(COLORS.gray).text('TOTAL:', box.x + 6, y);
-  const currencyLabel = normalizeCurrencyLabel(data.moneda);
   const totalWords = data.totalEnLetras || amountToWords(data.totalGeneral, currencyLabel);
   doc.font('Helvetica').fillColor(COLORS.grayLight).text(`${currencyLabel} ${totalWords}`, box.x + 60, y, {
     width: box.w - 220,
@@ -308,7 +358,7 @@ function drawTotalsBox(doc, data, colX, colW) {
   doc
     .font('Helvetica-Bold')
     .fillColor(COLORS.gray)
-    .text(`${currencyLabel} ${fmtGs(data.totalGeneral, { decimals: true })}`, box.x + box.w - 140, y, {
+    .text(`${currencyLabel} ${fmtMoneyByCurrency(data.totalGeneral, currencyLabel)}`, box.x + box.w - 140, y, {
       width: 130,
       align: 'right',
     });
@@ -320,25 +370,26 @@ function drawTotalsBox(doc, data, colX, colW) {
   const ivaColW = 150;
   const iva10X = box.x + box.w - ivaRightW - ivaColW;
   const iva5X = iva10X - ivaColW;
-  doc.text(`5 %: ${currencyLabel} ${fmtGs(data.iva5, { decimals: true })}`, iva5X, y, {
+  doc.text(`5 %: ${currencyLabel} ${fmtMoneyByCurrency(data.iva5, currencyLabel)}`, iva5X, y, {
     width: ivaColW,
     align: 'right',
   });
-  doc.text(`10 %: ${currencyLabel} ${fmtGs(data.iva10, { decimals: true })}`, iva10X, y, {
+  doc.text(`10 %: ${currencyLabel} ${fmtMoneyByCurrency(data.iva10, currencyLabel)}`, iva10X, y, {
     width: ivaColW,
     align: 'right',
   });
   doc
     .font('Helvetica-Bold')
     .fillColor(COLORS.gray)
-    .text(`TOTAL IVA: ${currencyLabel} ${fmtGs(data.ivaTotal, { decimals: true })}`, box.x + box.w - 200, y, {
+    .text(`TOTAL IVA: ${currencyLabel} ${fmtMoneyByCurrency(data.ivaTotal, currencyLabel)}`, box.x + box.w - 200, y, {
       width: 190,
       align: 'right',
     });
+  return box.y + box.h;
 }
 
-function drawFooter(doc, data) {
-  let y = 800;
+function drawFooter(doc, data, yStart = 800) {
+  let y = yStart;
   doc.font('Helvetica').fontSize(8).fillColor(COLORS.grayLight).text(
     data.footer?.autoimpresor ||
       'Autorizado como Autoimpresor por la SET - Nro. de solicitud 350050031843 de fecha 01/07/2026 - ORIGINAL',
@@ -494,7 +545,8 @@ export async function generateInvoicePDF(data, outputStream) {
       const afterItemsY = drawItems(doc, mappedItems, tableY + headerHeight, colX, colW, currencyLabel);
 
       // Totals
-      drawTotalsBox(
+      const totalsY = Math.max(690, afterItemsY + 14);
+      const totalsBottom = drawTotalsBox(
         doc,
         {
           subtotales: totalsCalc.subtotales,
@@ -506,12 +558,12 @@ export async function generateInvoicePDF(data, outputStream) {
           moneda: currencyLabel,
         },
         colX,
-        colW
+        colW,
+        totalsY
       );
 
       // Footer
-      drawFooter(doc, data);
-
+      drawFooter(doc, data, Math.max(800, totalsBottom + 14));
       doc.end();
       outputStream.on('finish', resolve);
       outputStream.on('error', reject);
