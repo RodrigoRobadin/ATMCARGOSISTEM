@@ -143,9 +143,15 @@ async function ensureServiceTables() {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       INDEX idx_org (org_id),
-      UNIQUE KEY uq_placa (placa_id)
+      INDEX idx_placa (placa_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+  try {
+    await pool.query('ALTER TABLE client_doors DROP INDEX uq_placa');
+  } catch (_) {}
+  try {
+    await pool.query('ALTER TABLE client_doors ADD INDEX idx_placa (placa_id)');
+  } catch (_) {}
 
   try {
     await pool.query('ALTER TABLE client_doors ADD COLUMN ref_int VARCHAR(120) NULL');

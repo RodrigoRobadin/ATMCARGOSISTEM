@@ -219,6 +219,10 @@ export default function ServiceModule() {
   const [orgSearch, setOrgSearch] = useState("");
   const [doorBranches, setDoorBranches] = useState([]);
   const [doorBranchLoading, setDoorBranchLoading] = useState(false);
+  const [caseBranches, setCaseBranches] = useState([]);
+  const [caseBranchLoading, setCaseBranchLoading] = useState(false);
+  const [doorBranchDraft, setDoorBranchDraft] = useState({ name: "", address: "" });
+  const [caseBranchDraft, setCaseBranchDraft] = useState({ name: "", address: "" });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -237,6 +241,7 @@ export default function ServiceModule() {
     org_label: "",
     org_id: "",
     door_ids: [],
+    org_branch_id: "",
     scheduled_date: "",
     stage_id: "",
   });
@@ -291,6 +296,114 @@ export default function ServiceModule() {
       live = false;
     };
   }, [doorForm.org_id]);
+
+  useEffect(() => {
+    const orgId = Number(caseForm.org_id || 0);
+    if (!orgId) {
+      setCaseBranches([]);
+      return;
+    }
+    let live = true;
+    (async () => {
+      setCaseBranchLoading(true);
+      try {
+        const { data } = await api.get(`/organizations/${orgId}/branches`);
+        if (live) setCaseBranches(Array.isArray(data) ? data : []);
+      } catch (_) {
+        if (live) setCaseBranches([]);
+      } finally {
+        if (live) setCaseBranchLoading(false);
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [caseForm.org_id]);
+
+  const doorLabel = (d) => {
+    const parts = [
+      `EQ-${String(d.id || 0).padStart(6, "0")}`,
+      d.placa_id ? `Placa ${d.placa_id}` : null,
+      d.nombre || d.modelo || "Equipo",
+      d.org_branch_name ? `Sucursal ${d.org_branch_name}` : "Sin sucursal",
+      d.sector || null,
+    ].filter(Boolean);
+    return parts.join(" | ");
+  };
+
+  async function createBranchFor(kind) {
+    const isDoor = kind === "door";
+    const orgId = Number(isDoor ? doorForm.org_id : (caseForm.org_id || 0));
+    if (!orgId) return alert("Selecciona primero una organizacion");
+    const draft = isDoor ? doorBranchDraft : caseBranchDraft;
+    const name = String(draft.name || "").trim();
+    const address = String(draft.address || "").trim();
+    if (!name && !address) return alert("Carga nombre o direccion de la sucursal");
+    try {
+      const { data: created } = await api.post(`/organizations/${orgId}/branches`, { name, address });
+      const createdId = String(created?.id || "");
+      const { data: refreshed } = await api.get(`/organizations/${orgId}/branches`);
+      const nextBranches = Array.isArray(refreshed) ? refreshed : (created ? [created] : []);
+      if (isDoor) {
+        setDoorBranches(nextBranches);
+        setDoorForm((prev) => ({ ...prev, org_branch_id: createdId }));
+        setDoorBranchDraft({ name: "", address: "" });
+      } else {
+        setCaseBranches(nextBranches);
+        setCaseForm((prev) => ({ ...prev, org_branch_id: createdId, door_ids: [] }));
+        setDoorForm((prev) => (
+          String(prev.org_id || "") === String(orgId) ? { ...prev, org_branch_id: createdId } : prev
+        ));
+        setCaseBranchDraft({ name: "", address: "" });
+      }
+    } catch (e) {
+      alert("No se pudo crear la sucursal");
+    }
+  }
+
+  function renderBranchQuickCreatePanel(kind) {
+    const isDoor = kind === "door";
+    const orgId = isDoor ? doorForm.org_id : caseForm.org_id;
+    const draft = isDoor ? doorBranchDraft : caseBranchDraft;
+    const setDraft = isDoor ? setDoorBranchDraft : setCaseBranchDraft;
+    return (
+      <aside className="pointer-events-auto w-full max-w-sm rounded-xl border bg-white p-4 shadow-xl">
+        <div className="text-sm font-semibold text-slate-900">Crear sucursal rápida</div>
+        <div className="mt-1 text-xs text-slate-500">Se guarda en la organización seleccionada y queda asignada automáticamente.</div>
+        <div className="mt-4 space-y-3">
+          <label className="block text-sm">
+            <span className="mb-1 block text-xs text-slate-500">Nombre de sucursal</span>
+            <input
+              className="w-full rounded border px-3 py-2 text-sm"
+              placeholder="Ej: Sucursal Centro"
+              value={draft.name}
+              onChange={(e) => setDraft((prev) => ({ ...prev, name: e.target.value }))}
+              disabled={!orgId}
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="mb-1 block text-xs text-slate-500">Dirección</span>
+            <input
+              className="w-full rounded border px-3 py-2 text-sm"
+              placeholder="Dirección de la sucursal"
+              value={draft.address}
+              onChange={(e) => setDraft((prev) => ({ ...prev, address: e.target.value }))}
+              disabled={!orgId}
+            />
+          </label>
+          <button
+            type="button"
+            className="w-full rounded bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
+            onClick={() => createBranchFor(kind)}
+            disabled={!orgId}
+          >
+            + Crear y seleccionar
+          </button>
+          {!orgId ? <p className="text-xs text-amber-700">Selecciona una organización para crear la sucursal.</p> : null}
+        </div>
+      </aside>
+    );
+  }
 
   const grouped = useMemo(() => {
     const g = Object.fromEntries(stages.map((s) => [s.id, []]));
@@ -370,9 +483,13 @@ export default function ServiceModule() {
   }
 
   const caseDoors = useMemo(() => {
-    if (!caseForm.org_id) return doors;
-    return doors.filter((d) => String(d.org_id) === String(caseForm.org_id));
-  }, [doors, caseForm.org_id]);
+    if (!caseForm.org_id) return [];
+    return doors.filter((d) => {
+      if (String(d.org_id) !== String(caseForm.org_id)) return false;
+      if (!caseForm.org_branch_id) return !d.org_branch_id;
+      return !d.org_branch_id || String(d.org_branch_id) === String(caseForm.org_branch_id);
+    });
+  }, [doors, caseForm.org_id, caseForm.org_branch_id]);
 
   const selectedDoors = useMemo(() => {
     const ids = new Set((caseForm.door_ids || []).map((x) => String(x)));
@@ -444,7 +561,7 @@ export default function ServiceModule() {
         doorForm.ancho && doorForm.alto
           ? `${doorForm.ancho} x ${doorForm.alto}`
           : doorForm.dimensiones || "";
-      const payload = { ...doorForm, dimensiones: dims };
+      const payload = { ...doorForm, org_branch_id: doorForm.org_branch_id || caseForm.org_branch_id || "", dimensiones: dims };
       if (!payload.org_id || !payload.placa_id) {
         alert("Org y placa son requeridos");
         return;
@@ -464,6 +581,7 @@ export default function ServiceModule() {
       if (showCaseModal && createdId && String(payload.org_id) === String(caseForm.org_id)) {
         setCaseForm((prev) => ({
           ...prev,
+          org_branch_id: prev.org_branch_id || payload.org_branch_id || "",
           door_ids: Array.from(new Set([...(prev.door_ids || []), createdId])),
         }));
       }
@@ -522,16 +640,18 @@ export default function ServiceModule() {
 
   async function createCase() {
     try {
-      if (!caseForm.door_ids?.length) return alert("Seleccioná al menos un equipo");
+      if (!caseForm.org_branch_id) return alert("Selecciona una sucursal para el servicio");
+      if (!caseForm.door_ids?.length) return alert("Selecciona al menos un equipo");
       await api.post("/service/cases", {
         door_ids: caseForm.door_ids,
+        org_branch_id: caseForm.org_branch_id,
         scheduled_date: caseForm.scheduled_date,
         stage_id: caseForm.stage_id,
       });
       const { data } = await api.get("/service/cases");
       setCases(data || []);
       setShowCaseModal(false);
-      setCaseForm({ org_label: "", org_id: "", door_ids: [], scheduled_date: "", stage_id: "" });
+      setCaseForm({ org_label: "", org_id: "", org_branch_id: "", door_ids: [], scheduled_date: "", stage_id: "" });
     } catch (e) {
       alert("No se pudo crear caso");
     }
@@ -876,10 +996,10 @@ export default function ServiceModule() {
 
       {showDoorModal && (
         <div
-          className={`fixed inset-0 ${doorModalVariant === "side" ? "pointer-events-none" : "bg-black/30 flex items-center justify-center"} ${activeModal === "door" ? "z-[70]" : "z-[60]"}`}
+          className={`fixed inset-0 ${doorModalVariant === "side" ? "pointer-events-none" : "bg-black/30 flex items-start justify-center gap-4 overflow-auto p-4"} ${activeModal === "door" ? "z-[70]" : "z-[60]"}`}
         >
           <div
-            className={`${doorModalVariant === "side" ? "absolute right-0 top-0 h-full w-full max-w-md shadow-xl border-l border-slate-200" : "rounded-xl w-full max-w-2xl"} bg-white p-4 overflow-auto pointer-events-auto`}
+            className={`${doorModalVariant === "side" ? "absolute right-0 top-0 h-full w-full max-w-md shadow-xl border-l border-slate-200" : "rounded-xl w-full max-w-2xl max-h-[92vh] shadow-xl"} bg-white p-4 overflow-auto pointer-events-auto`}
             onMouseDown={() => setActiveModal("door")}
           >
             <div className="flex items-center justify-between mb-2">
@@ -952,23 +1072,24 @@ export default function ServiceModule() {
                 value={doorForm.sector}
                 onChange={(e) => setDoorForm({ ...doorForm, sector: e.target.value })}
               />
-              <div className="space-y-1">
-                <label className="text-xs text-slate-500">Sucursal</label>
-                <select
-                  className="border rounded px-2 py-1 w-full"
-                  value={doorForm.org_branch_id || ""}
-                  onChange={(e) => setDoorForm({ ...doorForm, org_branch_id: e.target.value })}
-                >
-                  <option value="">
-                    {doorBranchLoading ? "Cargando sucursales..." : "Sin sucursales"}
-                  </option>
-                  {(doorBranches || []).map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name || b.address || `Sucursal ${b.id}`}
+                            <div className="md:col-span-2 rounded-lg border bg-slate-50 p-3 space-y-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-600">Sucursal</label>
+                  <select
+                    className="border rounded px-2 py-1 w-full bg-white"
+                    value={doorForm.org_branch_id || ""}
+                    onChange={(e) => setDoorForm({ ...doorForm, org_branch_id: e.target.value })}
+                  >
+                    <option value="">
+                      {doorBranchLoading ? "Cargando sucursales..." : "Sin sucursal"}
                     </option>
-                  ))}
-                </select>
-              </div>
+                    {(doorBranches || []).map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name || b.address || `Sucursal ${b.id}`}
+                      </option>
+                    ))}
+                  </select>
+                </div></div>
               <select
                 className="border rounded px-2 py-1"
                 value={doorForm.marca}
@@ -1074,13 +1195,14 @@ export default function ServiceModule() {
               <button className="btn btn-primary" onClick={saveDoor}>Guardar</button>
             </div>
           </div>
+          {doorModalVariant !== "side" && renderBranchQuickCreatePanel("door")}
         </div>
       )}
 
       {showCaseModal && (
-        <div className={`fixed inset-0 bg-black/30 flex items-center justify-center ${activeModal === "case" ? "z-[70]" : "z-[60]"}`}>
+        <div className={`fixed inset-0 bg-black/30 flex items-start justify-center gap-4 overflow-auto p-4 ${activeModal === "case" ? "z-[70]" : "z-[60]"}`}>
           <div
-            className="bg-white rounded-xl w-full max-w-xl p-4"
+            className="bg-white rounded-xl w-full max-w-xl max-h-[92vh] overflow-auto p-4 shadow-xl"
             onMouseDown={() => setActiveModal("case")}
           >
             <div className="text-lg font-semibold mb-2">Nuevo servicio</div>
@@ -1102,6 +1224,7 @@ export default function ServiceModule() {
                       ...caseForm,
                       org_label: val,
                       org_id: match ? String(match.id) : "",
+                      org_branch_id: "",
                       door_ids: [],
                     });
                   }}
@@ -1111,6 +1234,23 @@ export default function ServiceModule() {
                     <option key={o.id} value={`${o.name}${o.ruc ? ` - ${o.ruc}` : ""}`} />
                   ))}
                 </datalist>
+              </div>
+                            <div className="rounded-lg border bg-slate-50 p-3 space-y-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-600">Sucursal</label>
+                  <select
+                    className="border rounded px-2 py-1 w-full bg-white"
+                    value={caseForm.org_branch_id || ""}
+                    onChange={(e) => setCaseForm({ ...caseForm, org_branch_id: e.target.value, door_ids: [] })}
+                    required
+                    disabled={!caseForm.org_id}
+                  >
+                    <option value="">{caseBranchLoading ? "Cargando sucursales..." : "Seleccionar sucursal"}</option>
+                    {(caseBranches || []).map((b) => (
+                      <option key={b.id} value={b.id}>{b.name || b.address || `Sucursal ${b.id}`}</option>
+                    ))}
+                  </select>
+                </div><p className="text-[11px] text-slate-500">Los equipos sin sucursal se muestran siempre como apoyo.</p>
               </div>
               <div className="border rounded p-2">
                 <div className="flex items-center justify-between mb-2">
@@ -1123,6 +1263,7 @@ export default function ServiceModule() {
                       setDoorForm({
                         ...emptyDoor,
                         org_id: caseForm.org_id || "",
+                        org_branch_id: caseForm.org_branch_id || "",
                       });
                       setOrgSearch(caseForm.org_label || "");
                       setDoorModalVariant("side");
@@ -1151,11 +1292,7 @@ export default function ServiceModule() {
                             setCaseForm({ ...caseForm, door_ids: next });
                           }}
                         />
-                        <span className="truncate">
-                          {(d.nombre || d.placa_id || `Equipo ${d.id}`)}
-                          {d.sector ? ` · ${d.sector}` : ""}
-                          {d.modelo ? ` (${d.modelo})` : ""}
-                        </span>
+                        <span className="truncate">{doorLabel(d)}</span>
                       </label>
                     );
                   })}
@@ -1170,9 +1307,8 @@ export default function ServiceModule() {
                           to={`/service/doors/${d.id}`}
                           className="px-2 py-1 text-xs bg-slate-100 rounded hover:bg-slate-200"
                         >
-                          {(d.nombre || d.placa_id || `Equipo ${d.id}`)}
-                          {d.sector ? ` · ${d.sector}` : ""}
-                          {d.modelo ? ` (${d.modelo})` : ""}
+                          {doorLabel(d)}
+                        
                         </Link>
                       ))}
                     </div>
@@ -1201,6 +1337,7 @@ export default function ServiceModule() {
               <button className="btn btn-primary" onClick={createCase}>Crear</button>
             </div>
           </div>
+          {renderBranchQuickCreatePanel("case")}
         </div>
       )}
     </div>

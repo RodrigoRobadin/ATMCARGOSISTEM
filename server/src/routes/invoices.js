@@ -1720,6 +1720,25 @@ function validateInvoiceFiscalConfig(defaults, issueDate = new Date()) {
   };
 }
 
+async function resolveInvoiceFiscalForPdf(invoice, conn = pool) {
+  const status = String(invoice?.status || '').toLowerCase();
+  const isDraft = !status || status === 'borrador' || status === 'draft';
+  const missingSnapshot = !invoice?.timbrado_number || !invoice?.timbrado_start_date || !invoice?.timbrado_expires_at;
+  let defaults = null;
+  if (isDraft || missingSnapshot) {
+    try {
+      defaults = await peekInvoiceDefaults({ buKey: invoice?.business_unit_key || '' }, conn);
+    } catch (_) {
+      defaults = null;
+    }
+  }
+  return {
+    timbrado_number: (isDraft ? defaults?.timbrado_number : null) || invoice?.timbrado_number || defaults?.timbrado_number || process.env.INVOICE_TIMBRADO_NUMBER || '',
+    timbrado_start_date: (isDraft ? defaults?.timbrado_start_date : null) || invoice?.timbrado_start_date || defaults?.timbrado_start_date || process.env.INVOICE_TIMBRADO_START || null,
+    timbrado_expires_at: (isDraft ? defaults?.timbrado_expires_at : null) || invoice?.timbrado_expires_at || defaults?.timbrado_expires_at || process.env.INVOICE_TIMBRADO_END || null,
+  };
+}
+
 async function nextInvoiceNumber(buKey = '', conn) {
   const sequence = await resolveInvoiceSequence({ buKey }, conn);
   const invoice_number = `${sequence.point}-${sequence.establishment}-${String(sequence.next).padStart(7, '0')}`;
@@ -3162,7 +3181,7 @@ router.post('/', requireAuth, async (req, res) => {
       const gross = round2(Number(containerBilling.amount || 0));
       invoiceItems = [
         {
-          description: `Canon de arrendamiento contrato ${containerBilling.contract_no || "-"}${containerBilling.container_no ? ` · Contenedor ${containerBilling.container_no}${containerBilling.container_type ? ` ${containerBilling.container_type}` : ""}` : ""} · Periodo ${containerBilling.cycle_label || "-"}`,
+          description: `Canon de arrendamiento contrato ${containerBilling.contract_no || "-"}${containerBilling.container_no ? ` ï¿½ Contenedor ${containerBilling.container_no}${containerBilling.container_type ? ` ${containerBilling.container_type}` : ""}` : ""} ï¿½ Periodo ${containerBilling.cycle_label || "-"}`,
           quantity: 1,
           unit_price: gross,
           subtotal: gross,
@@ -3498,10 +3517,12 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
       'TRANSPORTE ACUATICO - TRANSPORTE TERRESTRE LOCAL DE CARGA - TRANSPORTE AEREO DE CARGA - ' +
       'COMERCIO AL POR MENOR DE OTROS PRODUCTOS EN COMERCIOS NO ESPECIALIZADOS.';
 
+    const fiscalForPdf = await resolveInvoiceFiscalForPdf(invoice);
+
     const issuer = {
       name: process.env.INVOICE_ISSUER_NAME || 'ATM CARGO S.R.L.',
       ruc: process.env.INVOICE_ISSUER_RUC || '80056841-6',
-      phone: process.env.INVOICE_ISSUER_PHONE || '+595 21 493082',
+      phone: process.env.INVOICE_ISSUER_PHONE || '+595 21 490382',
       address:
         process.env.INVOICE_ISSUER_ADDRESS || 'Cap. Milciades Urbieta 175 e/ Rio de Janeiro y Mcal. Lopez',
       city: process.env.INVOICE_ISSUER_CITY || 'Asuncion - Paraguay',
@@ -3728,6 +3749,7 @@ router.get('/:id', requireAuth, async (req, res) => {
       FROM invoices i
       LEFT JOIN organizations o ON o.id = i.organization_id
       LEFT JOIN deals d ON d.id = i.deal_id
+      LEFT JOIN business_units bu ON bu.id = d.business_unit_id
       LEFT JOIN service_cases sc ON sc.id = i.service_case_id
       LEFT JOIN users u ON u.id = i.created_by
       LEFT JOIN users u2 ON u2.id = i.issued_by
@@ -3787,10 +3809,12 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
         o.address as organization_address,
         o.city as organization_city,
         COALESCE(d.reference, sc.reference) as deal_reference,
-        COALESCE(d.title, sc.reference) as deal_title
+        COALESCE(d.title, sc.reference) as deal_title,
+        COALESCE(bu.key_slug, CASE WHEN i.service_case_id IS NOT NULL THEN 'atm-industrial' ELSE '' END) as business_unit_key
       FROM invoices i
       LEFT JOIN organizations o ON o.id = i.organization_id
       LEFT JOIN deals d ON d.id = i.deal_id
+      LEFT JOIN business_units bu ON bu.id = d.business_unit_id
       LEFT JOIN service_cases sc ON sc.id = i.service_case_id
       WHERE i.id = ?`,
       [id]
@@ -3819,16 +3843,18 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
       [id]
     );
 
+    const fiscalForPdf = await resolveInvoiceFiscalForPdf(invoice);
+
     const issuer = {
       name: process.env.INVOICE_ISSUER_NAME || 'ATM CARGO S.R.L.',
       ruc: process.env.INVOICE_ISSUER_RUC || '80056841-6',
-      phone: process.env.INVOICE_ISSUER_PHONE || '+595 21 493082',
+      phone: process.env.INVOICE_ISSUER_PHONE || '+595 21 490382',
       address:
         process.env.INVOICE_ISSUER_ADDRESS || 'Cap. Milciades Urbieta 175 e/ Rio de Janeiro y Mcal. Lopez',
       city: process.env.INVOICE_ISSUER_CITY || 'Asuncion - Paraguay',
-      timbrado: invoice.timbrado_number || process.env.INVOICE_TIMBRADO_NUMBER || '',
-      timbrado_start: formatDate(invoice.timbrado_start_date || process.env.INVOICE_TIMBRADO_START),
-      timbrado_end: formatDate(invoice.timbrado_expires_at || process.env.INVOICE_TIMBRADO_END),
+      timbrado: fiscalForPdf.timbrado_number || '',
+      timbrado_start: formatDate(fiscalForPdf.timbrado_start_date),
+      timbrado_end: formatDate(fiscalForPdf.timbrado_expires_at),
     };
 
     res.setHeader('Content-Type', 'application/pdf');
@@ -4216,16 +4242,18 @@ router.get('/credit-notes/:id/pdf', requireAuth, async (req, res) => {
       [id]
     );
 
+    const fiscalForPdf = await resolveInvoiceFiscalForPdf(invoice);
+
     const issuer = {
       name: process.env.INVOICE_ISSUER_NAME || 'ATM CARGO S.R.L.',
       ruc: process.env.INVOICE_ISSUER_RUC || '80056841-6',
-      phone: process.env.INVOICE_ISSUER_PHONE || '+595 21 493082',
+      phone: process.env.INVOICE_ISSUER_PHONE || '+595 21 490382',
       address:
         process.env.INVOICE_ISSUER_ADDRESS || 'Cap. Milciades Urbieta 175 e/ Rio de Janeiro y Mcal. Lopez',
       city: process.env.INVOICE_ISSUER_CITY || 'Asuncion - Paraguay',
-      timbrado: invoice.timbrado_number || process.env.INVOICE_TIMBRADO_NUMBER || '',
-      timbrado_start: formatDate(invoice.timbrado_start_date || process.env.INVOICE_TIMBRADO_START),
-      timbrado_end: formatDate(invoice.timbrado_expires_at || process.env.INVOICE_TIMBRADO_END),
+      timbrado: fiscalForPdf.timbrado_number || '',
+      timbrado_start: formatDate(fiscalForPdf.timbrado_start_date),
+      timbrado_end: formatDate(fiscalForPdf.timbrado_expires_at),
     };
 
     res.setHeader('Content-Type', 'application/pdf');
