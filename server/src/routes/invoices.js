@@ -2695,7 +2695,7 @@ router.get('/', requireAuth, async (req, res) => {
         if (withService) params.push(`%${search}%`);
       }
 
-      q += ' ORDER BY i.created_at DESC';
+      q += ' ORDER BY i.invoice_number DESC, i.issue_date DESC, i.id DESC';
       return q;
     };
 
@@ -3493,11 +3493,14 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
     const [[receipt]] = await pool.query(
       `SELECT r.*, i.invoice_number, i.issue_date as invoice_issue_date, i.currency_code as invoice_currency_code,
               i.total_amount as invoice_total_amount, i.organization_id,
+              i.deal_id, i.service_case_id, COALESCE(d.reference, sc.reference) AS operation_reference,
               o.name as organization_name, o.ruc as organization_ruc, o.address as organization_address,
               u.name as issued_by_name
          FROM receipts r
          LEFT JOIN invoices i ON i.id = r.invoice_id
          LEFT JOIN organizations o ON o.id = i.organization_id
+         LEFT JOIN deals d ON d.id = i.deal_id
+         LEFT JOIN service_cases sc ON sc.id = i.service_case_id
          LEFT JOIN users u ON u.id = r.issued_by
         WHERE r.id = ?`,
       [id]
@@ -3508,9 +3511,12 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
     if (error) return res.status(error.code).json({ error: error.msg });
 
     const [apps] = await pool.query(
-      `SELECT ra.amount_applied, i.invoice_number, i.issue_date, i.currency_code
+      `SELECT ra.amount_applied, i.invoice_number, i.issue_date, i.currency_code,
+              COALESCE(d.reference, sc.reference) AS operation_reference
          FROM receipt_applications ra
          LEFT JOIN invoices i ON i.id = ra.invoice_id
+         LEFT JOIN deals d ON d.id = i.deal_id
+         LEFT JOIN service_cases sc ON sc.id = i.service_case_id
         WHERE ra.receipt_id = ?
         ORDER BY ra.id`,
       [id]
@@ -3554,12 +3560,14 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
       invoice_number: receipt.invoice_number || invoice.invoice_number || '',
       issue_date: receipt.invoice_issue_date || invoice.issue_date || '',
       currency_code: currency,
+      operation_reference: receipt.operation_reference || invoice.operation_reference || '',
     };
 
     const rows = (apps && apps.length ? apps : [fallbackInvoice]).map((row) => ({
       number: row.invoice_number || '',
       issueDate: formatDate(row.issue_date),
       currency: row.currency_code || currency,
+      operationReference: row.operation_reference || '',
       amount: Number(row.amount_applied || amount),
       paymentType,
       paidAmount: Number(row.amount_applied || amount),

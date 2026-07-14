@@ -92,6 +92,7 @@ export default function Organizations() {
   const [loadingRows, setLoadingRows] = useState(false);
   const [page, setPage] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
+  const [ownerFilter, setOwnerFilter] = useState('');
   const pageSize = 15;
 
   // Se mantienen para futuro
@@ -124,7 +125,12 @@ export default function Organizations() {
       setLoadingRows(true);
       const offset = page * pageSize;
       const res = await api.get('/organizations', {
-        params: { limit: pageSize, offset, include_total: 1 },
+        params: {
+          limit: pageSize,
+          offset,
+          include_total: 1,
+          ...(ownerFilter ? { owner_user_id: ownerFilter } : {}),
+        },
       });
       const data = res?.data;
       const items = Array.isArray(data)
@@ -149,7 +155,7 @@ export default function Organizations() {
 
   useEffect(() => {
     fetchOrgs();
-  }, [page]);
+  }, [page, ownerFilter]);
 
   useEffect(() => {
     // ✅ Igual que en el VPS: cargamos sin mirar auth
@@ -244,14 +250,33 @@ export default function Organizations() {
         </div>
       </div>
 
-      <div className="mb-4">
+      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="px-3 py-2 rounded-lg bg-black text-white text-sm"
+          className="px-3 py-2 rounded-lg bg-black text-white text-sm md:self-start"
         >
-          ➕ Nueva organización
+          + Nueva organizacion
         </button>
+
+        <label className="text-sm md:w-80">
+          Ejecutivo de cuenta
+          <select
+            className="mt-1 w-full rounded-lg border px-3 py-2"
+            value={ownerFilter}
+            onChange={(e) => {
+              setOwnerFilter(e.target.value);
+              setPage(0);
+            }}
+          >
+            <option value="">Todos los ejecutivos</option>
+            {owners.map((owner) => (
+              <option key={owner.id} value={owner.id}>
+                {owner.name}{owner.email ? ` - ${owner.email}` : ''}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       <div className="bg-white rounded-2xl shadow overflow-auto">

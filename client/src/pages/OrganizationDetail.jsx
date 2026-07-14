@@ -373,6 +373,14 @@ export default function OrganizationDetail() {
   const [fleteRoutes, setFleteRoutes] = useState([]);
   const [fleteRoutesLoading, setFleteRoutesLoading] = useState(false);
 
+  // Sucursales de la organizacion
+  const emptyBranchDraft = { name: '', address: '', city: '', country: '', phone: '', email: '', is_default: 0 };
+  const [branches, setBranches] = useState([]);
+  const [branchesLoading, setBranchesLoading] = useState(false);
+  const [branchDraft, setBranchDraft] = useState(emptyBranchDraft);
+  const [branchSaving, setBranchSaving] = useState(false);
+  const [editingBranchId, setEditingBranchId] = useState(null);
+
   // === helpers de carga ===
   async function loadOrg() {
     const { data } = await api.get(`/organizations/${id}`);
@@ -426,6 +434,76 @@ export default function OrganizationDetail() {
     }
   }
 
+  async function loadBranches() {
+    setBranchesLoading(true);
+    try {
+      const { data } = await api.get(`/organizations/${id}/branches`);
+      setBranches(Array.isArray(data) ? data : []);
+    } catch {
+      setBranches([]);
+    } finally {
+      setBranchesLoading(false);
+    }
+  }
+
+  function resetBranchForm() {
+    setBranchDraft(emptyBranchDraft);
+    setEditingBranchId(null);
+  }
+
+  async function saveBranch() {
+    const payload = {
+      name: (branchDraft.name || '').trim(),
+      address: (branchDraft.address || '').trim(),
+      city: (branchDraft.city || '').trim(),
+      country: (branchDraft.country || '').trim(),
+      phone: (branchDraft.phone || '').trim(),
+      email: (branchDraft.email || '').trim(),
+      is_default: branchDraft.is_default ? 1 : 0,
+    };
+    if (!payload.name && !payload.address) {
+      alert('Carga al menos el nombre o la direccion de la sucursal.');
+      return;
+    }
+    setBranchSaving(true);
+    try {
+      if (editingBranchId) {
+        await api.put(`/organizations/${id}/branches/${editingBranchId}`, payload);
+      } else {
+        await api.post(`/organizations/${id}/branches`, payload);
+      }
+      resetBranchForm();
+      await loadBranches();
+    } catch {
+      alert('No se pudo guardar la sucursal.');
+    } finally {
+      setBranchSaving(false);
+    }
+  }
+
+  function editBranch(branch) {
+    setEditingBranchId(branch.id);
+    setBranchDraft({
+      name: branch.name || '',
+      address: branch.address || '',
+      city: branch.city || '',
+      country: branch.country || '',
+      phone: branch.phone || '',
+      email: branch.email || '',
+      is_default: branch.is_default ? 1 : 0,
+    });
+  }
+
+  async function deleteBranch(branch) {
+    if (!window.confirm(`Eliminar la sucursal ${branch.name || branch.address || branch.id}?`)) return;
+    try {
+      await api.delete(`/organizations/${id}/branches/${branch.id}`);
+      if (editingBranchId === branch.id) resetBranchForm();
+      await loadBranches();
+    } catch {
+      alert('No se pudo eliminar la sucursal.');
+    }
+  }
   // ===== NOTAS: lectura =====
   async function loadNotes() {
     setNotesLoading(true);
@@ -486,6 +564,7 @@ export default function OrganizationDetail() {
         await loadOrgDeals();
         await loadCustomFields();
         await loadFleteRoutes();
+        await loadBranches();
       } catch (e) {
         if (!cancel) setErr('No se pudo cargar la organización.');
       } finally {
@@ -819,6 +898,75 @@ export default function OrganizationDetail() {
           </section>
 
           {/* 👇 Hoja de ruta (solo flete) */}
+          {/* Sucursales */}
+          <section className="bg-white rounded-2xl shadow">
+            <header className="px-4 py-3 border-b font-medium flex items-center justify-between">
+              <span>Sucursales</span>
+              {branchesLoading && <span className="text-xs text-slate-500">Cargando...</span>}
+            </header>
+            <div className="p-4 space-y-3">
+              {branches.length === 0 && !branchesLoading ? (
+                <div className="text-sm text-slate-500">No hay sucursales cargadas.</div>
+              ) : null}
+
+              {branches.map((branch) => (
+                <div key={branch.id} className="rounded-lg border border-slate-200 p-3 text-sm">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-medium text-slate-900 break-words">
+                        {branch.name || 'Sucursal sin nombre'}
+                        {branch.is_default ? <Badge>Predeterminada</Badge> : null}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-600 break-words">
+                        {[branch.address, branch.city, branch.country].filter(Boolean).join(' - ') || 'Sin direccion'}
+                      </div>
+                      {(branch.phone || branch.email) && (
+                        <div className="mt-1 text-xs text-slate-500 break-words">
+                          {[branch.phone, branch.email].filter(Boolean).join(' - ')}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <button type="button" className="text-xs text-blue-600 hover:underline" onClick={() => editBranch(branch)}>
+                        Editar
+                      </button>
+                      <button type="button" className="text-xs text-red-600 hover:underline" onClick={() => deleteBranch(branch)}>
+                        Eliminar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
+                <div className="text-sm font-medium text-slate-900">
+                  {editingBranchId ? 'Editar sucursal' : 'Agregar sucursal'}
+                </div>
+                <div className="grid grid-cols-1 gap-2">
+                  <input className="w-full rounded-lg border px-3 py-2 text-sm" placeholder="Nombre de sucursal" value={branchDraft.name} onChange={(e) => setBranchDraft((prev) => ({ ...prev, name: e.target.value }))} />
+                  <input className="w-full rounded-lg border px-3 py-2 text-sm" placeholder="Direccion" value={branchDraft.address} onChange={(e) => setBranchDraft((prev) => ({ ...prev, address: e.target.value }))} />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <input className="w-full rounded-lg border px-3 py-2 text-sm" placeholder="Ciudad" value={branchDraft.city} onChange={(e) => setBranchDraft((prev) => ({ ...prev, city: e.target.value }))} />
+                    <input className="w-full rounded-lg border px-3 py-2 text-sm" placeholder="Pais" value={branchDraft.country} onChange={(e) => setBranchDraft((prev) => ({ ...prev, country: e.target.value }))} />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <input className="w-full rounded-lg border px-3 py-2 text-sm" placeholder="Telefono" value={branchDraft.phone} onChange={(e) => setBranchDraft((prev) => ({ ...prev, phone: e.target.value }))} />
+                    <input className="w-full rounded-lg border px-3 py-2 text-sm" placeholder="Email" value={branchDraft.email} onChange={(e) => setBranchDraft((prev) => ({ ...prev, email: e.target.value }))} />
+                  </div>
+                  <label className="flex items-center gap-2 text-xs text-slate-600">
+                    <input type="checkbox" checked={!!branchDraft.is_default} onChange={(e) => setBranchDraft((prev) => ({ ...prev, is_default: e.target.checked ? 1 : 0 }))} />
+                    Marcar como sucursal predeterminada
+                  </label>
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  {editingBranchId ? <button type="button" className="px-3 py-2 text-sm rounded-lg border" onClick={resetBranchForm}>Cancelar</button> : null}
+                  <button type="button" className="px-3 py-2 text-sm rounded-lg bg-black text-white disabled:opacity-50" onClick={saveBranch} disabled={branchSaving}>
+                    {branchSaving ? 'Guardando...' : editingBranchId ? 'Guardar cambios' : 'Agregar sucursal'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
           {isFreightOrg && (
             <section className="bg-white rounded-2xl shadow">
               <header className="px-4 py-3 border-b font-medium flex items-center justify-between">
@@ -1451,6 +1599,7 @@ export default function OrganizationDetail() {
           onSaved={async () => {
             await loadOrg();
             await loadFleteRoutes();
+            await loadBranches();
           }}
         />
       )}

@@ -8,7 +8,6 @@ import {
   Platform,
   Pressable,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -19,10 +18,11 @@ import { StatusBar } from 'expo-status-bar';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Font from 'expo-font';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import * as Linking from 'expo-linking';
 import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from './src/auth/AuthContext';
 import { api, API_URL, getAuthToken } from './src/api/client';
 import { pickDeviceContact } from './src/utils/deviceContacts';
@@ -158,6 +158,44 @@ function imageUploadPart(asset, fallbackName = 'imagen.jpg') {
   }
 
   return { uri, name, type: mimeType };
+}
+
+const IMAGE_UPLOAD_MAX_WIDTH = 1600;
+const IMAGE_UPLOAD_QUALITY = 0.68;
+
+function isImageAsset(asset) {
+  const mimeType = String(asset?.mimeType || asset?.type || '').toLowerCase();
+  const name = String(asset?.name || asset?.fileName || asset?.uri || '').toLowerCase();
+  return mimeType.startsWith('image/') || /\.(jpe?g|png|webp|heic|heif)$/i.test(name);
+}
+
+function jpgName(asset, fallbackName = 'imagen.jpg') {
+  const rawName = String(asset?.name || asset?.fileName || fallbackName).split('?')[0] || fallbackName;
+  const base = rawName.replace(/\.[^/.]+$/, '') || 'imagen';
+  return `${base}.jpg`;
+}
+
+async function prepareImageForUpload(asset, fallbackName = 'imagen.jpg') {
+  if (!asset?.uri || !isImageAsset(asset)) return asset;
+  try {
+    const width = Number(asset.width || 0);
+    const actions = width > IMAGE_UPLOAD_MAX_WIDTH ? [{ resize: { width: IMAGE_UPLOAD_MAX_WIDTH } }] : [];
+    const result = await ImageManipulator.manipulateAsync(asset.uri, actions, {
+      compress: IMAGE_UPLOAD_QUALITY,
+      format: ImageManipulator.SaveFormat.JPEG,
+    });
+    return {
+      ...asset,
+      ...result,
+      name: jpgName(asset, fallbackName),
+      fileName: jpgName(asset, fallbackName),
+      mimeType: 'image/jpeg',
+      type: 'image/jpeg',
+      base64: undefined,
+    };
+  } catch (_error) {
+    return asset;
+  }
 }
 
 function LoginScreen() {
@@ -1329,14 +1367,9 @@ function OperationListScreen({ route, navigation }) {
   async function uploadDoorImage(doorId, asset) {
     if (!doorId || !asset) return;
     const form = new FormData();
-    const imagePart = imageUploadPart(asset, `producto-${doorId}.jpg`);
-    if (asset.base64) {
-      form.append('image_base64', asset.base64);
-      form.append('name', imagePart.name);
-      form.append('mime_type', imagePart.type);
-    } else {
-      form.append('image', imagePart);
-    }
+    const preparedAsset = await prepareImageForUpload(asset, `producto-${doorId}.jpg`);
+    const imagePart = imageUploadPart(preparedAsset, `producto-${doorId}.jpg`);
+    form.append('image', imagePart);
     setSaving(true);
     try {
       await api.uploadIndustrialDoorImage(doorId, form);
@@ -1365,7 +1398,6 @@ function OperationListScreen({ route, navigation }) {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.75,
       allowsEditing: false,
-      base64: true,
     });
     if (!result.canceled && result.assets?.[0]) uploadDoorImage(doorId, result.assets[0]);
   }
@@ -1383,9 +1415,10 @@ function OperationListScreen({ route, navigation }) {
 
   async function uploadDetailAsset(asset) {
     if (!selectedId) return;
-    const uri = asset.uri;
-    const name = asset.name || asset.fileName || uri?.split('/').pop() || 'archivo';
-    const mimeType = asset.mimeType || asset.type || 'application/octet-stream';
+    const preparedAsset = await prepareImageForUpload(asset, 'archivo.jpg');
+    const uri = preparedAsset.uri;
+    const name = preparedAsset.name || preparedAsset.fileName || uri?.split('/').pop() || 'archivo';
+    const mimeType = preparedAsset.mimeType || preparedAsset.type || 'application/octet-stream';
     const form = new FormData();
     form.append('entity_type', 'deal');
     form.append('entity_id', String(selectedId));
@@ -1966,9 +1999,10 @@ function OperationsScreen({ navigation }) {
 
   async function uploadPendingFiles(dealId) {
     for (const asset of pendingFiles) {
-      const uri = asset.uri;
-      const name = asset.name || asset.fileName || uri?.split('/').pop() || 'archivo';
-      const mimeType = asset.mimeType || asset.type || 'application/octet-stream';
+      const preparedAsset = await prepareImageForUpload(asset, 'archivo.jpg');
+      const uri = preparedAsset.uri;
+      const name = preparedAsset.name || preparedAsset.fileName || uri?.split('/').pop() || 'archivo';
+      const mimeType = preparedAsset.mimeType || preparedAsset.type || 'application/octet-stream';
       const body = new FormData();
       body.append('entity_type', 'deal');
       body.append('entity_id', String(dealId));
@@ -2531,9 +2565,10 @@ function AttachmentsScreen({ route }) {
       return;
     }
 
-    const uri = asset.uri;
-    const name = asset.name || asset.fileName || uri?.split('/').pop() || 'archivo';
-    const mimeType = asset.mimeType || asset.type || 'application/octet-stream';
+    const preparedAsset = await prepareImageForUpload(asset, 'archivo.jpg');
+    const uri = preparedAsset.uri;
+    const name = preparedAsset.name || preparedAsset.fileName || uri?.split('/').pop() || 'archivo';
+    const mimeType = preparedAsset.mimeType || preparedAsset.type || 'application/octet-stream';
     const form = new FormData();
     form.append('entity_type', entityType);
     form.append('entity_id', entityId);

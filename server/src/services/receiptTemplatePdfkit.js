@@ -202,20 +202,22 @@ function drawInvoicesTable(doc, data, y) {
   doc.moveTo(M + W / 2 - 90, y + 14).lineTo(M + W / 2 + 90, y + 14).strokeColor(COLORS.gray).stroke();
 
   const headerY = y + 24;
-  const colW = { num: 80, date: 90, curr: 60, amount: 120, type: 190, paid: 120 };
+  const colW = { num: 80, date: 80, ref: 110, curr: 55, amount: 105, type: 150, paid: 105 };
   const colX = {
     num: M,
     date: M + colW.num,
-    curr: M + colW.num + colW.date,
-    amount: M + colW.num + colW.date + colW.curr,
-    type: M + colW.num + colW.date + colW.curr + colW.amount,
-    paid: M + colW.num + colW.date + colW.curr + colW.amount + colW.type,
+    ref: M + colW.num + colW.date,
+    curr: M + colW.num + colW.date + colW.ref,
+    amount: M + colW.num + colW.date + colW.ref + colW.curr,
+    type: M + colW.num + colW.date + colW.ref + colW.curr + colW.amount,
+    paid: M + colW.num + colW.date + colW.ref + colW.curr + colW.amount + colW.type,
   };
 
   doc.save().fillColor(COLORS.navy).rect(M, headerY, W, 18).fill().restore();
   doc.font('Helvetica-Bold').fontSize(8.5).fillColor('white');
   doc.text('NUMERO', colX.num, headerY + 5, { width: colW.num, align: 'center' });
   doc.text('EMISION', colX.date, headerY + 5, { width: colW.date, align: 'center' });
+  doc.text('REF. OPERACION', colX.ref, headerY + 5, { width: colW.ref, align: 'center' });
   doc.text('MONEDA', colX.curr, headerY + 5, { width: colW.curr, align: 'center' });
   doc.text('MONTO', colX.amount, headerY + 5, { width: colW.amount, align: 'right' });
   doc.text('TIPO DE PAGO', colX.type, headerY + 5, { width: colW.type, align: 'center' });
@@ -226,6 +228,7 @@ function drawInvoicesTable(doc, data, y) {
   (data.invoices || []).forEach((row) => {
     doc.text(row.number || '-', colX.num, rowY, { width: colW.num, align: 'center' });
     doc.text(row.issueDate || '-', colX.date, rowY, { width: colW.date, align: 'center' });
+    doc.text(row.operationReference || '-', colX.ref, rowY, { width: colW.ref, align: 'center' });
     doc.text(row.currency || data.currency || 'GS', colX.curr, rowY, { width: colW.curr, align: 'center' });
     doc.text(fmtGs(row.amount), colX.amount, rowY, { width: colW.amount, align: 'right' });
     doc.text(row.paymentType || '-', colX.type, rowY, { width: colW.type, align: 'center' });

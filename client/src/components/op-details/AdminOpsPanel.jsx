@@ -94,6 +94,7 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, deal, costSheetVe
               ...receipt,
               invoice_id: doc.id,
               invoice_number: doc.number,
+              operation_reference: doc.deal_reference || doc.operation_reference || doc.reference || deal?.reference || "-",
               invoice_currency_code: doc.currency_code,
             }))
           : []
@@ -510,6 +511,7 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, deal, costSheetVe
                   <tr className="border-b">
                     <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Recibo</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Factura</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Operacion</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Fecha</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Metodo</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Referencia</th>
@@ -522,6 +524,7 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, deal, costSheetVe
                     <tr key={receipt.id} className="border-b last:border-b-0">
                       <td className="px-4 py-3 font-medium">{receipt.receipt_number || `#${receipt.id}`}</td>
                       <td className="px-4 py-3">{receipt.invoice_number || `#${receipt.invoice_id}`}</td>
+                      <td className="px-4 py-3 font-medium text-slate-700">{receipt.operation_reference || "-"}</td>
                       <td className="px-4 py-3">{fmtDate(receipt.issue_date)}</td>
                       <td className="px-4 py-3 capitalize">{receipt.payment_method || "-"}</td>
                       <td className="px-4 py-3">{receipt.reference_number || "-"}</td>

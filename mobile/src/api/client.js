@@ -3,7 +3,7 @@ const DEFAULT_API_URL = 'https://atmcargosoft.com/api';
 export const API_URL = (process.env.EXPO_PUBLIC_API_URL || DEFAULT_API_URL).replace(/\/$/, '');
 
 let authToken = null;
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 45000;
 
 export function setAuthToken(token) {
   authToken = token || null;

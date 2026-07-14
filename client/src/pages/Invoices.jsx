@@ -1,5 +1,5 @@
 // client/src/pages/Invoices.jsx
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
 import InvoiceCreateModal from '../components/InvoiceCreateModal.jsx';
@@ -48,47 +48,6 @@ export default function Invoices() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [selectedInvoice, setSelectedInvoice] = useState(null);
-
-  const grouped = useMemo(() => {
-    const map = new Map();
-    invoices.forEach((inv) => {
-      const key = inv.deal_id || inv.deal_reference || inv.deal_title || 'sin-ref';
-      const ref = inv.deal_reference || inv.deal_title || '';
-      if (!map.has(key)) map.set(key, { key, reference: ref, title: inv.deal_title || '', items: [] });
-      map.get(key).items.push(inv);
-    });
-    return Array.from(map.values()).map((group) => {
-      const active = group.items.filter((i) => i.status !== 'anulada');
-      const totalPct = active.reduce((sum, it) => sum + (Number(it.percentage || 100)), 0);
-      const totalAmount = active.reduce((sum, it) => sum + Number(it.total_amount || 0), 0);
-      const baseAmount =
-        active.find((it) => it.base_amount != null)?.base_amount ||
-        (() => {
-          const first = active.find((it) => Number(it.percentage) > 0);
-          if (!first) return null;
-          const pct = Number(first.percentage || 100);
-          if (!pct) return null;
-          return (Number(first.total_amount || 0) * 100) / pct;
-        })();
-      const pendingPct = Math.max(0, 100 - totalPct);
-      const pendingAmount = baseAmount != null ? (baseAmount * pendingPct) / 100 : null;
-      const currency =
-        active.find((it) => it.currency_code)?.currency_code ||
-        active.find((it) => it.currency_resolved)?.currency_resolved ||
-        'USD';
-      return {
-        ...group,
-        currency,
-        summary: {
-          totalPct,
-          totalAmount,
-          pendingPct,
-          pendingAmount,
-          baseAmount,
-        },
-      };
-    });
-  }, [invoices]);
 
   useEffect(() => {
     loadInvoices();
@@ -230,144 +189,94 @@ export default function Invoices() {
       ) : invoices.length === 0 ? (
         <div className="text-center py-8 text-slate-500">No se encontraron facturas</div>
       ) : (
-        <div className="bg-white border rounded-lg overflow-hidden">
-          {grouped.map((group) => (
-            <div key={group.key} className="border-b last:border-b-0">
-                            <div className="bg-slate-100 px-4 py-2 flex items-center justify-between">
-                <div>
-                  <div className="text-sm font-semibold text-slate-800">
-                    {group.reference || 'Sin referencia'} {group.title ? `- ${group.title}` : ''}
-                  </div>
-                  <div className="text-xs text-slate-600 mt-0.5">
-                    Facturado: {(group.summary?.totalPct || 0).toFixed(0)}% ({fmtMoney(group.summary?.totalAmount || 0, group.currency)}) � Pendiente: {(group.summary?.pendingPct || 0).toFixed(0)}%
-                    {group.summary?.pendingAmount != null ? ` (${fmtMoney(group.summary.pendingAmount, group.currency)})` : ''}
-                  </div>
-                </div>
-                <div className="text-xs text-slate-600">Facturas: {group.items.length}</div>
-              </div>
-              <table className="w-full">
-                <thead className="bg-slate-50 border-b">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-700 uppercase">
-                      Número
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-700 uppercase">
-                      %
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-700 uppercase">
-                      Cliente
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-700 uppercase">
-                      Emisión
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-700 uppercase">
-                      Vencimiento
-                    </th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-slate-700 uppercase">
-                      Total
-                    </th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-slate-700 uppercase">
-                      Saldo
-                    </th>
-                    <th className="px-4 py-3 text-center text-xs font-medium text-slate-700 uppercase">
-                      Estado
-                    </th>
-                    <th className="px-4 py-3 text-center text-xs font-medium text-slate-700 uppercase">
-                      Acciones
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {group.items.map((invoice) => (
-                    <tr key={invoice.id} className="hover:bg-slate-50">
-                      <td className="px-4 py-3">
-                        <Link
-                          to={`/invoices/${invoice.id}`}
-                          className="font-medium text-blue-600 hover:underline"
-                        >
-                          {invoice.invoice_number}
-                        </Link>
-                      </td>
-                      <td className="px-4 py-3 text-sm text-slate-700">
-                        {invoice.percentage ? `${invoice.percentage}%` : '100%'}
-                      </td>
-                      <td className="px-4 py-3 text-sm">{invoice.organization_name || '—'}</td>
-                      <td className="px-4 py-3 text-sm text-slate-600">
-                        {fmtDate(invoice.issue_date)}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-slate-600">
-                        {fmtDate(invoice.due_date)}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-right font-medium">
-                        {fmtMoney(invoice.total_amount, invoice.currency_code || invoice.currency_resolved)}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-right">
-                        <span
-                          className={
-                            invoice.balance > 0 ? 'text-orange-600 font-medium' : 'text-green-600'
-                          }
-                        >
-                          {fmtMoney(invoice.balance, invoice.currency_code || invoice.currency_resolved)}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <span
-                          className={`px-2 py-1 rounded text-xs font-medium ${
-                            statusStyles[invoice.status] || statusStyles.borrador
-                          }`}
-                        >
-                          {statusLabels[invoice.status] || invoice.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center justify-center gap-2">
-                          {invoice.status === 'borrador' && (
-                            <>
-                              <button
-                                onClick={() => handleIssue(invoice)}
-                                className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
-                              >
-                                Emitir
-                              </button>
-                              <button
-                                onClick={() => handleDelete(invoice)}
-                                className="text-xs px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700"
-                              >
-                                Eliminar
-                              </button>
-                            </>
-                          )}
-                          {(invoice.status === 'emitida' || invoice.status === 'pago_parcial') && (
-                            <button
-                              onClick={() => openPaymentModal(invoice)}
-                              className="text-xs px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700"
-                            >
-                              Pago
-                            </button>
-                          )}
-                          <Link
-                            to={`/invoices/${invoice.id}`}
-                            className="text-xs px-2 py-1 bg-slate-600 text-white rounded hover:bg-slate-700"
-                          >
-                            Ver
-                          </Link>
-                          <button
-                            onClick={() => handlePdf(invoice.id)}
-                            className="text-xs px-2 py-1 bg-amber-600 text-white rounded hover:bg-amber-700"
-                          >
-                            PDF
+        <div className="bg-white border rounded-lg overflow-x-auto">
+          <table className="w-full table-fixed text-sm">
+            <thead className="bg-slate-50 border-b">
+              <tr>
+                <th className="w-40 px-2 py-2 text-left text-xs font-medium text-slate-700 uppercase">Numero factura</th>
+                <th className="px-2 py-2 text-left text-xs font-medium text-slate-700 uppercase">Operacion</th>
+                <th className="px-2 py-2 text-left text-xs font-medium text-slate-700 uppercase">Cliente</th>
+                <th className="px-2 py-2 text-left text-xs font-medium text-slate-700 uppercase">%</th>
+                <th className="px-2 py-2 text-left text-xs font-medium text-slate-700 uppercase">Emision</th>
+                <th className="px-2 py-2 text-left text-xs font-medium text-slate-700 uppercase">Vencimiento</th>
+                <th className="px-2 py-2 text-right text-xs font-medium text-slate-700 uppercase">Total</th>
+                <th className="px-2 py-2 text-right text-xs font-medium text-slate-700 uppercase">Saldo</th>
+                <th className="px-2 py-2 text-center text-xs font-medium text-slate-700 uppercase">Estado</th>
+                <th className="px-2 py-2 text-center text-xs font-medium text-slate-700 uppercase">Acciones</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {invoices.map((invoice) => (
+                <tr key={invoice.id} className="hover:bg-slate-50">
+                  <td className="w-40 px-2 py-2 whitespace-nowrap">
+                    <Link to={`/invoices/${invoice.id}`} className="font-medium text-blue-600 hover:underline">
+                      {invoice.invoice_number || `#${invoice.id}`}
+                    </Link>
+                    <div className="text-xs text-slate-500 mt-0.5">ID {invoice.id}</div>
+                  </td>
+                  <td className="px-2 py-2 text-sm">
+                    {invoice.deal_reference ? (
+                      <Link
+                        to={invoice.service_case_id ? `/service/cases/${invoice.service_case_id}?tab=administracion` : `/operations/${invoice.deal_id || ''}?tab=administracion`}
+                        className="font-medium text-blue-600 hover:underline"
+                      >
+                        {invoice.deal_reference}
+                      </Link>
+                    ) : (
+                      <span className="text-slate-400">Sin operacion</span>
+                    )}
+                    {invoice.deal_title && invoice.deal_title !== invoice.deal_reference ? (
+                      <div className="text-xs text-slate-500 mt-0.5">{invoice.deal_title}</div>
+                    ) : null}
+                  </td>
+                  <td className="px-2 py-2 text-sm">{invoice.organization_name || '—'}</td>
+                  <td className="px-2 py-2 text-sm text-slate-700">{invoice.percentage ? `${invoice.percentage}%` : '100%'}</td>
+                  <td className="px-2 py-2 text-sm text-slate-600">{fmtDate(invoice.issue_date)}</td>
+                  <td className="px-2 py-2 text-sm text-slate-600">{fmtDate(invoice.due_date)}</td>
+                  <td className="px-2 py-2 text-sm text-right font-medium">
+                    {fmtMoney(invoice.total_amount, invoice.currency_code || invoice.currency_resolved)}
+                  </td>
+                  <td className="px-2 py-2 text-sm text-right">
+                    <span className={invoice.balance > 0 ? 'text-orange-600 font-medium' : 'text-green-600'}>
+                      {fmtMoney(invoice.balance, invoice.currency_code || invoice.currency_resolved)}
+                    </span>
+                  </td>
+                  <td className="px-2 py-2 text-center">
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${statusStyles[invoice.status] || statusStyles.borrador}`}>
+                      {statusLabels[invoice.status] || invoice.status}
+                    </span>
+                  </td>
+                  <td className="px-2 py-2">
+                    <div className="flex items-center justify-center gap-1 flex-wrap">
+                      {invoice.status === 'borrador' && (
+                        <>
+                          <button onClick={() => handleIssue(invoice)} className="text-[11px] px-1.5 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">
+                            Emitir
                           </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ))}
+                          <button onClick={() => handleDelete(invoice)} className="text-[11px] px-1.5 py-1 bg-red-600 text-white rounded hover:bg-red-700">
+                            Eliminar
+                          </button>
+                        </>
+                      )}
+                      {(invoice.status === 'emitida' || invoice.status === 'pago_parcial') && (
+                        <button onClick={() => openPaymentModal(invoice)} className="text-[11px] px-1.5 py-1 bg-green-600 text-white rounded hover:bg-green-700">
+                          Pago
+                        </button>
+                      )}
+                      <Link to={`/invoices/${invoice.id}`} className="text-[11px] px-1.5 py-1 bg-slate-600 text-white rounded hover:bg-slate-700">
+                        Ver
+                      </Link>
+                      <button onClick={() => handlePdf(invoice.id)} className="text-[11px] px-1.5 py-1 bg-amber-600 text-white rounded hover:bg-amber-700">
+                        PDF
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
-
       {/* Payment Modal */}
       {showPaymentModal && selectedInvoice && (
         <PaymentModal

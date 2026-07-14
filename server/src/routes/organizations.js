@@ -36,6 +36,14 @@ const toUpperText = (v) =>
       console.log('[organizations] Columna created_by_user_id agregada');
     }
 
+    if (!have.has('advisor_user_id')) {
+      await db.query(`
+        ALTER TABLE organizations
+        ADD COLUMN advisor_user_id BIGINT NULL AFTER owner_user_id
+      `);
+      console.log('[organizations] Columna advisor_user_id agregada');
+    }
+
     if (!have.has('default_customs_broker_org_id')) {
       await db.query(`
         ALTER TABLE organizations
@@ -101,6 +109,7 @@ router.get('/', requireAuth, async (req, res) => {
     const includeTotal = String(req.query.include_total || '') === '1';
     const q = (req.query.q || '').trim();
     const tipoOrg = (req.query.tipo_org || '').trim();
+    const ownerUserId = req.query.owner_user_id ? Number(req.query.owner_user_id) : null;
 
     const where = [];
     const params = [];
@@ -112,6 +121,23 @@ router.get('/', requireAuth, async (req, res) => {
     if (tipoOrg) {
       where.push('LOWER(COALESCE(o.tipo_org, \'\')) = LOWER(?)');
       params.push(tipoOrg);
+    }
+    if (Number.isFinite(ownerUserId) && ownerUserId > 0) {
+      where.push(`
+        (
+          o.owner_user_id = ?
+          OR o.advisor_user_id = ?
+          OR o.created_by_user_id = ?
+          OR EXISTS (
+            SELECT 1
+            FROM deals d
+            LEFT JOIN contacts dc ON dc.id = d.contact_id
+            WHERE (d.org_id = o.id OR dc.org_id = o.id)
+              AND d.advisor_user_id = ?
+          )
+        )
+      `);
+      params.push(ownerUserId, ownerUserId, ownerUserId, ownerUserId);
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -151,7 +177,7 @@ router.get('/', requireAuth, async (req, res) => {
 
     if (includeTotal) {
       const [[countRow]] = await db.query(
-        `SELECT COUNT(*) AS total FROM organizations ${whereSql}`,
+        `SELECT COUNT(*) AS total FROM organizations o ${whereSql}`,
         params
       );
       const total = Number(countRow?.total || 0);
@@ -809,6 +835,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
       'country',
       'label',
       'owner_user_id',
+      'advisor_user_id',
       'created_by_user_id',
       'visibility',
       'notes',
@@ -834,6 +861,13 @@ router.patch('/:id', requireAuth, async (req, res) => {
       'latitude',
       'longitude',
     ];
+
+    if (
+      Object.prototype.hasOwnProperty.call(req.body, 'owner_user_id') &&
+      !Object.prototype.hasOwnProperty.call(req.body, 'advisor_user_id')
+    ) {
+      req.body.advisor_user_id = req.body.owner_user_id;
+    }
 
     const sets = [];
     const params = [];
