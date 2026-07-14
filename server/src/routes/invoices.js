@@ -141,7 +141,25 @@ function asJson(value) {
 
 function toSheetNumber(value) {
   if (value === '' || value === null || value === undefined) return 0;
-  const normalized = String(value).replace(/\./g, '').replace(',', '.');
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  const raw = String(value).trim();
+  if (!raw) return 0;
+  const hasComma = raw.includes(',');
+  const hasDot = raw.includes('.');
+  let normalized = raw.replace(/\s/g, '');
+  if (hasComma && hasDot) {
+    const lastComma = raw.lastIndexOf(',');
+    const lastDot = raw.lastIndexOf('.');
+    normalized = lastComma > lastDot
+      ? raw.replace(/\./g, '').replace(',', '.')
+      : raw.replace(/,/g, '');
+  } else if (hasComma) {
+    normalized = raw.replace(/\./g, '').replace(',', '.');
+  } else if (hasDot) {
+    const parts = raw.split('.');
+    const last = parts[parts.length - 1] || '';
+    normalized = parts.length > 2 || last.length === 3 ? raw.replace(/\./g, '') : raw;
+  }
   const num = Number(normalized);
   return Number.isFinite(num) ? num : 0;
 }
