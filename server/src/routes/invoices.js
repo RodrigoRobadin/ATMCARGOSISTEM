@@ -14,7 +14,6 @@ ensureCreditNoteTables().catch((err) => console.error('init credit tables', err?
 ensureInvoiceCreditColumns().catch((err) => console.error('init credit cols', err?.message));
 ensureReceiptTables().catch((err) => console.error('init receipts', err?.message));
 ensureInvoiceMoneyColumns().catch((err) => console.error('init money cols', err?.message));
-ensureInvoiceItemSourceColumns().catch((err) => console.error('init invoice item source cols', err?.message));
 
 // =================== HELPERS ===================
 async function ensureInvoiceSequence() {
@@ -124,6 +123,8 @@ async function ensureInvoiceItemSourceColumns() {
     invoiceItemSourceColumnsPromise = null;
   }
 }
+ensureInvoiceItemSourceColumns().catch((err) => console.error('init invoice item source cols', err?.message));
+
 
 function asJson(value) {
   if (value == null) return null;
