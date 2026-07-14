@@ -82,6 +82,9 @@ export default function InvoiceCreateModal({
     );
   }, [invoiceProgress.usedPercentages]);
   const planOptions = useMemo(() => {
+    if (hasSelectedQuoteItems) {
+      return PAYMENT_PLANS.map((plan) => ({ ...plan, availableInstallments: plan.installments }));
+    }
     return PAYMENT_PLANS.map((plan) => ({
       ...plan,
       availableInstallments: plan.installments.filter((pct) => {
@@ -89,7 +92,7 @@ export default function InvoiceCreateModal({
         return !usedPercentageSet.has(roundedPct) && usedTotalPercentage + pct <= 100.0001;
       }),
     }));
-  }, [usedPercentageSet, usedTotalPercentage]);
+  }, [hasSelectedQuoteItems, usedPercentageSet, usedTotalPercentage]);
   const availableInstallments = useMemo(() => {
     const option = planOptions.find((plan) => plan.key === selectedPlan.key);
     return option?.availableInstallments || [];
@@ -238,7 +241,7 @@ export default function InvoiceCreateModal({
   }, [isCreditPayment]);
 
   useEffect(() => {
-    if (isContainerBilling || isContainerInitialInvoice) return;
+    if (isContainerBilling || isContainerInitialInvoice || hasSelectedQuoteItems) return;
     if (availableInstallments.length === 0) {
       const fallbackPlan = planOptions.find((plan) => plan.availableInstallments.length > 0);
       if (fallbackPlan && fallbackPlan.key !== form.amount_plan) {
@@ -324,10 +327,12 @@ export default function InvoiceCreateModal({
 
   function handleAmountPlanChange(planKey) {
     const plan = PAYMENT_PLANS.find((p) => p.key === planKey) || PAYMENT_PLANS[0];
-    const nextAvailable = plan.installments.filter((pct) => {
-      const roundedPct = toPercentNumber(pct);
-      return !usedPercentageSet.has(roundedPct) && usedTotalPercentage + pct <= 100.0001;
-    });
+    const nextAvailable = hasSelectedQuoteItems
+      ? plan.installments
+      : plan.installments.filter((pct) => {
+          const roundedPct = toPercentNumber(pct);
+          return !usedPercentageSet.has(roundedPct) && usedTotalPercentage + pct <= 100.0001;
+        });
     const nextPct = nextAvailable[0] || plan.installments[0] || 100;
     setForm((prev) => ({
       ...prev,
@@ -806,7 +811,7 @@ export default function InvoiceCreateModal({
       alert('Ingresa un porcentaje valido entre 1 y 100');
       return;
     }
-    if (!isContainerBilling && !isContainerInitialInvoice) {
+    if (!hasSelectedQuoteItems && !isContainerBilling && !isContainerInitialInvoice) {
       const roundedPct = toPercentNumber(pct);
       if (usedPercentageSet.has(roundedPct)) {
         alert(`El ${roundedPct}% ya fue facturado para esta operacion.`);
@@ -1146,8 +1151,8 @@ export default function InvoiceCreateModal({
                   required
                 >
                   {selectedPlan.installments.map((pct) => {
-                    const used = usedPercentageSet.has(toPercentNumber(pct));
-                    const exceedsBalance = usedTotalPercentage + pct > 100.0001;
+                    const used = !hasSelectedQuoteItems && usedPercentageSet.has(toPercentNumber(pct));
+                    const exceedsBalance = !hasSelectedQuoteItems && usedTotalPercentage + pct > 100.0001;
                     return (
                       <option key={pct} value={pct} disabled={used || exceedsBalance}>
                         {pct}%{used ? " - ya facturado" : exceedsBalance ? " - excede saldo" : ""}
@@ -1166,7 +1171,7 @@ export default function InvoiceCreateModal({
               {hasSelectedQuoteItems && (
                 <p className="text-xs text-slate-500 mt-1">{defaultSelectedQuoteItems.length} item(s) seleccionado(s)</p>
               )}
-              {!isContainerBilling && !isContainerInitialInvoice && availableInstallments.length === 0 && (
+              {!hasSelectedQuoteItems && !isContainerBilling && !isContainerInitialInvoice && availableInstallments.length === 0 && (
                 <p className="text-xs text-red-600 mt-1">No quedan porcentajes disponibles en este esquema.</p>
               )}
             </div>
