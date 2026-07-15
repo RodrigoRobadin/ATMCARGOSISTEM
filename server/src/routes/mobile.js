@@ -636,7 +636,11 @@ router.get('/operation-defaults', requireAuth, async (req, res) => {
   }
 });
 
-async function getVisibleDealWhere(req, alias = 'd') {
+async function getVisibleDealWhere(_req, _alias = 'd') {
+  return { where: [], params: [] };
+}
+
+async function getEditableDealWhere(req, alias = 'd') {
   const where = [];
   const params = [];
   if (String(req.user?.role || '').toLowerCase() !== 'admin') {
@@ -649,7 +653,8 @@ async function getVisibleDealWhere(req, alias = 'd') {
 router.get('/operations', requireAuth, async (req, res) => {
   try {
     const q = cleanText(req.query.q, 120);
-    const limit = Math.min(Number(req.query.limit || 30) || 30, 80);
+    const limit = Math.min(Number(req.query.limit || 200) || 200, 200);
+    const offset = Math.max(Number(req.query.offset || 0) || 0, 0);
     const { where, params } = await getVisibleDealWhere(req, 'd');
     if (q) {
       where.push('(d.reference LIKE ? OR d.title LIKE ? OR o.name LIKE ? OR c.name LIKE ?)');
@@ -675,8 +680,8 @@ router.get('/operations', requireAuth, async (req, res) => {
          LEFT JOIN (SELECT deal_id, COUNT(*) AS total_fields FROM deal_custom_fields GROUP BY deal_id) fields ON fields.deal_id = d.id
         ${whereSql}
         ORDER BY d.created_at DESC
-        LIMIT ?`,
-      [...params, limit]
+        LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
     );
     res.json(rows);
   } catch (e) {
@@ -936,7 +941,7 @@ router.patch('/operations/:id', requireAuth, async (req, res) => {
   try {
     const id = toNumberOrNull(req.params.id);
     if (!id) return res.status(400).json({ error: 'ID de operacion requerido' });
-    const { where, params } = await getVisibleDealWhere(req, 'd');
+    const { where, params } = await getEditableDealWhere(req, 'd');
     where.push('d.id = ?');
     params.push(id);
     const [[deal]] = await db.query(`SELECT id FROM deals d WHERE ${where.join(' AND ')} LIMIT 1`, params);

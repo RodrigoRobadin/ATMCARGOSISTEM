@@ -4,7 +4,7 @@ import { api } from '../../api';
 import RouteForm from './RouteForm';
 import RouteDetail from './RouteDetail';
 
-export default function RoutesList({ onSelectRoute }) {
+export default function RoutesList({ onSelectRoute, userId = '' }) {
     const [routes, setRoutes] = useState([]);
     const [zones, setZones] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -14,7 +14,7 @@ export default function RoutesList({ onSelectRoute }) {
     const [selectedRouteId, setSelectedRouteId] = useState(null);
     useEffect(() => {
         loadData();
-    }, [filterZone, filterStatus]);
+    }, [filterZone, filterStatus, userId]);
 
     async function loadData() {
         setLoading(true);
@@ -22,6 +22,7 @@ export default function RoutesList({ onSelectRoute }) {
             const params = {};
             if (filterZone) params.zone_id = filterZone;
             if (filterStatus) params.status = filterStatus;
+            if (userId) params.user_id = userId;
 
             const [routesRes, zonesRes] = await Promise.all([
                 api.get('/routes', { params }),

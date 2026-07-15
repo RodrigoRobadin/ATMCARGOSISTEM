@@ -70,20 +70,34 @@ export async function apiRequest(path, options = {}) {
   return data;
 }
 
+async function fetchAllRows(path, params = {}, pageSize = 200) {
+  const rows = [];
+  let offset = 0;
+
+  while (true) {
+    const data = await apiRequest(path, { params: { ...params, limit: pageSize, offset } });
+    const page = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
+    rows.push(...page);
+    if (page.length < pageSize) break;
+    offset += page.length;
+  }
+
+  return rows;
+}
 export const api = {
   login: (email, password) =>
     apiRequest('/auth/login', { method: 'POST', body: { email, password } }),
   bootstrap: () => apiRequest('/mobile/bootstrap'),
-  searchContacts: (q) => apiRequest('/contacts', { params: { q, limit: 30 } }),
+  searchContacts: (q) => fetchAllRows('/contacts', { q }, 200),
   mobileContact: (id) => apiRequest(`/mobile/contacts/${id}`),
   createContact: (payload) => apiRequest('/contacts', { method: 'POST', body: payload }),
-  searchOrganizations: (q) => apiRequest('/organizations', { params: { q, limit: 30 } }),
+  searchOrganizations: (q) => fetchAllRows('/organizations', { q }, 1000),
   mobileOrganization: (id) => apiRequest(`/mobile/organizations/${id}`),
   createOrganization: (payload) => apiRequest('/organizations', { method: 'POST', body: payload }),
   organizationContacts: (id) => apiRequest(`/organizations/${id}/contacts`),
   operationDefaults: (business_unit_key) =>
     apiRequest('/mobile/operation-defaults', { params: { business_unit_key } }),
-  mobileOperations: (q) => apiRequest('/mobile/operations', { params: { q, limit: 40 } }),
+  mobileOperations: (q) => fetchAllRows('/mobile/operations', { q }, 200),
   mobileOperation: (id) => apiRequest(`/mobile/operations/${id}`),
   updateMobileOperation: (id, payload) => apiRequest(`/mobile/operations/${id}`, { method: 'PATCH', body: payload }),
   createDeal: (payload) => apiRequest('/deals', { method: 'POST', body: payload }),
@@ -107,8 +121,15 @@ export const api = {
   listAttachments: (entity_type, entity_id) =>
     apiRequest('/mobile/attachments', { params: { entity_type, entity_id } }),
   mobileFollowup: () => apiRequest('/mobile/followup'),
+  followupCalls: (params = {}) => apiRequest('/followups/calls', { params }),
+  startFollowupCall: (payload) => apiRequest('/followups/calls/start', { method: 'POST', body: payload }),
+  completeFollowupCall: (id, payload) =>
+    apiRequest(`/followups/calls/${id}/complete`, { method: 'PATCH', body: payload }),
+  registerFollowupDevice: (payload) => apiRequest('/followups/devices', { method: 'POST', body: { ...payload, expo_push_token: payload.token || payload.expo_push_token } }),
+  unregisterFollowupDevice: (token) =>
+    apiRequest('/followups/devices', { method: 'DELETE', body: { expo_push_token: token } }),
   createFollowupCall: (payload) => apiRequest('/mobile/followup/calls', { method: 'POST', body: payload }),
-  createFollowupNote: (payload) => apiRequest('/mobile/followup/notes', { method: 'POST', body: payload }),
-  createFollowupTask: (payload) => apiRequest('/mobile/followup/tasks', { method: 'POST', body: payload }),
+  createFollowupNote: (payload) => apiRequest('/followups/notes', { method: 'POST', body: { ...payload, source: 'mobile' } }),
+  createFollowupTask: (payload) => apiRequest('/followups/agenda', { method: 'POST', body: { ...payload, source: 'mobile' } }),
   updateFollowupTask: (id, payload) => apiRequest(`/mobile/followup/tasks/${id}`, { method: 'PATCH', body: payload }),
 };

@@ -95,8 +95,12 @@ router.get('/', requireAuth, async (req, res) => {
         const safeLimit = Math.min(Number(limit) || 500, 1000);
         const safeOffset = Math.max(Number(offset) || 0, 0);
 
-        let where = 'v.user_id = ?';
-        const params = [userId];
+        let where = '1=1';
+        const params = [];
+        if (!canAdmin(req) || req.query.user_id) {
+            where += ' AND v.user_id = ?';
+            params.push(userId);
+        }
 
         if (status) {
             where += ' AND v.status = ?';

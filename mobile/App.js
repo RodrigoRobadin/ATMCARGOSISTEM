@@ -13,6 +13,8 @@ import {
   Text,
   TextInput,
   View,
+  useColorScheme,
+  useWindowDimensions,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as DocumentPicker from 'expo-document-picker';
@@ -20,14 +22,27 @@ import * as Font from 'expo-font';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as Linking from 'expo-linking';
-import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
+import Constants from 'expo-constants';
+import * as Notifications from 'expo-notifications';
+import { DarkTheme, DefaultTheme, NavigationContainer, createNavigationContainerRef, useFocusEffect } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AuthProvider, useAuth } from './src/auth/AuthContext';
 import { api, API_URL, getAuthToken } from './src/api/client';
 import { pickDeviceContact } from './src/utils/deviceContacts';
 import { openPhone, openWhatsapp } from './src/utils/phone';
 
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
+const navigationRef = createNavigationContainerRef();
 const Tab = createBottomTabNavigator();
 const brandLogo = require('./assets/grupo-atm-logo.jpeg');
 const materialCommunityFont = require('./node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/MaterialCommunityIcons.ttf');
@@ -38,17 +53,56 @@ const iconAliases = {
   'phone-clock': 'phone',
 };
 
-const colors = {
-  bg: '#f6f7f9',
+const lightColors = {
+  bg: '#f5f7f8',
   panel: '#ffffff',
-  ink: '#111827',
+  elevated: '#ffffff',
+  input: '#ffffff',
+  ink: '#102038',
   muted: '#64748b',
-  border: '#dbe2ea',
-  accent: '#0f766e',
-  accentDark: '#115e59',
-  danger: '#b91c1c',
-  soft: '#e6f3f1',
+  border: '#dce4e8',
+  accent: '#087f73',
+  accentDark: '#06675f',
+  danger: '#c2414a',
+  dangerSoft: '#fff1f2',
+  soft: '#eaf6f3',
+  softStrong: '#dff1ed',
+  placeholder: '#94a3b8',
+  warning: '#a16207',
+  warningSoft: '#fffbeb',
+  shadow: '#0f172a',
+  nav: '#ffffff',
 };
+
+const darkColors = {
+  bg: '#0f171b',
+  panel: '#172126',
+  elevated: '#1b282e',
+  input: '#111b20',
+  ink: '#f3f7f8',
+  muted: '#9fb0ba',
+  border: '#2d3d45',
+  accent: '#39b8a8',
+  accentDark: '#278f84',
+  danger: '#fb7185',
+  dangerSoft: '#321b22',
+  soft: '#17332f',
+  softStrong: '#1d403a',
+  placeholder: '#71838e',
+  warning: '#fbbf24',
+  warningSoft: '#352a14',
+  shadow: '#000000',
+  nav: '#141e23',
+};
+
+const THEME_STORAGE_KEY = 'atm-mobile-theme';
+const ThemeContext = React.createContext({ isDark: false, toggleTheme: () => {} });
+let colors = lightColors;
+let styles;
+
+function useAppTheme() {
+  return React.useContext(ThemeContext);
+}
 
 function showError(error, fallback = 'No se pudo completar la accion') {
   Alert.alert('ATMCARGOSISTEM', error?.message || fallback);
@@ -58,13 +112,16 @@ function Screen({ children }) {
   return <SafeAreaView style={styles.screen}>{children}</SafeAreaView>;
 }
 
-function PrimaryButton({ title, icon, onPress, disabled, variant = 'primary' }) {
+function PrimaryButton({ title, icon, onPress, disabled, variant = 'primary', compact = false, accessibilityLabel }) {
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel || title}
       style={({ pressed }) => [
         styles.button,
+        compact && styles.buttonCompact,
         variant === 'secondary' && styles.buttonSecondary,
         variant === 'danger' && styles.buttonDanger,
         disabled && styles.buttonDisabled,
@@ -72,7 +129,7 @@ function PrimaryButton({ title, icon, onPress, disabled, variant = 'primary' }) 
       ]}
     >
       {icon ? <MaterialCommunityIcons name={icon} size={18} color={variant === 'secondary' ? colors.accent : '#fff'} /> : null}
-      <Text style={[styles.buttonText, variant === 'secondary' && styles.buttonSecondaryText]}>{title}</Text>
+      {title ? <Text style={[styles.buttonText, variant === 'secondary' && styles.buttonSecondaryText]}>{title}</Text> : null}
     </Pressable>
   );
 }
@@ -112,7 +169,7 @@ function Field({ label, value, onChangeText, placeholder, keyboardType = 'defaul
         autoCapitalize="none"
         multiline={multiline}
         style={[styles.input, multiline && styles.textArea]}
-        placeholderTextColor="#94a3b8"
+        placeholderTextColor={colors.placeholder}
       />
     </View>
   );
@@ -238,6 +295,7 @@ function LoginScreen() {
 
 function HomeScreen({ navigation }) {
   const { user, logout } = useAuth();
+  const { isDark, toggleTheme } = useAppTheme();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [data, setData] = useState(null);
@@ -264,7 +322,7 @@ function HomeScreen({ navigation }) {
   );
 
   const recentQuotes = [];
-  const recentOperations = data?.recentOperations || [];
+  const recentOperations = (data?.recentOperations || []).slice(0, 8);
 
   return (
     <Screen>
@@ -280,27 +338,38 @@ function HomeScreen({ navigation }) {
               <Text style={styles.title}>{user?.name || 'Usuario'}</Text>
             </View>
           </View>
-          <Pressable onPress={logout} style={styles.logoutButton}>
-            <MaterialCommunityIcons name="logout" size={20} color={colors.danger} />
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable onPress={toggleTheme} style={styles.iconButton} accessibilityLabel={isDark ? "Usar modo claro" : "Usar modo oscuro"}>
+              <MaterialCommunityIcons name={isDark ? "white-balance-sunny" : "moon-waning-crescent"} size={20} color={colors.accent} />
+            </Pressable>
+            <Pressable onPress={logout} style={[styles.iconButton, styles.logoutButton]} accessibilityLabel="Cerrar sesion">
+              <MaterialCommunityIcons name="logout" size={20} color={colors.danger} />
+            </Pressable>
+          </View>
         </View>
 
         <View style={styles.quickGrid}>
-          <QuickAction icon="account-plus" label="Contacto" onPress={() => navigation.navigate('Contactos')} />
-          <QuickAction icon="office-building-plus" label="Organizacion" onPress={() => navigation.navigate('Organizaciones')} />
-          <QuickAction icon="file-document-edit" label="Operar" onPress={() => navigation.navigate('Operar')} />
-          <QuickAction icon="clipboard-list" label="Operaciones" onPress={() => navigation.navigate('Operaciones')} />
+          <QuickAction icon="account-group" label="Contactos" subtitle="Comunica y da seguimiento" onPress={() => navigation.navigate('Contactos')} />
+          <QuickAction icon="office-building" label="Organizaciones" subtitle="Clientes y proveedores" onPress={() => navigation.navigate('Organizaciones')} />
+          <QuickAction icon="file-document-edit" label="Nueva operacion" subtitle="Crea un registro comercial" onPress={() => navigation.navigate('Operar')} />
+          <QuickAction icon="clipboard-list" label="Operaciones" subtitle="Consulta y actualiza" onPress={() => navigation.navigate('Operaciones')} />
         </View>
 
         <SectionTitle title="Operaciones recientes" />
         {loading ? <ActivityIndicator /> : null}
         {!loading && !recentOperations.length ? <EmptyState text="Sin operaciones recientes" /> : null}
         {recentOperations.map((op) => (
-          <Pressable key={op.id} style={styles.card} onPress={() => navigation.navigate('Operaciones', { operationId: op.id })}>
-            <Text style={styles.cardTitle}>{op.reference || `OP #${op.id}`}</Text>
-            <Text style={styles.meta}>{op.title || op.org_name || 'Sin titulo'}</Text>
-            <Text style={styles.meta}>{op.business_unit_name || '-'} · {op.stage_name || '-'}</Text>
-            <Text style={styles.meta}>{op.file_count || 0} adjuntos · {op.custom_field_count || 0} datos</Text>
+          <Pressable key={op.id} style={[styles.card, styles.operationCard]} onPress={() => navigation.navigate('Operaciones', { operationId: op.id })}>
+            <View style={styles.entityIcon}><MaterialCommunityIcons name="clipboard-list" size={22} color={colors.accent} /></View>
+            <View style={styles.cardContent}>
+              <Text style={styles.cardTitle}>{op.reference || `OP #${op.id}`}</Text>
+              <Text style={styles.meta} numberOfLines={1}>{op.org_name || op.title || 'Sin cliente'}</Text>
+              <Text style={styles.meta} numberOfLines={1}>{op.business_unit_name || '-'} · {op.file_count || 0} adjuntos · {op.custom_field_count || 0} datos</Text>
+            </View>
+            <View style={styles.cardAside}>
+              <View style={styles.stagePill}><Text style={styles.stagePillText}>{op.stage_name || 'Sin etapa'}</Text></View>
+              <MaterialCommunityIcons name="chevron-right" size={22} color={colors.accent} />
+            </View>
           </Pressable>
         ))}
 
@@ -321,11 +390,15 @@ function HomeScreen({ navigation }) {
   );
 }
 
-function QuickAction({ icon, label, onPress }) {
+function QuickAction({ icon, label, subtitle, onPress }) {
   return (
-    <Pressable onPress={onPress} style={styles.quickAction}>
-      <MaterialCommunityIcons name={icon} size={26} color={colors.accent} />
-      <Text style={styles.quickText}>{label}</Text>
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.quickAction, pressed && styles.cardPressed]}>
+      <View style={styles.entityIcon}><MaterialCommunityIcons name={icon} size={24} color={colors.accent} /></View>
+      <View style={styles.quickCopy}>
+        <Text style={styles.quickText}>{label}</Text>
+        <Text style={styles.quickSubtitle}>{subtitle}</Text>
+      </View>
+      <MaterialCommunityIcons name="chevron-right" size={22} color={colors.accent} />
     </Pressable>
   );
 }
@@ -335,12 +408,41 @@ function SectionTitle({ title }) {
 }
 
 const CALL_OUTCOMES = [
-  { value: 'no_contesta', label: 'No contesta' },
-  { value: 'interesado', label: 'Interesado' },
-  { value: 'no_interesado', label: 'No interesado' },
-  { value: 'volver_a_llamar', label: 'Volver a llamar' },
-  { value: 'en_negociacion', label: 'En negociacion' },
+  { value: 'no_contesta', label: 'No contesta', icon: 'phone-missed' },
+  { value: 'interesado', label: 'Interesado', icon: 'star-outline' },
+  { value: 'no_interesado', label: 'No interesado', icon: 'thumb-down-outline' },
+  { value: 'volver_a_llamar', label: 'Volver a llamar', icon: 'phone-forward' },
+  { value: 'en_negociacion', label: 'En negociacion', icon: 'handshake-outline' },
 ];
+
+const CALL_OUTCOMES_REQUIRING_TASK = new Set(['interesado', 'volver_a_llamar', 'en_negociacion']);
+
+function validateCallDraft(draft) {
+  if (draft?.outcome !== 'no_contesta' && !String(draft?.notes || '').trim()) {
+    throw new Error('El contexto de la llamada es obligatorio');
+  }
+  if (CALL_OUTCOMES_REQUIRING_TASK.has(draft?.outcome) &&
+      (!String(draft?.task_title || '').trim() || !String(draft?.task_due || '').trim())) {
+    throw new Error('Este resultado requiere una proxima accion con fecha y hora');
+  }
+}
+
+function callCompletionPayload(draft) {
+  const hasTask = Boolean(String(draft?.task_title || '').trim() && String(draft?.task_due || '').trim());
+  return {
+    subject: draft.subject,
+    notes: String(draft.notes || '').trim(),
+    happened_at: draft.happened_at,
+    duration_min: Number(draft.duration_min || 0),
+    outcome: draft.outcome,
+    task: hasTask ? {
+      title: String(draft.task_title).trim(),
+      due_at: draft.task_due,
+      priority: 'medium',
+      reminder_minutes: 30,
+    } : undefined,
+  };
+}
 
 function pad2(n) {
   return String(n).padStart(2, '0');
@@ -377,6 +479,24 @@ function authenticatedFileUrl(path) {
   return `${url}${separator}access_token=${encodeURIComponent(token)}`;
 }
 
+async function startAssistedCallFromList({ navigation, phone, orgId = null, contactId = null, name = 'cliente' }) {
+  const draft = {
+    org_id: orgId || null,
+    contact_id: contactId || null,
+    deal_id: null,
+    phone_number: phone || '',
+    subject: `Llamada - ${name || 'cliente'}`,
+    happened_at: localDateTime(0),
+    duration_min: '',
+    outcome: 'volver_a_llamar',
+    notes: '',
+    task_title: 'Volver a llamar',
+    task_due: localDateTime(1),
+  };
+  const started = await api.startFollowupCall({ ...draft, started_at: draft.happened_at, source: 'mobile' });
+  navigation.navigate('Seguimiento', { pendingCall: { ...draft, call_id: started.id } });
+  await openPhone(phone);
+}
 function entityPayload(entityType, entity) {
   if (entityType === 'contact') {
     return { contact_id: entity?.id, org_id: entity?.org_id || null };
@@ -401,22 +521,25 @@ function FollowupEntityDetail({ entityType, entity, followup, contacts = [], onC
 
   async function callNow(target = entity) {
     const targetPhone = target?.phone || phone;
+    const draft = {
+      ...entityPayload(target?.org_id ? 'contact' : entityType, target),
+      org_id: target?.org_id || base.org_id || null,
+      contact_id: target?.org_id ? target.id : base.contact_id || null,
+      subject: `Llamada - ${target?.name || title}`,
+      phone_number: targetPhone,
+      happened_at: localDateTime(0),
+      duration_min: '',
+      outcome: 'volver_a_llamar',
+      notes: '',
+      task_title: 'Volver a llamar',
+      task_due: localDateTime(1),
+    };
     try {
+      const started = await api.startFollowupCall({ ...draft, started_at: draft.happened_at, source: 'mobile' });
+      setCallDraft({ ...draft, call_id: started.id });
       await openPhone(targetPhone);
-      setCallDraft({
-        ...entityPayload(target?.org_id ? 'contact' : entityType, target),
-        org_id: target?.org_id || base.org_id || null,
-        contact_id: target?.org_id ? target.id : base.contact_id || null,
-        subject: `Llamada - ${target?.name || title}`,
-        happened_at: localDateTime(0),
-        outcome: 'volver_a_llamar',
-        notes: '',
-        task_title: 'Volver a llamar',
-        task_due: localDateTime(1),
-        create_task: true,
-      });
     } catch (e) {
-      showError(e, 'No se pudo abrir llamada');
+      showError(e, 'No se pudo iniciar la llamada');
     }
   }
 
@@ -424,23 +547,13 @@ function FollowupEntityDetail({ entityType, entity, followup, contacts = [], onC
     if (!callDraft) return;
     setSaving(true);
     try {
-      await api.createFollowupCall({
-        org_id: callDraft.org_id,
-        contact_id: callDraft.contact_id,
-        subject: callDraft.subject,
-        notes: callDraft.notes,
-        happened_at: callDraft.happened_at,
-        outcome: callDraft.outcome,
+      validateCallDraft(callDraft);
+      const started = callDraft.call_id ? null : await api.startFollowupCall({
+        ...callDraft,
+        started_at: callDraft.happened_at,
+        source: 'mobile',
       });
-      if (callDraft.create_task && callDraft.task_title && callDraft.task_due) {
-        await api.createFollowupTask({
-          org_id: callDraft.org_id,
-          contact_id: callDraft.contact_id,
-          title: callDraft.task_title,
-          due_at: callDraft.task_due,
-          priority: 'medium',
-        });
-      }
+      await api.completeFollowupCall(callDraft.call_id || started.id, callCompletionPayload(callDraft));
       setCallDraft(null);
       await onReload?.();
     } catch (e) {
@@ -534,7 +647,8 @@ function FollowupEntityDetail({ entityType, entity, followup, contacts = [], onC
           <OptionChips options={CALL_OUTCOMES} value={callDraft.outcome} onChange={(value) => setCallDraft({ ...callDraft, outcome: value })} />
           <Field label="Que se hablo" value={callDraft.notes} onChangeText={(v) => setCallDraft({ ...callDraft, notes: v })} placeholder="Resumen de la llamada" multiline />
           <Field label="Fecha llamada" value={callDraft.happened_at} onChangeText={(v) => setCallDraft({ ...callDraft, happened_at: v })} placeholder="YYYY-MM-DD HH:mm" />
-          <Field label="Proxima accion" value={callDraft.task_title} onChangeText={(v) => setCallDraft({ ...callDraft, task_title: v, create_task: !!v })} placeholder="Volver a llamar..." />
+          <Field label="Duracion (minutos, opcional)" value={String(callDraft.duration_min || '')} onChangeText={(v) => setCallDraft({ ...callDraft, duration_min: v })} placeholder="0" keyboardType="number-pad" />
+          <Field label="Proxima accion" value={callDraft.task_title} onChangeText={(v) => setCallDraft({ ...callDraft, task_title: v })} placeholder="Volver a llamar..." />
           <Text style={styles.label}>Fecha rapida</Text>
           <OptionChips
             options={[{ value: localDateTime(0), label: 'Hoy' }, { value: localDateTime(1), label: 'Manana' }, { value: localDateTime(2), label: '2 dias' }, { value: localDateTime(7), label: 'Prox. semana' }]}
@@ -544,7 +658,7 @@ function FollowupEntityDetail({ entityType, entity, followup, contacts = [], onC
           <Field label="Fecha tarea" value={callDraft.task_due} onChangeText={(v) => setCallDraft({ ...callDraft, task_due: v })} placeholder="YYYY-MM-DD HH:mm" />
           <View style={styles.actions}>
             <PrimaryButton title="Guardar llamada" icon="content-save" onPress={saveCall} disabled={saving} />
-            <PrimaryButton title="Cancelar" icon="close" variant="secondary" onPress={() => setCallDraft(null)} disabled={saving} />
+            <PrimaryButton title="Dejar pendiente" icon="close" variant="secondary" onPress={() => setCallDraft(null)} disabled={saving} />
           </View>
         </View>
       ) : null}
@@ -589,21 +703,28 @@ function FollowupEntityDetail({ entityType, entity, followup, contacts = [], onC
   );
 }
 
-function ContactCard({ item, onOpen }) {
+function ContactCard({ item, onOpen, onCall }) {
+  const { width } = useWindowDimensions();
+  const compactActions = width < 430;
+  const initials = String(item.name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
   return (
-    <Pressable style={styles.card} onPress={() => onOpen?.(item.id)}>
-      <Text style={styles.cardTitle}>{item.name || 'Sin nombre'}</Text>
-      <Text style={styles.meta}>{item.org_name || item.email || 'Sin organizacion'}</Text>
-      <Text style={styles.meta}>{item.phone || 'Sin telefono'}</Text>
-      <View style={styles.actions}>
-        <PrimaryButton title="Llamar" icon="phone" variant="secondary" disabled={!item.phone} onPress={() => openPhone(item.phone).catch(showError)} />
-        <PrimaryButton title="WhatsApp" icon="whatsapp" variant="secondary" disabled={!item.phone} onPress={() => openWhatsapp(item.phone).catch(showError)} />
+    <Pressable style={({ pressed }) => [styles.card, styles.entityCard, pressed && styles.cardPressed]} onPress={() => onOpen?.(item.id)}>
+      <View style={styles.avatar}><Text style={styles.avatarText}>{initials || '?'}</Text></View>
+      <View style={styles.cardContent}>
+        <Text style={styles.cardTitle} numberOfLines={1}>{item.name || 'Sin nombre'}</Text>
+        <Text style={styles.meta} numberOfLines={1}>{item.org_name || item.email || 'Sin organizacion'}</Text>
+        <Text style={styles.meta}>{item.phone || 'Sin telefono'}</Text>
       </View>
+      <View style={styles.entityActions}>
+        <PrimaryButton title={compactActions ? "" : "Llamar"} accessibilityLabel="Llamar" compact={compactActions} icon="phone" variant="secondary" disabled={!item.phone} onPress={() => onCall?.(item)} />
+        <PrimaryButton title={compactActions ? "" : "WhatsApp"} accessibilityLabel="WhatsApp" compact={compactActions} icon="whatsapp" variant="secondary" disabled={!item.phone} onPress={() => openWhatsapp(item.phone).catch(showError)} />
+      </View>
+      <MaterialCommunityIcons name="chevron-right" size={22} color={colors.accent} />
     </Pressable>
   );
 }
 
-function ContactsScreen() {
+function ContactsScreen({ navigation }) {
   const [q, setQ] = useState('');
   const [items, setItems] = useState([]);
   const [detail, setDetail] = useState(null);
@@ -611,6 +732,9 @@ function ContactsScreen() {
   const [loading, setLoading] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState({ name: '', email: '', phone: '', title: '', org_id: '' });
+  const [orgQuery, setOrgQuery] = useState('');
+  const [orgSuggestions, setOrgSuggestions] = useState([]);
+  const [searchingOrg, setSearchingOrg] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -625,8 +749,34 @@ function ContactsScreen() {
   }, [q]);
 
   useEffect(() => {
-    load();
-  }, []);
+    const timer = setTimeout(load, q.trim() ? 250 : 0);
+    return () => clearTimeout(timer);
+  }, [load, q]);
+
+  useEffect(() => {
+    let active = true;
+    const query = orgQuery.trim();
+    if (query.length < 1) {
+      setOrgSuggestions([]);
+      setSearchingOrg(false);
+      return undefined;
+    }
+    setSearchingOrg(true);
+    const timer = setTimeout(async () => {
+      try {
+        const rows = await api.searchOrganizations(query);
+        if (active) setOrgSuggestions(Array.isArray(rows) ? rows : rows?.items || []);
+      } catch {
+        if (active) setOrgSuggestions([]);
+      } finally {
+        if (active) setSearchingOrg(false);
+      }
+    }, 250);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [orgQuery]);
 
   async function create() {
     try {
@@ -639,6 +789,8 @@ function ContactsScreen() {
       };
       await api.createContact(payload);
       setForm({ name: '', email: '', phone: '', title: '', org_id: '' });
+      setOrgQuery('');
+      setOrgSuggestions([]);
       setFormOpen(false);
       await load();
     } catch (e) {
@@ -663,6 +815,15 @@ function ContactsScreen() {
     }
   }
 
+  async function callContactFromList(item) {
+    try {
+      await startAssistedCallFromList({
+        navigation, phone: item.phone, orgId: item.org_id, contactId: item.id, name: item.name,
+      });
+    } catch (error) {
+      showError(error, 'No se pudo iniciar la llamada');
+    }
+  }
   const openContactDetail = useCallback(async (id) => {
     setLoading(true);
     try {
@@ -694,15 +855,29 @@ function ContactsScreen() {
       <FlatList
         data={items}
         keyExtractor={(item) => String(item.id)}
-        renderItem={({ item }) => <ContactCard item={item} onOpen={openContactDetail} />}
+        renderItem={({ item }) => <ContactCard item={item} onOpen={openContactDetail} onCall={callContactFromList} />}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}
         ListHeaderComponent={
           <View style={styles.content}>
             <Text style={styles.title}>Contactos</Text>
-            <View style={styles.searchRow}>
-              <TextInput value={q} onChangeText={setQ} placeholder="Buscar contacto" style={[styles.input, styles.searchInput]} />
-              <PrimaryButton title="Buscar" icon="magnify" onPress={load} disabled={loading} />
-            </View>
+            <SuggestionBox
+              label="Buscar contacto"
+              value={q}
+              onChangeText={setQ}
+              placeholder="Nombre, organizacion, telefono o correo"
+              suggestions={q.trim() ? items : []}
+              loading={loading}
+              onSelect={(item) => {
+                setQ(item.name || '');
+                openContactDetail(item.id);
+              }}
+              renderSuggestion={(item) => (
+                <View>
+                  <Text style={styles.inlineItem}>{item.name || 'Sin nombre'}</Text>
+                  <Text style={styles.meta}>{item.org_name || item.phone || item.email || 'Contacto'}</Text>
+                </View>
+              )}
+            />
             <View style={styles.actions}>
               <PrimaryButton title={formOpen ? 'Cerrar formulario' : 'Agregar contacto'} icon="account-plus" variant="secondary" onPress={() => setFormOpen((v) => !v)} />
               <PrimaryButton title="Importar telefono" icon="contacts" variant="secondary" onPress={importFromPhone} />
@@ -713,7 +888,28 @@ function ContactsScreen() {
                 <Field label="Email" value={form.email} onChangeText={(v) => setForm({ ...form, email: v })} placeholder="correo@empresa.com" keyboardType="email-address" />
                 <Field label="Telefono" value={form.phone} onChangeText={(v) => setForm({ ...form, phone: v })} placeholder="+595..." keyboardType="phone-pad" />
                 <Field label="Cargo" value={form.title} onChangeText={(v) => setForm({ ...form, title: v })} placeholder="Compras, gerente, etc." />
-                <Field label="ID organizacion" value={form.org_id} onChangeText={(v) => setForm({ ...form, org_id: v })} placeholder="Opcional" keyboardType="number-pad" />
+                <SuggestionBox
+                  label="Organizacion"
+                  value={orgQuery}
+                  onChangeText={(value) => {
+                    setOrgQuery(value);
+                    setForm((prev) => ({ ...prev, org_id: '' }));
+                  }}
+                  placeholder="Buscar organizacion existente"
+                  suggestions={orgSuggestions}
+                  loading={searchingOrg}
+                  onSelect={(org) => {
+                    setOrgQuery(org.name || org.razon_social || '');
+                    setOrgSuggestions([]);
+                    setForm((prev) => ({ ...prev, org_id: String(org.id) }));
+                  }}
+                  renderSuggestion={(org) => (
+                    <View>
+                      <Text style={styles.inlineItem}>{org.name || org.razon_social || 'Sin nombre'}</Text>
+                      <Text style={styles.meta}>{org.ruc || org.email || 'Seleccionar organizacion'}</Text>
+                    </View>
+                  )}
+                />
                 <PrimaryButton title="Guardar contacto" icon="content-save" onPress={create} />
               </View>
             ) : null}
@@ -726,7 +922,9 @@ function ContactsScreen() {
   );
 }
 
-function OrganizationCard({ item, onOpen }) {
+function OrganizationCard({ item, onOpen, onCall }) {
+  const { width } = useWindowDimensions();
+  const compactActions = width < 430;
   const [contacts, setContacts] = useState([]);
   const [open, setOpen] = useState(false);
 
@@ -743,29 +941,31 @@ function OrganizationCard({ item, onOpen }) {
   }
 
   return (
-    <Pressable style={styles.card} onPress={() => onOpen?.(item.id)}>
-      <Text style={styles.cardTitle}>{item.name || item.razon_social || 'Sin nombre'}</Text>
-      <Text style={styles.meta}>{item.ruc || item.email || 'Sin RUC/email'}</Text>
-      <Text style={styles.meta}>{item.phone || 'Sin telefono'}</Text>
-      <View style={styles.actions}>
-        <PrimaryButton title="Llamar" icon="phone" variant="secondary" disabled={!item.phone} onPress={() => openPhone(item.phone).catch(showError)} />
-        <PrimaryButton title="Contactos" icon="account-group" variant="secondary" onPress={toggleContacts} />
+    <Pressable style={({ pressed }) => [styles.card, styles.entityCard, pressed && styles.cardPressed]} onPress={() => onOpen?.(item.id)}>
+      <View style={styles.entityIcon}><MaterialCommunityIcons name="office-building" size={23} color={colors.accent} /></View>
+      <View style={styles.cardContent}>
+        <Text style={styles.cardTitle} numberOfLines={1}>{item.name || item.razon_social || 'Sin nombre'}</Text>
+        <Text style={styles.meta} numberOfLines={1}>{item.ruc || item.email || 'Sin RUC/email'}</Text>
+        <Text style={styles.meta}>{item.phone || 'Sin telefono'}</Text>
+        {open ? (
+          <View style={styles.inlineList}>
+            {!contacts.length ? <Text style={styles.meta}>Sin contactos asociados</Text> : null}
+            {contacts.map((contact) => (
+              <Text key={contact.id} style={styles.inlineItem}>{contact.name} {contact.phone ? `· ${contact.phone}` : ''}</Text>
+            ))}
+          </View>
+        ) : null}
       </View>
-      {open ? (
-        <View style={styles.inlineList}>
-          {!contacts.length ? <Text style={styles.meta}>Sin contactos asociados</Text> : null}
-          {contacts.map((contact) => (
-            <Text key={contact.id} style={styles.inlineItem}>
-              {contact.name} {contact.phone ? `· ${contact.phone}` : ''}
-            </Text>
-          ))}
-        </View>
-      ) : null}
+      <View style={styles.entityActions}>
+        <PrimaryButton title={compactActions ? "" : "Llamar"} accessibilityLabel="Llamar" compact={compactActions} icon="phone" variant="secondary" disabled={!item.phone} onPress={() => onCall?.(item)} />
+        <PrimaryButton title={compactActions ? "" : "Contactos"} accessibilityLabel="Ver contactos" compact={compactActions} icon="account-group" variant="secondary" onPress={toggleContacts} />
+      </View>
+      <MaterialCommunityIcons name={open ? "chevron-up" : "chevron-right"} size={22} color={colors.accent} />
     </Pressable>
   );
 }
 
-function OrganizationsScreen() {
+function OrganizationsScreen({ navigation }) {
   const [q, setQ] = useState('');
   const [items, setItems] = useState([]);
   const [detail, setDetail] = useState(null);
@@ -788,8 +988,9 @@ function OrganizationsScreen() {
   }, [q]);
 
   useEffect(() => {
-    load();
-  }, []);
+    const timer = setTimeout(load, q.trim() ? 250 : 0);
+    return () => clearTimeout(timer);
+  }, [load, q]);
 
   async function create() {
     try {
@@ -838,6 +1039,15 @@ function OrganizationsScreen() {
     }
   }
 
+  async function callOrganizationFromList(item) {
+    try {
+      await startAssistedCallFromList({
+        navigation, phone: item.phone, orgId: item.id, name: item.name || item.razon_social,
+      });
+    } catch (error) {
+      showError(error, 'No se pudo iniciar la llamada');
+    }
+  }
   const openOrganizationDetail = useCallback(async (id) => {
     setLoading(true);
     try {
@@ -900,15 +1110,29 @@ function OrganizationsScreen() {
       <FlatList
         data={items}
         keyExtractor={(item) => String(item.id)}
-        renderItem={({ item }) => <OrganizationCard item={item} onOpen={openOrganizationDetail} />}
+        renderItem={({ item }) => <OrganizationCard item={item} onOpen={openOrganizationDetail} onCall={callOrganizationFromList} />}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}
         ListHeaderComponent={
           <View style={styles.content}>
             <Text style={styles.title}>Organizaciones</Text>
-            <View style={styles.searchRow}>
-              <TextInput value={q} onChangeText={setQ} placeholder="Buscar organizacion" style={[styles.input, styles.searchInput]} />
-              <PrimaryButton title="Buscar" icon="magnify" onPress={load} disabled={loading} />
-            </View>
+            <SuggestionBox
+              label="Buscar organizacion"
+              value={q}
+              onChangeText={setQ}
+              placeholder="Nombre, razon social o RUC"
+              suggestions={q.trim() ? items : []}
+              loading={loading}
+              onSelect={(item) => {
+                setQ(item.name || item.razon_social || '');
+                openOrganizationDetail(item.id);
+              }}
+              renderSuggestion={(item) => (
+                <View>
+                  <Text style={styles.inlineItem}>{item.name || item.razon_social || 'Sin nombre'}</Text>
+                  <Text style={styles.meta}>{item.ruc || item.email || item.phone || 'Organizacion'}</Text>
+                </View>
+              )}
+            />
             <View style={styles.actions}>
               <PrimaryButton title={formOpen ? 'Cerrar formulario' : 'Agregar organizacion'} icon="office-building-plus" variant="secondary" onPress={() => setFormOpen((v) => !v)} />
               <PrimaryButton title="Importar contacto" icon="contacts" variant="secondary" onPress={importOrganizationContact} />
@@ -941,19 +1165,33 @@ function OrganizationsScreen() {
   );
 }
 
-function ChoiceButton({ active, label, onPress }) {
+function ChoiceButton({ active, label, icon, onPress }) {
   return (
-    <Pressable onPress={onPress} style={[styles.choice, active && styles.choiceActive]}>
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.choice, active && styles.choiceActive, pressed && styles.choicePressed]}>
+      {icon ? <MaterialCommunityIcons name={icon} size={17} color={active ? '#fff' : colors.muted} /> : null}
       <Text style={[styles.choiceText, active && styles.choiceTextActive]}>{label}</Text>
+      {active ? <MaterialCommunityIcons name="check-circle" size={15} color="#fff" /> : null}
     </Pressable>
   );
 }
 
 function DetailSection({ open, title, onToggle, children }) {
+  const normalized = String(title || '').toLowerCase();
+  const icon = normalized.includes('adjunt') ? 'paperclip'
+    : normalized.includes('producto') ? 'cube-outline'
+      : normalized.includes('servicio') ? 'tools'
+        : normalized.includes('presupuesto') || normalized.includes('resultado') ? 'chart-pie'
+          : normalized.includes('seguimiento') ? 'phone-clock'
+            : normalized.includes('tarea') ? 'calendar-check'
+              : normalized.includes('nota') ? 'note-text-outline'
+                : 'clipboard-text-outline';
   return (
     <View style={styles.detailSection}>
       <Pressable style={styles.sectionToggle} onPress={onToggle}>
-        <Text style={styles.sectionToggleText}>{title}</Text>
+        <View style={styles.sectionTitleRow}>
+          <View style={styles.sectionIcon}><MaterialCommunityIcons name={icon} size={18} color={colors.accent} /></View>
+          <Text style={styles.sectionToggleText}>{title}</Text>
+        </View>
         <MaterialCommunityIcons name={open ? 'chevron-up' : 'chevron-down'} size={22} color={colors.ink} />
       </Pressable>
       {open ? <View style={styles.sectionBody}>{children}</View> : null}
@@ -974,6 +1212,7 @@ function OptionChips({ options, value, onChange }) {
             key={`${key}-${idx}`}
             active={String(value || '') === optionValue}
             label={label.slice(0, 42)}
+            icon={option?.icon}
             onPress={() => onChange(optionValue, option)}
           />
         );
@@ -1477,16 +1716,37 @@ function OperationListScreen({ route, navigation }) {
         {!detail ? (
           <>
         <Text style={styles.title}>Operaciones</Text>
-        <View style={styles.searchRow}>
-          <TextInput value={q} onChangeText={setQ} placeholder="Buscar OP, cliente o titulo" style={[styles.input, styles.searchInput]} />
-          <PrimaryButton title="Buscar" icon="magnify" onPress={loadList} disabled={loading} />
-        </View>
+        <SuggestionBox
+          label="Buscar operacion"
+          value={q}
+          onChangeText={setQ}
+          placeholder="Referencia, cliente, contacto o titulo"
+          suggestions={q.trim() ? items : []}
+          loading={loading}
+          onSelect={(item) => {
+            setQ(item.reference || item.title || '');
+            openOperation(item.id);
+          }}
+          renderSuggestion={(item) => (
+            <View>
+              <Text style={styles.inlineItem}>{item.reference || `OP #${item.id}`}</Text>
+              <Text style={styles.meta}>{item.org_name || item.contact_name || item.title || 'Operacion'}</Text>
+            </View>
+          )}
+        />
         {!items.length && !loading ? <EmptyState text="Sin operaciones para mostrar" /> : null}
         {items.map((item) => (
-          <Pressable key={item.id} style={[styles.card, String(selectedId) === String(item.id) && styles.selectedCard]} onPress={() => openOperation(item.id)}>
-            <Text style={styles.cardTitle}>{item.reference || `OP #${item.id}`}</Text>
-            <Text style={styles.meta}>{item.title || item.org_name || 'Sin titulo'}</Text>
-            <Text style={styles.meta}>{item.business_unit_name || '-'} · {item.stage_name || '-'}</Text>
+          <Pressable key={item.id} style={({ pressed }) => [styles.card, styles.operationCard, String(selectedId) === String(item.id) && styles.selectedCard, pressed && styles.cardPressed]} onPress={() => openOperation(item.id)}>
+            <View style={styles.entityIcon}><MaterialCommunityIcons name="clipboard-list" size={22} color={colors.accent} /></View>
+            <View style={styles.cardContent}>
+              <Text style={styles.cardTitle}>{item.reference || `OP #${item.id}`}</Text>
+              <Text style={styles.meta} numberOfLines={1}>{item.org_name || item.contact_name || item.title || 'Sin cliente'}</Text>
+              <Text style={styles.meta} numberOfLines={1}>{item.business_unit_name || '-'}</Text>
+            </View>
+            <View style={styles.cardAside}>
+              <View style={styles.stagePill}><Text style={styles.stagePillText}>{item.stage_name || 'Sin etapa'}</Text></View>
+              <MaterialCommunityIcons name="chevron-right" size={22} color={colors.accent} />
+            </View>
           </Pressable>
         ))}
 
@@ -1775,7 +2035,7 @@ function SuggestionBox({ label, value, onChangeText, placeholder, suggestions, o
         placeholder={placeholder}
         autoCapitalize="none"
         style={styles.input}
-        placeholderTextColor="#94a3b8"
+        placeholderTextColor={colors.placeholder}
       />
       {loading ? <Text style={styles.meta}>Buscando...</Text> : null}
       {!!suggestions.length ? (
@@ -2409,16 +2669,29 @@ function FollowupCard({ item, onCall, onRegister, onDone }) {
   );
 }
 
-function FollowupScreen() {
+function FollowupScreen({ route, navigation }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [callDraft, setCallDraft] = useState(null);
+  const [pendingCalls, setPendingCalls] = useState([]);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const pendingCall = route?.params?.pendingCall;
+    if (!pendingCall?.call_id) return;
+    setCallDraft(pendingCall);
+    navigation.setParams({ pendingCall: null });
+  }, [route?.params?.pendingCall, navigation]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setData(await api.mobileFollowup());
+      const [followup, pending] = await Promise.all([
+        api.mobileFollowup(),
+        api.followupCalls({ status: 'pending_result', limit: 20 }),
+      ]);
+      setData(followup);
+      setPendingCalls(pending?.rows || []);
     } catch (e) {
       showError(e, 'No se pudo cargar seguimiento');
     } finally {
@@ -2432,27 +2705,47 @@ function FollowupScreen() {
     }, [load])
   );
 
+  function draftFromPending(row) {
+    return {
+      call_id: row.id,
+      org_id: row.org_id || null,
+      contact_id: row.contact_id || null,
+      deal_id: row.deal_id || null,
+      phone_number: row.phone_number || '',
+      subject: row.subject || 'Llamada',
+      happened_at: row.happened_at || localDateTime(0),
+      duration_min: row.duration_min || '',
+      outcome: row.outcome || 'volver_a_llamar',
+      notes: row.notes || '',
+      task_title: row.task_title || 'Volver a llamar',
+      task_due: row.task_due_at || localDateTime(1),
+    };
+  }
   function draftFromItem(item) {
     return {
       org_id: item.org_id || null,
       contact_id: item.contact_id || null,
+      deal_id: item.deal_id || null,
+      phone_number: item.contact_phone || item.org_phone || '',
       subject: `Llamada - ${item.contact_name || item.org_name || 'cliente'}`,
       happened_at: localDateTime(0),
+      duration_min: '',
       outcome: 'volver_a_llamar',
       notes: '',
       task_title: item.title || 'Volver a llamar',
       task_due: localDateTime(1),
-      create_task: true,
     };
   }
 
   async function callItem(item) {
     const phone = item.contact_phone || item.org_phone;
+    const draft = draftFromItem(item);
     try {
+      const started = await api.startFollowupCall({ ...draft, started_at: draft.happened_at, source: 'mobile' });
+      setCallDraft({ ...draft, call_id: started.id });
       await openPhone(phone);
-      setCallDraft(draftFromItem(item));
     } catch (e) {
-      showError(e, 'No se pudo llamar');
+      showError(e, 'No se pudo iniciar la llamada');
     }
   }
 
@@ -2460,16 +2753,13 @@ function FollowupScreen() {
     if (!callDraft) return;
     setSaving(true);
     try {
-      await api.createFollowupCall(callDraft);
-      if (callDraft.create_task && callDraft.task_title && callDraft.task_due) {
-        await api.createFollowupTask({
-          org_id: callDraft.org_id,
-          contact_id: callDraft.contact_id,
-          title: callDraft.task_title,
-          due_at: callDraft.task_due,
-          priority: 'medium',
-        });
-      }
+      validateCallDraft(callDraft);
+      const started = callDraft.call_id ? null : await api.startFollowupCall({
+        ...callDraft,
+        started_at: callDraft.happened_at,
+        source: 'mobile',
+      });
+      await api.completeFollowupCall(callDraft.call_id || started.id, callCompletionPayload(callDraft));
       setCallDraft(null);
       await load();
     } catch (e) {
@@ -2491,16 +2781,37 @@ function FollowupScreen() {
     }
   }
 
+  const pendingToShow = pendingCalls.filter((row) => Number(row.id) !== Number(callDraft?.call_id));
+
   return (
     <Screen>
       <ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}>
         <Text style={styles.title}>Seguimiento</Text>
+        {route?.params?.taskId ? (() => {
+          const openedTask = [...(data?.overdue || []), ...(data?.today || []), ...(data?.upcoming || [])]
+            .find((item) => Number(item.id) === Number(route.params.taskId));
+          return openedTask ? <View style={styles.formPanel}><Text style={styles.sectionTitle}>Recordatorio abierto</Text><FollowupCard item={openedTask} onCall={callItem} onRegister={(row) => setCallDraft(draftFromItem(row))} onDone={doneTask} /></View> : null;
+        })() : null}
+        {pendingToShow.length ? (
+          <View>
+            <SectionTitle title={`Pendientes de completar (${pendingToShow.length})`} />
+            {pendingToShow.map((row) => (
+              <View key={`pending-${row.id}`} style={styles.card}>
+                <Text style={styles.cardTitle}>{row.contact_name || row.org_name || row.subject || 'Llamada pendiente'}</Text>
+                <Text style={styles.meta}>{row.phone_number || 'Sin telefono'} · {shortDateTime(row.happened_at)}</Text>
+                <PrimaryButton title="Completar registro" icon="phone-log" variant="secondary" onPress={() => setCallDraft(draftFromPending(row))} />
+              </View>
+            ))}
+          </View>
+        ) : null}
         {callDraft ? (
           <View style={styles.formPanel}>
             <Text style={styles.sectionTitle}>Registrar llamada</Text>
             <Text style={styles.label}>Resultado</Text>
             <OptionChips options={CALL_OUTCOMES} value={callDraft.outcome} onChange={(value) => setCallDraft({ ...callDraft, outcome: value })} />
             <Field label="Que se hablo" value={callDraft.notes} onChangeText={(v) => setCallDraft({ ...callDraft, notes: v })} placeholder="Resumen" multiline />
+            <Field label="Fecha llamada" value={String(callDraft.happened_at || '')} onChangeText={(v) => setCallDraft({ ...callDraft, happened_at: v })} placeholder="YYYY-MM-DD HH:mm" />
+            <Field label="Duracion (minutos, opcional)" value={String(callDraft.duration_min || '')} onChangeText={(v) => setCallDraft({ ...callDraft, duration_min: v })} placeholder="0" keyboardType="number-pad" />
             <Field label="Proxima accion" value={callDraft.task_title} onChangeText={(v) => setCallDraft({ ...callDraft, task_title: v })} placeholder="Volver a llamar..." />
             <OptionChips
               options={[{ value: localDateTime(0), label: 'Hoy' }, { value: localDateTime(1), label: 'Manana' }, { value: localDateTime(2), label: '2 dias' }, { value: localDateTime(7), label: 'Prox. semana' }]}
@@ -2510,7 +2821,7 @@ function FollowupScreen() {
             <Field label="Fecha tarea" value={callDraft.task_due} onChangeText={(v) => setCallDraft({ ...callDraft, task_due: v })} placeholder="YYYY-MM-DD HH:mm" />
             <View style={styles.actions}>
               <PrimaryButton title="Guardar" icon="content-save" onPress={saveCall} disabled={saving} />
-              <PrimaryButton title="Cancelar" icon="close" variant="secondary" onPress={() => setCallDraft(null)} disabled={saving} />
+              <PrimaryButton title="Dejar pendiente" icon="close" variant="secondary" onPress={() => setCallDraft(null)} disabled={saving} />
             </View>
           </View>
         ) : null}
@@ -2642,16 +2953,41 @@ function AttachmentsScreen({ route }) {
 }
 
 function Tabs() {
+  const { width } = useWindowDimensions();
+  const compact = width < 460;
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
+        tabBarShowLabel: !compact,
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.muted,
-        tabBarStyle: { borderTopColor: colors.border },
+        tabBarActiveBackgroundColor: colors.soft,
+        tabBarStyle: {
+          minHeight: compact ? 62 : 70,
+          paddingTop: 7,
+          paddingBottom: Platform.OS === 'ios' ? 10 : 7,
+          paddingHorizontal: 6,
+          borderTopColor: colors.border,
+          backgroundColor: colors.nav,
+          elevation: 12,
+          shadowColor: colors.shadow,
+          shadowOpacity: 0.1,
+          shadowRadius: 12,
+        },
+        tabBarItemStyle: {
+          borderRadius: 8,
+          marginHorizontal: 2,
+          minWidth: 44,
+        },
+        tabBarLabelStyle: {
+          fontSize: 10,
+          fontWeight: '700',
+          marginBottom: 2,
+        },
         tabBarIcon: ({ color, size }) => {
           const icons = {
-            Inicio: 'view-dashboard',
+            Inicio: 'home',
             Contactos: 'account-group',
             Organizaciones: 'office-building',
             Operar: 'file-document-edit',
@@ -2659,7 +2995,7 @@ function Tabs() {
             Seguimiento: 'phone-clock',
             Adjuntos: 'paperclip',
           };
-          return <MaterialCommunityIcons name={icons[route.name]} color={color} size={size} />;
+          return <MaterialCommunityIcons name={icons[route.name]} color={color} size={compact ? 23 : size} />;
         },
       })}
     >
@@ -2673,9 +3009,59 @@ function Tabs() {
     </Tab.Navigator>
   );
 }
-
 function Root() {
   const { token, loading } = useAuth();
+
+  useEffect(() => {
+    const openFollowup = (response) => {
+      const data = response?.notification?.request?.content?.data || {};
+      if (navigationRef.isReady()) {
+        navigationRef.navigate('Seguimiento', { taskId: data.task_id || null, callId: data.call_id || null, orgId: data.org_id || null });
+      }
+    };
+    const subscription = Notifications.addNotificationResponseReceivedListener(openFollowup);
+    Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (response) openFollowup(response);
+    }).catch(() => null);
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    if (!token) return undefined;
+    let active = true;
+    async function registerPushDevice() {
+      try {
+        if (Platform.OS === 'android') {
+          await Notifications.setNotificationChannelAsync('followup', {
+            name: 'Seguimiento',
+            importance: Notifications.AndroidImportance.HIGH,
+          });
+        }
+        const current = await Notifications.getPermissionsAsync();
+        const permission = current.status === 'granted'
+          ? current
+          : await Notifications.requestPermissionsAsync();
+        if (permission.status !== 'granted' || !active) return;
+        const projectId = Constants.expoConfig?.extra?.eas?.projectId || Constants.easConfig?.projectId;
+        if (!projectId) return;
+        const pushToken = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+        if (active && pushToken) {
+          await api.registerFollowupDevice({
+            token: pushToken,
+            platform: Platform.OS,
+            device_name: `${Platform.OS} mobile`,
+          });
+        }
+      } catch (error) {
+        console.warn('[followup-push] No se pudo registrar el dispositivo', error?.message || error);
+      }
+    }
+    registerPushDevice();
+    return () => {
+      active = false;
+    };
+  }, [token]);
+
   if (loading) {
     return (
       <Screen>
@@ -2690,7 +3076,19 @@ function Root() {
 }
 
 export default function App() {
+  const systemScheme = useColorScheme();
   const [iconFontsReady, setIconFontsReady] = useState(false);
+  const [themeMode, setThemeMode] = useState(systemScheme === 'dark' ? 'dark' : 'light');
+
+  useEffect(() => {
+    let mounted = true;
+    AsyncStorage.getItem(THEME_STORAGE_KEY)
+      .then((saved) => {
+        if (mounted && (saved === 'light' || saved === 'dark')) setThemeMode(saved);
+      })
+      .catch(() => null);
+    return () => { mounted = false; };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -2704,384 +3102,610 @@ export default function App() {
     };
   }, []);
 
+  const isDark = themeMode === 'dark';
+  colors = isDark ? darkColors : lightColors;
+  styles = createStyles(colors);
+
+  const toggleTheme = useCallback(() => {
+    setThemeMode((current) => {
+      const next = current === 'dark' ? 'light' : 'dark';
+      AsyncStorage.setItem(THEME_STORAGE_KEY, next).catch(() => null);
+      return next;
+    });
+  }, []);
+
+  const navigationBase = isDark ? DarkTheme : DefaultTheme;
+  const navigationTheme = {
+    ...navigationBase,
+    colors: {
+      ...navigationBase.colors,
+      primary: colors.accent,
+      background: colors.bg,
+      card: colors.nav,
+      text: colors.ink,
+      border: colors.border,
+      notification: colors.danger,
+    },
+  };
+
+  const themeContext = { isDark, toggleTheme };
+
   if (!iconFontsReady) {
     return (
-      <SafeAreaProvider>
-        <Screen>
-          <View style={styles.center}>
-            <ActivityIndicator color={colors.accent} />
-            <Text style={styles.meta}>Cargando aplicacion...</Text>
-          </View>
-        </Screen>
-      </SafeAreaProvider>
+      <ThemeContext.Provider value={themeContext}>
+        <SafeAreaProvider>
+          <Screen>
+            <View style={styles.center}>
+              <ActivityIndicator color={colors.accent} />
+              <Text style={styles.meta}>Cargando aplicacion...</Text>
+            </View>
+          </Screen>
+        </SafeAreaProvider>
+      </ThemeContext.Provider>
     );
   }
 
   return (
-    <SafeAreaProvider>
-      <AuthProvider>
-        <NavigationContainer>
-          <StatusBar style="dark" />
-          <Root />
-        </NavigationContainer>
-      </AuthProvider>
-    </SafeAreaProvider>
+    <ThemeContext.Provider value={themeContext}>
+      <SafeAreaProvider>
+        <AuthProvider>
+          <NavigationContainer ref={navigationRef} theme={navigationTheme}>
+            <StatusBar style={isDark ? 'light' : 'dark'} backgroundColor={colors.bg} />
+            <Root />
+          </NavigationContainer>
+        </AuthProvider>
+      </SafeAreaProvider>
+    </ThemeContext.Provider>
   );
 }
+function createStyles(theme) {
+  return StyleSheet.create({
+    screen: {
+      flex: 1,
+      backgroundColor: theme.bg,
+    },
+    center: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 12,
+    },
+    iconFont: {
+      fontFamily: 'MaterialCommunityIcons',
+      fontWeight: 'normal',
+      fontStyle: 'normal',
+      textAlign: 'center',
+      includeFontPadding: false,
+    },
+    content: {
+      width: '100%',
+      maxWidth: 760,
+      alignSelf: 'center',
+      paddingHorizontal: 14,
+      paddingTop: 14,
+      paddingBottom: 28,
+      gap: 14,
+    },
+    listContent: {
+      paddingBottom: 88,
+    },
+    loginWrap: {
+      flex: 1,
+      justifyContent: 'center',
+      width: '100%',
+      maxWidth: 520,
+      alignSelf: 'center',
+      padding: 18,
+    },
+    loginCard: {
+      backgroundColor: theme.panel,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: theme.border,
+      padding: 20,
+      gap: 13,
+      shadowColor: theme.shadow,
+      shadowOpacity: 0.08,
+      shadowRadius: 14,
+      shadowOffset: { width: 0, height: 5 },
+      elevation: 3,
+    },
+    loginLogo: {
+      width: '100%',
+      height: 104,
+      marginBottom: 4,
+      borderRadius: 8,
+      backgroundColor: '#ffffff',
+    },
+    brand: {
+      fontSize: 24,
+      fontWeight: '800',
+      color: theme.ink,
+    },
+    subtitle: {
+      fontSize: 14,
+      color: theme.muted,
+      marginBottom: 8,
+    },
+    title: {
+      flexShrink: 1,
+      fontSize: 25,
+      lineHeight: 31,
+      fontWeight: '800',
+      color: theme.ink,
+    },
+    kicker: {
+      fontSize: 12,
+      color: theme.muted,
+      letterSpacing: 0,
+    },
+    headerRow: {
+      minHeight: 62,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 10,
+    },
+    headerActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    homeBrandRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flexShrink: 1,
+      gap: 12,
+    },
+    homeLogo: {
+      width: 86,
+      height: 48,
+      borderRadius: 8,
+      backgroundColor: '#ffffff',
+    },
+    iconButton: {
+      width: 42,
+      height: 42,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: theme.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.elevated,
+    },
+    logoutButton: {
+      borderColor: theme.danger,
+      backgroundColor: theme.dangerSoft,
+    },
+    quickGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 10,
+    },
+    quickAction: {
+      width: '48%',
+      minHeight: 102,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      backgroundColor: theme.panel,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: theme.border,
+      padding: 13,
+      shadowColor: theme.shadow,
+      shadowOpacity: 0.05,
+      shadowRadius: 8,
+      shadowOffset: { width: 0, height: 3 },
+      elevation: 2,
+    },
+    quickCopy: {
+      flex: 1,
+      minWidth: 0,
+      gap: 3,
+    },
+    quickText: {
+      fontSize: 15,
+      lineHeight: 19,
+      fontWeight: '800',
+      color: theme.ink,
+    },
+    quickSubtitle: {
+      fontSize: 12,
+      lineHeight: 17,
+      color: theme.muted,
+    },
+    sectionTitle: {
+      fontSize: 17,
+      lineHeight: 22,
+      fontWeight: '800',
+      color: theme.ink,
+      marginTop: 4,
+    },
+    card: {
+      backgroundColor: theme.panel,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: theme.border,
+      padding: 14,
+      marginHorizontal: 12,
+      marginBottom: 10,
+      gap: 6,
+      shadowColor: theme.shadow,
+      shadowOpacity: 0.05,
+      shadowRadius: 7,
+      shadowOffset: { width: 0, height: 3 },
+      elevation: 2,
+    },
+    cardPressed: {
+      opacity: 0.84,
+      transform: [{ scale: 0.995 }],
+    },
+    operationCard: {
+      marginHorizontal: 0,
+      minHeight: 82,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 11,
+    },
+    entityCard: {
+      minHeight: 92,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+    },
+    entityIcon: {
+      width: 46,
+      height: 46,
+      borderRadius: 23,
+      flexShrink: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.soft,
+      borderWidth: 1,
+      borderColor: theme.softStrong,
+    },
+    avatar: {
+      width: 48,
+      height: 48,
+      borderRadius: 24,
+      flexShrink: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.soft,
+      borderWidth: 1,
+      borderColor: theme.softStrong,
+    },
+    avatarText: {
+      color: theme.accent,
+      fontSize: 16,
+      fontWeight: '800',
+    },
+    cardContent: {
+      flex: 1,
+      minWidth: 0,
+      gap: 4,
+    },
+    cardAside: {
+      alignItems: 'flex-end',
+      justifyContent: 'center',
+      gap: 8,
+      maxWidth: 126,
+    },
+    entityActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      flexWrap: 'wrap',
+      gap: 6,
+    },
+    stagePill: {
+      maxWidth: 112,
+      minHeight: 30,
+      paddingHorizontal: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 8,
+      backgroundColor: theme.soft,
+      borderWidth: 1,
+      borderColor: theme.softStrong,
+    },
+    stagePillText: {
+      color: theme.accent,
+      fontSize: 11,
+      fontWeight: '800',
+      textAlign: 'center',
+    },
+    selectedCard: {
+      borderColor: theme.accent,
+      backgroundColor: theme.soft,
+    },
+    cardTitle: {
+      fontSize: 16,
+      lineHeight: 21,
+      fontWeight: '800',
+      color: theme.ink,
+    },
+    meta: {
+      fontSize: 13,
+      lineHeight: 18,
+      color: theme.muted,
+    },
+    hint: {
+      fontSize: 12,
+      lineHeight: 17,
+      color: theme.muted,
+      marginTop: 4,
+    },
+    field: {
+      gap: 6,
+    },
+    label: {
+      fontSize: 12,
+      lineHeight: 16,
+      fontWeight: '700',
+      color: theme.ink,
+    },
+    input: {
+      width: '100%',
+      minHeight: 48,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: theme.border,
+      backgroundColor: theme.input,
+      color: theme.ink,
+      paddingHorizontal: 13,
+      fontSize: 15,
+    },
+    textArea: {
+      minHeight: 104,
+      paddingTop: 12,
+      textAlignVertical: 'top',
+    },
+    searchRow: {
+      flexDirection: 'row',
+      gap: 8,
+      alignItems: 'center',
+    },
+    searchInput: {
+      flex: 1,
+    },
+    button: {
+      minHeight: 46,
+      borderRadius: 8,
+      paddingHorizontal: 14,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      backgroundColor: theme.accent,
+    },
+    buttonCompact: {
+      width: 42,
+      minWidth: 42,
+      height: 42,
+      minHeight: 42,
+      paddingHorizontal: 0,
+    },
+    buttonSecondary: {
+      backgroundColor: theme.soft,
+      borderWidth: 1,
+      borderColor: theme.softStrong,
+    },
+    buttonDanger: {
+      backgroundColor: theme.danger,
+    },
+    buttonDisabled: {
+      opacity: 0.45,
+    },
+    buttonPressed: {
+      transform: [{ scale: 0.985 }],
+      backgroundColor: theme.accentDark,
+    },
+    buttonText: {
+      color: '#ffffff',
+      fontWeight: '800',
+      fontSize: 14,
+    },
+    buttonSecondaryText: {
+      color: theme.accent,
+    },
+    formPanel: {
+      backgroundColor: theme.panel,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: theme.border,
+      padding: 14,
+      gap: 13,
+      shadowColor: theme.shadow,
+      shadowOpacity: 0.04,
+      shadowRadius: 7,
+      shadowOffset: { width: 0, height: 3 },
+      elevation: 1,
+    },
+    detailHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      flexWrap: 'wrap',
+      gap: 10,
+    },
+    statusPill: {
+      minHeight: 34,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: theme.border,
+      backgroundColor: theme.elevated,
+      paddingHorizontal: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    statusPillDirty: {
+      borderColor: theme.warning,
+      backgroundColor: theme.warningSoft,
+    },
+    statusPillText: {
+      fontSize: 12,
+      fontWeight: '800',
+      color: theme.muted,
+    },
+    statusPillDirtyText: {
+      color: theme.warning,
+    },
+    detailSection: {
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: theme.border,
+      backgroundColor: theme.panel,
+      overflow: 'hidden',
+      shadowColor: theme.shadow,
+      shadowOpacity: 0.035,
+      shadowRadius: 6,
+      shadowOffset: { width: 0, height: 2 },
+      elevation: 1,
+    },
+    sectionToggle: {
+      minHeight: 52,
+      paddingHorizontal: 13,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      backgroundColor: theme.elevated,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.border,
+    },
+    sectionTitleRow: {
+      flex: 1,
+      minWidth: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 9,
+    },
+    sectionIcon: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.soft,
+      borderWidth: 1,
+      borderColor: theme.softStrong,
+    },
+    sectionToggleText: {
+      flex: 1,
+      fontSize: 15,
+      lineHeight: 20,
+      fontWeight: '800',
+      color: theme.ink,
+    },
+    sectionBody: {
+      padding: 13,
+      gap: 11,
+      backgroundColor: theme.panel,
+    },
+    choiceRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+    },
+    choice: {
+      minHeight: 40,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: theme.border,
+      backgroundColor: theme.input,
+      paddingHorizontal: 12,
+      flexDirection: 'row',
+      gap: 7,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    choiceActive: {
+      backgroundColor: theme.accent,
+      borderColor: theme.accent,
+    },
+    choicePressed: {
+      opacity: 0.78,
+    },
+    choiceText: {
+      color: theme.ink,
+      fontWeight: '800',
+      fontSize: 12,
+    },
+    choiceTextActive: {
+      color: '#ffffff',
+    },
+    suggestions: {
+      borderWidth: 1,
+      borderColor: theme.border,
+      borderRadius: 8,
+      backgroundColor: theme.elevated,
+      overflow: 'hidden',
+      shadowColor: theme.shadow,
+      shadowOpacity: 0.1,
+      shadowRadius: 10,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 5,
+    },
+    suggestionItem: {
+      paddingHorizontal: 12,
+      paddingVertical: 11,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.border,
+    },
+    actions: {
+      flexDirection: 'row',
+      gap: 8,
+      flexWrap: 'wrap',
+    },
+    inlineList: {
+      borderTopWidth: 1,
+      borderTopColor: theme.border,
+      paddingTop: 9,
+      gap: 5,
+    },
+    inlinePanel: {
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: theme.border,
+      backgroundColor: theme.elevated,
+      padding: 12,
+      gap: 10,
+    },
+    inlineItem: {
+      fontSize: 13,
+      lineHeight: 18,
+      color: theme.ink,
+    },
+    importPreview: {
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: theme.softStrong,
+      backgroundColor: theme.soft,
+      padding: 12,
+      gap: 4,
+    },
+    empty: {
+      margin: 14,
+      padding: 20,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderStyle: 'dashed',
+      borderColor: theme.border,
+      backgroundColor: theme.panel,
+      alignItems: 'center',
+    },
+    emptyText: {
+      color: theme.muted,
+      fontSize: 14,
+      lineHeight: 19,
+      textAlign: 'center',
+    },
+    profit: {
+      color: theme.accent,
+      fontWeight: '800',
+    },
+  });
+}
 
-const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: colors.bg,
-  },
-  center: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-  },
-  iconFont: {
-    fontFamily: 'MaterialCommunityIcons',
-    fontWeight: 'normal',
-    fontStyle: 'normal',
-    textAlign: 'center',
-    includeFontPadding: false,
-  },
-  content: {
-    padding: 16,
-    gap: 14,
-  },
-  listContent: {
-    paddingBottom: 24,
-  },
-  loginWrap: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: 18,
-  },
-  loginCard: {
-    backgroundColor: colors.panel,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 18,
-    gap: 12,
-  },
-  loginLogo: {
-    width: '100%',
-    height: 112,
-    marginBottom: 4,
-  },
-  brand: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: colors.ink,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: colors.muted,
-    marginBottom: 8,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: colors.ink,
-  },
-  kicker: {
-    fontSize: 12,
-    color: colors.muted,
-    textTransform: 'uppercase',
-    letterSpacing: 0,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  homeBrandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexShrink: 1,
-    gap: 10,
-  },
-  homeLogo: {
-    width: 88,
-    height: 42,
-  },
-  logoutButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#fecaca',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#fff5f5',
-  },
-  quickGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  quickAction: {
-    width: '48%',
-    minHeight: 92,
-    backgroundColor: colors.panel,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 14,
-    justifyContent: 'space-between',
-  },
-  quickText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.ink,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: colors.ink,
-    marginTop: 4,
-  },
-  card: {
-    backgroundColor: colors.panel,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 14,
-    marginHorizontal: 16,
-    marginBottom: 10,
-    gap: 6,
-  },
-  selectedCard: {
-    borderColor: colors.accent,
-    backgroundColor: colors.soft,
-  },
-  cardTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: colors.ink,
-  },
-  meta: {
-    fontSize: 13,
-    color: colors.muted,
-  },
-  hint: {
-    fontSize: 12,
-    color: colors.muted,
-    marginTop: 4,
-  },
-  field: {
-    gap: 6,
-  },
-  label: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.ink,
-  },
-  input: {
-    minHeight: 46,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: '#fff',
-    color: colors.ink,
-    paddingHorizontal: 12,
-    fontSize: 15,
-  },
-  textArea: {
-    minHeight: 92,
-    paddingTop: 12,
-    textAlignVertical: 'top',
-  },
-  searchRow: {
-    flexDirection: 'row',
-    gap: 8,
-    alignItems: 'center',
-  },
-  searchInput: {
-    flex: 1,
-  },
-  button: {
-    minHeight: 46,
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: colors.accent,
-  },
-  buttonSecondary: {
-    backgroundColor: colors.soft,
-    borderWidth: 1,
-    borderColor: '#b7ded8',
-  },
-  buttonDanger: {
-    backgroundColor: colors.danger,
-  },
-  buttonDisabled: {
-    opacity: 0.5,
-  },
-  buttonPressed: {
-    transform: [{ scale: 0.99 }],
-    backgroundColor: colors.accentDark,
-  },
-  buttonText: {
-    color: '#fff',
-    fontWeight: '800',
-    fontSize: 14,
-  },
-  buttonSecondaryText: {
-    color: colors.accent,
-  },
-  formPanel: {
-    backgroundColor: colors.panel,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 14,
-    gap: 12,
-  },
-  detailHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
-  statusPill: {
-    minHeight: 34,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: '#fff',
-    paddingHorizontal: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  statusPillDirty: {
-    borderColor: '#fbbf24',
-    backgroundColor: '#fffbeb',
-  },
-  statusPillText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: colors.muted,
-  },
-  statusPillDirtyText: {
-    color: '#92400e',
-  },
-  detailSection: {
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: '#fff',
-    overflow: 'hidden',
-  },
-  sectionToggle: {
-    minHeight: 46,
-    paddingHorizontal: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: colors.soft,
-  },
-  sectionToggleText: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: colors.ink,
-  },
-  sectionBody: {
-    padding: 12,
-    gap: 10,
-  },
-  choiceRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  choice: {
-    minHeight: 38,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: '#fff',
-    paddingHorizontal: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  choiceActive: {
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
-  },
-  choiceText: {
-    color: colors.ink,
-    fontWeight: '800',
-    fontSize: 12,
-  },
-  choiceTextActive: {
-    color: '#fff',
-  },
-  suggestions: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 8,
-    backgroundColor: '#fff',
-    overflow: 'hidden',
-  },
-  suggestionItem: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eef2f6',
-  },
-  actions: {
-    flexDirection: 'row',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  inlineList: {
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: 10,
-    gap: 4,
-  },
-  inlinePanel: {
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: '#fff',
-    padding: 12,
-    gap: 10,
-  },
-  inlineItem: {
-    fontSize: 13,
-    color: colors.ink,
-  },
-  importPreview: {
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#b7ded8',
-    backgroundColor: colors.soft,
-    padding: 12,
-    gap: 4,
-  },
-  empty: {
-    margin: 16,
-    padding: 18,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-  },
-  emptyText: {
-    color: colors.muted,
-    fontSize: 14,
-  },
-  profit: {
-    color: colors.accent,
-    fontWeight: '800',
-  },
-});
+styles = createStyles(colors);

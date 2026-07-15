@@ -158,18 +158,21 @@ export default function GlobalSearchBar() {
     notifTimer.current = setTimeout(() => setShowNotif(false), 120);
   };
 
-  const markNotifRead = async (id, orgId) => {
+  const markNotifRead = async (notification) => {
+    const followupMatch = String(notification?.type || '').match(/^followup-(\d+)-/);
+    const target = followupMatch
+      ? `/followup-management?tab=agenda&task_id=${followupMatch[1]}`
+      : notification?.org_id ? `/organizations/${notification.org_id}` : null;
     try {
-      await api.patch(`/notifications/${id}/read`);
-      setNotifList((prev) => prev.filter((n) => n.id !== id));
+      await api.patch(`/notifications/${notification.id}/read`);
+      setNotifList((prev) => prev.filter((n) => n.id !== notification.id));
       setNotifCount((c) => Math.max(0, c - 1));
-      if (orgId) navigate(`/organizations/${orgId}`);
+      if (target) navigate(target);
     } catch (e) {
       console.error("No se pudo marcar notificacion", e);
-      if (orgId) navigate(`/organizations/${orgId}`);
+      if (target) navigate(target);
     }
   };
-
   const markAllRead = async () => {
     try {
       await api.patch("/notifications/read-all");
@@ -234,7 +237,7 @@ export default function GlobalSearchBar() {
                     key={n.id}
                     type="button"
                     className="block w-full text-left rounded-md border px-2 py-2 hover:bg-slate-50"
-                    onClick={() => markNotifRead(n.id, n.org_id)}
+                    onClick={() => markNotifRead(n)}
                   >
                     <div className="text-[12px] font-semibold text-slate-800">
                       {n.title}
