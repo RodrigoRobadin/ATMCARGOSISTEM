@@ -1,6 +1,6 @@
 // client/src/App.jsx
 import React, { useEffect, useState } from 'react';
-import { NavLink, Routes, Route } from 'react-router-dom';
+import { NavLink, Routes, Route, Navigate } from 'react-router-dom';
 
 import Pipeline from './pages/Pipeline';
 import CommercialDashboard from './pages/CommercialDashboard.jsx';
@@ -27,7 +27,6 @@ import AssistantBubble from './components/AssistantBubble.jsx';
 // Admin
 import UsersAdmin from './pages/UsersAdmin.jsx';
 import AdminParams from './pages/AdminParams.jsx';
-import AdminActivity from './pages/AdminActivity.jsx';
 import AccountStatement from './pages/AccountStatement.jsx';
 import Payments from './pages/Payments.jsx';
 import AdminExpenses from './pages/AdminExpenses.jsx';
@@ -56,7 +55,7 @@ import ContainerBilling from './pages/container/ContainerBilling.jsx';
 
 // Seguimiento
 import Invoices from './pages/Invoices.jsx';
-import FollowUp from './pages/FollowUp.jsx';
+import FollowUpManagement from './pages/FollowUpManagement.jsx';
 import InvoiceDetail from './pages/InvoiceDetail.jsx';
 import PurchaseOrders from './pages/PurchaseOrders.jsx';
 import PurchaseOrderDetail from './pages/PurchaseOrderDetail.jsx';
@@ -126,6 +125,7 @@ function Layout({ children }) {
   const canSeeAdminBlock = canSeeAdminCore || canSeeFinanceBlock;
   const canSeeContactsModules = true;
   const canSeeCommercialModules = !isServiceRole;
+  const canSeeFollowupManagement = ['admin', 'venta', 'ventas', 'vendedor', 'seller', 'sales', 'commercial', 'comercial'].includes(role);
   const [darkMode, setDarkMode] = useState(false);
   const [containerMenuOpen, setContainerMenuOpen] = useState(false);
   const [commercialMenuOpen, setCommercialMenuOpen] = useState(false);
@@ -245,7 +245,6 @@ function Layout({ children }) {
               <hr className="my-2 dark:border-slate-800" />
               {canSeeAdminCore && (
                 <>
-                  <SideLink to="/admin" icon={sidebarIcons.admin} label="Administraci\u00f3n" />
                   <SideLink to="/admin/users" icon={sidebarIcons.user} label="Usuarios" />
                   <SideLink to="/admin/params" icon={sidebarIcons.params} label="Par\u00e1metros" />
                 </>
@@ -335,7 +334,7 @@ function Layout({ children }) {
             <>
               <hr className="my-2 dark:border-slate-800" />
               <SideLink to="/purchase-orders" icon={sidebarIcons.orders} label="\u00d3rdenes de compra" />
-              <SideLink to="/followup" icon={sidebarIcons.followup} label="Seguimiento" />
+              {canSeeFollowupManagement && <SideLink to="/followup-management" icon={sidebarIcons.followup} label="Gestion de seguimiento" />}
               <SideLink to="/quotes" icon={sidebarIcons.quotes} label="Cotizaciones" />
             </>
           )}
@@ -464,14 +463,7 @@ export default function App() {
                 <Route path="/container/billing" element={<ContainerBilling />} />
 
                 {/* ---- Secciones restringidas a admin/manager ---- */}
-                <Route
-                  path="/admin"
-                  element={
-                    <RequireRole allow={['admin', 'manager']}>
-                      <AdminActivity />
-                    </RequireRole>
-                  }
-                />
+                <Route path="/admin" element={<Navigate to="/followup-management?tab=audit" replace />} />
                 <Route
                   path="/admin/users"
                   element={
@@ -660,7 +652,15 @@ export default function App() {
                 <Route path="/purchase-invoices/:id" element={<PurchaseInvoiceDetail />} />
 
                 {/* Seguimiento */}
-                <Route path="/followup" element={<FollowUp />} />
+                <Route
+                  path="/followup-management"
+                  element={
+                    <RequireRole allow={['admin', 'venta', 'ventas', 'vendedor', 'seller', 'sales', 'commercial', 'comercial']}>
+                      <FollowUpManagement />
+                    </RequireRole>
+                  }
+                />
+                <Route path="/followup" element={<Navigate to="/followup-management" replace />} />
               </Routes>
             </Layout>
           </RequireAuth>

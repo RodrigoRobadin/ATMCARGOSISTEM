@@ -29,6 +29,7 @@ import searchRouter from './routes/search.js';
 
 // ⭐️ Seguimiento
 import followupsRouter from './routes/followups.js';
+import followupManagementRouter from './routes/followupManagement.js';
 import visitsRouter from './routes/visits.js';
 
 // ⭐️ NUEVO: Recorridos (Routes Module)
@@ -224,6 +225,7 @@ app.use('/api/activities', activitiesRouter);
 app.use('/api/params', paramsRouter);
 app.use('/api/admin/activity', adminActivity);
 app.use('/api/audit', auditRouter);
+app.use('/api/followups', followupManagementRouter);
 app.use('/api/followups', followupsRouter);
 app.use('/api/visits', visitsRouter);
 
