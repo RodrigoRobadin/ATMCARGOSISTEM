@@ -1780,7 +1780,7 @@ async function recomputeInvoicePayments(invoiceId) {
   const [[inv]] = await pool.query('SELECT id, net_total_amount FROM invoices WHERE id = ?', [invoiceId]);
   if (!inv) return;
   const [[agg]] = await pool.query(
-    `SELECT COALESCE(SUM(net_amount),0) AS paid
+    `SELECT COALESCE(SUM(amount),0) AS paid
        FROM receipts
       WHERE invoice_id = ? AND status = 'emitido'`,
     [invoiceId]
@@ -2299,7 +2299,7 @@ async function fetchCustomerStatementInvoices(query = {}) {
            GROUP BY invoice_id
         ) it ON it.invoice_id = i.id
         LEFT JOIN (
-          SELECT invoice_id, SUM(net_amount) AS paid_amount, MAX(issue_date) AS last_payment_date
+          SELECT invoice_id, SUM(amount) AS paid_amount, MAX(issue_date) AS last_payment_date
             FROM receipts
            WHERE status = 'emitido'
            GROUP BY invoice_id
@@ -2401,7 +2401,7 @@ router.get('/customer-statement', requireAuth, async (req, res) => {
     for (const receipt of receipts) {
       const doc = docById.get(Number(receipt.invoice_id));
       if (!doc) continue;
-      movementRows.push({ id: `receipt:${receipt.id}`, source_type: 'receipt', source_id: receipt.id, invoice_id: receipt.invoice_id, date: receipt.issue_date, document_number: receipt.receipt_number, reference: doc.invoice_number, description: receipt.payment_method || 'Recibo', customer_key: doc.customer_key, customer_name: doc.customer_name, customer_ruc: doc.customer_ruc, currency_code: normalizeStatementCurrency(receipt.currency_code || doc.currency_code), debit: 0, credit: Number(receipt.net_amount || receipt.amount || 0) });
+      movementRows.push({ id: `receipt:${receipt.id}`, source_type: 'receipt', source_id: receipt.id, invoice_id: receipt.invoice_id, date: receipt.issue_date, document_number: receipt.receipt_number, reference: doc.invoice_number, description: receipt.payment_method || 'Recibo', customer_key: doc.customer_key, customer_name: doc.customer_name, customer_ruc: doc.customer_ruc, currency_code: normalizeStatementCurrency(receipt.currency_code || doc.currency_code), debit: 0, credit: Number(receipt.amount || 0) });
     }
 
     movementRows.sort((a, b) => {
@@ -2465,10 +2465,9 @@ function statementPdfMoney(value, currency = 'USD') {
   return `${curr === 'GS' ? 'PYG' : curr} ${amount}`;
 }
 
-function addStatementPdfPageHeader(doc, title, subtitle) {
+function addStatementPdfPageHeader(doc, title) {
   doc.rect(36, 32, 540, 52).fill('#0f172a');
-  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(16).text(title, 52, 46, { width: 340 });
-  doc.font('Helvetica').fontSize(8).text(subtitle || '', 52, 66, { width: 340 });
+  doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(16).text(title, 52, 50, { width: 340 });
   doc.font('Helvetica-Bold').fontSize(10).text('ATM CARGO', 444, 46, { width: 112, align: 'right' });
   doc.font('Helvetica').fontSize(8).text(formatDate(new Date()), 444, 62, { width: 112, align: 'right' });
   doc.fillColor('#0f172a');
@@ -2530,7 +2529,6 @@ router.get('/customer-statement/pdf', requireAuth, async (req, res) => {
     const isSingleClient = clientNames.length === 1;
     const primaryClient = isSingleClient ? documents[0] || {} : {};
     const title = isSingleClient ? `Estado de cuenta - ${clientNames[0]}` : 'Estado de cuenta de clientes';
-    const subtitle = `Documentos: ${documents.length} | Filtro: ${customerStatementStatusLabel(String(req.query?.status || 'por_cobrar').toLowerCase())}`;
     const fileSuffix = isSingleClient
       ? String(clientNames[0] || 'cliente').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)
       : 'clientes';
@@ -2540,7 +2538,7 @@ router.get('/customer-statement/pdf', requireAuth, async (req, res) => {
 
     const doc = new PDFDocument({ size: 'A4', margin: 36, bufferPages: true });
     doc.pipe(res);
-    addStatementPdfPageHeader(doc, title, subtitle);
+    addStatementPdfPageHeader(doc, title);
 
     let y = 104;
     if (isSingleClient) {
@@ -2572,22 +2570,6 @@ router.get('/customer-statement/pdf', requireAuth, async (req, res) => {
       y += 14;
     }
 
-    if (isSingleClient) {
-      y += 10;
-      const balanceText = Object.entries(totals.balance_by_currency || {})
-        .map(([currency, amount]) => statementPdfMoney(amount, currency))
-        .join(' / ') || statementPdfMoney(0, 'USD');
-      doc.roundedRect(36, y, 540, 44, 6).fillAndStroke('#fff7ed', '#fed7aa');
-      doc.fillColor('#9a3412').font('Helvetica-Bold').fontSize(8).text('Solicitud de regularizacion', 50, y + 10, { width: 220 });
-      doc.font('Helvetica').fontSize(8).fillColor('#7c2d12').text(
-        `Favor verificar el saldo pendiente de ${balanceText}. En caso de contar con pagos no aplicados, remitir el comprobante para su conciliacion.`,
-        50,
-        y + 24,
-        { width: 500 }
-      );
-      y += 58;
-    }
-
     y += 10;
     drawStatementPdfTableHeader(doc, y);
     y += 24;
@@ -2597,7 +2579,7 @@ router.get('/customer-statement/pdf', requireAuth, async (req, res) => {
     for (const row of maxRows) {
       if (y > 760) {
         doc.addPage();
-        addStatementPdfPageHeader(doc, title, subtitle);
+        addStatementPdfPageHeader(doc, title);
         y = 104;
         drawStatementPdfTableHeader(doc, y);
         y += 24;
@@ -3571,8 +3553,12 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
     const issuePlaceDate = `${cityShort} ${formatDateLong(issueDate)}`;
 
     const amount = Number(receipt.net_amount ?? receipt.amount ?? 0);
+    const grossAmount = Number(receipt.amount ?? amount);
+    const retentionAmount = Number(receipt.retention_amount || 0);
+    const retentionPct = Number(receipt.retention_pct || 0);
     const currency = receipt.currency_code || receipt.invoice_currency_code || 'USD';
-    const paymentType = String(receipt.payment_method || 'PAGO').toUpperCase();
+    const paymentTypeBase = String(receipt.payment_method || 'PAGO').toUpperCase();
+    const paymentType = retentionAmount > 0 ? paymentTypeBase + ' + RETENCION IVA' : paymentTypeBase;
 
     const fallbackInvoice = {
       amount_applied: amount,
@@ -3606,6 +3592,9 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
       receiptNumber: receipt.receipt_number || '',
       issuePlaceDate,
       amount,
+      grossAmount,
+      retentionAmount,
+      retentionPct,
       currency,
       receivedFrom: receipt.organization_name || invoice.organization_name || '',
       invoices: rows,
@@ -3624,7 +3613,7 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const { id } = req.params;
-    const { amount, payment_method, payment_date, currency, bank_account, reference_number, retention_pct, net_amount } = req.body;
+    const { amount, payment_method, payment_date, currency, bank_account, reference_number, retention_pct } = req.body;
     await ensureReceiptTables();
     await ensureInvoiceCreditColumns();
     const [[invoice]] = await conn.query('SELECT * FROM invoices WHERE id = ?', [id]);
@@ -3650,7 +3639,7 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
       ? Number(invoice.net_total_amount || 0)
       : Math.max(0, baseTotal - creditedInv);
     const [[paidRow]] = await conn.query(
-      "SELECT COALESCE(SUM(net_amount),0) AS paid FROM receipts WHERE invoice_id = ? AND status <> 'anulado'",
+      "SELECT COALESCE(SUM(amount),0) AS paid FROM receipts WHERE invoice_id = ? AND status <> 'anulado'",
       [id]
     );
     const paidInv = Number(paidRow?.paid || 0);
@@ -3658,14 +3647,24 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
 
     const amt = parseFloat(amount || 0);
     const retPct = parseFloat(retention_pct || 0);
-    const retAmt = Math.max(0, amt * retPct / 100);
-    const netAmt = net_amount ? parseFloat(net_amount) : Math.max(0, amt - retAmt);
+    const receiptCurrency = String(currency || invoice.currency_code || invoice.currency || 'USD').toUpperCase();
+    const calculatedTax = Math.max(0, Number(totalsCalc.tax_amount || 0));
+    const storedTax = Math.max(0, Number(invoice.tax_amount || 0));
+    const invoiceTax = calculatedTax > 0 ? calculatedTax : storedTax;
+    const taxTotal = calculatedTax > 0 && totalFromItems > 0 ? totalFromItems : totalFromInvoice;
+    const taxRatio = taxTotal > 0 ? Math.min(1, invoiceTax / taxTotal) : 0;
+    const proportionalTax = Math.max(0, amt) * taxRatio;
+    const roundReceiptMoney = (value) => receiptCurrency === 'PYG' || receiptCurrency === 'GS'
+      ? Math.round(value)
+      : Math.round(value * 100) / 100;
+    const retAmt = roundReceiptMoney(proportionalTax * retPct / 100);
+    const netAmt = roundReceiptMoney(Math.max(0, amt - retAmt));
 
-    if (amt <= 0 || netAmt <= 0) {
+    if (amt <= 0 || netAmt <= 0 || !Number.isFinite(retPct) || retPct < 0 || retPct > 100) {
       conn.release();
       return res.status(400).json({ error: 'Monto inválido' });
     }
-    if (netAmt - effBalance > 0.01) {
+    if (amt - effBalance > 0.01) {
       conn.release();
       return res.status(400).json({ error: 'Monto excede saldo' });
     }
@@ -3684,7 +3683,7 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
         receiptNumber,
         invoice.id,
         issueDate,
-        String(currency || invoice.currency_code || invoice.currency || 'USD').toUpperCase(),
+        receiptCurrency,
         payment_method || 'transferencia',
         bank_account || null,
         reference_number || null,
@@ -3700,7 +3699,7 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
     );
     await conn.query(
       `INSERT INTO receipt_applications (receipt_id, invoice_id, amount_applied) VALUES (?, ?, ?)`,
-      [ins.insertId, invoice.id, netAmt]
+      [ins.insertId, invoice.id, amt]
     );
 
     await conn.commit();

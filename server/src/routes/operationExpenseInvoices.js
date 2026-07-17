@@ -1943,7 +1943,7 @@ async function buildOperationFinancialStatement(operationId, opType, query = {})
     FROM invoices i
     LEFT JOIN organizations o ON o.id = i.organization_id
     LEFT JOIN (
-      SELECT invoice_id, SUM(net_amount) AS paid_amount
+      SELECT invoice_id, SUM(amount) AS paid_amount
       FROM receipts
       WHERE status <> 'anulado'
       GROUP BY invoice_id
@@ -2126,7 +2126,7 @@ async function buildOperationFinancialStatement(operationId, opType, query = {})
       third_party: row.invoice_number || 'Factura',
       currency_code: normCurrency(row.currency_code || 'USD'),
       debit: 0,
-      credit: Number(row.net_amount || row.amount || 0),
+      credit: Number(row.amount || 0),
       source_id: row.id,
       source_type: 'receipt',
     })),
@@ -2140,7 +2140,7 @@ async function buildOperationFinancialStatement(operationId, opType, query = {})
         ? `Motivo: ${row.cancel_reason}`
         : 'Recibo anulado',
       currency_code: normCurrency(row.currency_code || 'USD'),
-      debit: Number(row.net_amount || row.amount || 0),
+      debit: Number(row.amount || 0),
       credit: 0,
       source_id: row.id,
       source_type: 'receipt',

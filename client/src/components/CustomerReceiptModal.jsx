@@ -44,6 +44,24 @@ function invoiceBalance(invoice = {}) {
   };
 }
 
+function calculateRetention(invoice = {}, grossAmount = 0, retentionPct = 0, currencyCode = "USD") {
+  const invoiceSubtotal = Number(invoice.calcSubtotal ?? invoice.subtotal ?? 0);
+  const invoiceTax = Math.max(0, Number(invoice.calcTax ?? invoice.tax_amount ?? 0));
+  const invoiceTotalRaw = Number(invoice.calcTotal ?? invoice.total_amount ?? invoice.total ?? 0);
+  const invoiceTotal = invoiceTotalRaw > 0 ? invoiceTotalRaw : Math.max(0, invoiceSubtotal + invoiceTax);
+  const taxRatio = invoiceTotal > 0 ? Math.min(1, invoiceTax / invoiceTotal) : 0;
+  const proportionalTax = Math.max(0, Number(grossAmount || 0)) * taxRatio;
+  const rawRetention = proportionalTax * Math.max(0, Number(retentionPct || 0)) / 100;
+  const currency = String(currencyCode || "USD").toUpperCase();
+  const round = currency === "PYG" || currency === "GS"
+    ? (value) => Math.round(value)
+    : (value) => Math.round(value * 100) / 100;
+  return {
+    proportionalTax: round(proportionalTax),
+    retentionAmount: round(rawRetention),
+  };
+}
+
 export default function CustomerReceiptModal({ invoice, onClose, onSuccess }) {
   const totals = useMemo(() => invoiceBalance(invoice), [invoice]);
   const [form, setForm] = useState({
@@ -63,7 +81,7 @@ export default function CustomerReceiptModal({ invoice, onClose, onSuccess }) {
   const currency = String(form.currency || invoice?.currency_code || "USD").toUpperCase();
   const grossAmount = Number(form.amount || 0) || 0;
   const retentionPct = Number(form.retention_pct || 0) || 0;
-  const retentionAmount = Math.max(0, grossAmount * retentionPct / 100);
+  const { proportionalTax, retentionAmount } = calculateRetention(invoice, grossAmount, retentionPct, currency);
   const netAmount = Math.max(0, grossAmount - retentionAmount);
   const accountOptions = useMemo(
     () => filterCompanyBankAccounts(companyAccounts, currency),
@@ -107,8 +125,8 @@ export default function CustomerReceiptModal({ invoice, onClose, onSuccess }) {
       alert("Ingresa un monto valido.");
       return;
     }
-    if (netAmount > totals.balance + 0.01) {
-      alert("El monto neto no puede superar el saldo pendiente.");
+    if (grossAmount > totals.balance + 0.01) {
+      alert("El total aplicado no puede superar el saldo pendiente.");
       return;
     }
     if (!confirmStep) {
@@ -193,7 +211,7 @@ export default function CustomerReceiptModal({ invoice, onClose, onSuccess }) {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Monto bruto recibido</label>
+            <label className="block text-sm font-medium mb-1">Total aplicado a la factura</label>
             <input
               type="number"
               step="0.01"
@@ -268,8 +286,9 @@ export default function CustomerReceiptModal({ invoice, onClose, onSuccess }) {
               <option value="100">100%</option>
             </select>
             <div className="text-xs text-slate-600 mt-1 space-y-0.5">
+              <div>IVA correspondiente al pago: {fmtMoney(proportionalTax, currency)}</div>
               <div>Retencion: {fmtMoney(retentionAmount, currency)}</div>
-              <div>Neto aplicado: {fmtMoney(netAmount, currency)}</div>
+              <div>Importe recibido: {fmtMoney(netAmount, currency)}</div>
             </div>
           </div>
           <div>
@@ -287,10 +306,11 @@ export default function CustomerReceiptModal({ invoice, onClose, onSuccess }) {
             <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
               <div className="font-semibold mb-1">Confirmar registro de pago</div>
               <div>Factura: {invoice?.invoice_number || "-"}</div>
-              <div>Monto bruto: {fmtMoney(grossAmount, currency)}</div>
+              <div>Total aplicado a factura: {fmtMoney(grossAmount, currency)}</div>
+              <div>IVA correspondiente al pago: {fmtMoney(proportionalTax, currency)}</div>
               <div>Retencion: {fmtMoney(retentionAmount, currency)}</div>
-              <div>Neto aplicado: {fmtMoney(netAmount, currency)}</div>
-              <div>Saldo despues del pago: {fmtMoney(Math.max(0, totals.balance - netAmount), currency)}</div>
+              <div>Importe recibido: {fmtMoney(netAmount, currency)}</div>
+              <div>Saldo despues del pago: {fmtMoney(Math.max(0, totals.balance - grossAmount), currency)}</div>
             </div>
           ) : null}
 

@@ -926,7 +926,7 @@ async function buildCashFlowData(query = {}) {
       ) op_sup ON op_sup.operation_id = COALESCE(i.deal_id, i.service_case_id)
               AND op_sup.operation_type = CASE WHEN i.service_case_id IS NOT NULL THEN 'service' ELSE 'deal' END
       LEFT JOIN (
-        SELECT invoice_id, SUM(net_amount) AS paid_amount
+        SELECT invoice_id, SUM(amount) AS paid_amount
           FROM receipts
          WHERE status <> 'anulado'
          GROUP BY invoice_id

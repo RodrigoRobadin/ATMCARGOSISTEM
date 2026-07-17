@@ -35,7 +35,7 @@ async function recomputeInvoicePaymentsLocal(invoiceId, conn = pool) {
   if (!invoice) return null;
 
   const [[paidRow]] = await conn.query(
-    `SELECT COALESCE(SUM(net_amount), 0) AS paid
+    `SELECT COALESCE(SUM(amount), 0) AS paid
        FROM receipts
       WHERE invoice_id = ?
         AND status = 'emitido'`,
