@@ -166,27 +166,15 @@ function drawHeader(doc, data, y) {
 }
 
 function drawTopInfo(doc, data, y) {
-  const retention = Number(data.retentionAmount || 0);
-  const hasRetention = retention > 0;
   doc.font('Helvetica').fontSize(10).fillColor(COLORS.gray);
   doc.text(data.issuePlaceDate || '', M, y, { width: W / 2 });
   doc.font('Helvetica-Bold').fontSize(12).text(
-    (hasRetention ? 'IMPORTE RECIBIDO: ' : '') + (data.currency || 'GS') + ' ' + fmtGs(data.amount),
+    (data.currency || 'GS') + ' ' + fmtGs(data.amount),
     M + W / 2,
     y,
     { width: W / 2, align: 'right' }
   );
-  if (hasRetention) {
-    doc.font('Helvetica').fontSize(8).text(
-      'TOTAL APLICADO: ' + (data.currency || 'GS') + ' ' + fmtGs(data.grossAmount) +
-        '   |   RETENCION IVA (' + Number(data.retentionPct || 0).toLocaleString('es-PY') + '%): ' +
-        (data.currency || 'GS') + ' ' + fmtGs(retention),
-      M + W / 2 - 90,
-      y + 17,
-      { width: W / 2 + 90, align: 'right' }
-    );
-  }
-  return hasRetention ? 38 : 24;
+  return 24;
 }
 
 function drawBody(doc, data, y) {

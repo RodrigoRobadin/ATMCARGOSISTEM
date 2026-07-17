@@ -3557,8 +3557,7 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
     const retentionAmount = Number(receipt.retention_amount || 0);
     const retentionPct = Number(receipt.retention_pct || 0);
     const currency = receipt.currency_code || receipt.invoice_currency_code || 'USD';
-    const paymentTypeBase = String(receipt.payment_method || 'PAGO').toUpperCase();
-    const paymentType = retentionAmount > 0 ? paymentTypeBase + ' + RETENCION IVA' : paymentTypeBase;
+    const paymentType = String(receipt.payment_method || 'PAGO').toUpperCase();
 
     const fallbackInvoice = {
       amount_applied: amount,
