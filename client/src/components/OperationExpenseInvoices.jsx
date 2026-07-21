@@ -693,6 +693,15 @@ export default function OperationExpenseInvoices({
       setFormError("Agregá al menos un ítem.");
       return;
     }
+    if (entryMode === "detalle") {
+      const invalidItemIndex = items.findIndex(
+        (item) => parseCurrencyInput(item.quantity || 0) <= 0 || parseCurrencyInput(item.unit_price || 0) <= 0
+      );
+      if (invalidItemIndex >= 0) {
+        setFormError("Revisa el item #" + (invalidItemIndex + 1) + ": cantidad y precio unitario deben ser mayores a cero.");
+        return;
+      }
+    }
     if (entryMode !== "detalle" && !form.tax_mode) {
       setFormError("Seleccioná el tipo de IVA.");
       return;
@@ -733,6 +742,21 @@ export default function OperationExpenseInvoices({
           : form.amount_total !== "" && form.amount_total !== null
           ? parseCurrencyInput(form.amount_total)
           : totalNum || 0;
+      const normalizedItems =
+        entryMode === "detalle"
+          ? items.map((item, index) => {
+              const quantity = parseCurrencyInput(item.quantity || 0) || 1;
+              const unitPrice = parseCurrencyInput(item.unit_price || 0);
+              return {
+                ...item,
+                quantity,
+                unit_price: unitPrice,
+                tax_rate: Number(item.tax_rate ?? 10),
+                subtotal: Number((quantity * unitPrice).toFixed(2)),
+                item_order: index,
+              };
+            })
+          : undefined;
 
       const payload = {
         invoice_date: form.invoice_date || null,
@@ -776,7 +800,7 @@ export default function OperationExpenseInvoices({
         buyer_name: form.buyer_name || null,
         buyer_ruc: form.buyer_ruc || null,
         notes: form.notes || null,
-        items: entryMode === "detalle" ? items : undefined,
+        items: normalizedItems,
         cost_sheet_version_number: costSheetVersionNumber || undefined,
         quote_id: quoteId || undefined,
         quote_revision_id: quoteRevisionId || undefined,

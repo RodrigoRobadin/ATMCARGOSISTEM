@@ -385,6 +385,33 @@ function toNum(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function toLocalizedNum(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  const raw = String(value ?? '').trim().replace(/[^\d,.-]/g, '');
+  if (!raw) return 0;
+  const sign = raw.startsWith('-') ? -1 : 1;
+  const unsigned = raw.replace(/-/g, '');
+  const lastComma = unsigned.lastIndexOf(',');
+  const lastDot = unsigned.lastIndexOf('.');
+  let normalized = unsigned;
+  if (lastComma >= 0 && lastDot >= 0) {
+    const decimal = lastComma > lastDot ? ',' : '.';
+    const thousands = decimal === ',' ? /\./g : /,/g;
+    normalized = unsigned.replace(thousands, '').replace(decimal, '.');
+  } else if (lastComma >= 0) {
+    normalized = unsigned.replace(/\./g, '').replace(',', '.');
+  } else if (lastDot >= 0) {
+    const dotCount = (unsigned.match(/\./g) || []).length;
+    const integerPart = unsigned.slice(0, lastDot);
+    const digitsAfter = unsigned.length - lastDot - 1;
+    normalized = dotCount > 1 || (digitsAfter === 3 && integerPart !== '0')
+      ? unsigned.replace(/\./g, '')
+      : unsigned;
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? sign * parsed : 0;
+}
+
 async function getParamValue(key) {
   try {
     const [[row]] = await pool.query(
@@ -485,9 +512,9 @@ function normalizeItems(items = []) {
   const list = Array.isArray(items) ? items : [];
   return list
     .map((it, idx) => {
-      const qty = toNum(it.quantity || 0) || 1;
-      const unit = toNum(it.unit_price || 0);
-      const subtotal = toNum(it.subtotal || qty * unit);
+      const qty = toLocalizedNum(it.quantity || 0) || 1;
+      const unit = toLocalizedNum(it.unit_price || 0);
+      const subtotal = toLocalizedNum(it.subtotal || qty * unit);
       const taxRate = Number(it.tax_rate ?? 10);
       return {
         description: String(it.description || '').trim() || 'Sin descripción',
@@ -650,6 +677,10 @@ router.post('/:id/expense-invoices', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Proveedor es requerido' });
     }
     const items = normalizeItems(payload.items || []);
+    const invalidItemIndex = items.findIndex((item) => item.quantity <= 0 || item.unit_price <= 0 || item.subtotal <= 0);
+    if (invalidItemIndex >= 0) {
+      return res.status(400).json({ error: 'El item #' + (invalidItemIndex + 1) + ' debe tener cantidad y precio mayores a cero' });
+    }
     const totalNum = toNum(payload.amount_total);
     if (!items.length && (!totalNum || totalNum <= 0)) {
       return res.status(400).json({ error: 'Total comprobante es requerido' });
@@ -856,6 +887,12 @@ router.patch('/:id/expense-invoices/:invoiceId', requireAuth, async (req, res) =
     });
 
     const items = patch.items ? normalizeItems(patch.items || []) : null;
+    if (items) {
+      const invalidItemIndex = items.findIndex((item) => item.quantity <= 0 || item.unit_price <= 0 || item.subtotal <= 0);
+      if (invalidItemIndex >= 0) {
+        return res.status(400).json({ error: 'El item #' + (invalidItemIndex + 1) + ' debe tener cantidad y precio mayores a cero' });
+      }
+    }
     let totalNum = toNum(patch.amount_total ?? current.amount_total);
     let taxMode = String(patch.tax_mode || current.tax_mode || '').toLowerCase();
     let gravado10 = toNum(patch.gravado_10 ?? current.gravado_10);
