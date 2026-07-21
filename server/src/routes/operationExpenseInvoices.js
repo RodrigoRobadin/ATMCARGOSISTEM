@@ -512,7 +512,7 @@ function normalizeItems(items = []) {
   const list = Array.isArray(items) ? items : [];
   return list
     .map((it, idx) => {
-      const qty = toLocalizedNum(it.quantity || 0) || 1;
+      const qty = toNum(it.quantity || 0) || 1;
       const unit = toLocalizedNum(it.unit_price || 0);
       const subtotal = toLocalizedNum(it.subtotal || qty * unit);
       const taxRate = Number(it.tax_rate ?? 10);

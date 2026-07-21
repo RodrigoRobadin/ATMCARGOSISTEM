@@ -104,6 +104,11 @@ function parseCurrencyInput(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function parseQuantityInput(value) {
+  const parsed = Number(String(value ?? "").trim().replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function groupThousands(value) {
   return String(value || "0").replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 }
@@ -129,7 +134,7 @@ function formatCurrencyDisplay(value, currencyCode = "PYG") {
 }
 
 function calcItemSubtotal(it) {
-  const qty = parseCurrencyInput(it.quantity || 0) || 0;
+  const qty = parseQuantityInput(it.quantity || 0) || 0;
   const unit = parseCurrencyInput(it.unit_price || 0) || 0;
   return Number((qty * unit).toFixed(2));
 }
@@ -695,7 +700,7 @@ export default function OperationExpenseInvoices({
     }
     if (entryMode === "detalle") {
       const invalidItemIndex = items.findIndex(
-        (item) => parseCurrencyInput(item.quantity || 0) <= 0 || parseCurrencyInput(item.unit_price || 0) <= 0
+        (item) => parseQuantityInput(item.quantity || 0) <= 0 || parseCurrencyInput(item.unit_price || 0) <= 0
       );
       if (invalidItemIndex >= 0) {
         setFormError("Revisa el item #" + (invalidItemIndex + 1) + ": cantidad y precio unitario deben ser mayores a cero.");
@@ -745,7 +750,7 @@ export default function OperationExpenseInvoices({
       const normalizedItems =
         entryMode === "detalle"
           ? items.map((item, index) => {
-              const quantity = parseCurrencyInput(item.quantity || 0) || 1;
+              const quantity = parseQuantityInput(item.quantity || 0) || 1;
               const unitPrice = parseCurrencyInput(item.unit_price || 0);
               return {
                 ...item,
