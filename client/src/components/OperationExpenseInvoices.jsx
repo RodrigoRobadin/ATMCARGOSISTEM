@@ -224,14 +224,15 @@ export default function OperationExpenseInvoices({
   }, [form.amount_total, entryMode, itemsTotals.total]);
 
   const computedTax = useMemo(() => {
-    const mode = entryMode === "detalle"
-      ? (itemsTotals.g10 && itemsTotals.g5 ? "mixto" : itemsTotals.g10 ? "solo10" : "solo5")
-      : String(form.tax_mode || "").toLowerCase();
     const g10 = entryMode === "detalle" ? itemsTotals.g10 : parseCurrencyInput(form.gravado_10 || "");
     const g5 = entryMode === "detalle" ? itemsTotals.g5 : parseCurrencyInput(form.gravado_5 || "");
     let iva10 = 0;
     let iva5 = 0;
-    if (mode === "solo10") {
+    const mode = String(form.tax_mode || "").toLowerCase();
+    if (entryMode === "detalle") {
+      iva10 = g10 ? g10 / 11 : 0;
+      iva5 = g5 ? g5 / 21 : 0;
+    } else if (mode === "solo10") {
       iva10 = totalNum / 11;
     } else if (mode === "solo5") {
       iva5 = totalNum / 21;
@@ -243,7 +244,7 @@ export default function OperationExpenseInvoices({
       iva10: Number(iva10.toFixed(2)),
       iva5: Number(iva5.toFixed(2)),
     };
-  }, [form.tax_mode, form.gravado_10, form.gravado_5, totalNum]);
+  }, [entryMode, itemsTotals.g10, itemsTotals.g5, form.tax_mode, form.gravado_10, form.gravado_5, totalNum]);
 
   async function loadInvoices() {
     if (!operationId) return;
@@ -1469,7 +1470,7 @@ export default function OperationExpenseInvoices({
                           <td className="px-3 py-2">
                             <select
                               className="border rounded px-2 py-1 w-full"
-                              value={it.tax_rate || 10}
+                              value={it.tax_rate ?? 10}
                               onChange={(e) => updateItem(idx, "tax_rate", e.target.value)}
                             >
                               <option value={10}>10%</option>

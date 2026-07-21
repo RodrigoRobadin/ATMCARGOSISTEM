@@ -679,8 +679,10 @@ router.post('/:id/expense-invoices', requireAuth, async (req, res) => {
       totalFinal = Number(t.total.toFixed(2));
       gravado10 = Number(t.gravado10.toFixed(2));
       gravado5 = Number(t.gravado5.toFixed(2));
+      const exento = Number(t.exento.toFixed(2));
+      const taxBucketCount = [gravado10, gravado5, exento].filter((value) => value > 0).length;
       taxMode =
-        gravado10 && gravado5
+        taxBucketCount > 1
           ? 'mixto'
           : gravado10
           ? 'solo10'
@@ -689,7 +691,7 @@ router.post('/:id/expense-invoices', requireAuth, async (req, res) => {
           : 'mixto';
       iva10 = gravado10 ? gravado10 / 11 : 0;
       iva5 = gravado5 ? gravado5 / 21 : 0;
-      payload.iva_exempt = Number(t.exento.toFixed(2)) || 0;
+      payload.iva_exempt = exento || 0;
     } else {
       if (taxMode === 'solo10') {
         gravado10 = totalNum;
@@ -866,8 +868,10 @@ router.patch('/:id/expense-invoices/:invoiceId', requireAuth, async (req, res) =
       totalNum = Number(t.total.toFixed(2));
       gravado10 = Number(t.gravado10.toFixed(2));
       gravado5 = Number(t.gravado5.toFixed(2));
+      const exento = Number(t.exento.toFixed(2)) || 0;
+      const taxBucketCount = [gravado10, gravado5, exento].filter((value) => value > 0).length;
       taxMode =
-        gravado10 && gravado5
+        taxBucketCount > 1
           ? 'mixto'
           : gravado10
           ? 'solo10'
@@ -876,7 +880,6 @@ router.patch('/:id/expense-invoices/:invoiceId', requireAuth, async (req, res) =
           : 'mixto';
       iva10 = gravado10 ? gravado10 / 11 : 0;
       iva5 = gravado5 ? gravado5 / 21 : 0;
-      const exento = Number(t.exento.toFixed(2)) || 0;
       sets.push('amount_total = ?', 'tax_mode = ?', 'gravado_10 = ?', 'gravado_5 = ?', 'iva_exempt = ?');
       params.push(totalNum, taxMode, gravado10, gravado5, exento);
     } else if (taxMode) {
