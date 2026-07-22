@@ -3552,7 +3552,7 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
     const cityShort = String(issuer.city || 'Asuncion').split('-')[0].trim();
     const issuePlaceDate = `${cityShort} ${formatDateLong(issueDate)}`;
 
-    const amount = Number(receipt.net_amount ?? receipt.amount ?? 0);
+    const amount = Number(receipt.amount ?? receipt.net_amount ?? 0);
     const grossAmount = Number(receipt.amount ?? amount);
     const retentionAmount = Number(receipt.retention_amount || 0);
     const retentionPct = Number(receipt.retention_pct || 0);
