@@ -1,8 +1,8 @@
 import PDFDocument from 'pdfkit';
 import fs from 'fs';
 
-const PAGE_W = 297 * 2.83465;
-const PAGE_H = 210 * 2.83465;
+const PAGE_W = 210 * 2.83465;
+const PAGE_H = 297 * 2.83465;
 const M = 24;
 const W = PAGE_W - 2 * M;
 
@@ -118,12 +118,12 @@ function drawHeader(doc, data, y) {
   const header = { x: M, y, w: W, h: 120 };
   drawBox(doc, header);
 
-  const logoX = header.x + 12;
+  const logoX = header.x + 10;
   const logoY = header.y + 18;
   let logoDrawn = false;
   if (data.logoPath && fs.existsSync(data.logoPath)) {
     try {
-      doc.image(data.logoPath, logoX, logoY, { fit: [150, 70], align: 'left', valign: 'center' });
+      doc.image(data.logoPath, logoX, logoY, { fit: [118, 70], align: 'left', valign: 'center' });
       logoDrawn = true;
     } catch (err) {
       console.warn('[receipt-pdf] logo ignored:', err?.message || err);
@@ -134,8 +134,10 @@ function drawHeader(doc, data, y) {
     doc.font('Helvetica-Bold').fillColor('#D94545').text('atm', logoX + 70, logoY + 10);
   }
 
-  const centerX = header.x + 190;
-  const centerW = 260;
+  const logoW = 125;
+  const rightW = 140;
+  const centerX = header.x + logoW;
+  const centerW = header.w - logoW - rightW;
   let cy = header.y + 16;
   doc.font('Helvetica-Bold').fontSize(10.5).fillColor(COLORS.gray).text(data.issuerName, centerX, cy, {
     width: centerW,
@@ -153,8 +155,7 @@ function drawHeader(doc, data, y) {
   cy += 14;
   doc.fontSize(6.8).text(data.issuerActivities || '', centerX, cy, { width: centerW, align: 'center' });
 
-  const rightX = header.x + header.w - 220;
-  const rightW = 200;
+  const rightX = header.x + header.w - rightW - 8;
   doc.font('Helvetica-Bold').fontSize(10).fillColor(COLORS.gray).text('RECIBO NUMERO', rightX, header.y + 30, {
     width: rightW,
     align: 'center',
@@ -205,39 +206,62 @@ function drawInvoicesTable(doc, data, y) {
   doc.moveTo(M + W / 2 - 90, y + 14).lineTo(M + W / 2 + 90, y + 14).strokeColor(COLORS.gray).stroke();
 
   const headerY = y + 24;
-  const colW = { num: 80, date: 80, ref: 110, curr: 55, amount: 105, type: 150, paid: 105 };
+  const tableX = M + 8;
+  const tableW = W - 16;
+  const colW = {
+    num: 70,
+    date: 56,
+    ref: 76,
+    curr: 44,
+    amount: 78,
+    type: 110,
+    paid: tableW - 434,
+  };
   const colX = {
-    num: M,
-    date: M + colW.num,
-    ref: M + colW.num + colW.date,
-    curr: M + colW.num + colW.date + colW.ref,
-    amount: M + colW.num + colW.date + colW.ref + colW.curr,
-    type: M + colW.num + colW.date + colW.ref + colW.curr + colW.amount,
-    paid: M + colW.num + colW.date + colW.ref + colW.curr + colW.amount + colW.type,
+    num: tableX,
+    date: tableX + colW.num,
+    ref: tableX + colW.num + colW.date,
+    curr: tableX + colW.num + colW.date + colW.ref,
+    amount: tableX + colW.num + colW.date + colW.ref + colW.curr,
+    type: tableX + colW.num + colW.date + colW.ref + colW.curr + colW.amount,
+    paid: tableX + colW.num + colW.date + colW.ref + colW.curr + colW.amount + colW.type,
   };
 
-  doc.save().fillColor(COLORS.navy).rect(M, headerY, W, 18).fill().restore();
-  doc.font('Helvetica-Bold').fontSize(8.5).fillColor('white');
-  doc.text('NUMERO', colX.num, headerY + 5, { width: colW.num, align: 'center' });
-  doc.text('EMISION', colX.date, headerY + 5, { width: colW.date, align: 'center' });
-  doc.text('REF. OPERACION', colX.ref, headerY + 5, { width: colW.ref, align: 'center' });
-  doc.text('MONEDA', colX.curr, headerY + 5, { width: colW.curr, align: 'center' });
-  doc.text('MONTO', colX.amount, headerY + 5, { width: colW.amount, align: 'right' });
-  doc.text('TIPO DE PAGO', colX.type, headerY + 5, { width: colW.type, align: 'center' });
-  doc.text('PAGO', colX.paid, headerY + 5, { width: colW.paid, align: 'right' });
+  doc.save().fillColor(COLORS.navy).rect(tableX, headerY, tableW, 18).fill().restore();
+  doc.font('Helvetica-Bold').fontSize(7.2).fillColor('white');
+  doc.text('NUMERO', colX.num + 3, headerY + 5, { width: colW.num - 6, align: 'center' });
+  doc.text('EMISION', colX.date + 3, headerY + 5, { width: colW.date - 6, align: 'center' });
+  doc.text('REF. OPERACION', colX.ref + 3, headerY + 5, { width: colW.ref - 6, align: 'center' });
+  doc.text('MONEDA', colX.curr + 3, headerY + 5, { width: colW.curr - 6, align: 'center' });
+  doc.text('MONTO', colX.amount + 3, headerY + 5, { width: colW.amount - 6, align: 'right' });
+  doc.text('TIPO DE PAGO', colX.type + 3, headerY + 5, { width: colW.type - 6, align: 'center' });
+  doc.text('PAGO', colX.paid + 3, headerY + 5, { width: colW.paid - 6, align: 'right' });
 
   let rowY = headerY + 22;
-  doc.font('Helvetica').fontSize(9).fillColor(COLORS.gray);
+  doc.font('Helvetica').fontSize(7.6).fillColor(COLORS.gray);
   (data.invoices || []).forEach((row) => {
-    doc.text(row.number || '-', colX.num, rowY, { width: colW.num, align: 'center' });
-    doc.text(row.issueDate || '-', colX.date, rowY, { width: colW.date, align: 'center' });
-    doc.text(row.operationReference || '-', colX.ref, rowY, { width: colW.ref, align: 'center' });
-    doc.text(row.currency || data.currency || 'GS', colX.curr, rowY, { width: colW.curr, align: 'center' });
-    doc.text(fmtGs(row.amount), colX.amount, rowY, { width: colW.amount, align: 'right' });
-    doc.text(row.paymentType || '-', colX.type, rowY, { width: colW.type, align: 'center' });
-    doc.text(fmtGs(row.paidAmount), colX.paid, rowY, { width: colW.paid, align: 'right' });
-    rowY += 18;
-    doc.strokeColor('#d5d7dc').lineWidth(0.8).moveTo(M, rowY).lineTo(M + W, rowY).stroke();
+    const cells = [
+      { value: row.number || '-', x: colX.num, width: colW.num, align: 'center' },
+      { value: row.issueDate || '-', x: colX.date, width: colW.date, align: 'center' },
+      { value: row.operationReference || '-', x: colX.ref, width: colW.ref, align: 'center' },
+      { value: row.currency || data.currency || 'GS', x: colX.curr, width: colW.curr, align: 'center' },
+      { value: fmtGs(row.amount), x: colX.amount, width: colW.amount, align: 'right' },
+      { value: row.paymentType || '-', x: colX.type, width: colW.type, align: 'center' },
+      { value: fmtGs(row.paidAmount), x: colX.paid, width: colW.paid, align: 'right' },
+    ];
+    const rowHeight = Math.max(
+      18,
+      ...cells.map((cell) => doc.heightOfString(String(cell.value), { width: cell.width - 6 }) + 8)
+    );
+    cells.forEach((cell) => {
+      doc.text(String(cell.value), cell.x + 3, rowY + 4, {
+        width: cell.width - 6,
+        height: rowHeight - 6,
+        align: cell.align,
+      });
+    });
+    rowY += rowHeight;
+    doc.strokeColor('#d5d7dc').lineWidth(0.8).moveTo(tableX, rowY).lineTo(tableX + tableW, rowY).stroke();
   });
   return rowY + 8;
 }

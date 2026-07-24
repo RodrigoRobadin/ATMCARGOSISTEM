@@ -137,9 +137,9 @@ export default function CommissionPanel({ operationId, source = {}, compact = fa
           ['Venta', row.budgeted_sale],
           ['Profit ventas', row.budgeted_profit],
           ['% comision', `${(Number(row.commission_rate || 0) * 100).toFixed(2)}%`],
-          ['Comision IVA incl.', row.commission_gross],
-          ['Base imponible', row.commission_net],
-          [`IVA ${Number(row.iva_rate || 0)}%`, row.commission_iva],
+          ['Comision bruta', row.commission_gross],
+          [`IVA descontado ${Number(row.iva_rate || 0)}%`, row.commission_iva],
+          ['Comision vendedor', row.commission_net],
           ['Profit ATM', row.profit_atm],
         ].map(([label, value]) => <div key={label} className="rounded-lg border bg-white p-3"><div className="text-xs text-slate-500">{label}</div><div className="mt-1 font-semibold">{typeof value === 'string' ? value : money(value, row.currency_code)}</div></div>)}
       </div>
@@ -150,7 +150,7 @@ export default function CommissionPanel({ operationId, source = {}, compact = fa
             {Array.from({ length: 11 }, (_, index) => index * 5).map((rate) => <option key={rate} value={rate}>{rate}%</option>)}
           </select>
         </label>
-        <label className="text-sm">IVA incluido
+        <label className="text-sm">IVA a descontar
           <select className="mt-1 w-full rounded border px-3 py-2" value={Number(row.iva_rate || 0)} onChange={(e) => patch({ iva_rate: Number(e.target.value) })}>
             <option value="5">5%</option>
             <option value="10">10%</option>

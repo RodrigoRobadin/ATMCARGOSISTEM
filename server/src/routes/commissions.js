@@ -507,12 +507,15 @@ function drawOperationDetailPage(doc, row, detail, logoPath = '') {
   cell(67, 9, 1, code, { align: 'center' });
   amountCell(67, 10, instalacion.buy);
   merge(68, 1, 2, 'PROFFIT VENDEDOR', { bold: true, size: 7, fill: '#ffffff' });
-  amountCell(68, 4, row.commission_gross, { bold: true, fill: '#ffffff', size: 7 });
+  amountCell(68, 4, row.commission_net, { bold: true, fill: '#ffffff', size: 7 });
   cell(68, 5, 1, `Comision =${(number(row.commission_rate) * 100).toFixed(0)}%`, { border: false, bold: true, size: 6.2 });
   cell(68, 7, 1, '');
   cell(68, 8, 1, 'SEGURO');
   cell(68, 9, 1, code, { align: 'center' });
   amountCell(68, 10, seguro.buy);
+  merge(69, 1, 2, `IVA DESCONTADO ${number(row.iva_rate).toFixed(0)}%`, { bold: true, size: 6.6, fill: '#ffffff' });
+  amountCell(69, 4, -number(row.commission_iva), { bold: true, fill: '#ffffff', size: 6.6 });
+  cell(69, 5, 1, `Bruta ${fmt(row.commission_gross)}`, { border: false, size: 5.8 });
   merge(70, 1, 2, 'PROFFIT FINAL ATM', { bold: true, size: 7, fill: '#ffffff' });
   amountCell(70, 4, row.profit_atm, { bold: true, fill: '#ffffff', size: 7 });
   cell(72, 1, 1, 'AC', { border: false });
@@ -827,7 +830,7 @@ router.get('/export/pdf', async (req, res) => {
     const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 28 });
     res.setHeader('Content-Type','application/pdf'); res.setHeader('Content-Disposition','inline; filename=planilla-comisiones.pdf'); doc.pipe(res);
     const margin = 28;
-    const widths = [25, 60, 70, 130, 45, 75, 75, 80, 50, 85, 91];
+    const widths = [25, 44, 58, 100, 38, 66, 66, 68, 42, 68, 60, 72, 79];
     const cols = widths.reduce((all, width, index) => { all.push(index ? all[index - 1] + widths[index - 1] : margin); return all; }, []);
     const rowHeight = 21;
     const drawHeader = (name, pageNumber = null) => {
@@ -836,9 +839,9 @@ router.get('/export/pdf', async (req, res) => {
       doc.fillColor('#FF0000').text(name || 'TODOS LOS COMERCIALES', margin + 145, 58, { width: 230, align: 'left' });
       if (pageNumber) doc.fillColor('#666666').font('Helvetica').fontSize(7).text(`Página ${pageNumber}`, 720, 34, { width: 65, align: 'right' });
       const headerY = 82;
-      const labels = ['Nº', 'FECHA', 'REF. Nº', 'CLIENTE', 'MONEDA', 'COST. COMP', 'VENTA', 'PROFIT VENTAS', '% COMIS', 'PROFIT VEND', 'PROFIT ATM'];
+      const labels = ['N\u00ba', 'FECHA', 'REF. N\u00ba', 'CLIENTE', 'MONEDA', 'COST. COMP', 'VENTA', 'PROFIT VENTAS', '% COMIS', 'COMISION BRUTA', 'IVA DESCONT.', 'COMISION VEND.', 'PROFIT ATM'];
       labels.forEach((label, index) => {
-        const blue = [7, 9, 10].includes(index);
+        const blue = [7, 9, 11, 12].includes(index);
         doc.fillColor(blue ? '#0000FF' : '#000000').font('Helvetica-Bold').fontSize(8)
           .text(label, cols[index] + 2, headerY + 6, { width: widths[index] - 4, align: index === 3 ? 'left' : 'center' });
       });
@@ -853,10 +856,14 @@ router.get('/export/pdf', async (req, res) => {
     for (const row of rows) {
       if (y + rowHeight > 470) { doc.addPage(); page += 1; y = drawHeader(selectedName, page); }
       const code = row.currency_code || 'PYG';
-      totals[code] = totals[code] || { profit: 0, commission: 0, atm: 0 };
-      totals[code].profit += number(row.budgeted_profit); totals[code].commission += number(row.commission_gross); totals[code].atm += number(row.profit_atm);
+      totals[code] = totals[code] || { profit: 0, commissionGross: 0, iva: 0, commissionNet: 0, atm: 0 };
+      totals[code].profit += number(row.budgeted_profit);
+      totals[code].commissionGross += number(row.commission_gross);
+      totals[code].iva += number(row.commission_iva);
+      totals[code].commissionNet += number(row.commission_net);
+      totals[code].atm += number(row.profit_atm);
       const createdDate = row.created_at ? new Date(row.created_at).toLocaleDateString('es-PY') : '-';
-      const values = [rowNumber++, createdDate, row.reference || '-', row.client_name || row.title || '-', code, money(row.budgeted_purchase, code), money(row.budgeted_sale, code), money(row.budgeted_profit, code), `${(number(row.commission_rate) * 100).toFixed(2)}%`, money(row.commission_gross, code), money(row.profit_atm, code)];
+      const values = [rowNumber++, createdDate, row.reference || '-', row.client_name || row.title || '-', code, money(row.budgeted_purchase, code), money(row.budgeted_sale, code), money(row.budgeted_profit, code), `${(number(row.commission_rate) * 100).toFixed(2)}%`, money(row.commission_gross, code), `${number(row.iva_rate).toFixed(0)}% - ${money(row.commission_iva, code)}`, money(row.commission_net, code), money(row.profit_atm, code)];
       let x = margin;
       doc.strokeColor('#000000').lineWidth(0.35).rect(margin, y, 786, rowHeight).stroke();
       values.forEach((value, index) => {
@@ -866,19 +873,23 @@ router.get('/export/pdf', async (req, res) => {
       y += rowHeight;
     }
     const totalLines = Object.entries(totals);
-    const totalHeight = Math.max(rowHeight, totalLines.length * rowHeight);
+    const totalHeight = Math.max(rowHeight * 2, totalLines.length * rowHeight * 2);
+    const summaryHeight = totalHeight + 18 + 20 + (totalLines.length * 20) + 88;
+    if (y + summaryHeight > 565) { doc.addPage(); page += 1; y = drawHeader(selectedName, page); }
     doc.fillColor('#000000').rect(margin + 108, y, 678, totalHeight).fill('#FFFF00').stroke('#000000').stroke();
     doc.fillColor('#000000').font('Helvetica-Bold').fontSize(8).text('TOTAL', margin + 110, y + 6, { width: 86, align: 'center' });
     totalLines.forEach(([code, total], index) => {
-      const lineY = y + 5 + index * rowHeight;
-      doc.text(`Profit ventas ${money(total.profit, code)}`, 365, lineY, { width: 130, align: 'right' });
-      doc.fillColor('#0000FF').text(`Profit vend ${money(total.commission, code)}`, 500, lineY, { width: 135, align: 'right' });
-      doc.text(`Profit ATM ${money(total.atm, code)}`, 640, lineY, { width: 140, align: 'right' }); doc.fillColor('#000000');
+      const lineY = y + 5 + index * rowHeight * 2;
+      doc.text(`Profit ventas ${money(total.profit, code)}`, 330, lineY, { width: 145, align: 'right' });
+      doc.fillColor('#0000FF').text(`Comision bruta ${money(total.commissionGross, code)}`, 480, lineY, { width: 145, align: 'right' });
+      doc.fillColor('#FF0000').text(`IVA descontado ${money(total.iva, code)}`, 630, lineY, { width: 150, align: 'right' });
+      doc.fillColor('#0000FF').text(`Comision vendedor ${money(total.commissionNet, code)}`, 480, lineY + rowHeight, { width: 145, align: 'right' });
+      doc.fillColor('#000000').text(`Profit ATM ${money(total.atm, code)}`, 630, lineY + rowHeight, { width: 150, align: 'right' });
     });
     y += totalHeight + 18;
     doc.font('Helvetica-Bold').fontSize(8).text('PROMEDIO DE CAMBIO', margin + 110, y, { width: 170 });
     y += 20;
-    totalLines.forEach(([code, total]) => { doc.fillColor('#000000').rect(margin + 110, y - 3, 260, 17).fill('#FFFF00').stroke('#000000').stroke(); doc.fillColor('#000000').font('Helvetica-Bold').text(`TOTAL A PAGAR ${code}`, margin + 113, y + 1, { width: 125 }); doc.text(money(total.commission, code), margin + 240, y + 1, { width: 125, align: 'right' }); y += 20; });
+    totalLines.forEach(([code, total]) => { doc.fillColor('#000000').rect(margin + 110, y - 3, 260, 17).fill('#FFFF00').stroke('#000000').stroke(); doc.fillColor('#000000').font('Helvetica-Bold').text(`TOTAL A PAGAR ${code}`, margin + 113, y + 1, { width: 125 }); doc.text(money(total.commissionNet, code), margin + 240, y + 1, { width: 125, align: 'right' }); y += 20; });
     y += 34;
     doc.font('Helvetica').fontSize(8).text('APROBADO POR:', 205, y, { width: 100, align: 'center' }); doc.text('HECHO POR:', 425, y, { width: 100, align: 'center' }); doc.text('PAGADO POR:', 635, y, { width: 100, align: 'center' });
     y += 18;

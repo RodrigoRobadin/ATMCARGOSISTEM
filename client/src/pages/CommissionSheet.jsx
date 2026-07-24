@@ -39,9 +39,11 @@ export default function CommissionSheet() {
 
   const totals = useMemo(() => rows.filter((row) => row.status !== 'anulada').reduce((acc, row) => {
     const code = row.currency_code || 'PYG';
-    acc[code] = acc[code] || { profit: 0, commission: 0, atm: 0 };
+    acc[code] = acc[code] || { profit: 0, commissionGross: 0, iva: 0, commissionNet: 0, atm: 0 };
     acc[code].profit += Number(row.budgeted_profit || 0);
-    acc[code].commission += Number(row.commission_gross || 0);
+    acc[code].commissionGross += Number(row.commission_gross || 0);
+    acc[code].iva += Number(row.commission_iva || 0);
+    acc[code].commissionNet += Number(row.commission_net || 0);
     acc[code].atm += Number(row.profit_atm || 0);
     return acc;
   }, {}), [rows]);
@@ -140,12 +142,12 @@ export default function CommissionSheet() {
     </div>
 
     <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-      {Object.entries(totals).map(([code, total]) => <div key={code} className="rounded-lg border bg-white p-3 text-sm"><b>{code}</b><div>Profit ventas: {money(total.profit, code)}</div><div>Comision: {money(total.commission, code)}</div><div>Profit ATM: {money(total.atm, code)}</div></div>)}
+      {Object.entries(totals).map(([code, total]) => <div key={code} className="rounded-lg border bg-white p-3 text-sm"><b>{code}</b><div>Profit ventas: {money(total.profit, code)}</div><div>Comision bruta: {money(total.commissionGross, code)}</div><div>IVA descontado: {money(total.iva, code)}</div><div>Comision vendedor: {money(total.commissionNet, code)}</div><div>Profit ATM: {money(total.atm, code)}</div></div>)}
     </div>
 
     <div className="overflow-auto rounded-lg border bg-white">
       <table className="min-w-full text-sm">
-        <thead className="bg-slate-100 text-slate-600"><tr><th className="px-3 py-2" />{['REF.', 'Cliente', 'Ejecutivo', 'Compra', 'Venta', 'Profit', '%', 'Comision', 'IVA', 'Profit ATM', 'Estado', 'Acciones'].map((heading) => <th key={heading} className="px-3 py-2 text-left">{heading}</th>)}</tr></thead>
+        <thead className="bg-slate-100 text-slate-600"><tr><th className="px-3 py-2" />{['REF.', 'Cliente', 'Ejecutivo', 'Compra', 'Venta', 'Profit', '%', 'Comision bruta', 'IVA descontado', 'Comision vendedor', 'Profit ATM', 'Estado', 'Acciones'].map((heading) => <th key={heading} className="px-3 py-2 text-left">{heading}</th>)}</tr></thead>
         <tbody>
           {rows.map((row) => {
             const isCancelled = row.status === 'anulada';
@@ -159,13 +161,14 @@ export default function CommissionSheet() {
               <td className="px-3 py-2">{money(row.budgeted_profit, row.currency_code)}</td>
               <td className="px-3 py-2">{(Number(row.commission_rate || 0) * 100).toFixed(2)}%</td>
               <td className="px-3 py-2">{money(row.commission_gross, row.currency_code)}</td>
-              <td className="px-3 py-2">{Number(row.iva_rate)}%</td>
+              <td className="px-3 py-2"><div>{Number(row.iva_rate)}%</div><div className="font-medium text-red-700">-{money(row.commission_iva, row.currency_code)}</div></td>
+              <td className="px-3 py-2 font-medium">{money(row.commission_net, row.currency_code)}</td>
               <td className="px-3 py-2">{money(row.profit_atm, row.currency_code)}</td>
               <td className="px-3 py-2"><div>{statusLabel(row.status)}</div>{isCancelled ? <div className="text-xs no-underline">Por {row.cancelled_by_name || 'usuario'}: {row.cancel_reason || 'Sin motivo'}</div> : null}</td>
               <td className="px-3 py-2">{!isCancelled && ['borrador', 'enviada_aprobacion', 'aprobada_facturar'].includes(row.status) ? <button type="button" onClick={(event) => { event.stopPropagation(); cancelLiquidation(row); }} className="rounded border border-red-200 px-2 py-1 text-xs text-red-700">Eliminar</button> : null}</td>
             </tr>;
           })}
-          {!rows.length ? <tr><td colSpan="13" className="px-3 py-5 text-center text-slate-500">Sin liquidaciones todavia.</td></tr> : null}
+          {!rows.length ? <tr><td colSpan="14" className="px-3 py-5 text-center text-slate-500">Sin liquidaciones todavia.</td></tr> : null}
         </tbody>
       </table>
     </div>
