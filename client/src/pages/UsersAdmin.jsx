@@ -3,14 +3,17 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 
-const ROLES = ['admin', 'finanzas', 'venta', 'ops', 'service', 'viewer'];
+const ROLES = ['admin', 'finanzas', 'venta', 'ops', 'service', 'tecnico', 'viewer'];
 
 export default function UsersAdmin() {
-  const { user, loading } = useAuth(); // 👈 usamos loading, no authReady
+  const { user, loading, refreshUser } = useAuth(); // 👈 usamos loading, no authReady
 
   const [rows, setRows] = useState([]);
   const [err, setErr] = useState('');
   const [openNew, setOpenNew] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editingName, setEditingName] = useState('');
+  const [savingName, setSavingName] = useState(false);
 
   // form nuevo usuario
   const [nName, setNName] = useState('');
@@ -88,6 +91,39 @@ export default function UsersAdmin() {
     }
   }
 
+  function beginEditName(u) {
+    setEditingId(u.id);
+    setEditingName(u.name || '');
+    setErr('');
+  }
+
+  function cancelEditName() {
+    setEditingId(null);
+    setEditingName('');
+  }
+
+  async function saveName(u) {
+    const name = editingName.trim();
+    if (!name) {
+      setErr('El nombre del usuario es obligatorio');
+      return;
+    }
+    setSavingName(true);
+    setErr('');
+    try {
+      await api.patch(`/users/${u.id}`, { name });
+      await fetchAll();
+      if (Number(u.id) === Number(user?.id)) {
+        await refreshUser();
+      }
+      cancelEditName();
+    } catch (e) {
+      setErr(e?.response?.data?.error || 'No se pudo actualizar el nombre');
+    } finally {
+      setSavingName(false);
+    }
+  }
+
   async function resetPassword(u) {
     const np = prompt(`Nuevo password para ${u.name}:`);
     if (!np) return;
@@ -150,7 +186,21 @@ export default function UsersAdmin() {
             {rows.map((u) => (
               <tr key={u.id} className="border-b last:border-0">
                 <td className="p-2">{u.id}</td>
-                <td className="p-2">{u.name}</td>
+                <td className="p-2">
+                  {editingId === u.id ? (
+                    <input
+                      className="w-full min-w-44 rounded border px-2 py-1"
+                      value={editingName}
+                      maxLength={150}
+                      autoFocus
+                      onChange={(e) => setEditingName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') saveName(u);
+                        if (e.key === 'Escape') cancelEditName();
+                      }}
+                    />
+                  ) : u.name}
+                </td>
                 <td className="p-2">{u.email}</td>
                 <td className="p-2">
                   <select
@@ -177,12 +227,35 @@ export default function UsersAdmin() {
                   </button>
                 </td>
                 <td className="p-2">
-                  <button
-                    className="px-2 py-1 border rounded mr-2 hover:bg-gray-50"
-                    onClick={() => resetPassword(u)}
-                  >
-                    Reset password
-                  </button>
+                  {editingId === u.id ? (
+                    <>
+                      <button
+                        className="mr-2 rounded bg-black px-2 py-1 text-white disabled:opacity-50"
+                        disabled={savingName}
+                        onClick={() => saveName(u)}
+                      >
+                        {savingName ? 'Guardando...' : 'Guardar'}
+                      </button>
+                      <button className="rounded border px-2 py-1" disabled={savingName} onClick={cancelEditName}>
+                        Cancelar
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        className="mr-2 rounded border px-2 py-1 hover:bg-gray-50"
+                        onClick={() => beginEditName(u)}
+                      >
+                        Editar nombre
+                      </button>
+                      <button
+                        className="rounded border px-2 py-1 hover:bg-gray-50"
+                        onClick={() => resetPassword(u)}
+                      >
+                        Reset password
+                      </button>
+                    </>
+                  )}
                 </td>
               </tr>
             ))}

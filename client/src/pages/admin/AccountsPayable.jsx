@@ -7,6 +7,7 @@ import {
   parseCompanyBankAccounts,
 } from '../../utils/companyBankAccounts';
 import AccountsPayableVendorDrawer from './AccountsPayableVendorDrawer.jsx';
+import SupplierCreditNotesModal from '../../components/SupplierCreditNotesModal.jsx';
 
 const PAYMENT_METHODS = ['Transferencia', 'Efectivo', 'Cheque', 'Tarjeta', 'Otro'];
 
@@ -313,6 +314,7 @@ export default function AccountsPayable() {
     validation_notes: '',
   });
   const [companyAccounts, setCompanyAccounts] = useState([]);
+  const [creditNoteRow, setCreditNoteRow] = useState(null);
   const actionMenuRef = useRef(null);
 
   const activeTab = STATUS_TABS.find((tab) => tab.value === filters.status_tab) || STATUS_TABS[0];
@@ -522,6 +524,14 @@ export default function AccountsPayable() {
       reconciled_at: new Date().toISOString().slice(0, 10),
       reconciliation_notes: '',
       notes: '',
+    });
+  }
+
+  function openSupplierCreditNotes(row) {
+    setActionsMenu(null);
+    setCreditNoteRow({
+      ...row,
+      source_id: row.source_type === 'admin-expense' ? row.expense_id : row.invoice_id,
     });
   }
 
@@ -1001,7 +1011,14 @@ export default function AccountsPayable() {
                           {row.priority && row.priority !== 'normal' ? row.priority : ''}
                         </div>
                       </td>
-                      <td className="px-4 py-3 font-medium">{fmtMoney(row.balance, row.currency_code)}</td>
+                      <td className="px-4 py-3">
+                        <div className="font-medium">{fmtMoney(row.balance, row.currency_code)}</div>
+                        {Number(row.credited_amount || 0) > 0 ? (
+                          <div className="text-xs text-emerald-700">
+                            NC {fmtMoney(row.credited_amount, row.currency_code)} - Neto {fmtMoney(row.net_amount, row.currency_code)}
+                          </div>
+                        ) : null}
+                      </td>
                       <td className="px-4 py-3">
                         {row.payment_order_number ? (
                           <button type="button" className="text-blue-600 hover:underline" onClick={() => openPaymentOrderPdf(row)}>
@@ -1069,7 +1086,7 @@ export default function AccountsPayable() {
                         {open && (
                           <div
                             ref={actionMenuRef}
-                            className="fixed z-[80] w-52 rounded-xl border bg-white shadow-xl p-1"
+                            className="fixed z-[80] max-h-[calc(100vh-16px)] w-52 overflow-y-auto rounded-xl border bg-white p-1 shadow-xl"
                             style={{ left: actionsMenu.left, top: actionsMenu.top }}
                           >
                             {row.operation_id && (
@@ -1097,6 +1114,9 @@ export default function AccountsPayable() {
                             )}
                             <button className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-slate-50" onClick={() => openPayments(row)}>
                               Ver pagos
+                            </button>
+                            <button className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-orange-50 text-orange-700" onClick={() => openSupplierCreditNotes(row)}>
+                              Notas de credito
                             </button>
                             <button className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-blue-50 text-blue-700" onClick={() => openSchedulePayment(row)}>
                               Programar pago
@@ -1682,6 +1702,12 @@ export default function AccountsPayable() {
         initialMovementKind={selectedVendor?.movement_kind || 'all'}
         onDataChanged={reloadAll}
         onClose={() => setSelectedVendor(null)}
+      />
+      <SupplierCreditNotesModal
+        open={Boolean(creditNoteRow)}
+        document={creditNoteRow}
+        onClose={() => setCreditNoteRow(null)}
+        onChanged={reloadAll}
       />
     </div>
   );

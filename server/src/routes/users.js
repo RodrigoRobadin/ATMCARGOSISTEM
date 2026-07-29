@@ -96,7 +96,14 @@ router.post('/login', async (req, res) => {
  */
 router.get('/me', requireAuth, async (req, res) => {
   try {
-    return res.json(req.user);
+    const [[user]] = await pool.query(
+      'SELECT id, name, email, role, is_active FROM users WHERE id = ? LIMIT 1',
+      [req.user.id]
+    );
+    if (!user || !user.is_active) {
+      return res.status(401).json({ error: 'Usuario no disponible' });
+    }
+    return res.json(user);
   } catch (err) {
     console.error('[users/me] Error:', err);
     return res.status(500).json({ error: 'Error al obtener usuario' });
@@ -235,7 +242,7 @@ router.post('/', requireAuth, async (req, res) => {
 
 /**
  * PATCH /api/users/:id
- * Actualizar rol/activo (admin)
+ * Actualizar nombre/rol/activo (admin)
  */
 router.patch('/:id', requireAuth, async (req, res) => {
   try {
@@ -249,6 +256,18 @@ router.patch('/:id', requireAuth, async (req, res) => {
 
     const fields = [];
     const params = [];
+
+    if (req.body.name !== undefined) {
+      const name = String(req.body.name || '').trim();
+      if (!name) {
+        return res.status(400).json({ error: 'El nombre es obligatorio' });
+      }
+      if (name.length > 150) {
+        return res.status(400).json({ error: 'El nombre no puede superar 150 caracteres' });
+      }
+      fields.push('name = ?');
+      params.push(name);
+    }
 
     if (req.body.role !== undefined) {
       fields.push('role = ?');
@@ -265,9 +284,15 @@ router.patch('/:id', requireAuth, async (req, res) => {
     }
 
     params.push(id);
-    await pool.query(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, params);
-
-    return res.json({ ok: true });
+    const [result] = await pool.query(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, params);
+    if (!result.affectedRows) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+    const [[updated]] = await pool.query(
+      'SELECT id, name, email, role, is_active FROM users WHERE id = ? LIMIT 1',
+      [id]
+    );
+    return res.json({ ok: true, user: updated });
   } catch (err) {
     console.error('[users] Error updating:', err);
     return res.status(500).json({ error: 'Error al actualizar usuario' });

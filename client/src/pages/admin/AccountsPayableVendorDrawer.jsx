@@ -70,6 +70,11 @@ function getRowStatusMeta(row) {
     !status.includes('pagad') &&
     !status.includes('cancel');
 
+  if (row?.movement_kind === 'credit_note') {
+    if (status.includes('anulad')) return { label: 'NC anulada', tone: 'red' };
+    return { label: 'NC aplicada', tone: 'blue' };
+  }
+
   if (row?.movement_kind === 'payment_order') {
     if (status.includes('anulad')) return { label: 'OP anulada', tone: 'red' };
     if (status.includes('aprob')) return { label: 'OP aprobada', tone: 'blue' };
@@ -529,10 +534,11 @@ export default function AccountsPayableVendorDrawer({
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
             <SummaryBox label="Facturado" value={fmtMoney(summary.total_debit, supplier.currency_code || currencyCode)} />
-            <SummaryBox label="Pagado" value={fmtMoney(summary.total_credit, supplier.currency_code || currencyCode)} tone="emerald" />
+            <SummaryBox label="Pagado" value={fmtMoney(summary.total_paid, supplier.currency_code || currencyCode)} tone="emerald" />
             <SummaryBox label="Saldo final" value={fmtMoney(summary.final_balance, supplier.currency_code || currencyCode)} tone="blue" />
             <SummaryBox label="Facturas" value={summary.invoice_count || 0} />
             <SummaryBox label="Pagos" value={summary.payment_count || 0} tone="amber" />
+            <SummaryBox label="Notas de credito" value={`${fmtMoney(summary.total_credit_notes, supplier.currency_code || currencyCode)} (${summary.credit_note_count || 0})`} tone="blue" />
             <SummaryBox
               label="Facturas vencidas"
               value={summary.overdue_documents || 0}
@@ -584,6 +590,7 @@ export default function AccountsPayableVendorDrawer({
                 <option value="all">Todos los movimientos</option>
                 <option value="factura">Facturas</option>
                 <option value="payment">Pagos</option>
+                <option value="credit_note">Notas de credito</option>
                 <option value="payment_order">Órdenes de pago</option>
               </select>
               <input
@@ -598,6 +605,7 @@ export default function AccountsPayableVendorDrawer({
                 { key: 'all', label: 'Todo', apply: () => ({ movement_kind: 'all', only_overdue: false }) },
                 { key: 'factura', label: 'Facturas', apply: () => ({ movement_kind: 'factura', only_overdue: false }) },
                 { key: 'payment', label: 'Pagos', apply: () => ({ movement_kind: 'payment', only_overdue: false }) },
+                { key: 'credit_note', label: 'NC proveedor', apply: () => ({ movement_kind: 'credit_note', only_overdue: false }) },
                 { key: 'payment_order', label: 'OP', apply: () => ({ movement_kind: 'payment_order', only_overdue: false }) },
                 { key: 'overdue', label: 'Solo vencidos', apply: () => ({ movement_kind: 'factura', only_overdue: true }) },
               ].map((item) => {
@@ -605,6 +613,7 @@ export default function AccountsPayableVendorDrawer({
                   (item.key === 'all' && filters.movement_kind === 'all' && !filters.only_overdue) ||
                   (item.key === 'factura' && filters.movement_kind === 'factura' && !filters.only_overdue) ||
                   (item.key === 'payment' && filters.movement_kind === 'payment' && !filters.only_overdue) ||
+                  (item.key === 'credit_note' && filters.movement_kind === 'credit_note' && !filters.only_overdue) ||
                   (item.key === 'payment_order' && filters.movement_kind === 'payment_order' && !filters.only_overdue) ||
                   (item.key === 'overdue' && filters.movement_kind === 'factura' && filters.only_overdue);
                 return (

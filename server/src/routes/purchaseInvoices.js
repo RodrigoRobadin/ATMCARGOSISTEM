@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { pool } from '../services/db.js';
 import { requireAuth, requireRole } from '../middlewares/auth.js';
+import { ensureSupplierCreditNoteTables, recalculateSupplierDocument } from '../services/supplierCreditNotes.js';
 
 const router = Router();
 
@@ -300,6 +301,8 @@ router.post('/', requireAuth, async (req, res) => {
             );
         }
 
+        await ensureSupplierCreditNoteTables();
+        await recalculateSupplierDocument('purchase-invoice', invoiceId, pool);
         // Obtener factura creada
         const [[invoice]] = await pool.query(
             'SELECT * FROM purchase_invoices WHERE id = ?',
@@ -395,6 +398,8 @@ router.patch('/:id', requireAuth, async (req, res) => {
             );
         }
 
+        await ensureSupplierCreditNoteTables();
+        await recalculateSupplierDocument('purchase-invoice', id, pool);
         // Obtener factura actualizada
         const [[updated]] = await pool.query(
             'SELECT * FROM purchase_invoices WHERE id = ?',
@@ -428,6 +433,18 @@ router.delete('/:id', requireAuth, async (req, res) => {
 
         if (!canManageInvoice(req.user, invoice)) {
             return res.status(403).json({ error: 'No tienes permiso para eliminar esta factura' });
+        }
+
+        await ensureSupplierCreditNoteTables();
+        const [[creditNote]] = await pool.query(
+            `SELECT n.id
+               FROM supplier_credit_note_applications a
+               INNER JOIN supplier_credit_notes n ON n.id = a.credit_note_id AND n.status = 'registrada'
+              WHERE a.source_type = 'purchase-invoice' AND a.source_id = ? LIMIT 1`,
+            [id]
+        );
+        if (creditNote?.id) {
+            return res.status(409).json({ error: 'Anula primero las notas de credito vinculadas a esta factura' });
         }
 
         await pool.query('DELETE FROM purchase_invoices WHERE id = ?', [id]);
@@ -538,6 +555,7 @@ router.post('/:id/cancel', requireAuth, requireRole(['admin', 'finanzas']), asyn
 router.post('/:id/payments', requireAuth, requireRole(['admin', 'finanzas']), async (req, res) => {
     try {
         await ensurePurchaseInvoicePaymentAccountColumn();
+        await ensureSupplierCreditNoteTables();
         const { id } = req.params;
         const { payment_date, amount, payment_method, account, reference_number, notes } = req.body;
         const userId = req.user.id;
@@ -546,6 +564,7 @@ router.post('/:id/payments', requireAuth, requireRole(['admin', 'finanzas']), as
             return res.status(400).json({ error: 'payment_date, amount y payment_method son requeridos' });
         }
 
+        await recalculateSupplierDocument('purchase-invoice', id, pool);
         const [[invoice]] = await pool.query(
             'SELECT * FROM purchase_invoices WHERE id = ?',
             [id]
@@ -574,17 +593,7 @@ router.post('/:id/payments', requireAuth, requireRole(['admin', 'finanzas']), as
             [id, payment_date, paymentAmount, payment_method, account || null, reference_number, notes, userId]
         );
 
-        // Actualizar factura
-        const newPaidAmount = parseFloat(invoice.paid_amount) + paymentAmount;
-        const newBalance = parseFloat(invoice.total_amount) - newPaidAmount;
-        const newStatus = newBalance === 0 ? 'pagada' : 'pago_parcial';
-
-        await pool.query(
-            `UPDATE purchase_invoices 
-       SET paid_amount = ?, balance = ?, status = ?, paid_date = IF(? = 0, CURDATE(), paid_date)
-       WHERE id = ?`,
-            [newPaidAmount, newBalance, newStatus, newBalance, id]
-        );
+        await recalculateSupplierDocument('purchase-invoice', id, pool);
 
         const [[updated]] = await pool.query(
             'SELECT * FROM purchase_invoices WHERE id = ?',

@@ -1,6 +1,7 @@
 // client/src/components/OperationExpenseInvoices.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import SupplierCreditNotesModal from "./SupplierCreditNotesModal.jsx";
 import {
   companyBankAccountLabel,
   companyBankAccountValue,
@@ -179,6 +180,7 @@ export default function OperationExpenseInvoices({
   const [paymentOrderInvoice, setPaymentOrderInvoice] = useState(null);
   const [paymentInvoice, setPaymentInvoice] = useState(null);
   const [paymentsInvoice, setPaymentsInvoice] = useState(null);
+  const [creditNoteInvoice, setCreditNoteInvoice] = useState(null);
   const [actionsMenu, setActionsMenu] = useState(null);
   const exchangeRateStorageKey = operationId
     ? `operation-expense-control-tc:${operationType}:${Number(operationId)}`
@@ -308,9 +310,8 @@ export default function OperationExpenseInvoices({
       };
       const { data } = await api.get(`/operations/${operationId}/expense-control`, { params });
       setExpenseControl(data || null);
-      if (data?.exchange_rate != null && data.exchange_rate !== "") {
-        setManualExchangeRate(String(data.exchange_rate));
-      }
+      const savedRate = Number(data?.exchange_rate || 0);
+      if (savedRate > 0) setManualExchangeRate(String(savedRate));
     } catch (e) {
       console.error("Error loading expense control", e);
       setExpenseControl(null);
@@ -344,20 +345,21 @@ export default function OperationExpenseInvoices({
   useEffect(() => {
     try {
       if (!exchangeRateStorageKey) return;
-      if (manualExchangeRate) window.localStorage.setItem(exchangeRateStorageKey, manualExchangeRate);
+      if (Number(manualExchangeRate || 0) > 0) window.localStorage.setItem(exchangeRateStorageKey, manualExchangeRate);
       else window.localStorage.removeItem(exchangeRateStorageKey);
     } catch (_) {}
   }, [exchangeRateStorageKey, manualExchangeRate]);
 
   useEffect(() => {
     if (!operationId || !showList || !showExpenseControl || !expenseControlReady) return;
-    const rate = manualExchangeRate === "" ? null : Number(manualExchangeRate || 0);
-    if (rate != null && (!Number.isFinite(rate) || rate < 0)) return;
+    const parsedRate = manualExchangeRate === "" ? null : Number(manualExchangeRate || 0);
+    if (parsedRate != null && (!Number.isFinite(parsedRate) || parsedRate < 0)) return;
+    const rate = parsedRate > 0 ? parsedRate : null;
     const timer = setTimeout(() => {
       api
         .put(`/operations/${operationId}/expense-control-settings`, {
           op_type: operationType,
-          exchange_rate: manualExchangeRate === "" ? null : rate,
+          exchange_rate: rate,
         })
         .catch((err) => console.warn("No se pudo guardar TC de control", err?.message));
     }, 500);
@@ -1029,6 +1031,11 @@ export default function OperationExpenseInvoices({
                           <div className="text-slate-500">
                             Saldo {inv.currency_code || "PYG"} {formatCurrencyDisplay(inv.balance ?? inv.amount_total ?? 0, inv.currency_code || "PYG")}
                           </div>
+                          {Number(inv.credited_amount || 0) > 0 ? (
+                            <div className="text-emerald-700">
+                              NC {formatCurrencyDisplay(inv.credited_amount, inv.currency_code || "PYG")} - Neto {formatCurrencyDisplay(inv.net_amount, inv.currency_code || "PYG")}
+                            </div>
+                          ) : null}
                         </td>
                         <td className="px-3 py-2 text-xs">
                           10%: {inv.iva_10 || 0} · 5%: {inv.iva_5 || 0} · Ex:{" "}
@@ -1054,7 +1061,7 @@ export default function OperationExpenseInvoices({
                               onClick={(e) => {
                                 const rect = e.currentTarget.getBoundingClientRect();
                                 const menuWidth = 176;
-                                const menuHeight = 160;
+                                const menuHeight = 230;
                                 const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
                                 const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
                                 const fitsBelow = rect.bottom + 6 + menuHeight <= viewportHeight - 8;
@@ -1632,6 +1639,16 @@ export default function OperationExpenseInvoices({
             </button>
             <button
               type="button"
+              className="block w-full px-3 py-2 text-left text-xs text-orange-700 hover:bg-orange-50"
+              onClick={() => {
+                setCreditNoteInvoice(actionsMenu.invoice);
+                setActionsMenu(null);
+              }}
+            >
+              Notas de credito
+            </button>
+            <button
+              type="button"
               className="block w-full border-t px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50"
               onClick={() => {
                 const invoice = actionsMenu.invoice;
@@ -1678,6 +1695,21 @@ export default function OperationExpenseInvoices({
           onClose={() => setPaymentsInvoice(null)}
         />
       )}
+      <SupplierCreditNotesModal
+        open={Boolean(creditNoteInvoice)}
+        document={creditNoteInvoice ? {
+          ...creditNoteInvoice,
+          source_type: "operation-expense",
+          source_id: creditNoteInvoice.id,
+          document_number: creditNoteInvoice.receipt_number,
+          supplier_name: creditNoteInvoice.supplier_org_name || creditNoteInvoice.supplier_name,
+        } : null}
+        onClose={() => setCreditNoteInvoice(null)}
+        onChanged={async () => {
+          await loadInvoices();
+          if (showExpenseControl) await loadExpenseControl();
+        }}
+      />
     </>
   );
 }

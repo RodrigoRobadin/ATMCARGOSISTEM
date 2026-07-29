@@ -6,6 +6,7 @@ import ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
 import { pool } from '../services/db.js';
 import { requireAuth, requireAnyRole } from '../middlewares/auth.js';
+import { ensureSupplierCreditNoteTables } from '../services/supplierCreditNotes.js';
 
 const router = Router();
 
@@ -174,6 +175,7 @@ function appendSourceFilter(where, params, sourceType) {
 }
 
 async function fetchAccountsPayableVendorDetail(supplierKey, currencyCode) {
+  await ensureSupplierCreditNoteTables();
   const [movements] = await pool.query(
     `
     SELECT *
@@ -472,12 +474,12 @@ async function fetchAccountsPayableVendorDetail(supplierKey, currencyCode) {
         CAST(NULL AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS payment_order_status,
         NULL AS purchase_order_id,
         CAST(NULL AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS condition_type,
-        COALESCE(e.amount, 0) - (
+        COALESCE(e.balance, COALESCE(e.amount, 0) - (
           SELECT COALESCE(SUM(pay.amount), 0)
           FROM admin_expense_payments pay
           WHERE pay.expense_id = e.id
             AND COALESCE(pay.status, '') <> 'anulado'
-        ) AS document_balance,
+        )) AS document_balance,
         e.id AS source_id,
         1 AS sort_order
       FROM admin_expenses e
@@ -569,12 +571,12 @@ async function fetchAccountsPayableVendorDetail(supplierKey, currencyCode) {
         CAST(NULL AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS payment_order_status,
         NULL AS purchase_order_id,
         CAST(NULL AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS condition_type,
-        COALESCE(e.amount, 0) - (
+        COALESCE(e.balance, COALESCE(e.amount, 0) - (
           SELECT COALESCE(SUM(pay2.amount), 0)
           FROM admin_expense_payments pay2
           WHERE pay2.expense_id = e.id
             AND COALESCE(pay2.status, '') <> 'anulado'
-        ) AS document_balance,
+        )) AS document_balance,
         p.id AS source_id,
         2 AS sort_order
       FROM admin_expense_payments p
@@ -590,7 +592,44 @@ async function fetchAccountsPayableVendorDetail(supplierKey, currencyCode) {
     [supplierKey, currencyCode]
   );
 
-  const safeRows = Array.isArray(movements) ? movements : [];
+  const [creditMovements] = await pool.query(
+    `SELECT
+       CAST(COALESCE(CONCAT('org:', n.supplier_id), CONCAT('ruc:', n.supplier_ruc), CONCAT('name:', n.supplier_name), CONCAT('nc:', n.id)) AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS supplier_key,
+       n.supplier_name, n.supplier_ruc, UPPER(n.currency_code) AS currency_code,
+       n.note_date AS movement_date, 'credit_note' AS movement_kind,
+       'Nota de credito proveedor' AS movement_type,
+       CASE a.source_type WHEN 'operation-expense' THEN COALESCE(bu.key_slug, 'operaciones') WHEN 'purchase-invoice' THEN 'admin-purchases' ELSE 'admin-expenses' END AS module_key,
+       CASE a.source_type WHEN 'operation-expense' THEN COALESCE(bu.name, 'Operaciones') WHEN 'purchase-invoice' THEN 'Compras administrativas' ELSE 'Gastos administrativos' END AS module_name,
+       CASE WHEN oe.operation_type = 'service' THEN sc.reference ELSE d.reference END AS operation_reference,
+       oe.operation_id, oe.operation_type, n.receipt_number AS document_number,
+       n.reason AS description, 0 AS debit_amount, a.applied_amount AS credit_amount,
+       n.status AS movement_status, NULL AS due_date,
+       CASE WHEN a.source_type <> 'admin-expense' THEN a.source_id ELSE NULL END AS invoice_id,
+       CASE WHEN a.source_type = 'admin-expense' THEN a.source_id ELSE NULL END AS expense_id,
+       NULL AS payment_order_id, NULL AS payment_order_number, NULL AS payment_order_status,
+       NULL AS purchase_order_id, NULL AS condition_type, 0 AS document_balance,
+       n.id AS source_id, 2 AS sort_order, a.source_type AS affected_source_type,
+       a.source_id AS affected_source_id
+     FROM supplier_credit_notes n
+     INNER JOIN supplier_credit_note_applications a ON a.credit_note_id = n.id
+     LEFT JOIN operation_expense_invoices oe ON a.source_type = 'operation-expense' AND oe.id = a.source_id
+     LEFT JOIN deals d ON d.id = oe.operation_id AND oe.operation_type = 'deal'
+     LEFT JOIN service_cases sc ON sc.id = oe.operation_id AND oe.operation_type = 'service'
+     LEFT JOIN business_units bu ON bu.id = d.business_unit_id
+     WHERE n.status = 'registrada'
+     HAVING supplier_key = ? AND currency_code = ?`,
+    [supplierKey, currencyCode]
+  );
+
+  const safeRows = [
+    ...(Array.isArray(movements) ? movements : []),
+    ...(Array.isArray(creditMovements) ? creditMovements : []),
+  ].sort((a, b) => {
+    const dateDiff = new Date(a.movement_date || 0) - new Date(b.movement_date || 0);
+    if (dateDiff) return dateDiff;
+    const sortDiff = Number(a.sort_order || 0) - Number(b.sort_order || 0);
+    return sortDiff || Number(a.source_id || 0) - Number(b.source_id || 0);
+  });
   let runningBalance = 0;
   const rows = safeRows.map((row) => {
     runningBalance += Number(row.debit_amount || 0) - Number(row.credit_amount || 0);
@@ -605,8 +644,11 @@ async function fetchAccountsPayableVendorDetail(supplierKey, currencyCode) {
     (acc, row) => {
       acc.total_debit += Number(row.debit_amount || 0);
       acc.total_credit += Number(row.credit_amount || 0);
+      if (row.movement_kind === 'payment') acc.total_paid += Number(row.credit_amount || 0);
+      if (row.movement_kind === 'credit_note') acc.total_credit_notes += Number(row.credit_amount || 0);
       if (Number(row.debit_amount || 0) > 0 && row.movement_kind === 'factura') acc.invoice_count += 1;
       if (Number(row.credit_amount || 0) > 0 && row.movement_kind === 'payment') acc.payment_count += 1;
+      if (Number(row.credit_amount || 0) > 0 && row.movement_kind === 'credit_note') acc.credit_note_count += 1;
       if (
         row.movement_kind === 'factura' &&
         row.due_date &&
@@ -620,9 +662,12 @@ async function fetchAccountsPayableVendorDetail(supplierKey, currencyCode) {
     {
       total_debit: 0,
       total_credit: 0,
+      total_paid: 0,
+      total_credit_notes: 0,
       final_balance: rows.length ? Number(rows[rows.length - 1].running_balance || 0) : 0,
       invoice_count: 0,
       payment_count: 0,
+      credit_note_count: 0,
       overdue_documents: 0,
     }
   );
@@ -647,6 +692,7 @@ async function fetchAccountsPayableVendorDetail(supplierKey, currencyCode) {
 }
 
 async function fetchAccountsPayableSummary(query = {}) {
+  await ensureSupplierCreditNoteTables();
   const {
     supplier_q,
     currency_code,
@@ -967,12 +1013,12 @@ async function fetchAccountsPayableSummary(query = {}) {
           WHERE pay.expense_id = e.id
             AND COALESCE(pay.status, '') <> 'anulado'
         ) AS paid_amount,
-        COALESCE(e.amount, 0) - (
+        COALESCE(e.balance, COALESCE(e.amount, 0) - (
           SELECT COALESCE(SUM(pay.amount), 0)
           FROM admin_expense_payments pay
           WHERE pay.expense_id = e.id
             AND COALESCE(pay.status, '') <> 'anulado'
-        ) AS balance,
+        )) AS balance,
         COALESCE(e.invoice_date, e.expense_date) AS invoice_date,
         e.due_date,
         NULL AS operation_id,
@@ -1028,6 +1074,7 @@ async function fetchAccountsPayableSummary(query = {}) {
 }
 
 async function fetchAccountsPayableOpenDocuments(query = {}) {
+  await ensureSupplierCreditNoteTables();
   const { supplier_q, currency_code, module_key, source_type, from_date, to_date, overdue, quick_filter } = query || {};
   const where = ['src.balance > 0.009'];
   const params = [];
@@ -1119,12 +1166,12 @@ async function fetchAccountsPayableOpenDocuments(query = {}) {
         CAST(COALESCE(NULLIF(TRIM(CAST(sup.razon_social AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci), _utf8mb4''), NULLIF(TRIM(CAST(sup.name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci), _utf8mb4''), NULLIF(TRIM(CAST(e.supplier_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci), _utf8mb4''), _utf8mb4'Proveedor sin nombre' COLLATE utf8mb4_unicode_ci) AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS supplier_name,
         CAST(COALESCE(NULLIF(TRIM(CAST(sup.ruc AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci), _utf8mb4''), NULLIF(TRIM(CAST(e.supplier_ruc AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci), _utf8mb4'')) AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS supplier_ruc,
         CAST(UPPER(COALESCE(NULLIF(TRIM(CAST(e.currency_code AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci), _utf8mb4''), _utf8mb4'PYG' COLLATE utf8mb4_unicode_ci)) AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS currency_code,
-        COALESCE(e.amount, 0) - (
+        COALESCE(e.balance, COALESCE(e.amount, 0) - (
           SELECT COALESCE(SUM(pay.amount), 0)
           FROM admin_expense_payments pay
           WHERE pay.expense_id = e.id
             AND COALESCE(pay.status, '') <> 'anulado'
-        ) AS balance,
+        )) AS balance,
         e.due_date,
         COALESCE(e.invoice_date, e.expense_date) AS invoice_date,
         NULL AS operation_id,
@@ -1514,6 +1561,7 @@ function buildDocumentDashboard(rows = []) {
 }
 
 async function fetchAccountsPayableDocuments(query = {}) {
+  await ensureSupplierCreditNoteTables();
   const {
     supplier_q,
     currency_code,
@@ -1553,6 +1601,9 @@ async function fetchAccountsPayableDocuments(query = {}) {
         e.invoice_date,
         e.due_date,
         COALESCE(e.amount_total, 0) AS total_amount,
+        COALESCE(e.credited_amount, 0) AS credited_amount,
+        COALESCE(e.net_amount, e.amount_total, 0) AS net_amount,
+        COALESCE(e.supplier_credit_balance, 0) AS supplier_credit_balance,
         COALESCE(e.paid_amount, 0) AS paid_amount,
         COALESCE(e.balance, COALESCE(e.amount_total, 0) - COALESCE(e.paid_amount, 0)) AS balance,
         CAST(COALESCE(e.status, _utf8mb4'' COLLATE utf8mb4_unicode_ci) AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS document_status,
@@ -1622,6 +1673,9 @@ async function fetchAccountsPayableDocuments(query = {}) {
         pi.invoice_date,
         pi.due_date,
         COALESCE(pi.total_amount, 0) AS total_amount,
+        COALESCE(pi.credited_amount, 0) AS credited_amount,
+        COALESCE(pi.net_amount, pi.total_amount, 0) AS net_amount,
+        COALESCE(pi.supplier_credit_balance, 0) AS supplier_credit_balance,
         COALESCE(pi.paid_amount, 0) AS paid_amount,
         COALESCE(pi.balance, COALESCE(pi.total_amount, 0) - COALESCE(pi.paid_amount, 0)) AS balance,
         CAST(COALESCE(pi.status, _utf8mb4'' COLLATE utf8mb4_unicode_ci) AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS document_status,
@@ -1675,18 +1729,21 @@ async function fetchAccountsPayableDocuments(query = {}) {
         COALESCE(e.invoice_date, e.expense_date) AS invoice_date,
         e.due_date,
         COALESCE(e.amount, 0) AS total_amount,
+        COALESCE(e.credited_amount, 0) AS credited_amount,
+        COALESCE(e.net_amount, e.amount, 0) AS net_amount,
+        COALESCE(e.supplier_credit_balance, 0) AS supplier_credit_balance,
         (
           SELECT COALESCE(SUM(pay.amount), 0)
           FROM admin_expense_payments pay
           WHERE pay.expense_id = e.id
             AND COALESCE(pay.status, '') <> 'anulado'
         ) AS paid_amount,
-        COALESCE(e.amount, 0) - (
+        COALESCE(e.balance, COALESCE(e.amount, 0) - (
           SELECT COALESCE(SUM(pay.amount), 0)
           FROM admin_expense_payments pay
           WHERE pay.expense_id = e.id
             AND COALESCE(pay.status, '') <> 'anulado'
-        ) AS balance,
+        )) AS balance,
         CAST(COALESCE(e.status, _utf8mb4'' COLLATE utf8mb4_unicode_ci) AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS document_status,
         NULL AS invoice_id,
         e.id AS expense_id,
@@ -1737,8 +1794,11 @@ async function fetchAccountsPayableDocuments(query = {}) {
   let normalized = (rows || []).map((row) => ({
     ...row,
     total_amount: Number(row.total_amount || 0),
+    credited_amount: Number(row.credited_amount || 0),
+    net_amount: Number(row.net_amount ?? row.total_amount ?? 0),
     paid_amount: Number(row.paid_amount || 0),
     balance: Number(row.balance || 0),
+    supplier_credit_balance: Number(row.supplier_credit_balance || 0),
     payable_status: normalizePayableStatus(row),
     supplier_has_bank_account: hasSupplierBankData(row),
   })).map((row) => ({
@@ -1850,6 +1910,11 @@ function getMovementStatusMeta(row) {
     dueDate < new Date() &&
     !status.includes('pagad') &&
     !status.includes('cancel');
+
+  if (row?.movement_kind === 'credit_note') {
+    if (status.includes('anulad')) return { label: 'NC anulada', tone: 'red' };
+    return { label: 'NC aplicada', tone: 'blue' };
+  }
 
   if (row?.movement_kind === 'payment_order') {
     if (status.includes('anulad')) return { label: 'OP anulada', tone: 'red' };
@@ -2454,7 +2519,9 @@ router.get(
         { header: 'Modulo', key: 'module_name', width: 24 },
         { header: 'Operacion', key: 'operation_reference', width: 18 },
         { header: 'Moneda', key: 'currency_code', width: 10 },
-        { header: 'Total', key: 'total_amount', width: 14 },
+        { header: 'Total bruto', key: 'total_amount', width: 14 },
+        { header: 'Nota de credito', key: 'credited_amount', width: 16 },
+        { header: 'Total neto', key: 'net_amount', width: 14 },
         { header: 'Pagado', key: 'paid_amount', width: 14 },
         { header: 'Saldo', key: 'balance', width: 14 },
         { header: 'Condicion', key: 'condition_type', width: 14 },
@@ -2486,6 +2553,8 @@ router.get(
           operation_reference: row.operation_reference || '',
           currency_code: row.currency_code || '',
           total_amount: Number(row.total_amount || 0),
+          credited_amount: Number(row.credited_amount || 0),
+          net_amount: Number(row.net_amount ?? row.total_amount ?? 0),
           paid_amount: Number(row.paid_amount || 0),
           balance: Number(row.balance || 0),
           condition_type: row.condition_type || '',
@@ -2516,7 +2585,7 @@ router.get(
         }
       }
 
-      ['L', 'M', 'N'].forEach((col) => {
+      ['L', 'M', 'N', 'O', 'P'].forEach((col) => {
         sheet.getColumn(col).numFmt = '#,##0.00';
       });
 
@@ -2554,7 +2623,8 @@ router.get(
       summarySheet.addRow(['RUC', detail.supplier?.supplier_ruc || '']);
       summarySheet.addRow(['Moneda', detail.supplier?.currency_code || currencyCode]);
       summarySheet.addRow(['Facturado', Number(detail.summary?.total_debit || 0)]);
-      summarySheet.addRow(['Pagado', Number(detail.summary?.total_credit || 0)]);
+      summarySheet.addRow(['Pagado', Number(detail.summary?.total_paid || 0)]);
+      summarySheet.addRow(['Notas de credito', Number(detail.summary?.total_credit_notes || 0)]);
       summarySheet.addRow(['Saldo final', Number(detail.summary?.final_balance || 0)]);
       summarySheet.addRow(['Facturas', Number(detail.summary?.invoice_count || 0)]);
       summarySheet.addRow(['Pagos', Number(detail.summary?.payment_count || 0)]);
@@ -2562,12 +2632,12 @@ router.get(
       summarySheet.getColumn(1).width = 20;
       summarySheet.getColumn(2).width = 24;
       summarySheet.getRow(1).font = { bold: true };
-      ['B4', 'B5', 'B6'].forEach((cellRef) => {
+      ['B4', 'B5', 'B6', 'B7'].forEach((cellRef) => {
         summarySheet.getCell(cellRef).numFmt = '#,##0.00';
       });
       if (Number(detail.summary?.overdue_documents || 0) > 0) {
-        summarySheet.getCell('B9').font = { bold: true, color: { argb: 'B45309' } };
-        summarySheet.getCell('B9').fill = {
+        summarySheet.getCell('B10').font = { bold: true, color: { argb: 'B45309' } };
+        summarySheet.getCell('B10').fill = {
           type: 'pattern',
           pattern: 'solid',
           fgColor: { argb: 'FEF3C7' },
@@ -2663,7 +2733,8 @@ router.get(
 
       [
         `Facturado: ${formatMoney(detail.summary?.total_debit, currencyCode)}`,
-        `Pagado: ${formatMoney(detail.summary?.total_credit, currencyCode)}`,
+        `Pagado: ${formatMoney(detail.summary?.total_paid, currencyCode)}`,
+        `Notas de credito: ${formatMoney(detail.summary?.total_credit_notes, currencyCode)}`,
         `Saldo final: ${formatMoney(detail.summary?.final_balance, currencyCode)}`,
         `Facturas: ${detail.summary?.invoice_count || 0}  |  Pagos: ${detail.summary?.payment_count || 0}  |  Vencidas: ${detail.summary?.overdue_documents || 0}`,
       ].forEach((line) => doc.font('Helvetica').fontSize(9).fillColor('#111827').text(line));
@@ -2676,6 +2747,7 @@ router.get(
           { label: 'Parcial', tone: 'blue' },
           { label: 'Pagado', tone: 'emerald' },
           { label: 'Con OP', tone: 'amber' },
+          { label: 'NC aplicada', tone: 'blue' },
         ],
         doc.page.margins.left,
         doc.y

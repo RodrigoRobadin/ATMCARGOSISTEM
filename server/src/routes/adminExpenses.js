@@ -5,6 +5,7 @@ import path from 'path';
 import multer from 'multer';
 import { pool } from '../services/db.js';
 import { requireAuth, requireAnyRole } from '../middlewares/auth.js';
+import { ensureSupplierCreditNoteTables, recalculateSupplierDocument } from '../services/supplierCreditNotes.js';
 import ExcelJS from 'exceljs';
 
 const router = Router();
@@ -745,6 +746,7 @@ router.get('/meta', requireAuth, async (_req, res) => {
 router.get('/', requireAuth, async (req, res) => {
   try {
     await generateRecurringExpenses(pool);
+    await ensureSupplierCreditNoteTables();
     const { from_date, to_date, status, category_id, cost_center_id, provider_id, currency_code, recurrence_id, q } =
       req.query || {};
 
@@ -835,7 +837,7 @@ router.get('/', requireAuth, async (req, res) => {
       params
     );
     const out = (rows || []).map((row) => {
-      const amount = Number(row.amount || 0);
+      const amount = Number(row.net_amount ?? row.amount ?? 0);
       const paid = Number(row.paid_amount || 0);
       const balance = Math.max(0, amount - paid);
       const statusRaw = String(row.status || '').toLowerCase();
@@ -1020,6 +1022,8 @@ router.get('/:id/detail', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
     await ensureAdminExpenseTables();
+    await ensureSupplierCreditNoteTables();
+    await recalculateSupplierDocument('admin-expense', id, pool);
     const [[expense]] = await pool.query(
       `
       SELECT e.*,
@@ -1076,7 +1080,7 @@ router.get('/:id/detail', requireAuth, async (req, res) => {
       [id]
     );
 
-    const amount = Number(expense.amount || 0);
+    const amount = Number(expense.net_amount ?? expense.amount ?? 0);
     const paid = Number(expense.paid_amount || 0);
     const balance = Math.max(0, amount - paid);
     res.json({
@@ -1106,6 +1110,7 @@ router.get('/:id/detail', requireAuth, async (req, res) => {
 router.post('/:id/cancel', requireAuth, requireAnyRole('admin'), async (req, res) => {
   try {
     const { id } = req.params;
+    await ensureSupplierCreditNoteTables();
     const reason = String(req.body?.reason || '').trim();
     if (!reason) return res.status(400).json({ error: 'Debe cargar un motivo de anulacion' });
 
@@ -1113,6 +1118,16 @@ router.post('/:id/cancel', requireAuth, requireAnyRole('admin'), async (req, res
     if (!expense) return res.status(404).json({ error: 'Gasto no encontrado' });
     if (String(expense.status || '').toLowerCase() === 'anulado') {
       return res.status(400).json({ error: 'El gasto ya esta anulado' });
+    }
+    const [[creditNote]] = await pool.query(
+      `SELECT n.id
+         FROM supplier_credit_note_applications a
+         INNER JOIN supplier_credit_notes n ON n.id = a.credit_note_id AND n.status = 'registrada'
+        WHERE a.source_type = 'admin-expense' AND a.source_id = ? LIMIT 1`,
+      [id]
+    );
+    if (creditNote?.id) {
+      return res.status(409).json({ error: 'Anula primero las notas de credito vinculadas a este gasto.' });
     }
 
     const note = [expense.description, `Anulado: ${reason}`].filter(Boolean).join('\n');
@@ -1152,6 +1167,8 @@ router.post('/:id/payments', requireAuth, async (req, res) => {
       status,
     } = req.body || {};
     await ensureAdminExpenseTables();
+    await ensureSupplierCreditNoteTables();
+    await recalculateSupplierDocument('admin-expense', id, pool);
     const [[expense]] = await pool.query(
       `
       SELECT e.*,
@@ -1180,7 +1197,7 @@ router.post('/:id/payments', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'La moneda del pago debe coincidir con la moneda del gasto' });
     }
     const paidAmount = Number(expense.paid_amount || 0);
-    const balance = Math.max(0, Number(expense.amount || 0) - paidAmount);
+    const balance = Math.max(0, Number(expense.net_amount ?? expense.amount ?? 0) - paidAmount);
     if (paymentAmount - balance > 0.009) {
       return res.status(400).json({ error: 'El pago no puede superar el saldo pendiente' });
     }
@@ -1210,6 +1227,7 @@ router.post('/:id/payments', requireAuth, async (req, res) => {
       ]
     );
     const nextBalance = Math.max(0, balance - paymentAmount);
+    await recalculateSupplierDocument('admin-expense', id, pool);
     if (nextBalance <= 0.009) {
       await pool.query(`UPDATE admin_expenses SET status = 'pagado' WHERE id = ?`, [id]);
     } else if (String(expense.status || '').toLowerCase() === 'pagado') {
