@@ -3789,6 +3789,98 @@ router.post('/:id/issue', requireAuth, async (req, res) => {
 });
 
 // GET /api/invoices/:id
+// Listado global de notas de credito para Administracion.
+// Debe declararse antes de GET /:id para que "credit-notes" no sea tratado como un id.
+router.get('/credit-notes', requireAuth, requireRole(['admin', 'finanzas']), async (req, res) => {
+  try {
+    await ensureCreditNoteTables();
+    await ensureInvoiceExtraColumns();
+
+    const { status, search, from_date, to_date } = req.query || {};
+    const params = [];
+    let query = `
+      SELECT
+        cn.id,
+        cn.credit_note_number,
+        cn.invoice_id,
+        cn.issue_date,
+        cn.created_at,
+        cn.status,
+        cn.reason,
+        cn.subtotal,
+        cn.tax_amount,
+        cn.total_amount,
+        cn.balance,
+        cn.credit_type,
+        cn.mode,
+        cn.apply_mode,
+        cn.observations,
+        i.invoice_number,
+        i.deal_id,
+        i.service_case_id,
+        i.organization_id,
+        COALESCE(i.currency_code, 'USD') AS currency_code,
+        o.name AS organization_name,
+        o.ruc AS organization_ruc,
+        COALESCE(d.reference, sc.reference, '') AS operation_reference,
+        COALESCE(d.title, sc.reference, '') AS operation_title,
+        created_user.name AS created_by_name,
+        issued_user.name AS issued_by_name
+      FROM credit_notes cn
+      JOIN invoices i ON i.id = cn.invoice_id
+      LEFT JOIN organizations o ON o.id = i.organization_id
+      LEFT JOIN deals d ON d.id = i.deal_id
+      LEFT JOIN service_cases sc ON sc.id = i.service_case_id
+      LEFT JOIN users created_user ON created_user.id = cn.created_by
+      LEFT JOIN users issued_user ON issued_user.id = cn.issued_by
+      WHERE 1 = 1
+    `;
+
+    if (status) {
+      query += ' AND cn.status = ?';
+      params.push(status);
+    }
+    if (from_date) {
+      query += ' AND COALESCE(cn.issue_date, DATE(cn.created_at)) >= ?';
+      params.push(from_date);
+    }
+    if (to_date) {
+      query += ' AND COALESCE(cn.issue_date, DATE(cn.created_at)) <= ?';
+      params.push(to_date);
+    }
+    if (search) {
+      const value = `%${String(search).trim()}%`;
+      query += ` AND (
+        cn.credit_note_number LIKE ?
+        OR i.invoice_number LIKE ?
+        OR o.name LIKE ?
+        OR o.ruc LIKE ?
+        OR d.reference LIKE ?
+        OR sc.reference LIKE ?
+        OR cn.reason LIKE ?
+      )`;
+      params.push(value, value, value, value, value, value, value);
+    }
+
+    query += `
+      ORDER BY
+        COALESCE(NULLIF(cn.point_of_issue, ''), SUBSTRING_INDEX(cn.credit_note_number, '-', 1)) DESC,
+        COALESCE(
+          NULLIF(cn.establishment, ''),
+          SUBSTRING_INDEX(SUBSTRING_INDEX(cn.credit_note_number, '-', 2), '-', -1)
+        ) DESC,
+        CAST(SUBSTRING_INDEX(cn.credit_note_number, '-', -1) AS UNSIGNED) DESC,
+        cn.id DESC
+    `;
+
+    const [rows] = await pool.query(query, params);
+    res.json(rows || []);
+  } catch (e) {
+    console.error('[credit-notes] Error listing all:', e);
+    res.status(500).json({ error: 'Error al listar notas de credito' });
+  }
+});
+
 router.get('/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;

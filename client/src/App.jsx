@@ -55,6 +55,7 @@ import ContainerBilling from './pages/container/ContainerBilling.jsx';
 
 // Seguimiento
 import Invoices from './pages/Invoices.jsx';
+import CreditNotes from './pages/CreditNotes.jsx';
 import FollowUpManagement from './pages/FollowUpManagement.jsx';
 import InvoiceDetail from './pages/InvoiceDetail.jsx';
 import PurchaseOrders from './pages/PurchaseOrders.jsx';
@@ -130,6 +131,7 @@ function Layout({ children }) {
   const [containerMenuOpen, setContainerMenuOpen] = useState(false);
   const [commercialMenuOpen, setCommercialMenuOpen] = useState(false);
   const [adminOpsMenuOpen, setAdminOpsMenuOpen] = useState(false);
+  const [invoicesMenuOpen, setInvoicesMenuOpen] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem('theme');
@@ -279,11 +281,22 @@ function Layout({ children }) {
                         icon={sidebarIcons.account}
                         label="Estado de cuenta de clientes"
                       />
-                      <SideLink
-                        to="/invoices"
-                        icon={sidebarIcons.invoices}
-                        label="Facturas"
-                      />
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => setInvoicesMenuOpen((open) => !open)}
+                          className="w-full flex items-center rounded-lg text-sm px-3 py-2 transition-all justify-center group-hover:justify-start gap-0 group-hover:gap-2 hover:bg-slate-100 dark:hover:bg-slate-800 dark:text-slate-200"
+                          title="Facturas"
+                        >
+                          <span className="text-base w-6 text-center">{sidebarIcons.invoices}</span>
+                          <span className="hidden group-hover:inline flex-1 text-left">Facturas</span>
+                          <span className="hidden group-hover:inline text-[10px] text-slate-500">{invoicesMenuOpen ? '^' : 'v'}</span>
+                        </button>
+                        <div className={`${invoicesMenuOpen ? 'block' : 'hidden'} ml-8 mt-1 space-y-1`}>
+                          <SideLink to="/invoices" icon={sidebarIcons.invoices} label="Listado de facturas" />
+                          <SideLink to="/invoices/credit-notes" icon={sidebarIcons.account} label="Notas de credito" />
+                        </div>
+                      </div>
                       <SideLink
                         to="/admin-ops/purchases"
                         icon={sidebarIcons.expenses}
@@ -636,6 +649,14 @@ export default function App() {
                   element={
                     <RequireRole allow={['admin', 'finanzas']}>
                       <Invoices />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/invoices/credit-notes"
+                  element={
+                    <RequireRole allow={['admin', 'finanzas']}>
+                      <CreditNotes />
                     </RequireRole>
                   }
                 />
