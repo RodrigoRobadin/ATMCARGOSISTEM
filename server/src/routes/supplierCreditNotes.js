@@ -13,6 +13,7 @@ import {
 } from '../services/supplierCreditNotes.js';
 
 const router = Router();
+const SUPPLIER_CREDIT_NOTE_ROLES = ['admin', 'finanzas', 'ventas'];
 
 const attachmentStorage = multer.diskStorage({
   destination: (req, _file, cb) => {
@@ -145,7 +146,7 @@ async function fetchDetail(id, conn = pool) {
   return { ...note, applications, items, attachments, audit };
 }
 
-router.get('/', requireAuth, requireAnyRole('admin', 'finanzas'), async (req, res) => {
+router.get('/', requireAuth, requireAnyRole(...SUPPLIER_CREDIT_NOTE_ROLES), async (req, res) => {
   try {
     await ensureSupplierCreditNoteTables();
     const where = ['1=1'];
@@ -190,7 +191,7 @@ router.get('/', requireAuth, requireAnyRole('admin', 'finanzas'), async (req, re
   }
 });
 
-router.get('/source/:sourceType/:sourceId', requireAuth, requireAnyRole('admin', 'finanzas'), async (req, res) => {
+router.get('/source/:sourceType/:sourceId', requireAuth, requireAnyRole(...SUPPLIER_CREDIT_NOTE_ROLES), async (req, res) => {
   try {
     await ensureSupplierCreditNoteTables();
     const sourceType = normalizeSupplierCreditSourceType(req.params.sourceType);
@@ -216,7 +217,7 @@ router.get('/source/:sourceType/:sourceId', requireAuth, requireAnyRole('admin',
   }
 });
 
-router.get('/:id', requireAuth, requireAnyRole('admin', 'finanzas'), async (req, res) => {
+router.get('/:id', requireAuth, requireAnyRole(...SUPPLIER_CREDIT_NOTE_ROLES), async (req, res) => {
   try {
     await ensureSupplierCreditNoteTables();
     const detail = await fetchDetail(Number(req.params.id));
@@ -228,7 +229,7 @@ router.get('/:id', requireAuth, requireAnyRole('admin', 'finanzas'), async (req,
   }
 });
 
-router.post('/', requireAuth, requireAnyRole('admin', 'finanzas'), async (req, res) => {
+router.post('/', requireAuth, requireAnyRole(...SUPPLIER_CREDIT_NOTE_ROLES), async (req, res) => {
   const conn = await pool.getConnection();
   try {
     await ensureSupplierCreditNoteTables();
@@ -362,7 +363,7 @@ router.post('/', requireAuth, requireAnyRole('admin', 'finanzas'), async (req, r
   }
 });
 
-router.post('/:id/attachments', requireAuth, requireAnyRole('admin', 'finanzas'), upload.single('file'), async (req, res) => {
+router.post('/:id/attachments', requireAuth, requireAnyRole(...SUPPLIER_CREDIT_NOTE_ROLES), upload.single('file'), async (req, res) => {
   try {
     await ensureSupplierCreditNoteTables();
     if (!req.file) return res.status(400).json({ error: 'El archivo es requerido' });
