@@ -13,7 +13,7 @@ import {
 } from '../services/supplierCreditNotes.js';
 
 const router = Router();
-const SUPPLIER_CREDIT_NOTE_ROLES = ['admin', 'finanzas', 'ventas'];
+const SUPPLIER_CREDIT_NOTE_ROLES = ['admin', 'finanzas', 'venta', 'ventas'];
 
 const attachmentStorage = multer.diskStorage({
   destination: (req, _file, cb) => {
