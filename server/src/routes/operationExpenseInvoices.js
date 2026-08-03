@@ -8,6 +8,7 @@ import PDFDocument from 'pdfkit';
 import { pool } from '../services/db.js';
 import generatePaymentOrderPDF from '../services/paymentOrderTemplatePdfkit.js';
 import { requireAuth, requireAnyRole } from '../middlewares/auth.js';
+import { ensureSupplierCreditNoteTables, recalculateSupplierDocument } from '../services/supplierCreditNotes.js';
 
 const router = Router();
 
@@ -547,39 +548,8 @@ function totalsFromItems(items = []) {
 }
 
 async function updateInvoicePaymentStatus(invoiceId, conn = pool) {
-  const [[inv]] = await conn.query(
-    `SELECT id, amount_total, condition_type FROM operation_expense_invoices WHERE id = ?`,
-    [invoiceId]
-  );
-  if (!inv?.id) return;
-
-  const [[sumRow]] = await conn.query(
-    `SELECT COALESCE(SUM(amount),0) AS paid
-       FROM operation_expense_payments
-      WHERE invoice_id = ? AND status <> 'anulado'`,
-    [invoiceId]
-  );
-  const paid = Number(sumRow?.paid || 0);
-  const total = Number(inv.amount_total || 0);
-  const balance = Number((total - paid).toFixed(2));
-
-  let paymentStatus = 'pendiente';
-  if (String(inv.condition_type || '').toUpperCase() !== 'CREDITO') {
-    paymentStatus = 'n/a';
-  } else if (paid <= 0) {
-    paymentStatus = 'pendiente';
-  } else if (balance > 0) {
-    paymentStatus = 'parcial';
-  } else {
-    paymentStatus = 'pagado';
-  }
-
-  await conn.query(
-    `UPDATE operation_expense_invoices
-        SET paid_amount = ?, balance = ?, payment_status = ?, paid_date = IF(? <= 0, CURDATE(), paid_date)
-      WHERE id = ?`,
-    [paid, balance, paymentStatus, balance, invoiceId]
-  );
+  await ensureSupplierCreditNoteTables();
+  return recalculateSupplierDocument('operation-expense', invoiceId, conn);
 }
 
 async function ensureSupplierId(payload) {
@@ -800,10 +770,6 @@ router.post('/:id/expense-invoices', requireAuth, async (req, res) => {
       ]
     );
 
-    const [[row]] = await pool.query(
-      `SELECT * FROM operation_expense_invoices WHERE id = ?`,
-      [result.insertId]
-    );
     if (items.length) {
       for (const it of items) {
         await pool.query(
@@ -823,6 +789,11 @@ router.post('/:id/expense-invoices', requireAuth, async (req, res) => {
         );
       }
     }
+    await updateInvoicePaymentStatus(result.insertId, pool);
+    const [[row]] = await pool.query(
+      `SELECT * FROM operation_expense_invoices WHERE id = ?`,
+      [result.insertId]
+    );
     res.status(201).json(row);
   } catch (e) {
     if (e?.code === 'ER_DUP_ENTRY') {
@@ -1055,6 +1026,7 @@ router.post('/:id/expense-invoices/:invoiceId/attachments', requireAuth, upload.
 router.post('/:id/expense-invoices/:invoiceId/payments', requireAuth, async (req, res) => {
   try {
     await ensureOperationExpenseTables();
+    await ensureSupplierCreditNoteTables();
     const { id, invoiceId } = req.params;
     const opType = String(req.query?.op_type || 'deal').toLowerCase();
     const {
@@ -1070,6 +1042,7 @@ router.post('/:id/expense-invoices/:invoiceId/payments', requireAuth, async (req
       return res.status(400).json({ error: 'Metodo de pago es requerido' });
     }
 
+    await recalculateSupplierDocument('operation-expense', invoiceId, pool);
     const [[inv]] = await pool.query(
       `SELECT * FROM operation_expense_invoices WHERE id = ? AND operation_id = ? AND operation_type = ?`,
       [invoiceId, id, opType]
@@ -1100,8 +1073,8 @@ router.post('/:id/expense-invoices/:invoiceId/payments', requireAuth, async (req
       [invoiceId]
     );
     const paid = Number(sumRow?.paid || 0);
-    const total = Number(inv.amount_total || 0);
-    if (amt > total - paid + 0.01) {
+    const netTotal = Number(inv.net_amount ?? inv.amount_total ?? 0);
+    if (amt > netTotal - paid + 0.01) {
       return res.status(400).json({ error: 'El pago supera el saldo pendiente' });
     }
 
@@ -1157,6 +1130,8 @@ router.post('/:id/expense-invoices/:invoiceId/payment-orders', requireAuth, requ
   try {
     const { id, invoiceId } = req.params;
     const opType = req.query?.operation_type || 'deal';
+    await ensureSupplierCreditNoteTables();
+    await recalculateSupplierDocument('operation-expense', invoiceId, pool);
 
     const [[inv]] = await pool.query(
       `SELECT *
@@ -1171,6 +1146,10 @@ router.post('/:id/expense-invoices/:invoiceId/payment-orders', requireAuth, requ
 
     const orderNumber = await nextPaymentOrderNumber();
     const amount = Number(req.body?.amount || inv.balance || inv.amount_total || 0);
+    const availableBalance = Number(inv.balance ?? inv.net_amount ?? inv.amount_total ?? 0);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > availableBalance + 0.01) {
+      return res.status(400).json({ error: 'La orden de pago no puede superar el saldo neto de la factura.' });
+    }
     const payment_method = req.body?.payment_method || null;
     const payment_date = req.body?.payment_date || null;
     const observations = req.body?.observations || null;
@@ -1240,6 +1219,11 @@ router.post('/:id/expense-invoices/payment-orders', requireAuth, requireAnyRole(
     const opType = req.query?.operation_type || 'deal';
     const invoiceIds = Array.isArray(req.body?.invoice_ids) ? req.body.invoice_ids : [];
     if (!invoiceIds.length) return res.status(400).json({ error: 'invoice_ids requerido' });
+
+    await ensureSupplierCreditNoteTables();
+    for (const invoiceId of invoiceIds) {
+      await recalculateSupplierDocument('operation-expense', invoiceId, pool);
+    }
 
     const [invRows] = await pool.query(
       `SELECT *
@@ -1446,6 +1430,7 @@ router.get('/:id/payment-orders/:orderId/pdf', requireAuth, async (req, res) => 
 router.get('/:id/expense-invoices/:invoiceId/payments', requireAuth, async (req, res) => {
   try {
     await ensureOperationExpenseTables();
+    await ensureSupplierCreditNoteTables();
     const { id, invoiceId } = req.params;
     const opType = String(req.query?.op_type || 'deal').toLowerCase();
     const [[inv]] = await pool.query(
@@ -1752,6 +1737,7 @@ async function fetchOperationExportMeta(operationId, opType) {
 async function buildExpenseControlData(operationId, opType, query = {}) {
   await ensureOperationExpenseTables();
   await ensureOperationExpenseTablesPost();
+  await ensureSupplierCreditNoteTables();
   const normalizedOpType = String(opType || 'deal').toLowerCase();
   const exchangeRateFromQuery = Number(query.exchange_rate || 0) || null;
   const [[settings]] = await pool.query(
@@ -1770,8 +1756,18 @@ async function buildExpenseControlData(operationId, opType, query = {}) {
   const invoiceParams = [operationId, normalizedOpType];
   appendExpenseRevisionScope(invoiceWhere, invoiceParams, query || {}, 'e');
 
-  const [invoices] = await pool.query(
+  const [invoiceRows] = await pool.query(
     `SELECT e.*,
+            COALESCE(
+              (
+                SELECT SUM(a.applied_amount)
+                FROM supplier_credit_note_applications a
+                INNER JOIN supplier_credit_notes n
+                  ON n.id = a.credit_note_id AND n.status = 'registrada'
+                WHERE a.source_type = 'operation-expense' AND a.source_id = e.id
+              ),
+              0
+            ) AS applied_credit_amount,
             COALESCE(o.razon_social, o.name) AS supplier_org_name,
             o.ruc AS supplier_org_ruc,
             COALESCE(
@@ -1788,6 +1784,23 @@ async function buildExpenseControlData(operationId, opType, query = {}) {
       ORDER BY e.invoice_date DESC, e.id DESC`,
     invoiceParams
   );
+  const invoices = (invoiceRows || []).map((row) => {
+    const grossAmount = Number(row.amount_total || 0);
+    const creditedAmount = Math.min(
+      grossAmount,
+      Math.max(0, Number(row.applied_credit_amount ?? row.credited_amount ?? 0))
+    );
+    const netAmount = Math.max(0, Number((grossAmount - creditedAmount).toFixed(2)));
+    const paidAmount = Math.max(0, Number(row.paid_amount || 0));
+    return {
+      ...row,
+      amount_total: grossAmount,
+      credited_amount: creditedAmount,
+      net_amount: netAmount,
+      balance: Math.max(0, Number((netAmount - paidAmount).toFixed(2))),
+      supplier_credit_balance: Math.max(0, Number((paidAmount - netAmount).toFixed(2))),
+    };
+  });
 
   const detailWhere = ['e.operation_id = ?', 'e.operation_type = ?', "COALESCE(e.status, '') <> 'anulado'"];
   const detailParams = [operationId, normalizedOpType];
@@ -1802,12 +1815,31 @@ async function buildExpenseControlData(operationId, opType, query = {}) {
     detailParams
   );
 
+  const expenseInvoiceIds = invoices.map((invoice) => Number(invoice.id)).filter(Boolean);
+  let creditRows = [];
+  if (expenseInvoiceIds.length) {
+    const placeholders = expenseInvoiceIds.map(() => '?').join(',');
+    [creditRows] = await pool.query(
+      `SELECT a.source_id AS invoice_id, n.id AS credit_note_id, n.currency_code,
+              a.applied_amount, ni.id AS item_id, ni.subtotal,
+              ni.expense_rubro AS item_rubro, e.expense_rubro AS invoice_rubro
+         FROM supplier_credit_note_applications a
+         INNER JOIN supplier_credit_notes n ON n.id = a.credit_note_id AND n.status = 'registrada'
+         INNER JOIN operation_expense_invoices e ON e.id = a.source_id
+         LEFT JOIN supplier_credit_note_items ni ON ni.credit_note_id = n.id
+        WHERE a.source_type = 'operation-expense'
+          AND a.source_id IN (${placeholders})`,
+      expenseInvoiceIds
+    );
+  }
+
   const actualByRubro = {};
   const actualByCurrency = {};
   const invoiceHasItems = new Set(detailRows.filter((row) => row.item_id).map((row) => row.invoice_id));
   for (const invoice of invoices) {
     const currency = normCurrency(invoice.currency_code);
-    actualByCurrency[currency] = Number(((actualByCurrency[currency] || 0) + Number(invoice.amount_total || 0)).toFixed(2));
+    const netAmount = Number(invoice.net_amount ?? invoice.amount_total ?? 0);
+    actualByCurrency[currency] = Number(((actualByCurrency[currency] || 0) + netAmount).toFixed(2));
   }
   for (const row of detailRows) {
     if (!row.item_id && invoiceHasItems.has(row.invoice_id)) continue;
@@ -1818,6 +1850,18 @@ async function buildExpenseControlData(operationId, opType, query = {}) {
       if (!actualByRubro[rubro]) actualByRubro[rubro] = null;
     } else {
       actualByRubro[rubro] = Number(((actualByRubro[rubro] || 0) + converted).toFixed(2));
+    }
+  }
+  const creditNoteHasItems = new Set(creditRows.filter((row) => row.item_id).map((row) => row.credit_note_id));
+  for (const row of creditRows) {
+    if (!row.item_id && creditNoteHasItems.has(row.credit_note_id)) continue;
+    const rubro = String(row.item_rubro || row.invoice_rubro || 'SIN CLASIFICAR').toUpperCase();
+    const sourceAmount = row.item_id ? row.subtotal : row.applied_amount;
+    const converted = convertAmount(sourceAmount, row.currency_code, budget.currency_code, exchangeRate);
+    if (converted == null) {
+      actualByRubro[rubro] = null;
+    } else if (actualByRubro[rubro] != null) {
+      actualByRubro[rubro] = Number((Math.max(0, Number(actualByRubro[rubro] || 0) - converted)).toFixed(2));
     }
   }
 
@@ -1882,7 +1926,12 @@ async function buildExpenseControlData(operationId, opType, query = {}) {
   });
 
   const totalActualInBudget = invoices.reduce((sum, invoice) => {
-    const converted = convertAmount(invoice.amount_total, invoice.currency_code, budget.currency_code, exchangeRate);
+    const converted = convertAmount(
+      invoice.net_amount ?? invoice.amount_total,
+      invoice.currency_code,
+      budget.currency_code,
+      exchangeRate
+    );
     return converted == null ? sum : sum + converted;
   }, 0) + commissionActual;
   const comparisons = Object.entries(actualByCurrency).map(([currency, actual]) => {
@@ -2063,12 +2112,16 @@ async function buildOperationFinancialStatement(operationId, opType, query = {})
     ...row,
     currency_code: normCurrency(row.currency_code || 'PYG'),
     amount_total: Number(row.amount_total || 0),
+    credited_amount: Number(row.credited_amount || 0),
+    net_amount: Number(row.net_amount ?? row.amount_total ?? 0),
     paid_amount: Number(row.paid_amount || 0),
     balance: Number(row.balance || 0),
+    supplier_credit_balance: Number(row.supplier_credit_balance || 0),
   }));
   const scopedExpenseInvoiceIds = purchaseInvoices.map((row) => Number(row.id)).filter(Boolean);
   let expensePayments = [];
   let paymentOrders = [];
+  let supplierCreditNotes = [];
   if (scopedExpenseInvoiceIds.length) {
     const placeholders = scopedExpenseInvoiceIds.map(() => '?').join(',');
     const [paymentRows] = await pool.query(
@@ -2101,6 +2154,21 @@ async function buildOperationFinancialStatement(operationId, opType, query = {})
       [...scopedExpenseInvoiceIds, ...scopedExpenseInvoiceIds]
     );
     paymentOrders = orderRows;
+    const [supplierCreditRows] = await pool.query(
+      `SELECT n.*, a.source_id AS invoice_id, a.applied_amount,
+              e.receipt_number AS affected_document_number,
+              COALESCE(o.razon_social, o.name, e.supplier_name) AS supplier_display_name
+         FROM supplier_credit_note_applications a
+         INNER JOIN supplier_credit_notes n
+           ON n.id = a.credit_note_id AND n.status = 'registrada'
+         INNER JOIN operation_expense_invoices e ON e.id = a.source_id
+         LEFT JOIN organizations o ON o.id = e.supplier_id
+        WHERE a.source_type = 'operation-expense'
+          AND a.source_id IN (${placeholders})
+        ORDER BY n.note_date DESC, n.id DESC`,
+      scopedExpenseInvoiceIds
+    );
+    supplierCreditNotes = supplierCreditRows;
   }
 
   const sales = {
@@ -2119,11 +2187,14 @@ async function buildOperationFinancialStatement(operationId, opType, query = {})
 
   const purchases = {
     invoices: purchaseInvoices,
+    credit_notes: supplierCreditNotes,
     payments: expensePayments,
     payment_orders: paymentOrders,
     totals: {
       budgeted_by_currency: { [budgetCurrency]: Number(control.budget?.budgeted_purchase || 0) },
-      actual_by_currency: buildByCurrency(purchaseInvoices, 'amount_total'),
+      gross_by_currency: buildByCurrency(purchaseInvoices, 'amount_total'),
+      credited_by_currency: buildByCurrency(purchaseInvoices, 'credited_amount'),
+      actual_by_currency: buildByCurrency(purchaseInvoices, 'net_amount'),
       paid_by_currency: buildByCurrency(purchaseInvoices, 'paid_amount'),
       payable_by_currency: buildByCurrency(purchaseInvoices, 'balance'),
       payment_orders_by_currency: buildByCurrency(paymentOrders, 'amount'),
@@ -2208,6 +2279,21 @@ async function buildOperationFinancialStatement(operationId, opType, query = {})
       credit: Number(row.amount_total || 0),
       source_id: row.id,
       source_type: 'operation_expense_invoice',
+    })),
+    ...supplierCreditNotes.map((row) => ({
+      date: row.note_date || row.created_at,
+      type: 'nota_credito_proveedor',
+      label: 'Nota de credito proveedor',
+      document_number: row.receipt_number || row.id,
+      third_party: row.supplier_display_name || row.supplier_name || 'Proveedor',
+      description: row.affected_document_number
+        ? ['Afecta factura ' + row.affected_document_number, row.reason].filter(Boolean).join(' - ')
+        : row.reason || 'Ajuste de compra',
+      currency_code: normCurrency(row.currency_code || 'PYG'),
+      debit: Number(row.applied_amount || 0),
+      credit: 0,
+      source_id: row.id,
+      source_type: 'supplier_credit_note',
     })),
     ...expensePayments.map((row) => ({
       date: row.payment_date || row.created_at,
@@ -2379,7 +2465,7 @@ function fillOperationFinalTemplate(workbook, data) {
     setCellValue(ws, `H${row}`, idx + 1);
     setCellValue(ws, `I${row}`, invoice.supplier_org_name || invoice.supplier_name || 'Proveedor');
     setCellValue(ws, `J${row}`, invoice.currency_code || data.budget?.currency_code || 'USD');
-    setMoneyCell(ws, `K${row}`, invoice.amount_total || 0);
+    setMoneyCell(ws, `K${row}`, invoice.net_amount ?? invoice.amount_total ?? 0);
   });
 }
 
@@ -2396,7 +2482,7 @@ function addExpenseControlSheets(workbook, data) {
   const existingInvoices = workbook.getWorksheet('Facturas reales');
   if (existingInvoices) workbook.removeWorksheet(existingInvoices.id);
   const invoicesSheet = workbook.addWorksheet('Facturas reales');
-  invoicesSheet.addRow(['Fecha', 'Proveedor', 'Comprobante', 'Item compra', 'Concepto', 'Moneda', 'Total', 'Pagado', 'Saldo', 'Estado']);
+  invoicesSheet.addRow(['Fecha', 'Proveedor', 'Comprobante', 'Item compra', 'Concepto', 'Moneda', 'Total bruto', 'Nota de credito', 'Total neto', 'Pagado', 'Saldo', 'Estado']);
   data.invoices.forEach((inv) =>
     invoicesSheet.addRow([
       inv.invoice_date,
@@ -2406,6 +2492,8 @@ function addExpenseControlSheets(workbook, data) {
       inv.expense_concept || '',
       inv.currency_code,
       Number(inv.amount_total || 0),
+      Number(inv.credited_amount || 0),
+      Number(inv.net_amount ?? inv.amount_total ?? 0),
       Number(inv.paid_amount || 0),
       Number(inv.balance || 0),
       inv.payment_status || inv.status,
@@ -2413,7 +2501,7 @@ function addExpenseControlSheets(workbook, data) {
   );
   invoicesSheet.columns = [
     { width: 14 }, { width: 28 }, { width: 20 }, { width: 18 }, { width: 24 },
-    { width: 10 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 },
+    { width: 10 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 },
   ];
 
   for (const ws of [rubros, invoicesSheet]) {
@@ -2484,7 +2572,7 @@ router.get('/:id/expense-control/export-pdf', requireAuth, async (req, res) => {
     doc.fontSize(11).text('Facturas reales', { underline: true });
     doc.fontSize(8);
     data.invoices.slice(0, 40).forEach((inv) => {
-      doc.text(`${inv.invoice_date || ''} | ${inv.supplier_org_name || inv.supplier_name || ''} | ${inv.receipt_number || ''} | ${inv.expense_rubros || inv.expense_rubro || 'SIN CLASIFICAR'} | ${moneyText(inv.amount_total, inv.currency_code)}`);
+      doc.text(`${inv.invoice_date || ''} | ${inv.supplier_org_name || inv.supplier_name || ''} | ${inv.receipt_number || ''} | ${inv.expense_rubros || inv.expense_rubro || 'SIN CLASIFICAR'} | Bruto ${moneyText(inv.amount_total, inv.currency_code)} | NC ${moneyText(inv.credited_amount || 0, inv.currency_code)} | Neto ${moneyText(inv.net_amount ?? inv.amount_total, inv.currency_code)}`);
     });
     doc.end();
   } catch (e) {
@@ -2497,6 +2585,7 @@ router.delete('/:id/expense-invoices/:invoiceId', requireAuth, async (req, res) 
   const conn = await pool.getConnection();
   try {
     await ensureOperationExpenseTables();
+    await ensureSupplierCreditNoteTables();
     const { id, invoiceId } = req.params;
     const opType = String(req.query?.op_type || 'deal').toLowerCase();
     const [[inv]] = await conn.query(
@@ -2510,6 +2599,16 @@ router.delete('/:id/expense-invoices/:invoiceId', requireAuth, async (req, res) 
     );
     if (Number(pay?.total || 0) > 0) {
       return res.status(409).json({ error: 'No se puede eliminar una factura con pagos registrados.' });
+    }
+    const [[creditNote]] = await conn.query(
+      `SELECT n.id
+         FROM supplier_credit_note_applications a
+         INNER JOIN supplier_credit_notes n ON n.id = a.credit_note_id AND n.status = 'registrada'
+        WHERE a.source_type = 'operation-expense' AND a.source_id = ? LIMIT 1`,
+      [invoiceId]
+    );
+    if (creditNote?.id) {
+      return res.status(409).json({ error: 'Anula primero las notas de credito vinculadas a esta factura.' });
     }
     const [orders] = await conn.query(
       `SELECT DISTINCT po.id, po.status

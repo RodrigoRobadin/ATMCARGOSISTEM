@@ -89,6 +89,7 @@ function documentLinkForMovement(row, operationId, operationType) {
       return { kind: "pdf", url: `/invoices/credit-notes/${id}/pdf` };
     case "operation_expense_invoice":
     case "operation_expense_payment":
+    case "supplier_credit_note":
       return { kind: "link", url: operationPath(operationId, operationType, "gastos") };
     default:
       return null;
@@ -98,9 +99,12 @@ function documentLinkForMovement(row, operationId, operationType) {
 function DocumentLink({ row, operationId, operationType, children }) {
   const target = documentLinkForMovement(row, operationId, operationType);
   if (!target?.url) return <span>{children || "-"}</span>;
-  const title = row.source_type === "operation_expense_invoice" || row.source_type === "operation_expense_payment"
-    ? "Abrir gastos de la operacion"
-    : "Ver documento";
+  const opensOperationExpenses = [
+    "operation_expense_invoice",
+    "operation_expense_payment",
+    "supplier_credit_note",
+  ].includes(row.source_type);
+  const title = opensOperationExpenses ? "Abrir gastos de la operacion" : "Ver documento";
   if (target.kind === "pdf") {
     return (
       <button
@@ -239,7 +243,7 @@ export default function OperationFinancialStatement({
         <SummaryCard label="Cobrado" tone="emerald">
           <MoneyStack values={data.sales?.totals?.collected_by_currency} emptyCurrency={budgetCurrency} tone="emerald" />
         </SummaryCard>
-        <SummaryCard label="Compra real">
+        <SummaryCard label="Compra real neta">
           <MoneyStack values={data.purchases?.totals?.actual_by_currency} emptyCurrency={budgetCurrency} />
         </SummaryCard>
         <SummaryCard label="Pagado proveedores" tone="emerald">
@@ -314,7 +318,7 @@ export default function OperationFinancialStatement({
         <section className="rounded-2xl bg-white shadow">
           <div className="border-b px-4 py-3">
             <div className="font-semibold">Proveedores</div>
-            <div className="text-xs text-slate-500">Facturas de compra y pagos registrados</div>
+            <div className="text-xs text-slate-500">Facturas, notas de credito y pagos registrados</div>
           </div>
           <div className="overflow-auto">
             <table className="min-w-full text-sm">
@@ -323,14 +327,17 @@ export default function OperationFinancialStatement({
                   <th className="px-3 py-2 text-left">Comprobante</th>
                   <th className="px-3 py-2 text-left">Proveedor</th>
                   <th className="px-3 py-2 text-left">Rubro</th>
-                  <th className="px-3 py-2 text-right">Total</th>
+                  <th className="px-3 py-2 text-right">Bruto</th>
+                  <th className="px-3 py-2 text-right">NC</th>
+                  <th className="px-3 py-2 text-right">Neto</th>
                   <th className="px-3 py-2 text-right">Pagado</th>
                   <th className="px-3 py-2 text-right">Saldo</th>
+                  <th className="px-3 py-2 text-right">A favor</th>
                 </tr>
               </thead>
               <tbody>
                 {(data.purchases?.invoices || []).length === 0 ? (
-                  <tr><td colSpan={6} className="px-3 py-4 text-center text-slate-500">Sin facturas de compra.</td></tr>
+                  <tr><td colSpan={9} className="px-3 py-4 text-center text-slate-500">Sin facturas de compra.</td></tr>
                 ) : (
                   data.purchases.invoices.map((row) => (
                     <tr key={row.id} className="border-t">
@@ -341,8 +348,11 @@ export default function OperationFinancialStatement({
                       <td className="px-3 py-2">{row.supplier_org_name || row.supplier_name || "-"}</td>
                       <td className="px-3 py-2">{row.expense_rubros || row.expense_rubro || "-"}</td>
                       <td className="px-3 py-2 text-right">{fmtMoney(row.amount_total, row.currency_code)}</td>
+                      <td className="px-3 py-2 text-right text-blue-700">{fmtMoney(row.credited_amount, row.currency_code)}</td>
+                      <td className="px-3 py-2 text-right font-semibold">{fmtMoney(row.net_amount, row.currency_code)}</td>
                       <td className="px-3 py-2 text-right text-emerald-700">{fmtMoney(row.paid_amount, row.currency_code)}</td>
                       <td className="px-3 py-2 text-right font-semibold">{fmtMoney(row.balance, row.currency_code)}</td>
+                      <td className="px-3 py-2 text-right font-semibold text-blue-700">{fmtMoney(row.supplier_credit_balance, row.currency_code)}</td>
                     </tr>
                   ))
                 )}
@@ -365,7 +375,7 @@ export default function OperationFinancialStatement({
                 <th className="px-3 py-2 text-left">Tipo</th>
                 <th className="px-3 py-2 text-left">Documento</th>
                 <th className="px-3 py-2 text-left">Tercero</th>
-                <th className="px-3 py-2 text-right">Entrada</th>
+                <th className="px-3 py-2 text-right">Entrada/Ajuste a favor</th>
                 <th className="px-3 py-2 text-right">Salida/Ajuste</th>
               </tr>
             </thead>
