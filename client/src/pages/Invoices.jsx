@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
 import InvoiceCreateModal from '../components/InvoiceCreateModal.jsx';
+import CustomerReceiptModal from '../components/CustomerReceiptModal.jsx';
 
 const statusStyles = {
   borrador: 'bg-gray-100 text-gray-700',
@@ -279,7 +280,7 @@ export default function Invoices() {
       )}
       {/* Payment Modal */}
       {showPaymentModal && selectedInvoice && (
-        <PaymentModal
+        <CustomerReceiptModal
           invoice={selectedInvoice}
           onClose={() => {
             setShowPaymentModal(false);
