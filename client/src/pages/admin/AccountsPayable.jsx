@@ -216,7 +216,12 @@ function canRegisterPayment(row) {
     }
     return true;
   }
-  return row?.source_type === 'purchase-invoice' || row?.source_type === 'admin-expense';
+  if (row?.source_type === 'admin-expense') {
+    return ['aprobada', 'pago_parcial'].includes(
+      String(row?.payment_order_status || '').toLowerCase()
+    );
+  }
+  return row?.source_type === 'purchase-invoice';
 }
 
 function documentSourceId(row) {

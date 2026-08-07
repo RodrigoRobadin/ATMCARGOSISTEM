@@ -1,6 +1,7 @@
 // client/src/pages/AdminExpenses.jsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
+import { useAuth } from '../auth.jsx';
 import AdminExpensesMastersModal from '../components/AdminExpensesMastersModal';
 import {
   companyBankAccountLabel,
@@ -14,6 +15,12 @@ const fmtMoney = (v) =>
     Number(v || 0)
   );
 
+const fmtCurrencyAmount = (value, currency) =>
+  new Intl.NumberFormat('es-PY', {
+    minimumFractionDigits: currency === 'PYG' ? 0 : 2,
+    maximumFractionDigits: currency === 'PYG' ? 0 : 2,
+  }).format(Number(value || 0));
+
 const DEFAULT_BUYER = {
   name: 'ATM CARGO SRL',
   ruc: '80056641-6',
@@ -25,6 +32,18 @@ const PAYMENT_ACCOUNTS = ['Caja', 'Banco Itaú', 'Banco Continental', 'Banco Vis
 const today = () => new Date().toISOString().slice(0, 10);
 const dateOnly = (value) => (value ? String(value).slice(0, 10) : '');
 const isBeforeToday = (value) => Boolean(value) && dateOnly(value) < today();
+const addDaysToDate = (date, days) => {
+  if (!date || days === '' || days == null) return '';
+  const [year, month, day] = String(date).slice(0, 10).split('-').map(Number);
+  const count = Number(days);
+  if (!year || !month || !day || !Number.isFinite(count) || count < 0) return '';
+  const result = new Date(Date.UTC(year, month - 1, day));
+  result.setUTCDate(result.getUTCDate() + Math.trunc(count));
+  return result.toISOString().slice(0, 10);
+};
+
+const MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
 const EXPENSE_TABS = [
   { key: 'por_pagar', label: 'Por pagar' },
@@ -33,6 +52,7 @@ const EXPENSE_TABS = [
   { key: 'pagados', label: 'Pagados' },
   { key: 'anulados', label: 'Anulados' },
   { key: 'reportes', label: 'Reportes' },
+  { key: 'mensual', label: 'Planilla mensual' },
 ];
 
 function statusBadgeClass(status) {
@@ -55,6 +75,8 @@ function SummaryCard({ label, children, tone = 'slate' }) {
 }
 
 export default function AdminExpenses() {
+  const { user } = useAuth();
+  const isAdmin = String(user?.role || '').toLowerCase() === 'admin';
   const [meta, setMeta] = useState({
     categories: [],
     subcategories: [],
@@ -77,6 +99,7 @@ export default function AdminExpenses() {
   const [error, setError] = useState('');
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
   const [newInvoiceOpen, setNewInvoiceOpen] = useState(false);
+  const [newExpenseHasInvoice, setNewExpenseHasInvoice] = useState(false);
   const [newInvoiceMode, setNewInvoiceMode] = useState('resumen'); // resumen | detalle
   const [newInvoiceItems, setNewInvoiceItems] = useState([]);
   const [newInvoiceForm, setNewInvoiceForm] = useState({
@@ -91,6 +114,7 @@ export default function AdminExpenses() {
     due_date: '',
     supplier_ruc: '',
     supplier_name: '',
+    credit_days: '',
     buyer_name: DEFAULT_BUYER.name,
     buyer_ruc: DEFAULT_BUYER.ruc,
     tax_mode: 'solo10',
@@ -122,6 +146,7 @@ export default function AdminExpenses() {
     iva_10: '',
     iva_5: '',
     iva_exempt: '',
+    credit_days: '',
     iva_no_taxed: '',
     amount_total: '',
     currency_code: 'PYG',
@@ -156,6 +181,15 @@ export default function AdminExpenses() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [actionsMenu, setActionsMenu] = useState(null);
 
+  const [monthlyYear, setMonthlyYear] = useState(new Date().getFullYear());
+  const [monthlyCurrency, setMonthlyCurrency] = useState('PYG');
+  const [monthlyLoading, setMonthlyLoading] = useState(false);
+  const [monthlyData, setMonthlyData] = useState({
+    rows: [],
+    totals: [],
+    total_paid: 0,
+    exchange_rate: 0,
+  });
   const [filters, setFilters] = useState({
     from_date: '',
     to_date: '',
@@ -291,6 +325,30 @@ export default function AdminExpenses() {
     });
   }
 
+  async function loadMonthlySummary() {
+    setMonthlyLoading(true);
+    try {
+      const { data } = await api.get('/admin-expenses/monthly-summary', {
+        params: { year: monthlyYear, currency_code: monthlyCurrency },
+      });
+      setMonthlyData({
+        rows: Array.isArray(data?.rows) ? data.rows : [],
+        totals: Array.isArray(data?.totals) ? data.totals : [],
+        total_paid: Number(data?.total_paid || 0),
+        exchange_rate: Number(data?.exchange_rate || 0),
+      });
+    } catch (e) {
+      console.error('Error loading monthly admin expenses', e);
+      setError(e?.response?.data?.error || 'No se pudo cargar la planilla mensual.');
+    } finally {
+      setMonthlyLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (activeTab === 'mensual') loadMonthlySummary();
+  }, [activeTab, monthlyYear, monthlyCurrency]);
+
   useEffect(() => {
     let active = true;
     if (!providerQuery.trim()) {
@@ -382,6 +440,7 @@ export default function AdminExpenses() {
       timbrado_number: expense?.timbrado_number || '',
       invoice_date: expense?.invoice_date || today(),
       condition_type: expense?.condition_type || 'CONTADO',
+      credit_days: expense?.credit_days ?? '',
       due_date: expense?.due_date || '',
       supplier_ruc: supplierRuc,
       supplier_name: supplierName,
@@ -414,6 +473,22 @@ export default function AdminExpenses() {
     setNewInvoiceOpen(true);
   }
 
+  function confirmNewInvoice() {
+    let amount = Number(newInvoiceForm.amount_total || 0);
+    if (newInvoiceMode === 'detalle') {
+      const totals = computeItemsTotals(newInvoiceItems);
+      amount = totals.total;
+      setNewInvoiceForm((f) => ({ ...f, amount_total: String(totals.total || '') }));
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      alert('El total de la factura debe ser mayor a cero.');
+      return;
+    }
+    setForm((f) => ({ ...f, amount: String(amount), currency_code: newInvoiceForm.currency_code || 'PYG' }));
+    setNewExpenseHasInvoice(true);
+    setNewInvoiceOpen(false);
+  }
+
   async function handleSaveInvoice() {
     if (!invoiceExpense?.id) return;
     try {
@@ -425,6 +500,7 @@ export default function AdminExpenses() {
         condition_type: invoiceForm.condition_type || null,
         due_date: invoiceForm.due_date || null,
         currency_code: invoiceForm.currency_code || null,
+        credit_days: invoiceForm.credit_days === '' ? null : Number(invoiceForm.credit_days),
         exchange_rate: invoiceForm.exchange_rate || null,
         supplier_ruc: invoiceForm.supplier_ruc || null,
         supplier_name: invoiceForm.supplier_name || null,
@@ -509,7 +585,65 @@ export default function AdminExpenses() {
     return parts.join(' - ');
   }
 
+  function paymentOrderAllowsPayment(expense) {
+    return ['aprobada', 'pago_parcial'].includes(
+      String(expense?.payment_order_status || '').toLowerCase()
+    );
+  }
+
+  async function requestPaymentOrder(expense) {
+    if (!expense?.id) return;
+    const balance = getExpenseBalance(expense);
+    if (balance <= 0.009) return alert('El gasto no tiene saldo pendiente.');
+    if (!window.confirm(`Solicitar orden de pago por ${fmtMoney(balance)} ${expense.currency_code || ''}?`)) return;
+    try {
+      await api.post(`/admin-expenses/${expense.id}/payment-orders`, {
+        amount: balance,
+        payment_date: expense.due_date || null,
+        description: expense.description || expense.receipt_number || `Gasto #${expense.id}`,
+      });
+      setActionsMenu(null);
+      await loadExpenses();
+    } catch (e) {
+      console.error('Error requesting payment order', e);
+      alert(e?.response?.data?.error || 'No se pudo solicitar la orden de pago.');
+    }
+  }
+
+  async function approvePaymentOrder(expense) {
+    if (!expense?.payment_order_id) return;
+    if (!window.confirm(`Aprobar la orden ${expense.payment_order_number || ''}?`)) return;
+    try {
+      await api.patch(`/admin-expenses/payment-orders/${expense.payment_order_id}/approve`);
+      setActionsMenu(null);
+      await loadExpenses();
+    } catch (e) {
+      console.error('Error approving payment order', e);
+      alert(e?.response?.data?.error || 'No se pudo aprobar la orden de pago.');
+    }
+  }
+
+  async function cancelPaymentOrder(expense) {
+    if (!expense?.payment_order_id) return;
+    const reason = window.prompt('Motivo de anulacion de la orden de pago:');
+    if (!reason?.trim()) return;
+    try {
+      await api.patch(`/admin-expenses/payment-orders/${expense.payment_order_id}/cancel`, {
+        reason: reason.trim(),
+      });
+      setActionsMenu(null);
+      await loadExpenses();
+    } catch (e) {
+      console.error('Error canceling payment order', e);
+      alert(e?.response?.data?.error || 'No se pudo anular la orden de pago.');
+    }
+  }
+
   function openPaymentModal(expense) {
+    if (!paymentOrderAllowsPayment(expense)) {
+      alert('La orden de pago debe estar aprobada antes de registrar el pago.');
+      return;
+    }
     const balance = getExpenseBalance(expense);
     setPaymentExpense(expense);
     setPaymentForm({
@@ -576,7 +710,7 @@ export default function AdminExpenses() {
       await loadReport();
     } catch (e) {
       console.error('Error saving payment', e);
-      alert('No se pudo registrar el pago.');
+      alert(e?.response?.data?.error || 'No se pudo registrar el pago.');
     } finally {
       setPaymentSaving(false);
     }
@@ -656,6 +790,13 @@ export default function AdminExpenses() {
     setSaving(true);
     setError('');
     try {
+      const baseAmount = Number(
+        newExpenseHasInvoice ? newInvoiceForm.amount_total : form.amount
+      );
+      if (!Number.isFinite(baseAmount) || baseAmount <= 0) {
+        setError('El monto del gasto debe ser mayor a cero.');
+        return;
+      }
       const payload = {
         expense_date: form.expense_date,
         provider_id: form.provider_id || null,
@@ -663,27 +804,28 @@ export default function AdminExpenses() {
         subcategory_id: form.subcategory_id || null,
         cost_center_id: form.cost_center_id || null,
         description: form.description,
-        amount: Number(newInvoiceForm.amount_total || 0),
-        currency_code: newInvoiceForm.currency_code || 'PYG',
-        exchange_rate: newInvoiceForm.exchange_rate || null,
+        amount: baseAmount,
+        currency_code: newExpenseHasInvoice ? (newInvoiceForm.currency_code || 'PYG') : (form.currency_code || 'PYG'),
+        exchange_rate: newExpenseHasInvoice ? (newInvoiceForm.exchange_rate || null) : null,
         tax_rate: form.tax_rate || null,
-        receipt_type: newInvoiceForm.receipt_type || null,
-        receipt_number: newInvoiceForm.receipt_number || null,
-        timbrado_number: newInvoiceForm.timbrado_number || null,
-        invoice_date: newInvoiceForm.invoice_date || null,
-        condition_type: newInvoiceForm.condition_type || null,
-        due_date: newInvoiceForm.due_date || null,
+        receipt_type: newExpenseHasInvoice ? (newInvoiceForm.receipt_type || null) : null,
+        receipt_number: newExpenseHasInvoice ? (newInvoiceForm.receipt_number || null) : null,
+        timbrado_number: newExpenseHasInvoice ? (newInvoiceForm.timbrado_number || null) : null,
+        invoice_date: newExpenseHasInvoice ? (newInvoiceForm.invoice_date || null) : null,
+        condition_type: newExpenseHasInvoice ? (newInvoiceForm.condition_type || null) : null,
+        credit_days: newExpenseHasInvoice && newInvoiceForm.credit_days !== '' ? Number(newInvoiceForm.credit_days) : null,
+        due_date: newExpenseHasInvoice ? (newInvoiceForm.due_date || null) : null,
         supplier_ruc: newInvoiceForm.supplier_ruc || null,
         supplier_name: newInvoiceForm.supplier_name || null,
-        buyer_name: newInvoiceForm.buyer_name || null,
-        buyer_ruc: newInvoiceForm.buyer_ruc || null,
-        tax_mode: newInvoiceForm.tax_mode || null,
-        gravado_10: newInvoiceForm.gravado_10 || null,
-        gravado_5: newInvoiceForm.gravado_5 || null,
-        iva_10: newInvoiceForm.iva_10 || null,
-        iva_5: newInvoiceForm.iva_5 || null,
-        iva_exempt: newInvoiceForm.iva_exempt || null,
-        iva_no_taxed: newInvoiceForm.iva_no_taxed || null,
+        buyer_name: newExpenseHasInvoice ? (newInvoiceForm.buyer_name || null) : null,
+        buyer_ruc: newExpenseHasInvoice ? (newInvoiceForm.buyer_ruc || null) : null,
+        tax_mode: newExpenseHasInvoice ? (newInvoiceForm.tax_mode || null) : null,
+        gravado_10: newExpenseHasInvoice ? (newInvoiceForm.gravado_10 || null) : null,
+        gravado_5: newExpenseHasInvoice ? (newInvoiceForm.gravado_5 || null) : null,
+        iva_10: newExpenseHasInvoice ? (newInvoiceForm.iva_10 || null) : null,
+        iva_5: newExpenseHasInvoice ? (newInvoiceForm.iva_5 || null) : null,
+        iva_exempt: newExpenseHasInvoice ? (newInvoiceForm.iva_exempt || null) : null,
+        iva_no_taxed: newExpenseHasInvoice ? (newInvoiceForm.iva_no_taxed || null) : null,
         status: form.status || 'pendiente',
       };
       if (form.provider_id && (!payload.supplier_name || !payload.supplier_ruc)) {
@@ -698,7 +840,7 @@ export default function AdminExpenses() {
         }
       }
 
-      if (newInvoiceMode === 'detalle') {
+      if (newExpenseHasInvoice && newInvoiceMode === 'detalle') {
         const totals = computeItemsTotals(newInvoiceItems);
         const taxMode =
           totals.g10 && totals.g5 ? 'mixto' : totals.g5 ? 'solo5' : 'solo10';
@@ -726,7 +868,7 @@ export default function AdminExpenses() {
           end_date: form.end_date || null,
           frequency: 'monthly',
         });
-        if (newInvoiceFile) {
+        if (newExpenseHasInvoice && newInvoiceFile) {
           const recId = rec?.id;
           if (recId) {
             const { data: list } = await api.get('/admin-expenses', {
@@ -738,7 +880,7 @@ export default function AdminExpenses() {
         }
       } else {
         const { data } = await api.post('/admin-expenses', payload);
-        if (data?.id && newInvoiceFile) {
+        if (data?.id && newExpenseHasInvoice && newInvoiceFile) {
           await uploadExpenseAttachment(data.id, newInvoiceFile);
         }
       }
@@ -769,6 +911,7 @@ export default function AdminExpenses() {
         buyer_name: DEFAULT_BUYER.name,
         buyer_ruc: DEFAULT_BUYER.ruc,
         tax_mode: 'solo10',
+        credit_days: '',
         gravado_10: '',
         gravado_5: '',
         iva_10: '',
@@ -782,6 +925,7 @@ export default function AdminExpenses() {
       setNewInvoiceOpen(false);
       await loadExpenses();
       await loadUpcomingRecurrences();
+      setNewExpenseHasInvoice(false);
       await loadRecurrences();
     } catch (e) {
       console.error('Error creating expense', e);
@@ -989,8 +1133,79 @@ export default function AdminExpenses() {
           ))}
         </div>
       </div>
+      {activeTab === 'mensual' && (
+        <section className="bg-white border rounded-lg overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b">
+            <div>
+              <h2 className="text-base font-semibold">Planilla mensual de gastos</h2>
+              <p className="text-xs text-slate-500">Saldos pendientes y pagos reales agrupados por detalle.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <select className="border rounded px-2 py-1.5 text-sm" value={monthlyYear} onChange={(e) => setMonthlyYear(Number(e.target.value))}>
+                {[monthlyYear - 1, monthlyYear, monthlyYear + 1].map((year) => <option key={year} value={year}>{year}</option>)}
+              </select>
+              <select className="border rounded px-2 py-1.5 text-sm" value={monthlyCurrency} onChange={(e) => setMonthlyCurrency(e.target.value)}>
+                <option value="PYG">PYG</option>
+                <option value="USD">USD</option>
+                <option value="BRL">BRL</option>
+                <option value="ARS">ARS</option>
+              </select>
+              <button type="button" className="border rounded px-3 py-1.5 text-sm" onClick={loadMonthlySummary}>Actualizar</button>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-[2100px] w-full border-collapse text-xs">
+              <thead>
+                <tr className="bg-[#5f566d] text-white">
+                  <th className="border border-slate-300 px-3 py-2 text-left min-w-64">MES</th>
+                  {MONTHS.map((month) => <th key={month} colSpan={2} className="border border-slate-300 px-2 py-2 text-center uppercase">{month}</th>)}
+                  <th rowSpan={3} className="border border-slate-300 bg-red-700 px-3 py-2 text-center min-w-32">TOTAL PAGADO</th>
+                </tr>
+                <tr className="bg-[#5f566d] text-white">
+                  <th className="border border-slate-300 px-3 py-1.5 text-left">TIPO DE CAMBIO</th>
+                  {MONTHS.map((month) => <th key={month} colSpan={2} className="border border-slate-300 px-2 py-1.5 text-center">{monthlyData.exchange_rate ? fmtCurrencyAmount(monthlyData.exchange_rate, 'PYG') : '-'}</th>)}
+                </tr>
+                <tr className="bg-[#5f566d] text-white">
+                  <th className="border border-slate-300 px-3 py-2 text-left">DETALLE</th>
+                  {MONTHS.flatMap((month) => [
+                    <th key={`${month}-pay`} className="border border-slate-300 px-2 py-2 text-right">A PAGAR</th>,
+                    <th key={`${month}-paid`} className="border border-slate-300 px-2 py-2 text-right">PAGADO</th>,
+                  ])}
+                </tr>
+              </thead>
+              <tbody>
+                {monthlyLoading ? (
+                  <tr><td colSpan={26} className="px-4 py-8 text-center text-slate-500">Cargando planilla...</td></tr>
+                ) : monthlyData.rows.length ? monthlyData.rows.map((row) => (
+                  <tr key={row.detail} className="border-t hover:bg-slate-50">
+                    <td className="border border-slate-300 bg-slate-800 px-3 py-2 font-medium text-white">{row.detail}</td>
+                    {row.months.flatMap((month) => [
+                      <td key={`${row.detail}-${month.month}-pay`} className="border border-slate-300 px-2 py-2 text-right">{fmtCurrencyAmount(month.to_pay, monthlyCurrency)}</td>,
+                      <td key={`${row.detail}-${month.month}-paid`} className="border border-slate-300 px-2 py-2 text-right">{fmtCurrencyAmount(month.paid, monthlyCurrency)}</td>,
+                    ])}
+                    <td className="border border-slate-300 bg-lime-900 px-3 py-2 text-right font-semibold text-white">{fmtCurrencyAmount(row.total_paid, monthlyCurrency)}</td>
+                  </tr>
+                )) : (
+                  <tr><td colSpan={26} className="px-4 py-8 text-center text-slate-500">Sin gastos para el a?o y moneda seleccionados.</td></tr>
+                )}
+              </tbody>
+              <tfoot>
+                <tr className="bg-slate-100 font-semibold">
+                  <td className="border border-slate-300 px-3 py-2">TOTAL</td>
+                  {monthlyData.totals.flatMap((month) => [
+                    <td key={`total-${month.month}-pay`} className="border border-slate-300 px-2 py-2 text-right">{fmtCurrencyAmount(month.to_pay, monthlyCurrency)}</td>,
+                    <td key={`total-${month.month}-paid`} className="border border-slate-300 px-2 py-2 text-right">{fmtCurrencyAmount(month.paid, monthlyCurrency)}</td>,
+                  ])}
+                  <td className="border border-slate-300 bg-red-700 px-3 py-2 text-right text-white">{fmtCurrencyAmount(monthlyData.total_paid, monthlyCurrency)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </section>
+      )}
 
-      <div className="flex items-center justify-between">
+
+      <div className={activeTab === 'mensual' ? 'hidden' : 'flex items-center justify-between'}>
         <div>
           <h2 className="text-lg font-semibold">Registro de gastos</h2>
           <p className="text-sm text-slate-500">Carga de gastos administrativos.</p>
@@ -1004,7 +1219,7 @@ export default function AdminExpenses() {
         </button>
       </div>
 
-      <form onSubmit={handleCreateExpense} className="bg-white border rounded-lg p-4 space-y-3">
+      <form onSubmit={handleCreateExpense} className={activeTab === 'mensual' ? 'hidden' : 'bg-white border rounded-lg p-4 space-y-3'}>
         <div className="text-sm font-semibold">Nuevo gasto</div>
         <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
           <div>
@@ -1140,19 +1355,47 @@ export default function AdminExpenses() {
           />
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            className="px-3 py-2 text-sm border rounded"
-            onClick={openNewInvoiceModal}
-          >
-            Cargar factura
-          </button>
-          {newInvoiceForm.amount_total && (
-            <div className="text-xs text-slate-500">
-              Monto: {fmtMoney(newInvoiceForm.amount_total)} {newInvoiceForm.currency_code}
-            </div>
-          )}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+          <div>
+            <label className="text-xs text-slate-500">Monto estimado / real</label>
+            <input
+              type="number"
+              min="0.01"
+              step="0.01"
+              className="mt-1 w-full border rounded px-2 py-1 text-sm"
+              value={newExpenseHasInvoice ? newInvoiceForm.amount_total : form.amount}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (newExpenseHasInvoice) setNewInvoiceForm((f) => ({ ...f, amount_total: value }));
+                else setForm((f) => ({ ...f, amount: value }));
+              }}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500">Moneda</label>
+            <select
+              className="mt-1 w-full border rounded px-2 py-1 text-sm"
+              value={newExpenseHasInvoice ? newInvoiceForm.currency_code : form.currency_code}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (newExpenseHasInvoice) setNewInvoiceForm((f) => ({ ...f, currency_code: value }));
+                else setForm((f) => ({ ...f, currency_code: value }));
+              }}
+            >
+              <option value="PYG">PYG</option>
+              <option value="USD">USD</option>
+              <option value="BRL">BRL</option>
+              <option value="ARS">ARS</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="button" className="px-3 py-2 text-sm border rounded" onClick={openNewInvoiceModal}>
+              {newExpenseHasInvoice ? 'Editar factura' : 'Cargar factura (opcional)'}
+            </button>
+            <span className={`text-xs ${newExpenseHasInvoice ? 'text-emerald-700' : 'text-amber-700'}`}>
+              {newExpenseHasInvoice ? 'Factura cargada' : 'Sin factura'}
+            </span>
+          </div>
         </div>
         <div className="flex items-center gap-4">
           <label className="text-sm flex items-center gap-2">
@@ -1187,7 +1430,7 @@ export default function AdminExpenses() {
         </div>
       </form>
 
-      <div className="bg-white border rounded-lg p-4 space-y-3">
+      <div className={activeTab === 'mensual' ? 'hidden' : 'bg-white border rounded-lg p-4 space-y-3'}>
         <div className="flex items-center justify-between">
           <div className="text-sm font-semibold">Listado</div>
           <button className="text-sm border rounded px-3 py-1" onClick={handleApplyFilters}>
@@ -1266,6 +1509,7 @@ export default function AdminExpenses() {
                 <th className="text-right px-3 py-2">Pagado</th>
                 <th className="text-right px-3 py-2">Saldo</th>
                 <th className="text-left px-3 py-2">Moneda</th>
+                <th className="text-left px-3 py-2">OP</th>
                 <th className="text-left px-3 py-2">Estado</th>
                 <th className="text-left px-3 py-2">Alertas</th>
                 <th className="text-left px-3 py-2">Acciones</th>
@@ -1275,7 +1519,7 @@ export default function AdminExpenses() {
               {visibleExpenses.map((e) => (
                 <tr key={e.id} className="border-t">
                   <td className="px-3 py-2">{e.expense_date}</td>
-                  <td className="px-3 py-2">{e.provider_name || '-'}</td>
+                  <td className="px-3 py-2">{e.provider_name || e.supplier_name || '-'}</td>
                   <td className="px-3 py-2">{e.category_name || '-'}</td>
                   <td className="px-3 py-2">{e.cost_center_name || '-'}</td>
                   <td className="px-3 py-2">{e.condition_type || '-'}</td>
@@ -1287,6 +1531,14 @@ export default function AdminExpenses() {
                     {fmtMoney(e.balance ?? (Number(e.amount || 0) - Number(e.paid_amount || 0)))}
                   </td>
                   <td className="px-3 py-2">{e.currency_code || '-'}</td>
+                  <td className="px-3 py-2">
+                    {e.payment_order_number ? (
+                      <span className="whitespace-nowrap text-xs font-medium">
+                        {e.payment_order_number}<br />
+                        <span className="font-normal capitalize text-slate-500">{e.payment_order_status}</span>
+                      </span>
+                    ) : <span className="text-xs text-slate-400">Sin OP</span>}
+                  </td>
                   <td className="px-3 py-2 capitalize">
                     <span className={`inline-flex rounded-full px-2 py-0.5 text-xs ${statusBadgeClass(e.status)}`}>
                       {e.status || '-'}
@@ -1295,6 +1547,7 @@ export default function AdminExpenses() {
                   <td className="px-3 py-2">
                     <div className="flex flex-wrap gap-1">
                       {e.is_overdue ? <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700">Vencido</span> : null}
+                      {!e.invoice_date && !e.receipt_number ? <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700">Factura pendiente</span> : null}
                       {!e.has_attachment ? <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700">Sin comprobante</span> : null}
                       {e.recurrence_id ? <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700">Recurrente</span> : null}
                     </div>
@@ -1311,9 +1564,12 @@ export default function AdminExpenses() {
                       {actionsMenu === e.id && (
                         <div className="absolute right-0 z-30 mt-1 w-44 rounded-lg border bg-white py-1 shadow-lg">
                           <button className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-50" type="button" onClick={() => { setActionsMenu(null); openDetailDrawer(e); }}>Ver detalle</button>
-                          <button className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-50" type="button" onClick={() => { setActionsMenu(null); openInvoiceModal(e); }}>Editar factura</button>
-                          <button className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-50" type="button" onClick={() => { setActionsMenu(null); handleViewReceipt(e.id); }}>Ver comprobante</button>
-                          <button className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-50" type="button" onClick={() => { setActionsMenu(null); openPaymentModal(e); }}>Registrar pago</button>
+                          <button className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-50" type="button" onClick={() => { setActionsMenu(null); openInvoiceModal(e); }}>{e.invoice_date || e.receipt_number ? 'Editar factura' : 'Cargar factura'}</button>
+                          {e.has_attachment ? <button className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-50" type="button" onClick={() => { setActionsMenu(null); handleViewReceipt(e.id); }}>Ver comprobante</button> : null}
+                          {!e.payment_order_id && getExpenseBalance(e) > 0.009 ? <button className="block w-full px-3 py-2 text-left text-xs text-blue-700 hover:bg-blue-50" type="button" onClick={() => requestPaymentOrder(e)}>Solicitar OP</button> : null}
+                          {isAdmin && String(e.payment_order_status || '').toLowerCase() === 'pendiente' ? <button className="block w-full px-3 py-2 text-left text-xs text-emerald-700 hover:bg-emerald-50" type="button" onClick={() => approvePaymentOrder(e)}>Aprobar OP</button> : null}
+                          {paymentOrderAllowsPayment(e) ? <button className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-50" type="button" onClick={() => { setActionsMenu(null); openPaymentModal(e); }}>Registrar pago</button> : null}
+                          {isAdmin && e.payment_order_id && !['pagada', 'anulada'].includes(String(e.payment_order_status || '').toLowerCase()) ? <button className="block w-full px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50" type="button" onClick={() => cancelPaymentOrder(e)}>Anular OP</button> : null}
                           <button className="block w-full px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50" type="button" onClick={() => { setActionsMenu(null); cancelExpense(e); }}>Anular</button>
                         </div>
                       )}
@@ -1323,7 +1579,7 @@ export default function AdminExpenses() {
               ))}
               {!visibleExpenses.length && (
                 <tr>
-                  <td colSpan={14} className="px-3 py-4 text-center text-slate-500">
+                  <td colSpan={15} className="px-3 py-4 text-center text-slate-500">
                     Sin gastos registrados.
                   </td>
                 </tr>
@@ -1563,7 +1819,13 @@ export default function AdminExpenses() {
                   className="border rounded px-2 py-1 w-full"
                   value={newInvoiceForm.invoice_date}
                   onChange={(e) =>
-                    setNewInvoiceForm((f) => ({ ...f, invoice_date: e.target.value }))
+                    setNewInvoiceForm((f) => ({
+                      ...f,
+                      invoice_date: e.target.value,
+                      due_date: String(f.condition_type || '').toUpperCase() === 'CREDITO'
+                        ? addDaysToDate(e.target.value, f.credit_days)
+                        : '',
+                    }))
                   }
                 />
               </div>
@@ -1589,7 +1851,14 @@ export default function AdminExpenses() {
                   className="border rounded px-2 py-1 w-full"
                   value={newInvoiceForm.condition_type || 'CONTADO'}
                   onChange={(e) =>
-                    setNewInvoiceForm((f) => ({ ...f, condition_type: e.target.value }))
+                    setNewInvoiceForm((f) => ({
+                      ...f,
+                      condition_type: e.target.value,
+                      credit_days: e.target.value === 'CREDITO' ? f.credit_days : '',
+                      due_date: e.target.value === 'CREDITO'
+                        ? addDaysToDate(f.invoice_date, f.credit_days)
+                        : '',
+                    }))
                   }
                 >
                   <option value="CONTADO">CONTADO</option>
@@ -1597,17 +1866,26 @@ export default function AdminExpenses() {
                 </select>
               </div>
               {String(newInvoiceForm.condition_type || '').toUpperCase() === 'CREDITO' && (
-                <div>
-                  <label className="text-xs text-slate-500">Vencimiento</label>
-                  <input
-                    type="date"
-                    className="border rounded px-2 py-1 w-full"
-                    value={newInvoiceForm.due_date || ''}
-                    onChange={(e) =>
-                      setNewInvoiceForm((f) => ({ ...f, due_date: e.target.value }))
-                    }
-                  />
-                </div>
+                <>
+                  <div>
+                    <label className="text-xs text-slate-500">Dias de credito</label>
+                    <input type="number" min="0" className="border rounded px-2 py-1 w-full"
+                      value={newInvoiceForm.credit_days || ''}
+                      onChange={(e) => setNewInvoiceForm((f) => ({
+                        ...f,
+                        credit_days: e.target.value,
+                        due_date: addDaysToDate(f.invoice_date, e.target.value),
+                      }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-500">Vencimiento calculado</label>
+                    <input type="date" className="border rounded px-2 py-1 w-full"
+                      value={newInvoiceForm.due_date || ''}
+                      onChange={(e) => setNewInvoiceForm((f) => ({ ...f, due_date: e.target.value }))}
+                    />
+                  </div>
+                </>
               )}
               <div>
                 <label className="text-xs text-slate-500">Moneda</label>
@@ -1920,7 +2198,7 @@ export default function AdminExpenses() {
               </button>
               <button
                 className="px-3 py-2 text-sm bg-black text-white rounded"
-                onClick={() => setNewInvoiceOpen(false)}
+                onClick={confirmNewInvoice}
               >
                 Guardar
               </button>
@@ -1984,7 +2262,13 @@ export default function AdminExpenses() {
                   className="border rounded px-2 py-1 w-full"
                   value={invoiceForm.invoice_date}
                   onChange={(e) =>
-                    setInvoiceForm((f) => ({ ...f, invoice_date: e.target.value }))
+                    setInvoiceForm((f) => ({
+                      ...f,
+                      invoice_date: e.target.value,
+                      due_date: String(f.condition_type || '').toUpperCase() === 'CREDITO'
+                        ? addDaysToDate(e.target.value, f.credit_days)
+                        : '',
+                    }))
                   }
                 />
               </div>
@@ -2010,7 +2294,14 @@ export default function AdminExpenses() {
                   className="border rounded px-2 py-1 w-full"
                   value={invoiceForm.condition_type || 'CONTADO'}
                   onChange={(e) =>
-                    setInvoiceForm((f) => ({ ...f, condition_type: e.target.value }))
+                    setInvoiceForm((f) => ({
+                      ...f,
+                      condition_type: e.target.value,
+                      credit_days: e.target.value === 'CREDITO' ? f.credit_days : '',
+                      due_date: e.target.value === 'CREDITO'
+                        ? addDaysToDate(f.invoice_date, f.credit_days)
+                        : '',
+                    }))
                   }
                 >
                   <option value="CONTADO">CONTADO</option>
@@ -2018,17 +2309,26 @@ export default function AdminExpenses() {
                 </select>
               </div>
               {String(invoiceForm.condition_type || '').toUpperCase() === 'CREDITO' && (
-                <div>
-                  <label className="text-xs text-slate-500">Vencimiento</label>
-                  <input
-                    type="date"
-                    className="border rounded px-2 py-1 w-full"
-                    value={invoiceForm.due_date || ''}
-                    onChange={(e) =>
-                      setInvoiceForm((f) => ({ ...f, due_date: e.target.value }))
-                    }
-                  />
-                </div>
+                <>
+                  <div>
+                    <label className="text-xs text-slate-500">Dias de credito</label>
+                    <input type="number" min="0" className="border rounded px-2 py-1 w-full"
+                      value={invoiceForm.credit_days || ''}
+                      onChange={(e) => setInvoiceForm((f) => ({
+                        ...f,
+                        credit_days: e.target.value,
+                        due_date: addDaysToDate(f.invoice_date, e.target.value),
+                      }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-500">Vencimiento calculado</label>
+                    <input type="date" className="border rounded px-2 py-1 w-full"
+                      value={invoiceForm.due_date || ''}
+                      onChange={(e) => setInvoiceForm((f) => ({ ...f, due_date: e.target.value }))}
+                    />
+                  </div>
+                </>
               )}
               <div>
                 <label className="text-xs text-slate-500">Moneda</label>

@@ -203,6 +203,7 @@ async function ensureAdminExpenseTables() {
   await ensureExpenseAccountColumns();
   await ensureExpensePurchaseColumns();
   await ensureRecurrencePurchaseColumns();
+  await ensureAdminExpensePaymentOrdersTable();
   await ensureExpenseItemsTable();
   await ensureCategoryOrderColumns();
   await ensureSubcategoryOrderColumns();
@@ -245,6 +246,7 @@ async function ensurePaymentReceiptColumns() {
     if (!have.has('receipt_number')) add.push('ADD COLUMN receipt_number VARCHAR(64) NULL');
     if (!have.has('timbrado_number')) add.push('ADD COLUMN timbrado_number VARCHAR(64) NULL');
     if (!have.has('notes')) add.push('ADD COLUMN notes TEXT NULL');
+    if (!have.has('payment_order_id')) add.push('ADD COLUMN payment_order_id INT NULL');
     if (add.length) {
       await pool.query(`ALTER TABLE admin_expense_payments ${add.join(', ')}`);
     }
@@ -330,6 +332,7 @@ async function ensureExpensePurchaseColumns() {
     if (!have.has('due_date')) add.push('ADD COLUMN due_date DATE NULL');
     if (!have.has('buyer_ruc')) add.push('ADD COLUMN buyer_ruc VARCHAR(32) NULL');
     if (!have.has('buyer_name')) add.push('ADD COLUMN buyer_name VARCHAR(160) NULL');
+    if (!have.has('credit_days')) add.push('ADD COLUMN credit_days INT NULL');
     if (!have.has('tax_mode')) add.push('ADD COLUMN tax_mode VARCHAR(16) NULL');
     if (!have.has('gravado_10')) add.push('ADD COLUMN gravado_10 DECIMAL(15,2) NULL');
     if (!have.has('gravado_5')) add.push('ADD COLUMN gravado_5 DECIMAL(15,2) NULL');
@@ -343,11 +346,39 @@ async function ensureExpensePurchaseColumns() {
   }
 }
 
+async function ensureAdminExpensePaymentOrdersTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_expense_payment_orders (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      order_number VARCHAR(32) NULL,
+      expense_id INT NOT NULL,
+      amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+      currency_code VARCHAR(8) NOT NULL DEFAULT 'PYG',
+      payment_method VARCHAR(40) NULL,
+      payment_date DATE NULL,
+      description VARCHAR(255) NULL,
+      observations TEXT NULL,
+      status VARCHAR(24) NOT NULL DEFAULT 'pendiente',
+      requested_by INT NULL,
+      approved_by INT NULL,
+      requested_at DATETIME NULL,
+      approved_at DATETIME NULL,
+      canceled_by INT NULL,
+      canceled_at DATETIME NULL,
+      cancel_reason TEXT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_admin_expense_op_expense (expense_id),
+      INDEX idx_admin_expense_op_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+}
 async function ensureRecurrencePurchaseColumns() {
   try {
     const [cols] = await pool.query(`
       SELECT COLUMN_NAME
       FROM INFORMATION_SCHEMA.COLUMNS
+
       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_expense_recurrences'
     `);
     const have = new Set(cols.map((c) => c.COLUMN_NAME));
@@ -590,6 +621,14 @@ function formatDate(date) {
   return `${y}-${m}-${day}`;
 }
 
+function addDaysToDate(value, days) {
+  const base = toDateOnly(value);
+  const count = Number(days);
+  if (!base || !Number.isFinite(count) || count < 0) return null;
+  base.setUTCDate(base.getUTCDate() + Math.trunc(count));
+  return formatDate(base);
+}
+
 function addMonths(baseDate, months, dayOfMonth) {
   const base = new Date(baseDate.getTime());
   const y = base.getUTCFullYear();
@@ -802,8 +841,8 @@ router.get('/', requireAuth, async (req, res) => {
     const [rows] = await pool.query(
       `
       SELECT e.*,
-             COALESCE(p.razon_social, p.name) AS provider_name,
-             p.ruc AS provider_ruc,
+             COALESCE(p.razon_social, p.name, e.supplier_name) AS provider_name,
+             COALESCE(p.ruc, e.supplier_ruc) AS provider_ruc,
              p.supplier_bank_name,
              p.supplier_bank_account,
              p.supplier_bank_currency,
@@ -820,6 +859,10 @@ router.get('/', requireAuth, async (req, res) => {
                FROM admin_expense_payments pay
                WHERE pay.expense_id = e.id AND pay.status <> 'anulado'
              ) AS paid_amount,
+             po.id AS payment_order_id,
+             po.order_number AS payment_order_number,
+             po.status AS payment_order_status,
+             po.amount AS payment_order_amount,
              EXISTS(
                SELECT 1
                FROM admin_expense_attachments att
@@ -831,6 +874,15 @@ router.get('/', requireAuth, async (req, res) => {
         LEFT JOIN admin_expense_categories c ON c.id = e.category_id
         LEFT JOIN admin_expense_subcategories sc ON sc.id = e.subcategory_id
         LEFT JOIN admin_expense_cost_centers cc ON cc.id = e.cost_center_id
+        LEFT JOIN admin_expense_payment_orders po
+          ON po.id = (
+            SELECT po2.id
+              FROM admin_expense_payment_orders po2
+             WHERE po2.expense_id = e.id
+               AND po2.status <> 'anulada'
+             ORDER BY po2.id DESC
+             LIMIT 1
+          )
         ${whereSql}
         ORDER BY e.expense_date DESC, e.id DESC
       `,
@@ -887,6 +939,7 @@ router.post('/', requireAuth, async (req, res) => {
       iva_5,
       iva_exempt,
       condition_type,
+      credit_days,
       due_date,
       buyer_ruc,
       buyer_name,
@@ -905,14 +958,27 @@ router.post('/', requireAuth, async (req, res) => {
       items,
     } = req.body || {};
 
+    const numericAmount = Number(amount || 0);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      return res.status(400).json({ error: 'El monto del gasto debe ser mayor a cero' });
+    }
+    const normalizedCondition = String(condition_type || '').toUpperCase() || null;
+    const normalizedCreditDays =
+      normalizedCondition === 'CREDITO' && credit_days !== '' && credit_days != null
+        ? Math.max(0, Math.trunc(Number(credit_days) || 0))
+        : null;
+    const normalizedDueDate =
+      normalizedCondition === 'CREDITO'
+        ? (due_date || addDaysToDate(invoice_date, normalizedCreditDays))
+        : null;
     const [result] = await pool.query(
       `INSERT INTO admin_expenses
        (expense_date, provider_id, category_id, subcategory_id, cost_center_id, description,
         invoice_date, supplier_ruc, supplier_name, iva_10, iva_5, iva_exempt,
-        condition_type, due_date, buyer_ruc, buyer_name, tax_mode,
+        condition_type, credit_days, due_date, buyer_ruc, buyer_name, tax_mode,
         gravado_10, gravado_5, iva_no_taxed, exchange_rate,
         amount, currency_code, tax_rate, receipt_type, receipt_number, timbrado_number, status, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         expense_date,
         provider_id || null,
@@ -926,8 +992,9 @@ router.post('/', requireAuth, async (req, res) => {
         Number(iva_10 || 0) || null,
         Number(iva_5 || 0) || null,
         Number(iva_exempt || 0) || null,
-        condition_type || null,
-        due_date || null,
+        normalizedCondition,
+        normalizedCreditDays,
+        normalizedDueDate,
         buyer_ruc || null,
         buyer_name || null,
         tax_mode || null,
@@ -935,7 +1002,7 @@ router.post('/', requireAuth, async (req, res) => {
         Number(gravado_5 || 0) || null,
         Number(iva_no_taxed || 0) || null,
         Number(exchange_rate || 0) || null,
-        Number(amount || 0),
+        numericAmount,
         currency_code || 'PYG',
         tax_rate || null,
         receipt_type || null,
@@ -990,7 +1057,14 @@ router.patch('/:id', requireAuth, async (req, res) => {
       'timbrado_number',
       'status',
       'condition_type',
+      'credit_days',
       'due_date',
+      'invoice_date',
+      'supplier_ruc',
+      'supplier_name',
+      'iva_10',
+      'iva_5',
+      'iva_exempt',
       'buyer_ruc',
       'buyer_name',
       'tax_mode',
@@ -1027,8 +1101,8 @@ router.get('/:id/detail', requireAuth, async (req, res) => {
     const [[expense]] = await pool.query(
       `
       SELECT e.*,
-             COALESCE(p.razon_social, p.name) AS provider_name,
-             p.ruc AS provider_ruc,
+             COALESCE(p.razon_social, p.name, e.supplier_name) AS provider_name,
+             COALESCE(p.ruc, e.supplier_ruc) AS provider_ruc,
              p.supplier_bank_name,
              p.supplier_bank_account,
              p.supplier_bank_currency,
@@ -1150,6 +1224,267 @@ router.post('/:id/cancel', requireAuth, requireAnyRole('admin'), async (req, res
   }
 });
 
+router.get('/monthly-summary', requireAuth, async (req, res) => {
+  try {
+    await ensureAdminExpenseTables();
+    await ensureSupplierCreditNoteTables();
+    const year = Math.trunc(Number(req.query?.year || new Date().getFullYear()));
+    const currency = String(req.query?.currency_code || 'PYG').toUpperCase();
+    if (!Number.isFinite(year) || year < 2000 || year > 2200) {
+      return res.status(400).json({ error: 'Ano invalido' });
+    }
+    const [expenseRows] = await pool.query(`
+      SELECT e.id,
+             COALESCE(sc.name, NULLIF(e.description, ''), c.name,
+                      p.razon_social, p.name, e.supplier_name, 'SIN DETALLE') AS detail,
+             MONTH(COALESCE(e.due_date, e.invoice_date, e.expense_date)) AS month_number,
+             COALESCE(e.net_amount, e.amount, 0) AS net_amount,
+             COALESCE((
+               SELECT SUM(pay.amount)
+                 FROM admin_expense_payments pay
+                WHERE pay.expense_id = e.id
+                  AND pay.status <> 'anulado'
+             ), 0) AS paid_total
+        FROM admin_expenses e
+        LEFT JOIN organizations p ON p.id = e.provider_id
+        LEFT JOIN admin_expense_categories c ON c.id = e.category_id
+        LEFT JOIN admin_expense_subcategories sc ON sc.id = e.subcategory_id
+       WHERE YEAR(COALESCE(e.due_date, e.invoice_date, e.expense_date)) = ?
+         AND UPPER(e.currency_code) = ?
+         AND LOWER(COALESCE(e.status, 'pendiente')) <> 'anulado'
+       ORDER BY detail, e.id
+    `, [year, currency]);
+    const [paymentRows] = await pool.query(`
+      SELECT COALESCE(sc.name, NULLIF(e.description, ''), c.name,
+                      p.razon_social, p.name, e.supplier_name, 'SIN DETALLE') AS detail,
+             MONTH(pay.payment_date) AS month_number,
+             SUM(pay.amount) AS paid_amount
+        FROM admin_expense_payments pay
+        INNER JOIN admin_expenses e ON e.id = pay.expense_id
+        LEFT JOIN organizations p ON p.id = e.provider_id
+        LEFT JOIN admin_expense_categories c ON c.id = e.category_id
+        LEFT JOIN admin_expense_subcategories sc ON sc.id = e.subcategory_id
+       WHERE YEAR(pay.payment_date) = ?
+         AND UPPER(pay.currency_code) = ?
+         AND pay.status <> 'anulado'
+         AND LOWER(COALESCE(e.status, 'pendiente')) <> 'anulado'
+       GROUP BY detail, MONTH(pay.payment_date)
+       ORDER BY detail
+    `, [year, currency]);
+
+    const rowsMap = new Map();
+    const ensureRow = (detail) => {
+      const key = String(detail || 'SIN DETALLE').trim() || 'SIN DETALLE';
+      if (!rowsMap.has(key)) {
+        rowsMap.set(key, {
+          detail: key,
+          months: Array.from({ length: 12 }, (_, index) => ({
+            month: index + 1,
+            to_pay: 0,
+            paid: 0,
+          })),
+          total_paid: 0,
+        });
+      }
+      return rowsMap.get(key);
+    };
+    expenseRows.forEach((row) => {
+      const monthIndex = Number(row.month_number || 0) - 1;
+      if (monthIndex < 0 || monthIndex > 11) return;
+      const item = ensureRow(row.detail);
+      const balance = Math.max(0, Number(row.net_amount || 0) - Number(row.paid_total || 0));
+      item.months[monthIndex].to_pay += balance;
+    });
+    paymentRows.forEach((row) => {
+      const monthIndex = Number(row.month_number || 0) - 1;
+      if (monthIndex < 0 || monthIndex > 11) return;
+      const item = ensureRow(row.detail);
+      const paid = Number(row.paid_amount || 0);
+      item.months[monthIndex].paid += paid;
+      item.total_paid += paid;
+    });
+    const rows = Array.from(rowsMap.values()).sort((a, b) =>
+      a.detail.localeCompare(b.detail, 'es')
+    );
+    const totals = Array.from({ length: 12 }, (_, index) => ({
+      month: index + 1,
+      to_pay: rows.reduce((sum, row) => sum + Number(row.months[index].to_pay || 0), 0),
+      paid: rows.reduce((sum, row) => sum + Number(row.months[index].paid || 0), 0),
+    }));
+    const rate = await getParamValue('admin_expense_exchange_rate', pool);
+    res.json({
+      year,
+      currency_code: currency,
+      exchange_rate: Number(rate?.value || 0),
+      rows,
+      totals,
+      total_paid: rows.reduce((sum, row) => sum + Number(row.total_paid || 0), 0),
+    });
+  } catch (e) {
+    console.error('[admin-expenses] monthly summary error', e);
+    res.status(500).json({ error: 'No se pudo cargar la planilla mensual' });
+  }
+});
+
+router.get('/:id/payment-orders', requireAuth, requireAnyRole('admin', 'finanzas'), async (req, res) => {
+  try {
+    await ensureAdminExpensePaymentOrdersTable();
+    const [rows] = await pool.query(`
+      SELECT po.*,
+             requester.name AS requested_by_name,
+             approver.name AS approved_by_name,
+             COALESCE((
+               SELECT SUM(p.amount)
+                 FROM admin_expense_payments p
+                WHERE p.payment_order_id = po.id
+                  AND p.status <> 'anulado'
+             ), 0) AS paid_amount
+        FROM admin_expense_payment_orders po
+        LEFT JOIN users requester ON requester.id = po.requested_by
+        LEFT JOIN users approver ON approver.id = po.approved_by
+       WHERE po.expense_id = ?
+       ORDER BY po.id DESC
+    `, [req.params.id]);
+    res.json(rows);
+  } catch (e) {
+    console.error('[admin-expenses] payment orders list error', e);
+    res.status(500).json({ error: 'No se pudieron cargar las ordenes de pago' });
+  }
+});
+
+router.post('/:id/payment-orders', requireAuth, requireAnyRole('admin', 'finanzas'), async (req, res) => {
+  try {
+    await ensureAdminExpenseTables();
+    const { id } = req.params;
+    const [[expense]] = await pool.query(`
+      SELECT e.*,
+             COALESCE((
+               SELECT SUM(p.amount)
+                 FROM admin_expense_payments p
+                WHERE p.expense_id = e.id
+                  AND p.status <> 'anulado'
+             ), 0) AS paid_amount
+        FROM admin_expenses e
+       WHERE e.id = ?
+       LIMIT 1
+    `, [id]);
+    if (!expense) return res.status(404).json({ error: 'Gasto no encontrado' });
+    if (String(expense.status || '').toLowerCase() === 'anulado') {
+      return res.status(400).json({ error: 'No se puede solicitar una OP para un gasto anulado' });
+    }
+    const [[activeOrder]] = await pool.query(`
+      SELECT id, order_number, status
+        FROM admin_expense_payment_orders
+       WHERE expense_id = ?
+         AND status IN ('pendiente', 'aprobada', 'pago_parcial')
+       ORDER BY id DESC
+       LIMIT 1
+    `, [id]);
+    if (activeOrder) {
+      return res.status(409).json({
+        error: 'El gasto ya tiene una orden de pago activa',
+        payment_order: activeOrder,
+      });
+    }
+    const balance = Math.max(
+      0,
+      Number(expense.net_amount ?? expense.amount ?? 0) - Number(expense.paid_amount || 0)
+    );
+    const requestedAmount = Number(req.body?.amount || balance);
+    if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+      return res.status(400).json({ error: 'El monto de la orden debe ser mayor a cero' });
+    }
+    if (requestedAmount - balance > 0.009) {
+      return res.status(400).json({ error: 'La orden no puede superar el saldo pendiente' });
+    }
+    const [result] = await pool.query(`
+      INSERT INTO admin_expense_payment_orders
+      (expense_id, amount, currency_code, payment_method, payment_date, description,
+       observations, status, requested_by, requested_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'pendiente', ?, NOW())
+    `, [
+      id,
+      requestedAmount,
+      expense.currency_code || 'PYG',
+      req.body?.payment_method || null,
+      req.body?.payment_date || expense.due_date || null,
+      req.body?.description || expense.description || null,
+      req.body?.observations || null,
+      req.user?.id || null,
+    ]);
+    const orderNumber = 'OPA-' + String(result.insertId).padStart(6, '0');
+    await pool.query(
+      'UPDATE admin_expense_payment_orders SET order_number = ? WHERE id = ?',
+      [orderNumber, result.insertId]
+    );
+    const [[row]] = await pool.query(
+      'SELECT * FROM admin_expense_payment_orders WHERE id = ?',
+      [result.insertId]
+    );
+    res.status(201).json(row);
+  } catch (e) {
+    console.error('[admin-expenses] payment order create error', e);
+    res.status(500).json({ error: 'No se pudo generar la orden de pago' });
+  }
+});
+
+router.patch('/payment-orders/:orderId/approve', requireAuth, requireAnyRole('admin'), async (req, res) => {
+  try {
+    await ensureAdminExpensePaymentOrdersTable();
+    const { orderId } = req.params;
+    const [[order]] = await pool.query(
+      'SELECT * FROM admin_expense_payment_orders WHERE id = ?',
+      [orderId]
+    );
+    if (!order) return res.status(404).json({ error: 'Orden no encontrada' });
+    if (String(order.status || '').toLowerCase() !== 'pendiente') {
+      return res.status(400).json({ error: 'Solo se puede aprobar una orden pendiente' });
+    }
+    await pool.query(`
+      UPDATE admin_expense_payment_orders
+         SET status = 'aprobada', approved_by = ?, approved_at = NOW()
+       WHERE id = ?
+    `, [req.user?.id || null, orderId]);
+    const [[updated]] = await pool.query(
+      'SELECT * FROM admin_expense_payment_orders WHERE id = ?',
+      [orderId]
+    );
+    res.json(updated);
+  } catch (e) {
+    console.error('[admin-expenses] payment order approve error', e);
+    res.status(500).json({ error: 'No se pudo aprobar la orden de pago' });
+  }
+});
+
+router.patch('/payment-orders/:orderId/cancel', requireAuth, requireAnyRole('admin'), async (req, res) => {
+  try {
+    await ensureAdminExpensePaymentOrdersTable();
+    const reason = String(req.body?.reason || '').trim();
+    if (!reason) return res.status(400).json({ error: 'El motivo es obligatorio' });
+    const { orderId } = req.params;
+    const [[paid]] = await pool.query(`
+      SELECT COALESCE(SUM(amount), 0) AS total
+        FROM admin_expense_payments
+       WHERE payment_order_id = ?
+         AND status <> 'anulado'
+    `, [orderId]);
+    if (Number(paid?.total || 0) > 0.009) {
+      return res.status(409).json({ error: 'No se puede anular una OP con pagos registrados' });
+    }
+    const [result] = await pool.query(`
+      UPDATE admin_expense_payment_orders
+         SET status = 'anulada', canceled_by = ?, canceled_at = NOW(), cancel_reason = ?
+       WHERE id = ?
+         AND status <> 'anulada'
+    `, [req.user?.id || null, reason, orderId]);
+    if (!result.affectedRows) return res.status(404).json({ error: 'Orden no encontrada' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[admin-expenses] payment order cancel error', e);
+    res.status(500).json({ error: 'No se pudo anular la orden de pago' });
+  }
+});
+
 router.post('/:id/payments', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
@@ -1201,6 +1536,32 @@ router.post('/:id/payments', requireAuth, async (req, res) => {
     if (paymentAmount - balance > 0.009) {
       return res.status(400).json({ error: 'El pago no puede superar el saldo pendiente' });
     }
+    const [[paymentOrder]] = await pool.query(`
+      SELECT *
+        FROM admin_expense_payment_orders
+       WHERE expense_id = ?
+         AND status IN ('aprobada', 'pago_parcial')
+       ORDER BY id DESC
+       LIMIT 1
+    `, [id]);
+    if (!paymentOrder) {
+      return res.status(409).json({
+        error: 'La orden de pago debe estar aprobada antes de registrar el pago',
+      });
+    }
+    const [[orderPaidRow]] = await pool.query(`
+      SELECT COALESCE(SUM(amount), 0) AS paid
+        FROM admin_expense_payments
+       WHERE payment_order_id = ?
+         AND status <> 'anulado'
+    `, [paymentOrder.id]);
+    const orderPaid = Number(orderPaidRow?.paid || 0);
+    const orderBalance = Math.max(0, Number(paymentOrder.amount || 0) - orderPaid);
+    if (paymentAmount - orderBalance > 0.009) {
+      return res.status(400).json({
+        error: 'El pago no puede superar el saldo aprobado en la orden de pago',
+      });
+    }
     const normalizedMethod = String(method || '').trim().toLowerCase();
     const requiresAccount = normalizedMethod && !['efectivo', 'tarjeta'].includes(normalizedMethod);
     if (requiresAccount && !String(account || '').trim()) {
@@ -1208,10 +1569,11 @@ router.post('/:id/payments', requireAuth, async (req, res) => {
     }
     const [result] = await pool.query(
       `INSERT INTO admin_expense_payments
-       (expense_id, payment_date, method, account, reference_number, receipt_type, receipt_number, timbrado_number, notes, amount, currency_code, status, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (expense_id, payment_order_id, payment_date, method, account, reference_number, receipt_type, receipt_number, timbrado_number, notes, amount, currency_code, status, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
+        paymentOrder.id,
         payment_date || null,
         method || null,
         account || null,
@@ -1228,6 +1590,13 @@ router.post('/:id/payments', requireAuth, async (req, res) => {
     );
     const nextBalance = Math.max(0, balance - paymentAmount);
     await recalculateSupplierDocument('admin-expense', id, pool);
+    const nextOrderPaid = orderPaid + paymentAmount;
+    await pool.query(
+      `UPDATE admin_expense_payment_orders
+          SET status = ?
+        WHERE id = ?`,
+      [nextOrderPaid + 0.009 >= Number(paymentOrder.amount || 0) ? 'pagada' : 'pago_parcial', paymentOrder.id]
+    );
     if (nextBalance <= 0.009) {
       await pool.query(`UPDATE admin_expenses SET status = 'pagado' WHERE id = ?`, [id]);
     } else if (String(expense.status || '').toLowerCase() === 'pagado') {

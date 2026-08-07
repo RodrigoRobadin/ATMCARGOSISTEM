@@ -1754,9 +1754,9 @@ async function fetchAccountsPayableDocuments(query = {}) {
         CAST(_utf8mb4'admin-expenses' COLLATE utf8mb4_unicode_ci AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS module_key,
         CAST(_utf8mb4'Gastos administrativos' COLLATE utf8mb4_unicode_ci AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS module_name,
         CAST(COALESCE(e.condition_type, _utf8mb4'' COLLATE utf8mb4_unicode_ci) AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS condition_type,
-        NULL AS payment_order_id,
-        CAST(NULL AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS payment_order_number,
-        CAST(NULL AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS payment_order_status,
+        apo.id AS payment_order_id,
+        CAST(apo.order_number AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS payment_order_number,
+        CAST(apo.status AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS payment_order_status,
         NULL AS purchase_order_id,
         sup.supplier_bank_name, sup.supplier_bank_account, sup.supplier_bank_currency,
         sup.supplier_bank_account_type, sup.supplier_bank_holder, sup.supplier_bank_holder_ruc,
@@ -1783,6 +1783,15 @@ async function fetchAccountsPayableDocuments(query = {}) {
       LEFT JOIN accounts_payable_document_meta apm
         ON apm.source_type = 'admin-expense' AND apm.source_id = e.id
       LEFT JOIN users vu ON vu.id = apm.validated_by
+      LEFT JOIN admin_expense_payment_orders apo
+        ON apo.id = (
+          SELECT apo2.id
+            FROM admin_expense_payment_orders apo2
+           WHERE apo2.expense_id = e.id
+             AND apo2.status <> 'anulada'
+           ORDER BY apo2.id DESC
+           LIMIT 1
+        )
       WHERE COALESCE(CAST(e.status AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci, '') <> 'anulado'
     ) src
     ${whereSql}
