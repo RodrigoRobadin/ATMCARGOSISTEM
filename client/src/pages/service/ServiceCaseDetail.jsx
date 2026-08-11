@@ -8,7 +8,6 @@ import InvoiceCreateModal from "../../components/InvoiceCreateModal.jsx";
 import OperationExpenseInvoices from "../../components/OperationExpenseInvoices.jsx";
 import AdminOpsPanel from "../../components/op-details/AdminOpsPanel.jsx";
 import { attachServiceCaseToAssistant } from "../../utils/assistantContext";
-import ServiceVisitsPanel from "./ServiceVisitsPanel.jsx";
 
 function safeJsonArray(v) {
   if (!v) return [];
@@ -359,7 +358,6 @@ export default function ServiceCaseDetail() {
 
   const baseTabs = [
     { id: "detalle", label: "Detalle" },
-    { id: "visitas", label: "Visitas tecnicas" },
     { id: "oferta", label: "Detalle de oferta" },
     { id: "presupuesto", label: "Presupuesto" },
     { id: "informes", label: "Informes" },
@@ -1423,10 +1421,6 @@ export default function ServiceCaseDetail() {
 
           {isDocTab(tab) && (
             <OperationDocViewer doc={getDocFromTab(tab)} />
-          )}
-
-          {tab === "visitas" && (
-            <ServiceVisitsPanel caseId={caseId} caseData={data} />
           )}
 
           {tab === "oferta" && (
