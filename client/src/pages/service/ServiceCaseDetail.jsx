@@ -8,6 +8,7 @@ import InvoiceCreateModal from "../../components/InvoiceCreateModal.jsx";
 import OperationExpenseInvoices from "../../components/OperationExpenseInvoices.jsx";
 import AdminOpsPanel from "../../components/op-details/AdminOpsPanel.jsx";
 import { attachServiceCaseToAssistant } from "../../utils/assistantContext";
+import ServiceVisitsPanel from "./ServiceVisitsPanel.jsx";
 
 function safeJsonArray(v) {
   if (!v) return [];
@@ -358,6 +359,7 @@ export default function ServiceCaseDetail() {
 
   const baseTabs = [
     { id: "detalle", label: "Detalle" },
+    { id: "visitas", label: "Visitas tecnicas" },
     { id: "oferta", label: "Detalle de oferta" },
     { id: "presupuesto", label: "Presupuesto" },
     { id: "informes", label: "Informes" },
@@ -687,6 +689,10 @@ export default function ServiceCaseDetail() {
 
   function openAdditionalQuote(id) {
     window.open(`/service/additional-quotes/${id}?caseId=${caseId}`, "_blank");
+  }
+
+  function openAdditionalBudget(id) {
+    window.open(`/service/cases/${caseId}/industrial-quote?serviceCaseId=${caseId}&additionId=${id}`, "_blank");
   }
 
   function openAdditionalInvoice(additionId) {
@@ -1419,6 +1425,10 @@ export default function ServiceCaseDetail() {
             <OperationDocViewer doc={getDocFromTab(tab)} />
           )}
 
+          {tab === "visitas" && (
+            <ServiceVisitsPanel caseId={caseId} caseData={data} />
+          )}
+
           {tab === "oferta" && (
             <div className="bg-white border rounded-lg p-3">
               <QuoteEditor
@@ -1668,7 +1678,13 @@ export default function ServiceCaseDetail() {
                             className="px-2 py-1 text-xs rounded border"
                             onClick={() => openAdditionalQuote(q.id)}
                           >
-                            Ver
+                            Detalle
+                          </button>
+                          <button
+                            className="px-2 py-1 text-xs rounded border border-blue-300 text-blue-700"
+                            onClick={() => openAdditionalBudget(q.id)}
+                          >
+                            Presupuesto
                           </button>
                           <button
                             className="px-2 py-1 text-xs rounded bg-slate-900 text-white"

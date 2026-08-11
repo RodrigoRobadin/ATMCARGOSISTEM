@@ -225,10 +225,16 @@ export default function InvoiceCreateModal({
   }, [isContainerInitialInvoice]);
 
   useEffect(() => {
-    if (!defaultDealId && !defaultServiceCaseId) return;
-    loadInvoiceProgress(defaultDealId, defaultServiceCaseId, defaultCostSheetVersionNumber, defaultQuoteRevisionId);
+    if (!defaultDealId && !defaultServiceCaseId && !defaultServiceQuoteAdditionId) return;
+    loadInvoiceProgress(
+      defaultDealId,
+      defaultServiceCaseId,
+      defaultCostSheetVersionNumber,
+      defaultQuoteRevisionId,
+      defaultServiceQuoteAdditionId
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaultDealId, defaultServiceCaseId, defaultCostSheetVersionNumber, defaultQuoteRevisionId]);
+  }, [defaultDealId, defaultServiceCaseId, defaultCostSheetVersionNumber, defaultQuoteRevisionId, defaultServiceQuoteAdditionId]);
 
   useEffect(() => {
     if (isCreditPayment) return;
@@ -299,21 +305,31 @@ export default function InvoiceCreateModal({
     }
   }
 
-  async function loadInvoiceProgress(dealId, serviceCaseId, costSheetVersionNumber = null, quoteRevisionId = null) {
+  async function loadInvoiceProgress(dealId, serviceCaseId, costSheetVersionNumber = null, quoteRevisionId = null, additionId = null) {
     try {
-      const params = dealId ? { deal_id: dealId } : { service_case_id: serviceCaseId };
+      const params = additionId
+        ? { service_case_id: serviceCaseId || undefined, service_quote_addition_id: additionId }
+        : dealId
+        ? { deal_id: dealId }
+        : { service_case_id: serviceCaseId };
       const { data } = await api.get('/invoices/operation-docs', { params });
-      const activeInvoices = (Array.isArray(data) ? data : []).filter(
-        (doc) => doc.kind === 'invoice' && String(doc.status || '').toLowerCase() !== 'anulada'
-      ).filter((doc) => {
-        if (dealId && costSheetVersionNumber) {
-          return Number(doc.cost_sheet_version_number || 0) === Number(costSheetVersionNumber);
-        }
-        if (dealId && quoteRevisionId) {
-          return Number(doc.quote_revision_id || 0) === Number(quoteRevisionId);
-        }
-        return true;
-      });
+      const activeInvoices = (Array.isArray(data) ? data : [])
+        .filter((doc) => doc.kind === 'invoice' && String(doc.status || '').toLowerCase() !== 'anulada')
+        .filter((doc) => {
+          if (additionId) {
+            return Number(doc.service_quote_addition_id || 0) === Number(additionId);
+          }
+          if (serviceCaseId) {
+            return !doc.service_quote_addition_id;
+          }
+          if (dealId && costSheetVersionNumber) {
+            return Number(doc.cost_sheet_version_number || 0) === Number(costSheetVersionNumber);
+          }
+          if (dealId && quoteRevisionId) {
+            return Number(doc.quote_revision_id || 0) === Number(quoteRevisionId);
+          }
+          return true;
+        });
       const usedPercentages = activeInvoices
         .map((doc) => toPercentNumber(doc.percentage))
         .filter((pct) => pct != null && pct > 0);
@@ -324,7 +340,6 @@ export default function InvoiceCreateModal({
       setInvoiceProgress({ usedPercentages: [], usedTotal: 0 });
     }
   }
-
   function handleAmountPlanChange(planKey) {
     const plan = PAYMENT_PLANS.find((p) => p.key === planKey) || PAYMENT_PLANS[0];
     const nextAvailable = hasSelectedQuoteItems
@@ -556,14 +571,24 @@ export default function InvoiceCreateModal({
           ) || 1;
         }
       }
+      const documentSnapshot = inputs.document_snapshot || {};
+      const savedCondition = String(documentSnapshot.condicion_venta || '').trim();
+      const savedCreditTerm = String(documentSnapshot.plazo_credito || '').trim();
+      const normalizedCondition = savedCondition
+        ? savedCondition.toLowerCase().includes('contado')
+          ? 'contado'
+          : 'credito'
+        : '';
+
       setQuoteCurrencyInfo({ currency: curr || 'USD', exchange_rate: rate || 1 });
       setForm((prev) => {
-        if (currencyTouched) return prev;
         const suggestedRate = getSuggestedExchangeRate({ currency: curr, exchange_rate: rate }, prev.exchange_rate);
         return {
           ...prev,
-          currency_code: curr || prev.currency_code,
-          exchange_rate: suggestedRate === '' ? prev.exchange_rate : suggestedRate,
+          currency_code: currencyTouched ? prev.currency_code : (curr || prev.currency_code),
+          exchange_rate: currencyTouched || suggestedRate === '' ? prev.exchange_rate : suggestedRate,
+          payment_condition: normalizedCondition || prev.payment_condition,
+          payment_terms: normalizedCondition === 'credito' && savedCreditTerm ? savedCreditTerm : prev.payment_terms,
         };
       });
       setCurrencyTouched(true);
@@ -671,7 +696,14 @@ export default function InvoiceCreateModal({
   const buildBillableItemsParams = () => {
     const dealId = form.deal_id ? Number(form.deal_id) : null;
     const serviceCaseId = form.service_case_id ? Number(form.service_case_id) : null;
-    if (!dealId && !serviceCaseId) return null;
+    const additionId = form.service_quote_addition_id ? Number(form.service_quote_addition_id) : Number(defaultServiceQuoteAdditionId || 0) || null;
+    if (!dealId && !serviceCaseId && !additionId) return null;
+    if (additionId) {
+      return {
+        service_quote_addition_id: additionId,
+        service_case_id: serviceCaseId || undefined,
+      };
+    }
     return dealId
       ? {
           deal_id: dealId,
@@ -680,7 +712,6 @@ export default function InvoiceCreateModal({
         }
       : { service_case_id: serviceCaseId, quote_revision_id: defaultQuoteRevisionId || undefined };
   };
-
   const buildPreview = (items, pct) => {
     const selectedKeys = new Set(defaultSelectedQuoteItems.map((key) => String(key || '')));
     const sourceItems = hasSelectedQuoteItems
@@ -756,7 +787,7 @@ export default function InvoiceCreateModal({
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.deal_id, form.service_case_id, form.currency_code, form.exchange_rate, form.mode, form.percentage, defaultCostSheetVersionNumber, defaultQuoteRevisionId, defaultSelectedQuoteItems.join('|'), containerBilling?.id]);
+  }, [form.deal_id, form.service_case_id, form.service_quote_addition_id, form.currency_code, form.exchange_rate, form.mode, form.percentage, defaultServiceQuoteAdditionId, defaultCostSheetVersionNumber, defaultQuoteRevisionId, defaultSelectedQuoteItems.join('|'), containerBilling?.id]);
   async function validateInvoiceHasAmount(pct) {
     if (isContainerBilling) {
       const amount = Number(
@@ -769,17 +800,8 @@ export default function InvoiceCreateModal({
       return !Number.isFinite(amount) || amount > 0;
     }
 
-    const dealId = form.deal_id ? Number(form.deal_id) : null;
-    const serviceCaseId = form.service_case_id ? Number(form.service_case_id) : null;
-    if (!dealId && !serviceCaseId) return true;
-
-    const params = dealId
-      ? {
-          deal_id: dealId,
-          cost_sheet_version_number: defaultCostSheetVersionNumber || undefined,
-          quote_revision_id: defaultQuoteRevisionId || undefined,
-        }
-      : { service_case_id: serviceCaseId, quote_revision_id: defaultQuoteRevisionId || undefined };
+    const params = buildBillableItemsParams();
+    if (!params) return true;
 
     try {
       const { data } = await api.get('/invoices/billable-items', { params });
@@ -801,7 +823,7 @@ export default function InvoiceCreateModal({
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!form.deal_id && !form.service_case_id && !form.container_billing_cycle_id) {
+    if (!form.deal_id && !form.service_case_id && !form.service_quote_addition_id && !form.container_billing_cycle_id) {
       alert('Ingresa el ID de la operación, del servicio o una mensualidad container');
       return;
     }

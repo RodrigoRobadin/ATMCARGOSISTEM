@@ -148,6 +148,7 @@ export default function OperationExpenseInvoices({
   costSheetVersionNumber,
   quoteId,
   quoteRevisionId,
+  serviceQuoteAdditionId,
   title = "Gastos por operacion",
   subtitle = "Facturas de compra vinculadas a esta operacion.",
   showExpenseControl = false,
@@ -264,6 +265,9 @@ export default function OperationExpenseInvoices({
           cost_sheet_version_number: showExpenseControl ? costSheetVersionNumber || undefined : undefined,
           quote_id: showExpenseControl ? quoteId || undefined : undefined,
           quote_revision_id: showExpenseControl ? quoteRevisionId || undefined : undefined,
+          service_quote_addition_id: serviceQuoteAdditionId || undefined,
+          exclude_service_additions:
+            operationType === "service" && !serviceQuoteAdditionId ? 1 : undefined,
         },
       });
       const baseRows = Array.isArray(data) ? data : [];
@@ -325,7 +329,7 @@ export default function OperationExpenseInvoices({
     if (!operationId) return;
     if (showList) loadInvoices();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [operationId, operationType, showList, showExpenseControl, costSheetVersionNumber, quoteId, quoteRevisionId]);
+  }, [operationId, operationType, showList, showExpenseControl, costSheetVersionNumber, quoteId, quoteRevisionId, serviceQuoteAdditionId]);
 
   useEffect(() => {
     if (!showList || !showExpenseControl) return;
@@ -811,6 +815,7 @@ export default function OperationExpenseInvoices({
         cost_sheet_version_number: costSheetVersionNumber || undefined,
         quote_id: quoteId || undefined,
         quote_revision_id: quoteRevisionId || undefined,
+        service_quote_addition_id: serviceQuoteAdditionId || undefined,
       };
 
       let invoiceId = editingInvoice?.id;

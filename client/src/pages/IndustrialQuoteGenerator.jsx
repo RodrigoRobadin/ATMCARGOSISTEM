@@ -740,6 +740,8 @@ export default function QuoteGenerator(){
   const [searchParams] = useSearchParams();
 
   const revisionIdParam = searchParams.get('revision_id');
+  const additionIdFromQuery = Number(searchParams.get('additionId') || searchParams.get('serviceQuoteAdditionId') || '');
+  const serviceQuoteAdditionId = Number.isFinite(additionIdFromQuery) && additionIdFromQuery > 0 ? additionIdFromQuery : null;
   const isEmbed = searchParams.get('embed') === '1';
   const serviceCaseIdFromQuery = Number(searchParams.get('serviceCaseId') || searchParams.get('caseId') || '');
   const serviceCaseId = Number.isFinite(serviceCaseIdFromQuery) ? serviceCaseIdFromQuery : Number(serviceCaseIdParam || 0);
@@ -747,6 +749,7 @@ export default function QuoteGenerator(){
   const isService = isServicePath || (Number.isFinite(serviceCaseId) && serviceCaseId > 0);
   const baseId = isService ? serviceCaseId : id;
   const revisionId = useMemo(() => {
+    if (serviceQuoteAdditionId) return null;
     if (revisionIdParam) return revisionIdParam;
     try {
       const storageKey = isService
@@ -756,7 +759,7 @@ export default function QuoteGenerator(){
     } catch (_) {
       return null;
     }
-  }, [baseId, isService, revisionIdParam]);
+  }, [baseId, isService, revisionIdParam, serviceQuoteAdditionId]);
 
   const { user } = useAuth();
 
@@ -1086,15 +1089,23 @@ CORDIALES SALUDOS`,
 
           api.get(isService ? `/service/cases/${baseId}/custom-fields` : `/deals/${baseId}/custom-fields`).catch(() => ({ data: [] })),
 
-          api.get(isService ? `/service/cases/${baseId}/quote` : `/deals/${baseId}/quote`, { params: revisionId ? { revision_id: revisionId } : {} }).catch(() => ({ data: null })),
+          api.get(
+            serviceQuoteAdditionId
+              ? `/service/additional-quotes/${serviceQuoteAdditionId}`
+              : isService
+              ? `/service/cases/${baseId}/quote`
+              : `/deals/${baseId}/quote`,
+            { params: revisionId ? { revision_id: revisionId } : {} }
+          ).catch(() => ({ data: null })),
 
         ]);
 
+        const qInputs = quoteRes?.data?.quote?.inputs || quoteRes?.data?.inputs || {};
         if (isService) {
           const caseData = detail?.case || detail?.data || detail;
           setDeal({
             id: caseData?.id,
-            reference: caseData?.reference,
+            reference: serviceQuoteAdditionId ? (qInputs.ref_code || caseData?.reference) : caseData?.reference,
             org_name: caseData?.org_name,
             contact_name: caseData?.contact_name || "",
           });
@@ -1103,8 +1114,6 @@ CORDIALES SALUDOS`,
         }
 
         setQuoteRecordId(quoteRes?.data?.quote?.id || quoteRes?.data?.id || null);
-
-        const qInputs = quoteRes?.data?.quote?.inputs || quoteRes?.data?.inputs || {};
         const cur = String(qInputs.operation_currency || 'USD').toUpperCase();
         const rate = Number(
           qInputs.exchange_rate_atm_gs_per_usd ||
@@ -1121,7 +1130,10 @@ CORDIALES SALUDOS`,
         (cfRes.data || []).forEach((r) => (cfMap[r.key] = r.value ?? ''));
 
         const snapshotCfMap = snapshotToCustomFieldMap(
-          quoteRes?.data?.document_snapshot || quoteRes?.data?.meta?.document_snapshot || null
+          quoteRes?.data?.document_snapshot ||
+          quoteRes?.data?.meta?.document_snapshot ||
+          qInputs.document_snapshot ||
+          null
         );
         const effectiveCfMap = { ...cfMap, ...snapshotCfMap };
 
@@ -1617,7 +1629,7 @@ CORDIALES SALUDOS`,
 
     })();
 
-  }, [baseId, isService, revisionId]);
+  }, [baseId, isService, revisionId, serviceQuoteAdditionId]);
 
 
 
@@ -1768,7 +1780,7 @@ CORDIALES SALUDOS`,
   const [saving, setSaving] = useState(false);
   const [lastSavedSignature, setLastSavedSignature] = useState('');
   const [signatureKeyReady, setSignatureKeyReady] = useState('');
-  const signatureKey = `${baseId || 'na'}:${revisionId || 'base'}:${isService ? 'service' : 'deal'}`;
+  const signatureKey = `${baseId || 'na'}:${revisionId || 'base'}:${serviceQuoteAdditionId || 'main'}:${isService ? 'service' : 'deal'}`;
 
   useEffect(() => {
     setLastSavedSignature('');
@@ -1786,72 +1798,60 @@ CORDIALES SALUDOS`,
     signatureKeyReady === signatureKey && currentSaveSignature !== lastSavedSignature;
 
   async function saveToCustomFields() {
-
     try {
-
       setSaving(true);
 
-      await Promise.all(customFieldEntries.map(async ([key, value]) => {
-
-        const def = CF_SCHEMA[key] || { label: key, type: 'text' };
-
-        await api.post(isService ? `/service/cases/${baseId}/custom-fields` : `/deals/${baseId}/custom-fields`, {
-
-          key,
-
-          label: def.label,
-
-          type: def.type === 'number' ? 'number' : 'text',
-
-          value: value === '' ? null : value,
-
+      if (serviceQuoteAdditionId) {
+        const { data: latestAddition } = await api.get(`/service/additional-quotes/${serviceQuoteAdditionId}`);
+        const latestInputs = latestAddition?.inputs || {};
+        await api.put(`/service/additional-quotes/${serviceQuoteAdditionId}`, {
+          inputs: {
+            ...latestInputs,
+            document_snapshot: documentSnapshot,
+          },
         });
+        setCf(documentSnapshot);
+      } else {
+        await Promise.all(customFieldEntries.map(async ([key, value]) => {
+          const def = CF_SCHEMA[key] || { label: key, type: 'text' };
+          await api.post(isService ? `/service/cases/${baseId}/custom-fields` : `/deals/${baseId}/custom-fields`, {
+            key,
+            label: def.label,
+            type: def.type === 'number' ? 'number' : 'text',
+            value: value === '' ? null : value,
+          });
+        }));
 
-      }));
+        if (quoteRecordId) {
+          const quotePath = isService
+            ? `/service/quotes/${quoteRecordId}`
+            : `/quotes/${quoteRecordId}`;
+          const revisionPath = revisionId
+            ? `${quotePath}/revisions/${revisionId}`
+            : quotePath;
+          await api.put(revisionPath, {
+            document_snapshot: documentSnapshot,
+          });
+        }
 
-      if (quoteRecordId) {
-        const quotePath = isService
-          ? `/service/quotes/${quoteRecordId}`
-          : `/quotes/${quoteRecordId}`;
-        const revisionPath = revisionId
-          ? `${quotePath}/revisions/${revisionId}`
-          : quotePath;
-        await api.put(revisionPath, {
-          document_snapshot: documentSnapshot,
-        });
+        const { data: cfs } = await api
+          .get(isService ? `/service/cases/${baseId}/custom-fields` : `/deals/${baseId}/custom-fields`)
+          .catch(() => ({ data: [] }));
+        const map = {};
+        (cfs || []).forEach((r) => (map[r.key] = r.value ?? ''));
+        setCf(map);
       }
 
-
-
-      const { data: cfs } = await api.get(isService ? `/service/cases/${baseId}/custom-fields` : `/deals/${baseId}/custom-fields`).catch(() => ({ data: [] }));
-
-      const map = {};
-
-      (cfs || []).forEach((r) => (map[r.key] = r.value ?? ''));
-
-      setCf(map);
       setLastSavedSignature(currentSaveSignature);
       setSignatureKeyReady(signatureKey);
-
-
-
-      alert('Datos guardados en la operación ✔');
-
+      alert(serviceQuoteAdditionId ? 'Presupuesto adicional guardado.' : 'Datos guardados en la operacion.');
     } catch (e) {
-
-      console.error('No se pudieron guardar los custom fields:', e);
-
-      alert('No se pudo guardar. Revisá la consola para más detalles.');
-
+      console.error('No se pudieron guardar los datos del presupuesto:', e);
+      alert('No se pudo guardar. Revisa la consola para mas detalles.');
     } finally {
-
       setSaving(false);
-
     }
-
   }
-
-
 
   // ============ Descargar PDF (con nombre armado con códigos + abreviación) ============
 
@@ -2702,7 +2702,7 @@ CORDIALES SALUDOS`,
             disabled={saving}
             className="px-3 py-2 rounded bg-blue-600 text-white disabled:opacity-60"
           >
-            {saving ? 'Guardando...' : 'Guardar en Operacion'}
+            {saving ? 'Guardando...' : serviceQuoteAdditionId ? 'Guardar presupuesto adicional' : 'Guardar en Operacion'}
           </button>
           <button onClick={downloadPdf} className="px-3 py-2 rounded bg-black text-white">
             Descargar PDF

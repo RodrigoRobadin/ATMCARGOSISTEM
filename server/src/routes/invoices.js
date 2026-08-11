@@ -431,16 +431,20 @@ async function fetchServiceQuoteJsonForInvoice(serviceCaseId, conn, quoteRevisio
   };
 }
 
-async function fetchInvoiceLockStatus({ deal_id, service_case_id, cost_sheet_version_number, quote_revision_id }) {
-  if (!deal_id && !service_case_id) return { locked: false, count: 0 };
+async function fetchInvoiceLockStatus({ deal_id, service_case_id, service_quote_addition_id, cost_sheet_version_number, quote_revision_id }) {
+  if (!deal_id && !service_case_id && !service_quote_addition_id) return { locked: false, count: 0 };
   try {
     const where = ["status <> 'anulada'", 'COALESCE(net_total_amount, total_amount, 0) > 0.01'];
     const params = [];
     if (deal_id) {
       where.push('deal_id = ?');
       params.push(deal_id);
+    } else if (service_quote_addition_id) {
+      where.push('service_quote_addition_id = ?');
+      params.push(service_quote_addition_id);
     } else {
       where.push('service_case_id = ?');
+      where.push('service_quote_addition_id IS NULL');
       params.push(service_case_id);
     }
     if (cost_sheet_version_number) {
@@ -1040,6 +1044,7 @@ async function fetchServiceCaseBillableItems(serviceCaseId, conn, quoteRevisionI
        INNER JOIN invoices i ON i.id = ii.invoice_id
       WHERE i.service_case_id = ?
         AND i.status <> 'anulada'
+        AND i.service_quote_addition_id IS NULL
         AND (? IS NULL OR i.quote_revision_id = ?)
         AND ii.source_type = 'service_quote'
         AND ii.source_parent_id = ?
@@ -1078,6 +1083,59 @@ async function fetchServiceCaseBillableItems(serviceCaseId, conn, quoteRevisionI
   });
 }
 
+async function fetchServiceQuoteAdditionBillableItems(additionId, conn) {
+  await ensureInvoiceItemSourceColumns();
+  const quoteItems = await fetchServiceQuoteAdditionItemsForInvoice(additionId, conn);
+  if (!quoteItems.length) return [];
+  const quoteCurrency = await fetchServiceQuoteAdditionCurrencyInfo(additionId, conn);
+  const billCurrency = String(quoteCurrency?.currency || 'USD').toUpperCase();
+
+  const [rows] = await conn.query(
+    `SELECT ii.source_item_key,
+            MAX(i.id) AS last_invoice_id,
+            MAX(i.invoice_number) AS last_invoice_number,
+            MAX(i.status) AS last_invoice_status,
+            COUNT(*) AS used_count,
+            SUM(COALESCE(i.percentage, 100)) AS used_pct,
+            GROUP_CONCAT(COALESCE(i.percentage, 100) ORDER BY i.created_at, i.id) AS used_percentages
+       FROM invoice_items ii
+       INNER JOIN invoices i ON i.id = ii.invoice_id
+      WHERE i.service_quote_addition_id = ?
+        AND i.status <> 'anulada'
+        AND ii.source_item_key IS NOT NULL
+      GROUP BY ii.source_item_key`,
+    [additionId]
+  );
+  const usedMap = new Map((rows || []).map((row) => [String(row.source_item_key || ''), row]));
+  return quoteItems.map((item, idx) => {
+    const sourceItemKey = String(item.source_item_key || `service_quote:${item.item_order ?? idx}`);
+    const used = usedMap.get(sourceItemKey) || null;
+    const quantity = Number(item.quantity || 0) || 1;
+    const unitPrice = Number(item.unit_price || 0) || 0;
+    const total = Number((quantity * unitPrice).toFixed(2));
+    const usedPercentage = Math.min(100, Number(used?.used_pct || 0));
+    const usedPercentages = parsePercentageList(used?.used_percentages);
+    const isFullyInvoiced = usedPercentage >= 99.999;
+    return {
+      source_item_key: sourceItemKey,
+      item_order: Number(item.item_order ?? idx) || idx,
+      description: item.description || 'Item',
+      quantity,
+      unit_price: unitPrice,
+      total,
+      tax_rate: readTaxRate(item, 0),
+      currency_code: billCurrency,
+      used_percentage: usedPercentage,
+      remaining_percentage: Math.max(0, round2(100 - usedPercentage)),
+      used_percentages: usedPercentages,
+      invoiced: isFullyInvoiced,
+      pending: !isFullyInvoiced,
+      invoice_id: used?.last_invoice_id || null,
+      invoice_number: used?.last_invoice_number || null,
+      invoice_status: used?.last_invoice_status || null,
+    };
+  });
+}
 async function assertServiceQuoteItemsAvailable(serviceCaseId, selectedKeys, percentage, conn, quoteRevisionId = null) {
   const billableItems = await fetchServiceCaseBillableItems(serviceCaseId, conn, quoteRevisionId);
   const wanted = new Set((selectedKeys || []).map((key) => String(key || '')));
@@ -1096,6 +1154,23 @@ async function assertServiceQuoteItemsAvailable(serviceCaseId, selectedKeys, per
   return selected.filter((item) => item.pending);
 }
 
+async function assertServiceQuoteAdditionItemsAvailable(additionId, selectedKeys, percentage, conn) {
+  const billableItems = await fetchServiceQuoteAdditionBillableItems(additionId, conn);
+  const wanted = new Set((selectedKeys || []).map((key) => String(key || '')));
+  const pct = Number(percentage || 100);
+  const selected = billableItems.filter((item) => wanted.has(String(item.source_item_key)));
+  const duplicates = selected.filter((item) => hasPercentage(item.used_percentages, pct));
+  if (duplicates.length) {
+    const labels = duplicates.map((item) => item.description).join(', ');
+    throw new Error(`El ${pct}% ya fue facturado para: ${labels}`);
+  }
+  const invalid = selected.filter((item) => Number(item.used_percentage || 0) + pct > 100.0001);
+  if (invalid.length) {
+    const labels = invalid.map((item) => `${item.description} (${Number(item.remaining_percentage || 0).toFixed(2)}% disponible)`).join(', ');
+    throw new Error(`El porcentaje supera el saldo pendiente de: ${labels}`);
+  }
+  return selected.filter((item) => item.pending);
+}
 async function ensureInvoiceItemsTaxColumn() {
   try {
     await pool.query("ALTER TABLE invoice_items ADD COLUMN tax_rate DECIMAL(5,2) NULL");
@@ -2106,12 +2181,19 @@ router.get('/lock-status', requireAuth, async (req, res) => {
   try {
     const deal_id = Number(req.query?.deal_id || 0) || null;
     const service_case_id = Number(req.query?.service_case_id || 0) || null;
+    const service_quote_addition_id = Number(req.query?.service_quote_addition_id || 0) || null;
     const cost_sheet_version_number = Number(req.query?.cost_sheet_version_number || req.query?.cost_sheet_version || 0) || null;
     const quote_revision_id = Number(req.query?.quote_revision_id || req.query?.revision_id || 0) || null;
-    if (!deal_id && !service_case_id) {
-      return res.status(400).json({ error: 'deal_id o service_case_id es requerido' });
+    if (!deal_id && !service_case_id && !service_quote_addition_id) {
+      return res.status(400).json({ error: 'deal_id, service_case_id o service_quote_addition_id es requerido' });
     }
-    const status = await fetchInvoiceLockStatus({ deal_id, service_case_id, cost_sheet_version_number, quote_revision_id });
+    const status = await fetchInvoiceLockStatus({
+      deal_id,
+      service_case_id,
+      service_quote_addition_id,
+      cost_sheet_version_number,
+      quote_revision_id,
+    });
     res.json({
       locked: status.locked,
       count: status.count,
@@ -2629,8 +2711,8 @@ router.get('/', requireAuth, async (req, res) => {
         SELECT 
           i.*,
           o.name as organization_name,
-          COALESCE(d.title, ${withService ? 'sc.reference' : "''"}) as deal_title,
-          COALESCE(d.reference, ${withService ? 'sc.reference' : "''"}) as deal_reference,
+          COALESCE(d.title, ${withService ? 'sqa.name, sc.reference' : "''"}) as deal_title,
+          COALESCE(d.reference, ${withService ? 'JSON_UNQUOTE(JSON_EXTRACT(sqa.inputs_json, \'$.ref_code\')), sc.reference' : "''"}) as deal_reference,
           u.name as created_by_name,
           it.first_item_desc as first_item_desc,
           COALESCE(
@@ -2717,33 +2799,46 @@ router.get('/', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/invoices/operation-docs?deal_id=# or service_case_id=#
+// GET /api/invoices/operation-docs?deal_id=# or service_case_id=# or service_quote_addition_id=#
 router.get('/operation-docs', requireAuth, async (req, res) => {
   try {
     await ensureInvoiceExtraColumns();
     const dealId = Number(req.query?.deal_id || 0);
     const serviceCaseId = Number(req.query?.service_case_id || 0);
-    if (!dealId && !serviceCaseId) {
-      return res.status(400).json({ error: 'deal_id o service_case_id requerido' });
+    const serviceQuoteAdditionId = Number(req.query?.service_quote_addition_id || 0);
+    if (!dealId && !serviceCaseId && !serviceQuoteAdditionId) {
+      return res.status(400).json({ error: 'deal_id, service_case_id o service_quote_addition_id requerido' });
     }
 
+    const invoiceWhere = dealId
+      ? 'deal_id = ?'
+      : serviceQuoteAdditionId
+      ? 'service_quote_addition_id = ?'
+      : 'service_case_id = ? AND service_quote_addition_id IS NULL';
+    const invoiceScopeId = dealId || serviceQuoteAdditionId || serviceCaseId;
     const [invRows] = await pool.query(
-      `SELECT id, invoice_number, issue_date, created_at, status, total_amount, currency_code, percentage, cost_sheet_version_number, quote_revision_id
+      `SELECT id, invoice_number, issue_date, created_at, status, total_amount, currency_code, percentage,
+              cost_sheet_version_number, quote_revision_id, service_quote_addition_id
          FROM invoices
-        WHERE ${dealId ? 'deal_id = ?' : 'service_case_id = ?'}
+        WHERE ${invoiceWhere}
         ORDER BY issue_date ASC, created_at ASC, id ASC`,
-      [dealId || serviceCaseId]
+      [invoiceScopeId]
     );
 
     let cnRows = [];
     try {
+      const creditNoteWhere = dealId
+        ? 'i.deal_id = ?'
+        : serviceQuoteAdditionId
+        ? 'i.service_quote_addition_id = ?'
+        : 'i.service_case_id = ? AND i.service_quote_addition_id IS NULL';
       const [rows] = await pool.query(
         `SELECT cn.id, cn.credit_note_number, cn.issue_date, cn.created_at, cn.status, cn.total_amount, cn.invoice_id
            FROM credit_notes cn
            JOIN invoices i ON i.id = cn.invoice_id
-          WHERE ${dealId ? 'i.deal_id = ?' : 'i.service_case_id = ?'}
+          WHERE ${creditNoteWhere}
           ORDER BY cn.issue_date ASC, cn.created_at ASC, cn.id ASC`,
-        [dealId || serviceCaseId]
+        [invoiceScopeId]
       );
       cnRows = rows || [];
     } catch (err) {
@@ -2753,28 +2848,17 @@ router.get('/operation-docs', requireAuth, async (req, res) => {
 
     const docs = [
       ...(invRows || []).map((r) => ({
-        kind: 'invoice',
-        id: r.id,
-        number: r.invoice_number,
-        issue_date: r.issue_date,
-        created_at: r.created_at,
-        status: r.status,
-        total_amount: r.total_amount,
-        currency_code: r.currency_code,
-        percentage: r.percentage,
+        kind: 'invoice', id: r.id, number: r.invoice_number, issue_date: r.issue_date,
+        created_at: r.created_at, status: r.status, total_amount: r.total_amount,
+        currency_code: r.currency_code, percentage: r.percentage,
         cost_sheet_version_number: r.cost_sheet_version_number || null,
         quote_revision_id: r.quote_revision_id || null,
+        service_quote_addition_id: r.service_quote_addition_id || null,
       })),
       ...(cnRows || []).map((r) => ({
-        kind: 'credit_note',
-        id: r.id,
-        number: r.credit_note_number,
-        issue_date: r.issue_date,
-        created_at: r.created_at,
-        status: r.status,
-        total_amount: r.total_amount,
-        currency_code: null,
-        invoice_id: r.invoice_id,
+        kind: 'credit_note', id: r.id, number: r.credit_note_number,
+        issue_date: r.issue_date, created_at: r.created_at, status: r.status,
+        total_amount: r.total_amount, currency_code: null, invoice_id: r.invoice_id,
       })),
     ];
 
@@ -2793,7 +2877,6 @@ router.get('/operation-docs', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'No se pudieron obtener los documentos' });
   }
 });
-
 // GET /api/invoices/billable-items?deal_id=#
 router.get('/billable-items', requireAuth, async (req, res) => {
   const conn = await pool.getConnection();
@@ -2802,13 +2885,16 @@ router.get('/billable-items', requireAuth, async (req, res) => {
     await ensureInvoiceItemSourceColumns();
     const dealId = Number(req.query?.deal_id || 0);
     const serviceCaseId = Number(req.query?.service_case_id || 0);
+    const serviceQuoteAdditionId = Number(req.query?.service_quote_addition_id || 0);
     const costSheetVersionNumber = Number(req.query?.cost_sheet_version_number || req.query?.cost_sheet_version || 0) || null;
     const quoteRevisionId = Number(req.query?.quote_revision_id || req.query?.revision_id || 0) || null;
-    if (!dealId && !serviceCaseId) {
-      return res.status(400).json({ error: 'deal_id o service_case_id requerido' });
+    if (!dealId && !serviceCaseId && !serviceQuoteAdditionId) {
+      return res.status(400).json({ error: 'deal_id, service_case_id o service_quote_addition_id requerido' });
     }
     const items = dealId
       ? await fetchDealQuoteBillableItems(dealId, conn, costSheetVersionNumber, quoteRevisionId)
+      : serviceQuoteAdditionId
+      ? await fetchServiceQuoteAdditionBillableItems(serviceQuoteAdditionId, conn)
       : await fetchServiceCaseBillableItems(serviceCaseId, conn, quoteRevisionId);
     res.json(items);
   } catch (e) {
@@ -3100,6 +3186,7 @@ router.post('/', requireAuth, async (req, res) => {
            FROM invoices
           WHERE ${deal_id ? 'deal_id = ?' : 'service_case_id = ?'}
             AND status <> 'anulada'
+            ${deal_id ? '' : 'AND service_quote_addition_id IS NULL'}
             ${invoiceRevisionWhere}
             AND percentage IS NOT NULL
             AND ABS(percentage - ?) < 0.0001
@@ -3115,6 +3202,7 @@ router.post('/', requireAuth, async (req, res) => {
            FROM invoices
           WHERE ${deal_id ? 'deal_id = ?' : 'service_case_id = ?'}
             AND status <> 'anulada'
+            ${deal_id ? '' : 'AND service_quote_addition_id IS NULL'}
             ${invoiceRevisionWhere}`,
         [scopeValue, ...invoiceRevisionParams]
       );
@@ -3151,6 +3239,8 @@ router.post('/', requireAuth, async (req, res) => {
     if (hasSelectedQuoteItems) {
       const selectedPendingItems = deal_id
         ? await assertDealQuoteItemsAvailable(Number(deal_id), selectedQuoteItems, perc, conn, costSheetVersionNumber, quoteRevisionId)
+        : useAddition
+        ? await assertServiceQuoteAdditionItemsAvailable(Number(service_quote_addition_id), selectedQuoteItems, perc, conn)
         : await assertServiceQuoteItemsAvailable(Number(effectiveServiceCaseId), selectedQuoteItems, perc, conn, quoteRevisionId);
       if (!selectedPendingItems.length) {
         await conn.rollback();
@@ -3180,8 +3270,20 @@ router.post('/', requireAuth, async (req, res) => {
           subtotal,
           tax_rate: readTaxRate(it, 0),
           item_order: Number.isFinite(Number(it.item_order)) ? Number(it.item_order) : idx,
-          source_type: deal_id ? 'deal_quote' : effectiveServiceCaseId ? 'service_quote' : null,
-          source_parent_id: deal_id ? Number(deal_id) : effectiveServiceCaseId ? Number(effectiveServiceCaseId) : null,
+          source_type: deal_id
+            ? 'deal_quote'
+            : useAddition
+            ? 'service_quote_addition'
+            : effectiveServiceCaseId
+            ? 'service_quote'
+            : null,
+          source_parent_id: deal_id
+            ? Number(deal_id)
+            : useAddition
+            ? Number(service_quote_addition_id)
+            : effectiveServiceCaseId
+            ? Number(effectiveServiceCaseId)
+            : null,
           source_item_key: it.source_item_key || null,
         };
       });
@@ -3892,8 +3994,8 @@ router.get('/:id', requireAuth, async (req, res) => {
         o.address as organization_address,
         o.city as organization_city,
         d.id as deal_id,
-        d.title as deal_title,
-        COALESCE(d.reference, sc.reference) as deal_reference,
+        COALESCE(d.title, sqa.name, sc.reference) as deal_title,
+        COALESCE(d.reference, JSON_UNQUOTE(JSON_EXTRACT(sqa.inputs_json, '$.ref_code')), sc.reference) as deal_reference,
         u.name as created_by_name,
         u2.name as issued_by_name
       FROM invoices i
@@ -3901,6 +4003,7 @@ router.get('/:id', requireAuth, async (req, res) => {
       LEFT JOIN deals d ON d.id = i.deal_id
       LEFT JOIN business_units bu ON bu.id = d.business_unit_id
       LEFT JOIN service_cases sc ON sc.id = i.service_case_id
+      LEFT JOIN service_quote_additions sqa ON sqa.id = i.service_quote_addition_id
       LEFT JOIN users u ON u.id = i.created_by
       LEFT JOIN users u2 ON u2.id = i.issued_by
       WHERE i.id = ?`,
@@ -3958,14 +4061,15 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
         o.ruc as organization_ruc,
         o.address as organization_address,
         o.city as organization_city,
-        COALESCE(d.reference, sc.reference) as deal_reference,
-        COALESCE(d.title, sc.reference) as deal_title,
+        COALESCE(d.reference, JSON_UNQUOTE(JSON_EXTRACT(sqa.inputs_json, '$.ref_code')), sc.reference) as deal_reference,
+        COALESCE(d.title, sqa.name, sc.reference) as deal_title,
         COALESCE(bu.key_slug, CASE WHEN i.service_case_id IS NOT NULL THEN 'atm-industrial' ELSE '' END) as business_unit_key
       FROM invoices i
       LEFT JOIN organizations o ON o.id = i.organization_id
       LEFT JOIN deals d ON d.id = i.deal_id
       LEFT JOIN business_units bu ON bu.id = d.business_unit_id
       LEFT JOIN service_cases sc ON sc.id = i.service_case_id
+      LEFT JOIN service_quote_additions sqa ON sqa.id = i.service_quote_addition_id
       WHERE i.id = ?`,
       [id]
     );

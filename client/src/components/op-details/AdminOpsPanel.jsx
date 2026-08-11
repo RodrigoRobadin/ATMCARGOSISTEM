@@ -39,7 +39,7 @@ function SummaryCard({ label, value, tone = "slate" }) {
   );
 }
 
-export default function AdminOpsPanel({ dealId, serviceCaseId, deal, costSheetVersionNumber, quoteRevisionId, onDocsRefresh }) {
+export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAdditionId, deal, costSheetVersionNumber, quoteRevisionId, onDocsRefresh }) {
   const [docs, setDocs] = useState([]);
   const [receiptDocs, setReceiptDocs] = useState([]);
   const [billableItems, setBillableItems] = useState([]);
@@ -53,10 +53,15 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, deal, costSheetVe
   const [creditInvoice, setCreditInvoice] = useState(null);
 
   async function loadAdminData() {
-    if (!dealId && !serviceCaseId) return;
+    if (!dealId && !serviceCaseId && !serviceQuoteAdditionId) return;
     setLoading(true);
     try {
-      const params = dealId
+      const params = serviceQuoteAdditionId
+        ? {
+            service_case_id: serviceCaseId || undefined,
+            service_quote_addition_id: serviceQuoteAdditionId,
+          }
+        : dealId
         ? {
             deal_id: dealId,
             cost_sheet_version_number: costSheetVersionNumber || undefined,
@@ -122,7 +127,7 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, deal, costSheetVe
   useEffect(() => {
     loadAdminData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dealId, serviceCaseId, costSheetVersionNumber, quoteRevisionId]);
+  }, [dealId, serviceCaseId, serviceQuoteAdditionId, costSheetVersionNumber, quoteRevisionId]);
 
   const invoiceDocs = useMemo(() => docs.filter((doc) => doc.kind === "invoice"), [docs]);
   const creditNoteDocs = useMemo(() => docs.filter((doc) => doc.kind === "credit_note"), [docs]);
@@ -285,6 +290,11 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, deal, costSheetVe
             {dealId && quoteRevisionId ? (
               <p className="text-xs text-blue-700 mt-1">
                 Facturando sobre revision industrial #{quoteRevisionId}.
+              </p>
+            ) : null}
+            {serviceQuoteAdditionId ? (
+              <p className="text-xs text-blue-700 mt-1">
+                Documentos exclusivos de este presupuesto adicional.
               </p>
             ) : null}
           </div>
@@ -547,6 +557,7 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, deal, costSheetVe
         <InvoiceCreateModal
           defaultDealId={dealId ? Number(dealId) : undefined}
           defaultServiceCaseId={serviceCaseId ? Number(serviceCaseId) : undefined}
+          defaultServiceQuoteAdditionId={serviceQuoteAdditionId ? Number(serviceQuoteAdditionId) : undefined}
           defaultCostSheetVersionNumber={dealId ? costSheetVersionNumber : undefined}
           defaultQuoteRevisionId={quoteRevisionId || undefined}
           defaultSelectedQuoteItems={selectedPendingItems.map((item) => item.source_item_key)}

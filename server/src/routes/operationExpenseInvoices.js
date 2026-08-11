@@ -60,6 +60,7 @@ async function ensureOperationExpenseTables() {
       cost_sheet_version_number INT NULL,
       quote_id INT NULL,
       quote_revision_id INT NULL,
+      service_quote_addition_id INT NULL,
       expense_rubro VARCHAR(32) NULL,
       expense_concept VARCHAR(255) NULL,
       tax_mode VARCHAR(16) NULL,
@@ -260,6 +261,9 @@ function revisionScopeFromSource(source = {}) {
     costSheetVersionNumber: Number(source.cost_sheet_version_number || source.cost_sheet_version || 0) || null,
     quoteId: Number(source.quote_id || 0) || null,
     quoteRevisionId: Number(source.quote_revision_id || source.revision_id || 0) || null,
+    serviceQuoteAdditionId: Number(source.service_quote_addition_id || 0) || null,
+    excludeServiceAdditions:
+      source.exclude_service_additions === true || String(source.exclude_service_additions || '') === '1',
   };
 }
 
@@ -276,6 +280,12 @@ function appendExpenseRevisionScope(where, params, source = {}, alias = 'e') {
   } else if (scope.quoteId) {
     where.push(`${prefix}quote_id = ?`);
     params.push(scope.quoteId);
+  }
+  if (scope.serviceQuoteAdditionId) {
+    where.push(`${prefix}service_quote_addition_id = ?`);
+    params.push(scope.serviceQuoteAdditionId);
+  } else if (scope.excludeServiceAdditions) {
+    where.push(`${prefix}service_quote_addition_id IS NULL`);
   }
   return scope;
 }
@@ -299,6 +309,7 @@ async function ensureOperationExpenseColumns() {
     if (!have.has('cost_sheet_version_number')) add.push('ADD COLUMN cost_sheet_version_number INT NULL AFTER timbrado_number');
     if (!have.has('quote_id')) add.push('ADD COLUMN quote_id INT NULL AFTER cost_sheet_version_number');
     if (!have.has('quote_revision_id')) add.push('ADD COLUMN quote_revision_id INT NULL AFTER quote_id');
+    if (!have.has('service_quote_addition_id')) add.push('ADD COLUMN service_quote_addition_id INT NULL AFTER quote_revision_id');
     if (!have.has('tax_mode')) add.push('ADD COLUMN tax_mode VARCHAR(16) NULL');
     if (!have.has('gravado_10')) add.push('ADD COLUMN gravado_10 DECIMAL(15,2) NULL');
     if (!have.has('gravado_5')) add.push('ADD COLUMN gravado_5 DECIMAL(15,2) NULL');
@@ -668,6 +679,16 @@ router.post('/:id/expense-invoices', requireAuth, async (req, res) => {
     const supplierId = await ensureSupplierId(payload);
     const scope = revisionScopeFromSource(payload);
 
+    if (opType === 'service' && scope.serviceQuoteAdditionId) {
+      const [[addition]] = await pool.query(
+        `SELECT id FROM service_quote_additions WHERE id = ? AND service_case_id = ? LIMIT 1`,
+        [scope.serviceQuoteAdditionId, Number(id)]
+      );
+      if (!addition?.id) {
+        return res.status(400).json({ error: 'El presupuesto adicional no pertenece a este servicio.' });
+      }
+    }
+
     let taxMode = String(payload.tax_mode || '').toLowerCase();
     let gravado10 = toNum(payload.gravado_10);
     let gravado5 = toNum(payload.gravado_5);
@@ -723,14 +744,14 @@ router.post('/:id/expense-invoices', requireAuth, async (req, res) => {
       `
       INSERT INTO operation_expense_invoices
       (operation_id, operation_type, invoice_date, receipt_type, receipt_number, timbrado_number,
-       cost_sheet_version_number, quote_id, quote_revision_id,
+       cost_sheet_version_number, quote_id, quote_revision_id, service_quote_addition_id,
        expense_rubro, expense_concept,
        tax_mode, gravado_10, gravado_5,
        condition_type, due_date, currency_code, exchange_rate, amount_total,
        iva_10, iva_5, iva_exempt, iva_no_taxed,
        status, payment_status, paid_amount, balance,
        supplier_id, supplier_name, supplier_ruc, buyer_name, buyer_ruc, notes, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         Number(id),
@@ -742,6 +763,7 @@ router.post('/:id/expense-invoices', requireAuth, async (req, res) => {
         scope.costSheetVersionNumber,
         scope.quoteId,
         scope.quoteRevisionId,
+        scope.serviceQuoteAdditionId,
         payload.expense_rubro || 'SIN CLASIFICAR',
         payload.expense_concept || null,
         taxMode || null,
@@ -827,6 +849,7 @@ router.patch('/:id/expense-invoices/:invoiceId', requireAuth, async (req, res) =
       'cost_sheet_version_number',
       'quote_id',
       'quote_revision_id',
+      'service_quote_addition_id',
       'expense_rubro',
       'expense_concept',
       'tax_mode',
@@ -1554,6 +1577,12 @@ function addBudgetRubro(map, rubro, amount) {
   map[key] = Number(((map[key] || 0) + pickNumber(amount)).toFixed(2));
 }
 
+function addBudgetRubroFallback(map, rubro, amount) {
+  const key = String(rubro || 'SIN CLASIFICAR').trim().toUpperCase() || 'SIN CLASIFICAR';
+  if (Object.prototype.hasOwnProperty.call(map, key)) return;
+  addBudgetRubro(map, key, amount);
+}
+
 function getRubroAmount(source, kind = 'buy') {
   if (kind === 'sell') {
     return pickNumber(
@@ -1592,13 +1621,13 @@ function buildIndustrialBudgetFromComputed(computed = {}, revisionLabel = 'Revis
     addBudgetRubro(rubros, key, budgetAmount(getRubroAmount(value, 'buy')));
     addBudgetRubro(sellRubros, key, budgetAmount(getRubroAmount(value, 'sell')));
   }
-  addBudgetRubro(rubros, 'FLETE', budgetAmount(computed?.despacho?.totals?.freight_buy_usd));
-  addBudgetRubro(rubros, 'DESPACHO', budgetAmount(computed?.despacho?.totals?.customs_total_usd_theoretical));
-  addBudgetRubro(rubros, 'FINANCIACION', budgetAmount(computed?.financiacion?.totals?.financing_total_buy_usd));
-  addBudgetRubro(rubros, 'INSTALACION', budgetAmount(computed?.instalacion?.totals?.installation_total_cost_usd));
-  addBudgetRubro(sellRubros, 'DESPACHO', budgetAmount(computed?.despacho?.totals?.customs_total_sale_usd));
-  addBudgetRubro(sellRubros, 'FINANCIACION', budgetAmount(computed?.financiacion?.totals?.financing_total_sale_usd));
-  addBudgetRubro(sellRubros, 'INSTALACION', budgetAmount(computed?.instalacion?.totals?.installation_total_sale_usd));
+  addBudgetRubroFallback(rubros, 'FLETE', budgetAmount(computed?.despacho?.totals?.freight_buy_usd));
+  addBudgetRubroFallback(rubros, 'DESPACHO', budgetAmount(computed?.despacho?.totals?.customs_total_usd_theoretical));
+  addBudgetRubroFallback(rubros, 'FINANCIACION', budgetAmount(computed?.financiacion?.totals?.financing_total_buy_usd));
+  addBudgetRubroFallback(rubros, 'INSTALACION', budgetAmount(computed?.instalacion?.totals?.installation_total_cost_usd));
+  addBudgetRubroFallback(sellRubros, 'DESPACHO', budgetAmount(computed?.despacho?.totals?.customs_total_sale_usd));
+  addBudgetRubroFallback(sellRubros, 'FINANCIACION', budgetAmount(computed?.financiacion?.totals?.financing_total_sale_usd));
+  addBudgetRubroFallback(sellRubros, 'INSTALACION', budgetAmount(computed?.instalacion?.totals?.installation_total_sale_usd));
 
   const installationLines = Array.isArray(computed?.instalacion?.lines)
     ? computed.instalacion.lines.map((line, idx) => {
@@ -2361,10 +2390,13 @@ router.put('/:id/expense-control-settings', requireAuth, async (req, res) => {
   try {
     await ensureOperationExpenseTables();
     const opType = String(req.body?.op_type || req.query?.op_type || 'deal').toLowerCase();
-    const rate = req.body?.exchange_rate == null || req.body?.exchange_rate === '' ? null : Number(req.body.exchange_rate);
-    if (rate != null && (!Number.isFinite(rate) || rate < 0)) {
+    const parsedRate = req.body?.exchange_rate == null || req.body?.exchange_rate === ''
+      ? null
+      : Number(req.body.exchange_rate);
+    if (parsedRate != null && (!Number.isFinite(parsedRate) || parsedRate < 0)) {
       return res.status(400).json({ error: 'TC invalido' });
     }
+    const rate = parsedRate > 0 ? parsedRate : null;
     await pool.query(
       `INSERT INTO operation_expense_control_settings (operation_id, operation_type, exchange_rate, updated_by)
        VALUES (?, ?, ?, ?)
