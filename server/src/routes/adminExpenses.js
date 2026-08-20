@@ -10,6 +10,83 @@ import ExcelJS from 'exceljs';
 
 const router = Router();
 
+const ADMIN_EXPENSE_CORE_CATEGORIES = [
+  { system_key: 'ADMINISTRACION', name: 'Administración', ord: 10 },
+  { system_key: 'OPERATIVO', name: 'Operativo', ord: 20 },
+];
+
+const ADMIN_EXPENSE_CORE_SUBCATEGORIES = [
+  { system_key: 'FIJOS', name: 'Fijos', ord: 10 },
+  { system_key: 'VARIABLES', name: 'Variables', ord: 20 },
+];
+
+const ADMIN_EXPENSE_COST_CENTERS = [
+  'ALQUILER OFICINA',
+  'ANDE',
+  'ESSAP',
+  'CLARO',
+  'PERSONAL',
+  'COPACO LINEAS TELEFONICAS',
+  'MODICA',
+  'VIATICO / HOTEL VIAJES ALEJO',
+  'VIATICO / HOTEL VIAJES RODRIGO',
+  'PATENTE',
+  'CAJA CHICA RAYFLEX',
+  'LIMPIEZA',
+  'COMBUSTIBLE',
+  'COMBUSTIBLE / FLOTA BR',
+  'COMBUSTIBLE / FLOTA PETROBRAS',
+  'GASTOS VARIOS',
+  'UNIFORMES',
+  'REGALOS NAVIDEÑOS',
+  'UTILES DE OFICINA',
+  'GASTOS FINANCIEROS CTA USD Y GS',
+  'GESTIONES / MOTO TAXI',
+  'SEGURO SAVEIRO ROJO DEBITO',
+  'SEGURO NOAH DEBITO',
+  'SEGURO GOLCITO DEBITO',
+  'SEGURO SAVEIRO GRIS',
+  'SEGURO AMAROK DEBITO',
+  'SEGURO ADUANA',
+  'ATOLPAR',
+  'CLUB DE EJECUTIVO',
+  'IPS',
+  'SET',
+  'SISTEMA',
+  'MANTENIMIENTO Y EQUIPAMIENTOS',
+  'TUPI',
+  'TRAMITES JUDICIALES',
+  'MONITAL',
+  'GPS',
+  'HONORARIOS CONTABILIDAD',
+  'SUELDOS Y EXTRAS RAYFLEX',
+  'SUELDOS ATM',
+  'VACACIONES - AGUINALDOS - LIQUIDACION',
+  'IMPRENTA',
+  'HOSTIN',
+  'HABILITACIONES',
+  'EXPO LOGISTICA / PUBLICIDAD',
+  'MANTENIMIENTO NOAH',
+  'MANTENIMIENTO AMAROK',
+  'MANTENIMIENTO SAVEIRO',
+  'TARJETA DE CREDITO ITAU',
+  'PRESTAMO ITAU / CAPITAL OPERATIVO',
+  'INTERES PRESTAMO OPERATIVO',
+  'PRESTAMO ITAU',
+  'COMPRA AMAROK',
+  'COMPRA SAVEIRO',
+  'COMPRA GOLCITO',
+];
+
+function normalizeMasterName(value) {
+  return String(value || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .toUpperCase();
+}
+
 router.use(requireAuth, requireAnyRole('admin', 'manager', 'finanzas'));
 
 const storage = multer.diskStorage({
@@ -53,6 +130,7 @@ async function ensureAdminExpenseTables() {
     CREATE TABLE IF NOT EXISTS admin_expense_categories (
       id INT AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(120) NOT NULL,
+      system_key VARCHAR(40) NULL,
       ord INT NULL DEFAULT 0,
       active TINYINT(1) NOT NULL DEFAULT 1,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -65,6 +143,7 @@ async function ensureAdminExpenseTables() {
       id INT AUTO_INCREMENT PRIMARY KEY,
       category_id INT NOT NULL,
       name VARCHAR(120) NOT NULL,
+      system_key VARCHAR(40) NULL,
       ord INT NULL DEFAULT 0,
       active TINYINT(1) NOT NULL DEFAULT 1,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -77,6 +156,7 @@ async function ensureAdminExpenseTables() {
     CREATE TABLE IF NOT EXISTS admin_expense_cost_centers (
       id INT AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(120) NOT NULL,
+      ord INT NULL DEFAULT 0,
       active TINYINT(1) NOT NULL DEFAULT 1,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -207,6 +287,7 @@ async function ensureAdminExpenseTables() {
   await ensureExpenseItemsTable();
   await ensureCategoryOrderColumns();
   await ensureSubcategoryOrderColumns();
+  await ensureCostCenterOrderColumns();
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS admin_expense_attachments (
@@ -428,11 +509,14 @@ async function ensureCategoryOrderColumns() {
       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_expense_categories'
     `);
     const have = new Set(cols.map((c) => c.COLUMN_NAME));
-    if (!have.has('ord')) {
-      await pool.query(`ALTER TABLE admin_expense_categories ADD COLUMN ord INT NULL DEFAULT 0`);
+    const add = [];
+    if (!have.has('ord')) add.push('ADD COLUMN ord INT NULL DEFAULT 0');
+    if (!have.has('system_key')) add.push('ADD COLUMN system_key VARCHAR(40) NULL');
+    if (add.length) {
+      await pool.query(`ALTER TABLE admin_expense_categories ${add.join(', ')}`);
     }
   } catch (e) {
-    console.error('[admin-expenses] ensure category ord error', e?.message || e);
+    console.error('[admin-expenses] ensure category columns error', e?.message || e);
   }
 }
 
@@ -444,89 +528,199 @@ async function ensureSubcategoryOrderColumns() {
       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_expense_subcategories'
     `);
     const have = new Set(cols.map((c) => c.COLUMN_NAME));
+    const add = [];
+    if (!have.has('ord')) add.push('ADD COLUMN ord INT NULL DEFAULT 0');
+    if (!have.has('system_key')) add.push('ADD COLUMN system_key VARCHAR(40) NULL');
+    if (add.length) {
+      await pool.query(`ALTER TABLE admin_expense_subcategories ${add.join(', ')}`);
+    }
+  } catch (e) {
+    console.error('[admin-expenses] ensure subcategory columns error', e?.message || e);
+  }
+}
+
+async function ensureCostCenterOrderColumns() {
+  try {
+    const [cols] = await pool.query(`
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_expense_cost_centers'
+    `);
+    const have = new Set(cols.map((c) => c.COLUMN_NAME));
     if (!have.has('ord')) {
       await pool.query(
-        `ALTER TABLE admin_expense_subcategories ADD COLUMN ord INT NULL DEFAULT 0`
+        `ALTER TABLE admin_expense_cost_centers ADD COLUMN ord INT NULL DEFAULT 0`
       );
     }
   } catch (e) {
-    console.error('[admin-expenses] ensure subcategory ord error', e?.message || e);
+    console.error('[admin-expenses] ensure cost center columns error', e?.message || e);
   }
 }
 
 async function seedAdminExpenseMasters() {
   try {
-    const categories = {
-      'Servicios básicos': ['ANDE', 'ESSAP'],
-      'Telefonía e internet': ['CLARO', 'PERSONAL', 'COPACO LINEAS TELEFONICAS'],
-      'Alquileres': ['ALQUILER OFICINA'],
-      'Viáticos y viajes': ['VIATICO / HOTEL VIAJES'],
-      'Impuestos y tasas': ['PATENTE', 'IPS', 'SET'],
-      'Caja chica': ['CAJA CHICA RAYFLEX'],
-      'Combustible y flota': [
-        'COMBUSTIBLE / FLOTA BR',
-        'COMBUSTIBLE / FLOTA PETROBRAS',
-        'MANTENIMIENTO CAMIONETAS / GSTO CAMIONETA',
-        'SEGURO SAVEIRO ROJO DEBITO',
-        'SEGURO NOAH DEBITO',
-        'SEGURO GOLCITO DEBITO',
-        'SEGURO SAVEIRO GRIS',
-        'SEGURO AMAROK DEBITO',
-      ],
-      'Gastos financieros': [
-        'GASTOS FINANCIEROS CTA USD Y GS',
-        'TARJETA DE CREDITO ITAU',
-        'PRESTAMO ITAU / CAPITAL OPERATIVO',
-        'PRESTAMO ITAU',
-      ],
-      'Administración general': ['GASTOS VARIOS', 'GESTIONES / MOTO TAXI', 'TRAMITES JUDICIALES'],
-      'Regalos y eventos': ['REGALOS NAVIDEÑOS', 'EXPO LOGISTICA / PUBLICIDAD', 'CLUB DE EJECUTIVO'],
-      'Oficina y suministros': ['UTILES DE OFICINA', 'IMPRENTA'],
-      'Sistemas y software': ['SISTEMA', 'EQUIFAX', 'HOSTIN', 'MONITAL'],
-      'Mantenimiento y equipamientos': ['MANTENIMIENTO Y EQUIPAMIENTOS', 'TUPI', 'MODICA'],
-      'Nómina': ['SUELDOS Y EXTRAS RAYFLEX', 'SUELDOS ATM', 'VACACIONES- AGUINALDOS - LIQUIDACION'],
-      'Activos fijos': ['COMPRA NOAH', 'COMPRA AMAROK', 'COMPRA SAVEIRO', 'COMPRA GOLCITO'],
-      'Otros': ['ATOLPAR'],
-    };
-
-    for (const [catName, subs] of Object.entries(categories)) {
-      const [[cat]] = await pool.query(
-        `SELECT id FROM admin_expense_categories WHERE name = ? LIMIT 1`,
-        [catName]
+    const categoryIds = new Map();
+    for (const category of ADMIN_EXPENSE_CORE_CATEGORIES) {
+      const [[existing]] = await pool.query(
+        `SELECT id FROM admin_expense_categories WHERE system_key = ? LIMIT 1`,
+        [category.system_key]
       );
-      let catId = cat?.id;
-      if (!catId) {
-        const [ins] = await pool.query(
-          `INSERT INTO admin_expense_categories (name, active) VALUES (?, 1)`,
-          [catName]
+      let categoryId = existing?.id;
+      if (!categoryId) {
+        const [result] = await pool.query(
+          `INSERT INTO admin_expense_categories (name, system_key, ord, active)
+           VALUES (?, ?, ?, 1)`,
+          [category.name, category.system_key, category.ord]
         );
-        catId = ins.insertId;
+        categoryId = result.insertId;
       }
-      for (const subName of subs) {
-        const [[sub]] = await pool.query(
-          `SELECT id FROM admin_expense_subcategories WHERE name = ? AND category_id = ? LIMIT 1`,
-          [subName, catId]
+      categoryIds.set(category.system_key, categoryId);
+
+      for (const subcategory of ADMIN_EXPENSE_CORE_SUBCATEGORIES) {
+        const [[existingSubcategory]] = await pool.query(
+          `SELECT id
+             FROM admin_expense_subcategories
+            WHERE category_id = ? AND system_key = ?
+            LIMIT 1`,
+          [categoryId, subcategory.system_key]
         );
-        if (!sub?.id) {
+        if (!existingSubcategory?.id) {
           await pool.query(
-            `INSERT INTO admin_expense_subcategories (name, category_id, active) VALUES (?, ?, 1)`,
-            [subName, catId]
+            `INSERT INTO admin_expense_subcategories
+             (category_id, name, system_key, ord, active)
+             VALUES (?, ?, ?, ?, 1)`,
+            [categoryId, subcategory.name, subcategory.system_key, subcategory.ord]
           );
         }
       }
     }
 
-    const [[cc]] = await pool.query(
-      `SELECT id FROM admin_expense_cost_centers WHERE name = 'IPS' LIMIT 1`
+    const [existingCenters] = await pool.query(
+      `SELECT id, name FROM admin_expense_cost_centers ORDER BY id`
     );
-    if (!cc?.id) {
-      await pool.query(
-        `INSERT INTO admin_expense_cost_centers (name, active) VALUES ('IPS', 1)`
+    const centerByName = new Map(
+      existingCenters.map((row) => [normalizeMasterName(row.name), row])
+    );
+    for (let index = 0; index < ADMIN_EXPENSE_COST_CENTERS.length; index += 1) {
+      const name = ADMIN_EXPENSE_COST_CENTERS[index];
+      if (!centerByName.has(normalizeMasterName(name))) {
+        const [result] = await pool.query(
+          `INSERT INTO admin_expense_cost_centers (name, ord, active)
+           VALUES (?, ?, 1)`,
+          [name, (index + 1) * 10]
+        );
+        centerByName.set(normalizeMasterName(name), { id: result.insertId, name });
+      }
+    }
+
+    const migration = await getParamValue('admin_expense_classification_v2_migrated', pool);
+    if (migration?.value !== '1') {
+      const adminCategoryId = categoryIds.get('ADMINISTRACION');
+      const [[fixedSubcategory]] = await pool.query(
+        `SELECT id
+           FROM admin_expense_subcategories
+          WHERE category_id = ? AND system_key = 'FIJOS'
+          LIMIT 1`,
+        [adminCategoryId]
       );
+      const [legacySubcategories] = await pool.query(
+        `SELECT id, name
+           FROM admin_expense_subcategories
+          WHERE system_key IS NULL`
+      );
+      for (const subcategory of legacySubcategories) {
+        const center = centerByName.get(normalizeMasterName(subcategory.name));
+        if (!center?.id) continue;
+        await pool.query(
+          `UPDATE admin_expenses
+              SET cost_center_id = COALESCE(cost_center_id, ?)
+            WHERE subcategory_id = ?`,
+          [center.id, subcategory.id]
+        );
+        await pool.query(
+          `UPDATE admin_expense_recurrences
+              SET cost_center_id = COALESCE(cost_center_id, ?)
+            WHERE subcategory_id = ?`,
+          [center.id, subcategory.id]
+        );
+      }
+
+      await pool.query(
+        `UPDATE admin_expenses e
+         LEFT JOIN admin_expense_categories c ON c.id = e.category_id
+            SET e.category_id = ?, e.subcategory_id = NULL
+          WHERE e.category_id IS NULL OR c.system_key IS NULL`,
+        [adminCategoryId]
+      );
+      await pool.query(
+        `UPDATE admin_expense_recurrences r
+         LEFT JOIN admin_expense_categories c ON c.id = r.category_id
+            SET r.category_id = ?, r.subcategory_id = ?
+          WHERE r.category_id IS NULL OR c.system_key IS NULL`,
+        [adminCategoryId, fixedSubcategory?.id || null]
+      );
+      await pool.query(
+        `UPDATE admin_expense_categories SET active = 0 WHERE system_key IS NULL`
+      );
+      await pool.query(
+        `UPDATE admin_expense_subcategories SET active = 0 WHERE system_key IS NULL`
+      );
+      await upsertParam('admin_expense_classification_v2_migrated', '1', pool);
     }
   } catch (e) {
     console.error('[admin-expenses] seed masters error', e?.message || e);
   }
+}
+
+async function validateExpenseClassification(input) {
+  const categoryId = Number(input?.category_id);
+  const subcategoryId = Number(input?.subcategory_id);
+  const costCenterId = Number(input?.cost_center_id);
+  if (!categoryId || !subcategoryId || !costCenterId) {
+    return { error: 'Categoría, subcategoría y centro de costo son obligatorios' };
+  }
+
+  const [[category]] = await pool.query(
+    `SELECT id FROM admin_expense_categories WHERE id = ? AND active = 1 LIMIT 1`,
+    [categoryId]
+  );
+  if (!category) return { error: 'La categoría seleccionada no está disponible' };
+
+  const [[subcategory]] = await pool.query(
+    `SELECT id
+       FROM admin_expense_subcategories
+      WHERE id = ? AND category_id = ? AND active = 1
+      LIMIT 1`,
+    [subcategoryId, categoryId]
+  );
+  if (!subcategory) {
+    return { error: 'La subcategoría no corresponde a la categoría seleccionada' };
+  }
+
+  const [[costCenter]] = await pool.query(
+    `SELECT id FROM admin_expense_cost_centers WHERE id = ? AND active = 1 LIMIT 1`,
+    [costCenterId]
+  );
+  if (!costCenter) return { error: 'El centro de costo seleccionado no está disponible' };
+
+  return {
+    category_id: categoryId,
+    subcategory_id: subcategoryId,
+    cost_center_id: costCenterId,
+  };
+}
+
+async function findDuplicateMaster(table, name, options = {}) {
+  const [rows] = await pool.query(
+    `SELECT id, name FROM ${table} ${options.categoryId ? 'WHERE category_id = ?' : ''}`,
+    options.categoryId ? [options.categoryId] : []
+  );
+  const normalized = normalizeMasterName(name);
+  return rows.find(
+    (row) =>
+      Number(row.id) !== Number(options.excludeId || 0) &&
+      normalizeMasterName(row.name) === normalized
+  );
 }
 
 
@@ -760,7 +954,7 @@ router.get('/meta', requireAuth, async (_req, res) => {
       `SELECT * FROM admin_expense_subcategories ORDER BY ord, name`
     );
     const [costCenters] = await pool.query(
-      `SELECT * FROM admin_expense_cost_centers WHERE active = 1 ORDER BY name`
+      `SELECT * FROM admin_expense_cost_centers ORDER BY ord, name`
     );
     const [providers] = await pool.query(
       `SELECT id, razon_social, name, ruc
@@ -962,6 +1156,14 @@ router.post('/', requireAuth, async (req, res) => {
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
       return res.status(400).json({ error: 'El monto del gasto debe ser mayor a cero' });
     }
+    const classification = await validateExpenseClassification({
+      category_id,
+      subcategory_id,
+      cost_center_id,
+    });
+    if (classification.error) {
+      return res.status(400).json({ error: classification.error });
+    }
     const normalizedCondition = String(condition_type || '').toUpperCase() || null;
     const normalizedCreditDays =
       normalizedCondition === 'CREDITO' && credit_days !== '' && credit_days != null
@@ -982,9 +1184,9 @@ router.post('/', requireAuth, async (req, res) => {
       [
         expense_date,
         provider_id || null,
-        category_id || null,
-        subcategory_id || null,
-        cost_center_id || null,
+        classification.category_id,
+        classification.subcategory_id,
+        classification.cost_center_id,
         description || '',
         invoice_date || null,
         supplier_ruc || null,
@@ -1042,6 +1244,28 @@ router.patch('/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const patch = req.body || {};
+    if (
+      patch.category_id !== undefined ||
+      patch.subcategory_id !== undefined ||
+      patch.cost_center_id !== undefined
+    ) {
+      const [[current]] = await pool.query(
+        'SELECT category_id, subcategory_id, cost_center_id FROM admin_expenses WHERE id = ?',
+        [id]
+      );
+      if (!current) return res.status(404).json({ error: 'Gasto no encontrado' });
+      const classification = await validateExpenseClassification({
+        category_id: patch.category_id ?? current.category_id,
+        subcategory_id: patch.subcategory_id ?? current.subcategory_id,
+        cost_center_id: patch.cost_center_id ?? current.cost_center_id,
+      });
+      if (classification.error) {
+        return res.status(400).json({ error: classification.error });
+      }
+      patch.category_id = classification.category_id;
+      patch.subcategory_id = classification.subcategory_id;
+      patch.cost_center_id = classification.cost_center_id;
+    }
     const fields = [
       'expense_date',
       'provider_id',
@@ -1230,54 +1454,106 @@ router.get('/monthly-summary', requireAuth, async (req, res) => {
     await ensureSupplierCreditNoteTables();
     const year = Math.trunc(Number(req.query?.year || new Date().getFullYear()));
     const currency = String(req.query?.currency_code || 'PYG').toUpperCase();
+    const requestedCategory = String(req.query?.category_id || '').trim();
+    const requestedSubcategory = String(req.query?.subcategory_id || '').trim();
+    const requestedCostCenter = String(req.query?.cost_center_id || '').trim();
+    const includeEmpty = ['1', 'true', 'yes'].includes(
+      String(req.query?.include_empty || '').toLowerCase()
+    );
     if (!Number.isFinite(year) || year < 2000 || year > 2200) {
-      return res.status(400).json({ error: 'Ano invalido' });
+      return res.status(400).json({ error: 'Año inválido' });
     }
-    const [expenseRows] = await pool.query(`
-      SELECT e.id,
-             COALESCE(sc.name, NULLIF(e.description, ''), c.name,
-                      p.razon_social, p.name, e.supplier_name, 'SIN DETALLE') AS detail,
-             MONTH(COALESCE(e.due_date, e.invoice_date, e.expense_date)) AS month_number,
-             COALESCE(e.net_amount, e.amount, 0) AS net_amount,
-             COALESCE((
-               SELECT SUM(pay.amount)
-                 FROM admin_expense_payments pay
-                WHERE pay.expense_id = e.id
-                  AND pay.status <> 'anulado'
-             ), 0) AS paid_total
-        FROM admin_expenses e
-        LEFT JOIN organizations p ON p.id = e.provider_id
-        LEFT JOIN admin_expense_categories c ON c.id = e.category_id
-        LEFT JOIN admin_expense_subcategories sc ON sc.id = e.subcategory_id
-       WHERE YEAR(COALESCE(e.due_date, e.invoice_date, e.expense_date)) = ?
-         AND UPPER(e.currency_code) = ?
-         AND LOWER(COALESCE(e.status, 'pendiente')) <> 'anulado'
-       ORDER BY detail, e.id
-    `, [year, currency]);
-    const [paymentRows] = await pool.query(`
-      SELECT COALESCE(sc.name, NULLIF(e.description, ''), c.name,
-                      p.razon_social, p.name, e.supplier_name, 'SIN DETALLE') AS detail,
-             MONTH(pay.payment_date) AS month_number,
-             SUM(pay.amount) AS paid_amount
-        FROM admin_expense_payments pay
-        INNER JOIN admin_expenses e ON e.id = pay.expense_id
-        LEFT JOIN organizations p ON p.id = e.provider_id
-        LEFT JOIN admin_expense_categories c ON c.id = e.category_id
-        LEFT JOIN admin_expense_subcategories sc ON sc.id = e.subcategory_id
-       WHERE YEAR(pay.payment_date) = ?
-         AND UPPER(pay.currency_code) = ?
-         AND pay.status <> 'anulado'
-         AND LOWER(COALESCE(e.status, 'pendiente')) <> 'anulado'
-       GROUP BY detail, MONTH(pay.payment_date)
-       ORDER BY detail
-    `, [year, currency]);
+
+    let categoryId = null;
+    if (!requestedCategory) {
+      const [[adminCategory]] = await pool.query(
+        `SELECT id
+           FROM admin_expense_categories
+          WHERE system_key = 'ADMINISTRACION'
+          LIMIT 1`
+      );
+      categoryId = adminCategory?.id || null;
+    } else if (requestedCategory.toLowerCase() !== 'all') {
+      categoryId = Number(requestedCategory);
+      if (!categoryId) return res.status(400).json({ error: 'Categoría inválida' });
+    }
+    const subcategoryId = requestedSubcategory ? Number(requestedSubcategory) : null;
+    const costCenterId = requestedCostCenter ? Number(requestedCostCenter) : null;
+    if (requestedSubcategory && !subcategoryId) {
+      return res.status(400).json({ error: 'Subcategoría inválida' });
+    }
+    if (requestedCostCenter && !costCenterId) {
+      return res.status(400).json({ error: 'Centro de costo inválido' });
+    }
+
+    const classificationWhere = [];
+    const classificationParams = [];
+    if (categoryId) {
+      classificationWhere.push('e.category_id = ?');
+      classificationParams.push(categoryId);
+    }
+    if (subcategoryId) {
+      classificationWhere.push('e.subcategory_id = ?');
+      classificationParams.push(subcategoryId);
+    }
+    if (costCenterId) {
+      classificationWhere.push('e.cost_center_id = ?');
+      classificationParams.push(costCenterId);
+    }
+    const extraWhere = classificationWhere.length
+      ? ` AND ${classificationWhere.join(' AND ')}`
+      : '';
+
+    const [expenseRows] = await pool.query(
+      `SELECT e.id,
+              e.cost_center_id,
+              COALESCE(cc.name, 'SIN CENTRO DE COSTO') AS detail,
+              COALESCE(cc.ord, 999999) AS cost_center_ord,
+              MONTH(COALESCE(e.due_date, e.invoice_date, e.expense_date)) AS month_number,
+              COALESCE(e.net_amount, e.amount, 0) AS net_amount,
+              COALESCE((
+                SELECT SUM(pay.amount)
+                  FROM admin_expense_payments pay
+                 WHERE pay.expense_id = e.id
+                   AND pay.status <> 'anulado'
+              ), 0) AS paid_total
+         FROM admin_expenses e
+         LEFT JOIN admin_expense_cost_centers cc ON cc.id = e.cost_center_id
+        WHERE YEAR(COALESCE(e.due_date, e.invoice_date, e.expense_date)) = ?
+          AND UPPER(e.currency_code) = ?
+          AND LOWER(COALESCE(e.status, 'pendiente')) <> 'anulado'
+          ${extraWhere}
+        ORDER BY cost_center_ord, detail, e.id`,
+      [year, currency, ...classificationParams]
+    );
+
+    const [paymentRows] = await pool.query(
+      `SELECT e.cost_center_id,
+              COALESCE(cc.name, 'SIN CENTRO DE COSTO') AS detail,
+              COALESCE(cc.ord, 999999) AS cost_center_ord,
+              MONTH(pay.payment_date) AS month_number,
+              SUM(pay.amount) AS paid_amount
+         FROM admin_expense_payments pay
+         INNER JOIN admin_expenses e ON e.id = pay.expense_id
+         LEFT JOIN admin_expense_cost_centers cc ON cc.id = e.cost_center_id
+        WHERE YEAR(pay.payment_date) = ?
+          AND UPPER(pay.currency_code) = ?
+          AND pay.status <> 'anulado'
+          AND LOWER(COALESCE(e.status, 'pendiente')) <> 'anulado'
+          ${extraWhere}
+        GROUP BY e.cost_center_id, cc.name, cc.ord, MONTH(pay.payment_date)
+        ORDER BY cost_center_ord, detail`,
+      [year, currency, ...classificationParams]
+    );
 
     const rowsMap = new Map();
-    const ensureRow = (detail) => {
-      const key = String(detail || 'SIN DETALLE').trim() || 'SIN DETALLE';
+    const ensureRow = (costCenterIdValue, detail, ord = 999999) => {
+      const key = costCenterIdValue ? `cc:${costCenterIdValue}` : 'cc:unassigned';
       if (!rowsMap.has(key)) {
         rowsMap.set(key, {
-          detail: key,
+          cost_center_id: costCenterIdValue || null,
+          cost_center_ord: Number(ord ?? 999999),
+          detail: String(detail || 'SIN CENTRO DE COSTO').trim() || 'SIN CENTRO DE COSTO',
           months: Array.from({ length: 12 }, (_, index) => ({
             month: index + 1,
             to_pay: 0,
@@ -1288,23 +1564,52 @@ router.get('/monthly-summary', requireAuth, async (req, res) => {
       }
       return rowsMap.get(key);
     };
+
+    if (includeEmpty) {
+      const emptyWhere = ['active = 1'];
+      const emptyParams = [];
+      if (costCenterId) {
+        emptyWhere.push('id = ?');
+        emptyParams.push(costCenterId);
+      }
+      const [centers] = await pool.query(
+        `SELECT id, name, ord
+           FROM admin_expense_cost_centers
+          WHERE ${emptyWhere.join(' AND ')}
+          ORDER BY ord, name`,
+        emptyParams
+      );
+      centers.forEach((center) => ensureRow(center.id, center.name, center.ord));
+    }
+
     expenseRows.forEach((row) => {
       const monthIndex = Number(row.month_number || 0) - 1;
       if (monthIndex < 0 || monthIndex > 11) return;
-      const item = ensureRow(row.detail);
+      const item = ensureRow(
+        row.cost_center_id,
+        row.detail,
+        row.cost_center_ord
+      );
       const balance = Math.max(0, Number(row.net_amount || 0) - Number(row.paid_total || 0));
       item.months[monthIndex].to_pay += balance;
     });
     paymentRows.forEach((row) => {
       const monthIndex = Number(row.month_number || 0) - 1;
       if (monthIndex < 0 || monthIndex > 11) return;
-      const item = ensureRow(row.detail);
+      const item = ensureRow(
+        row.cost_center_id,
+        row.detail,
+        row.cost_center_ord
+      );
       const paid = Number(row.paid_amount || 0);
       item.months[monthIndex].paid += paid;
       item.total_paid += paid;
     });
-    const rows = Array.from(rowsMap.values()).sort((a, b) =>
-      a.detail.localeCompare(b.detail, 'es')
+
+    const rows = Array.from(rowsMap.values()).sort(
+      (a, b) =>
+        Number(a.cost_center_ord || 0) - Number(b.cost_center_ord || 0) ||
+        a.detail.localeCompare(b.detail, 'es')
     );
     const totals = Array.from({ length: 12 }, (_, index) => ({
       month: index + 1,
@@ -1316,6 +1621,12 @@ router.get('/monthly-summary', requireAuth, async (req, res) => {
       year,
       currency_code: currency,
       exchange_rate: Number(rate?.value || 0),
+      filters: {
+        category_id: categoryId,
+        subcategory_id: subcategoryId,
+        cost_center_id: costCenterId,
+        include_empty: includeEmpty,
+      },
       rows,
       totals,
       total_paid: rows.reduce((sum, row) => sum + Number(row.total_paid || 0), 0),
@@ -1800,6 +2111,18 @@ router.post('/recurrences', requireAuth, async (req, res) => {
     } = req.body || {};
     const start = toDateOnly(start_date);
     if (!start) return res.status(400).json({ error: 'start_date is required' });
+    const numericAmount = Number(amount || 0);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      return res.status(400).json({ error: 'El monto del gasto debe ser mayor a cero' });
+    }
+    const classification = await validateExpenseClassification({
+      category_id,
+      subcategory_id,
+      cost_center_id,
+    });
+    if (classification.error) {
+      return res.status(400).json({ error: classification.error });
+    }
     const dom = start.getUTCDate();
     const [result] = await pool.query(
       `INSERT INTO admin_expense_recurrences
@@ -1815,9 +2138,9 @@ router.post('/recurrences', requireAuth, async (req, res) => {
         dom,
         formatDate(start),
         provider_id || null,
-        category_id || null,
-        subcategory_id || null,
-        cost_center_id || null,
+        classification.category_id,
+        classification.subcategory_id,
+        classification.cost_center_id,
         description || '',
         invoice_date || null,
         supplier_ruc || null,
@@ -1834,7 +2157,7 @@ router.post('/recurrences', requireAuth, async (req, res) => {
         Number(gravado_5 || 0) || null,
         Number(iva_no_taxed || 0) || null,
         Number(exchange_rate || 0) || null,
-        Number(amount || 0),
+        numericAmount,
         currency_code || 'PYG',
         tax_rate || null,
         receipt_type || null,
@@ -1881,54 +2204,6 @@ router.get('/recurrences', requireAuth, async (_req, res) => {
     console.error('[admin-expenses] recurrence list error', e);
     res.status(500).json({ error: 'Error listing recurrences' });
   }
-});
-
-router.patch('/recurrences/:id', requireAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const patch = req.body || {};
-    const fields = [
-      'end_date',
-      'active',
-      'description',
-      'amount',
-      'currency_code',
-      'category_id',
-      'subcategory_id',
-      'cost_center_id',
-      'provider_id',
-      'status',
-    ];
-    const sets = [];
-    const params = [];
-    fields.forEach((f) => {
-      if (patch[f] !== undefined) {
-        sets.push(`${f} = ?`);
-        params.push(patch[f]);
-      }
-    });
-    if (!sets.length) return res.json({ ok: true });
-    params.push(id);
-    await pool.query(
-      `UPDATE admin_expense_recurrences SET ${sets.join(', ')} WHERE id = ?`,
-      params
-    );
-    const [[row]] = await pool.query(
-      `SELECT * FROM admin_expense_recurrences WHERE id = ?`,
-      [id]
-    );
-    res.json(row);
-  } catch (e) {
-    console.error('[admin-expenses] recurrence update error', e);
-    res.status(500).json({ error: 'Error updating recurrence' });
-  }
-});
-
-router.get('/categories', requireAuth, async (_req, res) => {
-  const [rows] = await pool.query(
-    'SELECT * FROM admin_expense_categories ORDER BY ord, name'
-  );
-  res.json(rows);
 });
 
 router.get('/recurrences/upcoming', requireAuth, async (req, res) => {
@@ -1979,25 +2254,44 @@ router.post('/recurrences/run', requireAuth, async (_req, res) => {
   }
 });
 
-router.post('/categories', requireAuth, async (req, res) => {
-  const name = String(req.body?.name || '').trim();
-  if (!name) return res.status(400).json({ error: 'name is required' });
-  const [result] = await pool.query(
-    `INSERT INTO admin_expense_categories (name, active) VALUES (?, 1)`,
-    [name]
-  );
-  const [[row]] = await pool.query(
-    'SELECT * FROM admin_expense_categories WHERE id = ?',
-    [result.insertId]
-  );
-  res.status(201).json(row);
-});
-
-router.patch('/categories/:id', requireAuth, async (req, res) => {
+router.patch('/recurrences/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const patch = req.body || {};
-    const fields = ['name', 'active', 'ord'];
+    if (
+      patch.category_id !== undefined ||
+      patch.subcategory_id !== undefined ||
+      patch.cost_center_id !== undefined
+    ) {
+      const [[current]] = await pool.query(
+        'SELECT category_id, subcategory_id, cost_center_id FROM admin_expense_recurrences WHERE id = ?',
+        [id]
+      );
+      if (!current) return res.status(404).json({ error: 'Recurrencia no encontrada' });
+      const classification = await validateExpenseClassification({
+        category_id: patch.category_id ?? current.category_id,
+        subcategory_id: patch.subcategory_id ?? current.subcategory_id,
+        cost_center_id: patch.cost_center_id ?? current.cost_center_id,
+      });
+      if (classification.error) {
+        return res.status(400).json({ error: classification.error });
+      }
+      patch.category_id = classification.category_id;
+      patch.subcategory_id = classification.subcategory_id;
+      patch.cost_center_id = classification.cost_center_id;
+    }
+    const fields = [
+      'end_date',
+      'active',
+      'description',
+      'amount',
+      'currency_code',
+      'category_id',
+      'subcategory_id',
+      'cost_center_id',
+      'provider_id',
+      'status',
+    ];
     const sets = [];
     const params = [];
     fields.forEach((f) => {
@@ -2008,7 +2302,90 @@ router.patch('/categories/:id', requireAuth, async (req, res) => {
     });
     if (!sets.length) return res.json({ ok: true });
     params.push(id);
-    await pool.query(`UPDATE admin_expense_categories SET ${sets.join(', ')} WHERE id = ?`, params);
+    await pool.query(
+      `UPDATE admin_expense_recurrences SET ${sets.join(', ')} WHERE id = ?`,
+      params
+    );
+    const [[row]] = await pool.query(
+      `SELECT * FROM admin_expense_recurrences WHERE id = ?`,
+      [id]
+    );
+    res.json(row);
+  } catch (e) {
+    console.error('[admin-expenses] recurrence update error', e);
+    res.status(500).json({ error: 'Error updating recurrence' });
+  }
+});
+
+router.get('/categories', requireAuth, async (_req, res) => {
+  const [rows] = await pool.query(
+    'SELECT * FROM admin_expense_categories ORDER BY ord, name'
+  );
+  res.json(rows);
+});
+
+router.post('/categories', requireAuth, async (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'El nombre es obligatorio' });
+    if (await findDuplicateMaster('admin_expense_categories', name)) {
+      return res.status(409).json({ error: 'Ya existe una categoría con ese nombre' });
+    }
+    const [[maxOrder]] = await pool.query(
+      'SELECT COALESCE(MAX(ord), 0) AS max_ord FROM admin_expense_categories'
+    );
+    const [result] = await pool.query(
+      `INSERT INTO admin_expense_categories (name, ord, active) VALUES (?, ?, 1)`,
+      [name, Number(maxOrder?.max_ord || 0) + 10]
+    );
+    const [[row]] = await pool.query(
+      'SELECT * FROM admin_expense_categories WHERE id = ?',
+      [result.insertId]
+    );
+    res.status(201).json(row);
+  } catch (e) {
+    console.error('[admin-expenses] category create error', e);
+    res.status(500).json({ error: 'No se pudo crear la categoría' });
+  }
+});
+
+router.patch('/categories/:id', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const patch = req.body || {};
+    const [[current]] = await pool.query(
+      'SELECT * FROM admin_expense_categories WHERE id = ?',
+      [id]
+    );
+    if (!current) return res.status(404).json({ error: 'Categoría no encontrada' });
+    if (current.system_key && patch.active !== undefined && !Number(patch.active)) {
+      return res.status(400).json({ error: 'Las categorías base no se pueden desactivar' });
+    }
+    if (patch.name !== undefined) {
+      const name = String(patch.name || '').trim();
+      if (!name) return res.status(400).json({ error: 'El nombre es obligatorio' });
+      if (
+        await findDuplicateMaster('admin_expense_categories', name, { excludeId: id })
+      ) {
+        return res.status(409).json({ error: 'Ya existe una categoría con ese nombre' });
+      }
+      patch.name = name;
+    }
+    const fields = ['name', 'active', 'ord'];
+    const sets = [];
+    const params = [];
+    fields.forEach((field) => {
+      if (patch[field] !== undefined) {
+        sets.push(`${field} = ?`);
+        params.push(patch[field]);
+      }
+    });
+    if (!sets.length) return res.json(current);
+    params.push(id);
+    await pool.query(
+      `UPDATE admin_expense_categories SET ${sets.join(', ')} WHERE id = ?`,
+      params
+    );
     const [[row]] = await pool.query(
       'SELECT * FROM admin_expense_categories WHERE id = ?',
       [id]
@@ -2016,7 +2393,7 @@ router.patch('/categories/:id', requireAuth, async (req, res) => {
     res.json(row);
   } catch (e) {
     console.error('[admin-expenses] category update error', e);
-    res.status(500).json({ error: 'Error updating category' });
+    res.status(500).json({ error: 'No se pudo actualizar la categoría' });
   }
 });
 
@@ -2028,36 +2405,87 @@ router.get('/subcategories', requireAuth, async (_req, res) => {
 });
 
 router.post('/subcategories', requireAuth, async (req, res) => {
-  const name = String(req.body?.name || '').trim();
-  const categoryId = req.body?.category_id || null;
-  if (!name || !categoryId) {
-    return res.status(400).json({ error: 'name and category_id are required' });
+  try {
+    const name = String(req.body?.name || '').trim();
+    const categoryId = Number(req.body?.category_id || 0);
+    if (!name || !categoryId) {
+      return res.status(400).json({ error: 'Nombre y categoría son obligatorios' });
+    }
+    if (
+      await findDuplicateMaster('admin_expense_subcategories', name, {
+        categoryId,
+      })
+    ) {
+      return res.status(409).json({ error: 'Ya existe esa subcategoría en la categoría' });
+    }
+    const [[maxOrder]] = await pool.query(
+      `SELECT COALESCE(MAX(ord), 0) AS max_ord
+         FROM admin_expense_subcategories
+        WHERE category_id = ?`,
+      [categoryId]
+    );
+    const [result] = await pool.query(
+      `INSERT INTO admin_expense_subcategories
+       (name, category_id, ord, active)
+       VALUES (?, ?, ?, 1)`,
+      [name, categoryId, Number(maxOrder?.max_ord || 0) + 10]
+    );
+    const [[row]] = await pool.query(
+      'SELECT * FROM admin_expense_subcategories WHERE id = ?',
+      [result.insertId]
+    );
+    res.status(201).json(row);
+  } catch (e) {
+    console.error('[admin-expenses] subcategory create error', e);
+    res.status(500).json({ error: 'No se pudo crear la subcategoría' });
   }
-  const [result] = await pool.query(
-    `INSERT INTO admin_expense_subcategories (name, category_id, active) VALUES (?, ?, 1)`,
-    [name, categoryId]
-  );
-  const [[row]] = await pool.query(
-    'SELECT * FROM admin_expense_subcategories WHERE id = ?',
-    [result.insertId]
-  );
-  res.status(201).json(row);
 });
 
 router.patch('/subcategories/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const patch = req.body || {};
+    const [[current]] = await pool.query(
+      'SELECT * FROM admin_expense_subcategories WHERE id = ?',
+      [id]
+    );
+    if (!current) return res.status(404).json({ error: 'Subcategoría no encontrada' });
+    if (current.system_key && patch.active !== undefined && !Number(patch.active)) {
+      return res.status(400).json({ error: 'Las subcategorías base no se pueden desactivar' });
+    }
+    const targetCategoryId = Number(patch.category_id ?? current.category_id);
+    if (
+      current.system_key &&
+      patch.category_id !== undefined &&
+      targetCategoryId !== Number(current.category_id)
+    ) {
+      return res.status(400).json({
+        error: 'Las subcategorías base no se pueden mover a otra categoría',
+      });
+    }
+    if (patch.name !== undefined) {
+      const name = String(patch.name || '').trim();
+      if (!name) return res.status(400).json({ error: 'El nombre es obligatorio' });
+      if (
+        await findDuplicateMaster('admin_expense_subcategories', name, {
+          categoryId: targetCategoryId,
+          excludeId: id,
+        })
+      ) {
+        return res.status(409).json({ error: 'Ya existe esa subcategoría en la categoría' });
+      }
+      patch.name = name;
+    }
     const fields = ['name', 'active', 'ord', 'category_id'];
     const sets = [];
     const params = [];
-    fields.forEach((f) => {
-      if (patch[f] !== undefined) {
-        sets.push(`${f} = ?`);
-        params.push(patch[f]);
+    fields.forEach((field) => {
+      if (patch[field] !== undefined) {
+        sets.push(`${field} = ?`);
+        params.push(patch[field]);
       }
     });
-    if (!sets.length) return res.json({ ok: true });
+    if (!sets.length) return res.json(current);
     params.push(id);
     await pool.query(
       `UPDATE admin_expense_subcategories SET ${sets.join(', ')} WHERE id = ?`,
@@ -2070,27 +2498,88 @@ router.patch('/subcategories/:id', requireAuth, async (req, res) => {
     res.json(row);
   } catch (e) {
     console.error('[admin-expenses] subcategory update error', e);
-    res.status(500).json({ error: 'Error updating subcategory' });
+    res.status(500).json({ error: 'No se pudo actualizar la subcategoría' });
   }
 });
 
 router.get('/cost-centers', requireAuth, async (_req, res) => {
-  const [rows] = await pool.query('SELECT * FROM admin_expense_cost_centers ORDER BY name');
+  const [rows] = await pool.query(
+    'SELECT * FROM admin_expense_cost_centers ORDER BY ord, name'
+  );
   res.json(rows);
 });
 
 router.post('/cost-centers', requireAuth, async (req, res) => {
-  const name = String(req.body?.name || '').trim();
-  if (!name) return res.status(400).json({ error: 'name is required' });
-  const [result] = await pool.query(
-    `INSERT INTO admin_expense_cost_centers (name, active) VALUES (?, 1)`,
-    [name]
-  );
-  const [[row]] = await pool.query(
-    'SELECT * FROM admin_expense_cost_centers WHERE id = ?',
-    [result.insertId]
-  );
-  res.status(201).json(row);
+  try {
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'El nombre es obligatorio' });
+    if (await findDuplicateMaster('admin_expense_cost_centers', name)) {
+      return res.status(409).json({ error: 'Ya existe un centro de costo con ese nombre' });
+    }
+    const [[maxOrder]] = await pool.query(
+      'SELECT COALESCE(MAX(ord), 0) AS max_ord FROM admin_expense_cost_centers'
+    );
+    const [result] = await pool.query(
+      `INSERT INTO admin_expense_cost_centers (name, ord, active)
+       VALUES (?, ?, 1)`,
+      [name, Number(maxOrder?.max_ord || 0) + 10]
+    );
+    const [[row]] = await pool.query(
+      'SELECT * FROM admin_expense_cost_centers WHERE id = ?',
+      [result.insertId]
+    );
+    res.status(201).json(row);
+  } catch (e) {
+    console.error('[admin-expenses] cost center create error', e);
+    res.status(500).json({ error: 'No se pudo crear el centro de costo' });
+  }
+});
+
+router.patch('/cost-centers/:id', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const patch = req.body || {};
+    const [[current]] = await pool.query(
+      'SELECT * FROM admin_expense_cost_centers WHERE id = ?',
+      [id]
+    );
+    if (!current) return res.status(404).json({ error: 'Centro de costo no encontrado' });
+    if (patch.name !== undefined) {
+      const name = String(patch.name || '').trim();
+      if (!name) return res.status(400).json({ error: 'El nombre es obligatorio' });
+      if (
+        await findDuplicateMaster('admin_expense_cost_centers', name, {
+          excludeId: id,
+        })
+      ) {
+        return res.status(409).json({ error: 'Ya existe un centro de costo con ese nombre' });
+      }
+      patch.name = name;
+    }
+    const fields = ['name', 'active', 'ord'];
+    const sets = [];
+    const params = [];
+    fields.forEach((field) => {
+      if (patch[field] !== undefined) {
+        sets.push(`${field} = ?`);
+        params.push(patch[field]);
+      }
+    });
+    if (!sets.length) return res.json(current);
+    params.push(id);
+    await pool.query(
+      `UPDATE admin_expense_cost_centers SET ${sets.join(', ')} WHERE id = ?`,
+      params
+    );
+    const [[row]] = await pool.query(
+      'SELECT * FROM admin_expense_cost_centers WHERE id = ?',
+      [id]
+    );
+    res.json(row);
+  } catch (e) {
+    console.error('[admin-expenses] cost center update error', e);
+    res.status(500).json({ error: 'No se pudo actualizar el centro de costo' });
+  }
 });
 
 router.get('/export', requireAuth, async (req, res) => {

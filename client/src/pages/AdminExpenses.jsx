@@ -183,6 +183,10 @@ export default function AdminExpenses() {
 
   const [monthlyYear, setMonthlyYear] = useState(new Date().getFullYear());
   const [monthlyCurrency, setMonthlyCurrency] = useState('PYG');
+  const [monthlyCategoryId, setMonthlyCategoryId] = useState('');
+  const [monthlySubcategoryId, setMonthlySubcategoryId] = useState('');
+  const [monthlyCostCenterId, setMonthlyCostCenterId] = useState('');
+  const [monthlyIncludeEmpty, setMonthlyIncludeEmpty] = useState(false);
   const [monthlyLoading, setMonthlyLoading] = useState(false);
   const [monthlyData, setMonthlyData] = useState({
     rows: [],
@@ -287,15 +291,35 @@ export default function AdminExpenses() {
     return activeSubs.filter((s) => String(s.category_id) === String(form.category_id));
   }, [meta.subcategories, form.category_id]);
 
+  const monthlySubcategories = useMemo(() => {
+    const activeSubs = meta.subcategories.filter((subcategory) => subcategory.active);
+    if (!monthlyCategoryId || monthlyCategoryId === 'all') return activeSubs;
+    return activeSubs.filter(
+      (subcategory) => String(subcategory.category_id) === String(monthlyCategoryId)
+    );
+  }, [meta.subcategories, monthlyCategoryId]);
+
   async function loadMeta() {
     const { data } = await api.get('/admin-expenses/meta');
+    const categories = data.categories || [];
+    const adminCategory = categories.find(
+      (category) => category.system_key === 'ADMINISTRACION'
+    );
     setMeta({
-      categories: data.categories || [],
+      categories,
       subcategories: data.subcategories || [],
       costCenters: data.costCenters || [],
       providers: data.providers || [],
       exchange_rate: data.exchange_rate || '',
     });
+    if (adminCategory?.id) {
+      setForm((current) =>
+        current.category_id
+          ? current
+          : { ...current, category_id: String(adminCategory.id), subcategory_id: '' }
+      );
+      setMonthlyCategoryId((current) => current || String(adminCategory.id));
+    }
   }
 
   async function loadExpenses() {
@@ -329,7 +353,14 @@ export default function AdminExpenses() {
     setMonthlyLoading(true);
     try {
       const { data } = await api.get('/admin-expenses/monthly-summary', {
-        params: { year: monthlyYear, currency_code: monthlyCurrency },
+        params: {
+          year: monthlyYear,
+          currency_code: monthlyCurrency,
+          category_id: monthlyCategoryId || undefined,
+          subcategory_id: monthlySubcategoryId || undefined,
+          cost_center_id: monthlyCostCenterId || undefined,
+          include_empty: monthlyIncludeEmpty ? 1 : 0,
+        },
       });
       setMonthlyData({
         rows: Array.isArray(data?.rows) ? data.rows : [],
@@ -347,7 +378,15 @@ export default function AdminExpenses() {
 
   useEffect(() => {
     if (activeTab === 'mensual') loadMonthlySummary();
-  }, [activeTab, monthlyYear, monthlyCurrency]);
+  }, [
+    activeTab,
+    monthlyYear,
+    monthlyCurrency,
+    monthlyCategoryId,
+    monthlySubcategoryId,
+    monthlyCostCenterId,
+    monthlyIncludeEmpty,
+  ]);
 
   useEffect(() => {
     let active = true;
@@ -790,6 +829,10 @@ export default function AdminExpenses() {
     setSaving(true);
     setError('');
     try {
+      if (!form.category_id || !form.subcategory_id || !form.cost_center_id) {
+        setError('Categoría, subcategoría y centro de costo son obligatorios.');
+        return;
+      }
       const baseAmount = Number(
         newExpenseHasInvoice ? newInvoiceForm.amount_total : form.amount
       );
@@ -816,7 +859,9 @@ export default function AdminExpenses() {
         credit_days: newExpenseHasInvoice && newInvoiceForm.credit_days !== '' ? Number(newInvoiceForm.credit_days) : null,
         due_date: newExpenseHasInvoice ? (newInvoiceForm.due_date || null) : null,
         supplier_ruc: newInvoiceForm.supplier_ruc || null,
-        supplier_name: newInvoiceForm.supplier_name || null,
+        supplier_name:
+          newInvoiceForm.supplier_name ||
+          (!form.provider_id ? providerQuery.trim() || null : null),
         buyer_name: newExpenseHasInvoice ? (newInvoiceForm.buyer_name || null) : null,
         buyer_ruc: newExpenseHasInvoice ? (newInvoiceForm.buyer_ruc || null) : null,
         tax_mode: newExpenseHasInvoice ? (newInvoiceForm.tax_mode || null) : null,
@@ -887,6 +932,11 @@ export default function AdminExpenses() {
 
       setForm((prev) => ({
         ...prev,
+        category_id:
+          meta.categories.find((category) => category.system_key === 'ADMINISTRACION')?.id ||
+          prev.category_id,
+        subcategory_id: '',
+        cost_center_id: '',
         provider_id: '',
         description: '',
         amount: '',
@@ -1138,20 +1188,96 @@ export default function AdminExpenses() {
           <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b">
             <div>
               <h2 className="text-base font-semibold">Planilla mensual de gastos</h2>
-              <p className="text-xs text-slate-500">Saldos pendientes y pagos reales agrupados por detalle.</p>
+              <p className="text-xs text-slate-500">
+                Saldos pendientes y pagos reales agrupados por centro de costo.
+              </p>
             </div>
-            <div className="flex items-center gap-2">
-              <select className="border rounded px-2 py-1.5 text-sm" value={monthlyYear} onChange={(e) => setMonthlyYear(Number(e.target.value))}>
-                {[monthlyYear - 1, monthlyYear, monthlyYear + 1].map((year) => <option key={year} value={year}>{year}</option>)}
+            <button
+              type="button"
+              className="border rounded px-3 py-1.5 text-sm"
+              onClick={loadMonthlySummary}
+            >
+              Actualizar
+            </button>
+          </div>
+          <div className="grid grid-cols-1 gap-3 border-b px-4 py-3 sm:grid-cols-2 lg:grid-cols-6">
+            <div>
+              <label className="text-xs text-slate-500">Año</label>
+              <select
+                className="mt-1 w-full border rounded px-2 py-1.5 text-sm"
+                value={monthlyYear}
+                onChange={(e) => setMonthlyYear(Number(e.target.value))}
+              >
+                {[monthlyYear - 1, monthlyYear, monthlyYear + 1].map((year) => (
+                  <option key={year} value={year}>{year}</option>
+                ))}
               </select>
-              <select className="border rounded px-2 py-1.5 text-sm" value={monthlyCurrency} onChange={(e) => setMonthlyCurrency(e.target.value)}>
+            </div>
+            <div>
+              <label className="text-xs text-slate-500">Moneda</label>
+              <select
+                className="mt-1 w-full border rounded px-2 py-1.5 text-sm"
+                value={monthlyCurrency}
+                onChange={(e) => setMonthlyCurrency(e.target.value)}
+              >
                 <option value="PYG">PYG</option>
                 <option value="USD">USD</option>
                 <option value="BRL">BRL</option>
                 <option value="ARS">ARS</option>
               </select>
-              <button type="button" className="border rounded px-3 py-1.5 text-sm" onClick={loadMonthlySummary}>Actualizar</button>
             </div>
+            <div>
+              <label className="text-xs text-slate-500">Categoría</label>
+              <select
+                className="mt-1 w-full border rounded px-2 py-1.5 text-sm"
+                value={monthlyCategoryId}
+                onChange={(e) => {
+                  setMonthlyCategoryId(e.target.value);
+                  setMonthlySubcategoryId('');
+                }}
+              >
+                <option value="all">Todas</option>
+                {meta.categories.filter((category) => category.active).map((category) => (
+                  <option key={category.id} value={category.id}>{category.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-slate-500">Subcategoría</label>
+              <select
+                className="mt-1 w-full border rounded px-2 py-1.5 text-sm"
+                value={monthlySubcategoryId}
+                onChange={(e) => setMonthlySubcategoryId(e.target.value)}
+              >
+                <option value="">Todas</option>
+                {monthlySubcategories.map((subcategory) => (
+                  <option key={subcategory.id} value={subcategory.id}>
+                    {subcategory.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-slate-500">Centro de costo</label>
+              <select
+                className="mt-1 w-full border rounded px-2 py-1.5 text-sm"
+                value={monthlyCostCenterId}
+                onChange={(e) => setMonthlyCostCenterId(e.target.value)}
+              >
+                <option value="">Todos</option>
+                {meta.costCenters.filter((center) => center.active).map((center) => (
+                  <option key={center.id} value={center.id}>{center.name}</option>
+                ))}
+              </select>
+            </div>
+            <label className="flex items-end gap-2 pb-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={monthlyIncludeEmpty}
+                onChange={(e) => setMonthlyIncludeEmpty(e.target.checked)}
+              />
+              Mostrar centros sin movimientos
+            </label>
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-[2100px] w-full border-collapse text-xs">
@@ -1177,7 +1303,7 @@ export default function AdminExpenses() {
                 {monthlyLoading ? (
                   <tr><td colSpan={26} className="px-4 py-8 text-center text-slate-500">Cargando planilla...</td></tr>
                 ) : monthlyData.rows.length ? monthlyData.rows.map((row) => (
-                  <tr key={row.detail} className="border-t hover:bg-slate-50">
+                  <tr key={row.cost_center_id || row.detail} className="border-t hover:bg-slate-50">
                     <td className="border border-slate-300 bg-slate-800 px-3 py-2 font-medium text-white">{row.detail}</td>
                     {row.months.flatMap((month) => [
                       <td key={`${row.detail}-${month.month}-pay`} className="border border-slate-300 px-2 py-2 text-right">{fmtCurrencyAmount(month.to_pay, monthlyCurrency)}</td>,
@@ -1186,7 +1312,7 @@ export default function AdminExpenses() {
                     <td className="border border-slate-300 bg-lime-900 px-3 py-2 text-right font-semibold text-white">{fmtCurrencyAmount(row.total_paid, monthlyCurrency)}</td>
                   </tr>
                 )) : (
-                  <tr><td colSpan={26} className="px-4 py-8 text-center text-slate-500">Sin gastos para el a?o y moneda seleccionados.</td></tr>
+                  <tr><td colSpan={26} className="px-4 py-8 text-center text-slate-500">Sin gastos para los filtros seleccionados.</td></tr>
                 )}
               </tbody>
               <tfoot>
@@ -1283,7 +1409,7 @@ export default function AdminExpenses() {
             )}
           </div>
           <div>
-            <label className="text-xs text-slate-500">Categoria</label>
+            <label className="text-xs text-slate-500">Categoría *</label>
             <select
               className="mt-1 w-full border rounded px-2 py-1 text-sm"
               value={form.category_id}
@@ -1302,7 +1428,7 @@ export default function AdminExpenses() {
             </select>
           </div>
           <div>
-            <label className="text-xs text-slate-500">Subcategoria</label>
+            <label className="text-xs text-slate-500">Subcategoría *</label>
             <select
               className="mt-1 w-full border rounded px-2 py-1 text-sm"
               value={form.subcategory_id}
@@ -1317,14 +1443,14 @@ export default function AdminExpenses() {
             </select>
           </div>
           <div>
-            <label className="text-xs text-slate-500">Centro de costo</label>
+            <label className="text-xs text-slate-500">Centro de costo *</label>
             <select
               className="mt-1 w-full border rounded px-2 py-1 text-sm"
               value={form.cost_center_id}
               onChange={(e) => setForm((f) => ({ ...f, cost_center_id: e.target.value }))}
             >
               <option value="">Seleccionar</option>
-              {meta.costCenters.map((c) => (
+              {meta.costCenters.filter((c) => c.active).map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
                 </option>
