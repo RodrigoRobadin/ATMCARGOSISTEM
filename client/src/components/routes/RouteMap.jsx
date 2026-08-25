@@ -1,189 +1,49 @@
-// client/src/components/routes/RouteMap.jsx
 import React, { useMemo } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
+import { MapContainer, Marker, Polyline, Popup, TileLayer } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// Fix para los iconos de Leaflet en Vite/Webpack
-delete L.Icon.Default.prototype._getIconUrl;
-L.Icon.Default.mergeOptions({
-    iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-    iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-});
+function coordinates(stop) {
+  const latitude = Number(stop.latitude_snapshot ?? stop.latitude);
+  const longitude = Number(stop.longitude_snapshot ?? stop.longitude);
+  return Number.isFinite(latitude) && Number.isFinite(longitude) ? [latitude, longitude] : null;
+}
 
-export default function RouteMap({ stops = [], zoneColor = '#3B82F6' }) {
-    // Crear iconos numerados personalizados
-    const createNumberedIcon = (number, status) => {
-        const color = status === 'completada' ? '#10B981' :
-            status === 'cancelada' ? '#6B7280' :
-                '#3B82F6';
+function numberedIcon(number, status) {
+  const color = status === 'completada' || status === 'completed'
+    ? '#047857'
+    : status === 'cancelada' || status === 'cancelled'
+      ? '#64748b'
+      : '#0f766e';
+  return L.divIcon({
+    className: '',
+    html: '<div style="width:30px;height:30px;border-radius:50%;background:' + color + ';border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;color:white;font-weight:700">' + number + '</div>',
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+    popupAnchor: [0, -15],
+  });
+}
 
-        return L.divIcon({
-            className: 'custom-marker',
-            html: `
-                <div style="
-                    background-color: ${color};
-                    width: 32px;
-                    height: 32px;
-                    border-radius: 50%;
-                    border: 3px solid white;
-                    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    color: white;
-                    font-weight: bold;
-                    font-size: 14px;
-                ">
-                    ${number}
-                </div>
-            `,
-            iconSize: [32, 32],
-            iconAnchor: [16, 16],
-            popupAnchor: [0, -16],
-        });
-    };
+export default function RouteMap({ stops = [] }) {
+  const locatedStops = useMemo(() => stops.map((stop) => ({ ...stop, point: coordinates(stop) })).filter((stop) => stop.point), [stops]);
+  const bounds = locatedStops.length > 1 ? locatedStops.map((stop) => stop.point) : undefined;
+  const center = locatedStops[0]?.point || [-25.3, -57.57];
+  const line = locatedStops.map((stop) => stop.point);
 
-    // Filtrar paradas con coordenadas válidas
-    const validStops = useMemo(() => {
-        return stops.filter(stop =>
-            stop.latitude &&
-            stop.longitude &&
-            !isNaN(parseFloat(stop.latitude)) &&
-            !isNaN(parseFloat(stop.longitude))
-        );
-    }, [stops]);
+  if (!locatedStops.length) {
+    return <div className="rounded border border-dashed p-10 text-center">
+      <div className="font-medium text-gray-700">Sin coordenadas exactas</div>
+      <div className="mt-1 text-sm text-gray-500">El recorrido puede planificarse por ciudad, pero necesita latitud y longitud para dibujar las paradas.</div>
+    </div>;
+  }
 
-    // Calcular centro y bounds del mapa
-    const { center, bounds } = useMemo(() => {
-        if (validStops.length === 0) {
-            // Centro de Paraguay por defecto
-            return {
-                center: [-23.4425, -58.4438],
-                bounds: null
-            };
-        }
-
-        if (validStops.length === 1) {
-            return {
-                center: [parseFloat(validStops[0].latitude), parseFloat(validStops[0].longitude)],
-                bounds: null
-            };
-        }
-
-        // Calcular bounds para incluir todas las paradas
-        const lats = validStops.map(s => parseFloat(s.latitude));
-        const lngs = validStops.map(s => parseFloat(s.longitude));
-
-        return {
-            center: [
-                (Math.min(...lats) + Math.max(...lats)) / 2,
-                (Math.min(...lngs) + Math.max(...lngs)) / 2
-            ],
-            bounds: [
-                [Math.min(...lats), Math.min(...lngs)],
-                [Math.max(...lats), Math.max(...lngs)]
-            ]
-        };
-    }, [validStops]);
-
-    // Crear líneas de ruta
-    const routeLines = useMemo(() => {
-        if (validStops.length < 2) return [];
-
-        return validStops.map((stop, index) => {
-            if (index === validStops.length - 1) return null;
-
-            const nextStop = validStops[index + 1];
-            return [
-                [parseFloat(stop.latitude), parseFloat(stop.longitude)],
-                [parseFloat(nextStop.latitude), parseFloat(nextStop.longitude)]
-            ];
-        }).filter(Boolean);
-    }, [validStops]);
-
-    if (validStops.length === 0) {
-        return (
-            <div className="bg-gray-50 rounded-lg p-8 text-center">
-                <div className="text-gray-400 text-4xl mb-2">🗺️</div>
-                <p className="text-gray-600 font-medium">No hay paradas con ubicación</p>
-                <p className="text-sm text-gray-500 mt-1">
-                    Agrega coordenadas (latitud/longitud) a las organizaciones para verlas en el mapa
-                </p>
-            </div>
-        );
-    }
-
-    return (
-        <div className="rounded-lg overflow-hidden border shadow-sm">
-            <MapContainer
-                center={center}
-                zoom={bounds ? undefined : 7}
-                bounds={bounds}
-                boundsOptions={{ padding: [50, 50] }}
-                style={{ height: '500px', width: '100%' }}
-                scrollWheelZoom={true}
-            >
-                <TileLayer
-                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                />
-
-                {validStops.map((stop) => (
-                    <Marker
-                        key={stop.id}
-                        position={[parseFloat(stop.latitude), parseFloat(stop.longitude)]}
-                        icon={createNumberedIcon(stop.stop_order, stop.status)}
-                    >
-                        <Popup>
-                            <div className="p-2">
-                                <div className="font-bold text-lg mb-1">
-                                    {stop.stop_order}. {stop.organization_name}
-                                </div>
-                                {stop.city && (
-                                    <div className="text-sm text-gray-600">
-                                        📍 {stop.city}{stop.department && `, ${stop.department}`}
-                                    </div>
-                                )}
-                                {stop.address && (
-                                    <div className="text-sm text-gray-600 mt-1">
-                                        {stop.address}
-                                    </div>
-                                )}
-                                {stop.notes && (
-                                    <div className="text-sm text-gray-700 mt-2 italic">
-                                        "{stop.notes}"
-                                    </div>
-                                )}
-                                <div className="mt-2">
-                                    <span className={`text-xs px-2 py-1 rounded ${stop.status === 'completada' ? 'bg-green-100 text-green-700' :
-                                            stop.status === 'cancelada' ? 'bg-gray-100 text-gray-700' :
-                                                'bg-blue-100 text-blue-700'
-                                        }`}>
-                                        {stop.status === 'completada' ? '✓ Completada' :
-                                            stop.status === 'cancelada' ? '✕ Cancelada' :
-                                                'Pendiente'}
-                                    </span>
-                                </div>
-                            </div>
-                        </Popup>
-                    </Marker>
-                ))}
-
-                {routeLines.map((line, index) => (
-                    <Polyline
-                        key={index}
-                        positions={line}
-                        pathOptions={{
-                            color: zoneColor,
-                            weight: 3,
-                            opacity: 0.7,
-                            dashArray: '10, 10'
-                        }}
-                    />
-                ))}
-            </MapContainer>
-        </div>
-    );
+  return <div className="overflow-hidden rounded border">
+    <MapContainer center={center} zoom={locatedStops.length === 1 ? 13 : 10} bounds={bounds} boundsOptions={{ padding: [35, 35] }} style={{ height: 430, width: '100%' }} scrollWheelZoom>
+      <TileLayer attribution="&copy; OpenStreetMap" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+      {locatedStops.map((stop) => <Marker key={stop.id || stop.location_key} position={stop.point} icon={numberedIcon(stop.stop_order || locatedStops.indexOf(stop) + 1, stop.status || stop.visit_status)}>
+        <Popup><div className="min-w-[190px]"><strong>{stop.organization_name}</strong><div>{stop.branch_name || stop.location_name || 'Casa matriz'}</div><div>{stop.address_snapshot || stop.address || ''}</div></div></Popup>
+      </Marker>)}
+      {line.length > 1 && <Polyline positions={line} pathOptions={{ color: '#0f766e', weight: 4, opacity: 0.75 }} />}
+    </MapContainer>
+  </div>;
 }

@@ -1,402 +1,198 @@
-// client/src/components/routes/RouteDetail.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
 import RouteForm from './RouteForm';
 import RouteMap from './RouteMap';
 
+const labels = { borrador: 'Borrador', planificado: 'Planificado', en_curso: 'En curso', completado: 'Completado', cancelado: 'Cancelado' };
+const colors = { borrador: 'bg-gray-100 text-gray-700', planificado: 'bg-blue-100 text-blue-800', en_curso: 'bg-amber-100 text-amber-800', completado: 'bg-emerald-100 text-emerald-800', cancelado: 'bg-red-100 text-red-700' };
+
+function dateOnly(value) {
+  return String(value || '').slice(0, 10);
+}
+
 export default function RouteDetail({ routeId, onClose, onUpdate }) {
-    const { user } = useAuth();
-    const [route, setRoute] = useState(null);
-    const [loading, setLoading] = useState(true);
-    const [showEditForm, setShowEditForm] = useState(false);
-    const [organizations, setOrganizations] = useState([]);
-    const [selectedOrg, setSelectedOrg] = useState('');
-    const [addingStop, setAddingStop] = useState(false);
+  const { user } = useAuth();
+  const [route, setRoute] = useState(null);
+  const [candidates, setCandidates] = useState([]);
+  const [candidateKey, setCandidateKey] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
 
-    useEffect(() => {
-        loadRouteDetail();
-    }, [routeId]);
-
-    async function loadRouteDetail() {
-        setLoading(true);
-        try {
-            const [routeRes, orgsRes] = await Promise.all([
-                api.get(`/routes/${routeId}`),
-                api.get('/organizations')
-            ]);
-
-            setRoute(routeRes.data);
-            setOrganizations(orgsRes.data || []);
-        } catch (err) {
-            console.error('Error loading route detail:', err);
-            alert('Error al cargar el recorrido');
-        } finally {
-            setLoading(false);
-        }
+  async function loadRoute() {
+    setLoading(true);
+    try {
+      const { data } = await api.get('/routes/' + routeId);
+      setRoute(data);
+      if (data.status === 'borrador' && data.cities?.length) {
+        const candidateResponse = await api.get('/routes/candidates', { params: { city_ids: data.cities.map((city) => city.id).join(',') } });
+        setCandidates(candidateResponse.data || []);
+      } else {
+        setCandidates([]);
+      }
+    } catch (error) {
+      alert(error.response?.data?.error || 'No se pudo cargar el recorrido.');
+      onClose?.();
+    } finally {
+      setLoading(false);
     }
+  }
 
-    async function handleAddStop() {
-        if (!selectedOrg) {
-            alert('Selecciona una organización');
-            return;
-        }
+  useEffect(() => { loadRoute(); }, [routeId]);
 
-        setAddingStop(true);
-        try {
-            await api.post(`/routes/${routeId}/stops`, {
-                organization_id: parseInt(selectedOrg),
-                stop_order: (route.stops?.length || 0) + 1,
-            });
+  const canEdit = route && (String(user?.role || '').toLowerCase() === 'admin' || Number(user?.id) === Number(route.user_id));
+  const availableCandidates = useMemo(() => candidates.filter((candidate) => !(route?.stops || []).some((stop) =>
+    Number(stop.organization_id) === Number(candidate.organization_id) &&
+    Number(stop.org_branch_id || 0) === Number(candidate.org_branch_id || 0)
+  )), [candidates, route?.stops]);
 
-            setSelectedOrg('');
-            await loadRouteDetail();
-            alert('Parada agregada correctamente');
-        } catch (err) {
-            console.error('Error adding stop:', err);
-            alert(err.response?.data?.error || 'Error al agregar parada');
-        } finally {
-            setAddingStop(false);
-        }
+  const mapsUrl = useMemo(() => {
+    const points = (route?.stops || []).map((stop) => {
+      const lat = Number(stop.latitude_snapshot);
+      const lng = Number(stop.longitude_snapshot);
+      return Number.isFinite(lat) && Number.isFinite(lng) ? lat + ',' + lng : null;
+    }).filter(Boolean);
+    if (!points.length) return '';
+    const destination = points[points.length - 1];
+    const waypoints = points.slice(0, -1).join('|');
+    return 'https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=' + encodeURIComponent(destination) + (waypoints ? '&waypoints=' + encodeURIComponent(waypoints) : '');
+  }, [route?.stops]);
+
+  async function addStop() {
+    const candidate = availableCandidates.find((row) => row.location_key === candidateKey);
+    if (!candidate) return;
+    setBusy(true);
+    try {
+      await api.post('/routes/' + route.id + '/stops', {
+        organization_id: candidate.organization_id,
+        org_branch_id: candidate.org_branch_id,
+        city_id: candidate.city_id,
+      });
+      setCandidateKey('');
+      await loadRoute();
+      onUpdate?.();
+    } catch (error) {
+      alert(error.response?.data?.error || 'No se pudo agregar la parada.');
+    } finally {
+      setBusy(false);
     }
+  }
 
-    async function handleDeleteStop(stopId) {
-        if (!confirm('¿Estás seguro de eliminar esta parada?')) {
-            return;
-        }
-
-        try {
-            await api.delete(`/routes/${routeId}/stops/${stopId}`);
-            await loadRouteDetail();
-            alert('Parada eliminada correctamente');
-        } catch (err) {
-            console.error('Error deleting stop:', err);
-            alert(err.response?.data?.error || 'Error al eliminar parada');
-        }
+  async function removeStop(stopId) {
+    if (!confirm('Quitar esta parada del borrador?')) return;
+    try {
+      await api.delete('/routes/' + route.id + '/stops/' + stopId);
+      await loadRoute();
+      onUpdate?.();
+    } catch (error) {
+      alert(error.response?.data?.error || 'No se pudo quitar la parada.');
     }
+  }
 
-    async function handleMoveStop(stopId, direction) {
-        const stop = route.stops.find(s => s.id === stopId);
-        if (!stop) return;
-
-        const newOrder = direction === 'up' ? stop.stop_order - 1 : stop.stop_order + 1;
-
-        if (newOrder < 1 || newOrder > route.stops.length) {
-            return;
-        }
-
-        try {
-            await api.patch(`/routes/${routeId}/stops/${stopId}/order`, { new_order: newOrder });
-            await loadRouteDetail();
-        } catch (err) {
-            console.error('Error reordering stop:', err);
-            alert('Error al reordenar parada');
-        }
+  async function moveStop(stop, direction) {
+    const newOrder = Number(stop.stop_order) + direction;
+    if (newOrder < 1 || newOrder > route.stops.length) return;
+    try {
+      await api.patch('/routes/' + route.id + '/stops/' + stop.id + '/order', { new_order: newOrder });
+      await loadRoute();
+    } catch (error) {
+      alert(error.response?.data?.error || 'No se pudo reordenar.');
     }
+  }
 
-    async function handleChangeStatus(newStatus) {
-        try {
-            await api.patch(`/routes/${routeId}/status`, { status: newStatus });
-            await loadRouteDetail();
-            if (onUpdate) onUpdate();
-            alert('Estado actualizado correctamente');
-        } catch (err) {
-            console.error('Error changing status:', err);
-            alert('Error al cambiar estado');
-        }
+  async function confirmRoute() {
+    if (!confirm('Esto creara una visita programada por cada parada. Continuar?')) return;
+    setBusy(true);
+    try {
+      await api.post('/routes/' + route.id + '/confirm');
+      await loadRoute();
+      onUpdate?.();
+    } catch (error) {
+      alert(error.response?.data?.error || 'No se pudo confirmar el recorrido.');
+    } finally {
+      setBusy(false);
     }
+  }
 
-    async function handleDeleteRoute() {
-        if (!confirm('¿Estás seguro de eliminar este recorrido? Esta acción no se puede deshacer.')) {
-            return;
-        }
-
-        try {
-            await api.delete(`/routes/${routeId}`);
-            alert('Recorrido eliminado correctamente');
-            if (onUpdate) onUpdate();
-            if (onClose) onClose();
-        } catch (err) {
-            console.error('Error deleting route:', err);
-            alert('Error al eliminar recorrido');
-        }
+  async function setStatus(status) {
+    setBusy(true);
+    try {
+      await api.patch('/routes/' + route.id + '/status', { status });
+      await loadRoute();
+      onUpdate?.();
+    } catch (error) {
+      alert(error.response?.data?.error || 'No se pudo cambiar el estado.');
+    } finally {
+      setBusy(false);
     }
+  }
 
-    function getStatusBadge(status) {
-        const styles = {
-            planificado: 'bg-blue-100 text-blue-700',
-            en_curso: 'bg-yellow-100 text-yellow-700',
-            completado: 'bg-green-100 text-green-700',
-            cancelado: 'bg-gray-100 text-gray-700',
-        };
-
-        const labels = {
-            planificado: 'Planificado',
-            en_curso: 'En Curso',
-            completado: 'Completado',
-            cancelado: 'Cancelado',
-        };
-
-        return (
-            <span className={`px-3 py-1 rounded-full text-sm font-medium ${styles[status] || styles.planificado}`}>
-                {labels[status] || status}
-            </span>
-        );
+  async function deleteRoute() {
+    if (!confirm('Eliminar este borrador?')) return;
+    try {
+      await api.delete('/routes/' + route.id);
+      onUpdate?.();
+      onClose?.();
+    } catch (error) {
+      alert(error.response?.data?.error || 'No se pudo eliminar.');
     }
+  }
 
-    function formatDate(dateStr) {
-        if (!dateStr) return '—';
-        return new Date(dateStr).toLocaleDateString('es-PY');
-    }
+  if (loading) return <div className="rounded bg-white p-16 text-center text-gray-500">Cargando recorrido...</div>;
+  if (!route) return null;
+  if (showEdit) return <div className="overflow-hidden rounded bg-white"><RouteForm editRoute={route} onCancel={() => setShowEdit(false)}
+    onSuccess={() => { setShowEdit(false); loadRoute(); onUpdate?.(); }} /></div>;
 
-    const isAdmin = (user?.role || '').toLowerCase() === 'admin';
-    const isOwner = route && Number(user?.id) === Number(route.user_id);
-    const canEdit = isAdmin || isOwner;
-
-    // Filtrar organizaciones de la misma zona
-    const availableOrgs = organizations.filter(org =>
-        org.zone_id === route?.zone_id &&
-        !route?.stops?.some(stop => stop.organization_id === org.id)
-    );
-
-    if (loading) {
-        return (
-            <div className="flex justify-center items-center p-8">
-                <div className="text-gray-500">Cargando recorrido...</div>
-            </div>
-        );
-    }
-
-    if (!route) {
-        return (
-            <div className="text-center p-8">
-                <p className="text-gray-600">Recorrido no encontrado</p>
-            </div>
-        );
-    }
-
-    if (showEditForm) {
-        return (
-            <RouteForm
-                editRoute={route}
-                onSuccess={() => {
-                    setShowEditForm(false);
-                    loadRouteDetail();
-                    if (onUpdate) onUpdate();
-                }}
-                onCancel={() => setShowEditForm(false)}
-            />
-        );
-    }
-
-    return (
-        <div className="bg-white rounded-lg shadow-lg max-w-4xl mx-auto">
-            {/* Header */}
-            <div className="p-6 border-b">
-                <div className="flex items-start justify-between mb-4">
-                    <div className="flex-1">
-                        <h2 className="text-2xl font-bold mb-2">{route.name}</h2>
-                        <div className="flex items-center gap-4 text-sm text-gray-600">
-                            <div className="flex items-center gap-2">
-                                <span
-                                    className="inline-block w-4 h-4 rounded-full"
-                                    style={{ backgroundColor: route.zone_color || '#3B82F6' }}
-                                />
-                                <span>{route.zone_name}</span>
-                            </div>
-                            <div>👤 {route.user_name}</div>
-                            <div>📅 {formatDate(route.start_date)} - {formatDate(route.end_date)}</div>
-                        </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        {getStatusBadge(route.status)}
-                        {onClose && (
-                            <button
-                                onClick={onClose}
-                                className="text-gray-500 hover:text-gray-700 text-2xl leading-none"
-                            >
-                                ✕
-                            </button>
-                        )}
-                    </div>
-                </div>
-
-                {route.notes && (
-                    <div className="mt-4 p-3 bg-gray-50 rounded">
-                        <p className="text-sm text-gray-700">{route.notes}</p>
-                    </div>
-                )}
-            </div>
-
-            {/* Actions */}
-            {canEdit && (
-                <div className="p-4 border-b bg-gray-50 flex flex-wrap gap-2">
-                    <button
-                        onClick={() => setShowEditForm(true)}
-                        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
-                    >
-                        ✏️ Editar
-                    </button>
-
-                    {route.status === 'planificado' && (
-                        <button
-                            onClick={() => handleChangeStatus('en_curso')}
-                            className="px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700 text-sm"
-                        >
-                            ▶️ Iniciar
-                        </button>
-                    )}
-
-                    {route.status === 'en_curso' && (
-                        <button
-                            onClick={() => handleChangeStatus('completado')}
-                            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm"
-                        >
-                            ✓ Completar
-                        </button>
-                    )}
-
-                    {route.status !== 'cancelado' && (
-                        <button
-                            onClick={() => handleChangeStatus('cancelado')}
-                            className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm"
-                        >
-                            ✕ Cancelar
-                        </button>
-                    )}
-
-                    <button
-                        onClick={handleDeleteRoute}
-                        className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-sm ml-auto"
-                    >
-                        🗑️ Eliminar Recorrido
-                    </button>
-                </div>
-            )}
-
-            {/* Stops Section */}
-            <div className="p-6">
-                <h3 className="text-xl font-bold mb-4">
-                    📍 Paradas ({route.stops?.length || 0})
-                </h3>
-
-                {/* Add Stop */}
-                {canEdit && route.status !== 'completado' && route.status !== 'cancelado' && (
-                    <div className="mb-6 p-4 bg-green-50 rounded-lg">
-                        <h4 className="font-semibold mb-2">Agregar Parada</h4>
-                        <div className="flex gap-2">
-                            <select
-                                className="flex-1 border rounded px-3 py-2"
-                                value={selectedOrg}
-                                onChange={(e) => setSelectedOrg(e.target.value)}
-                                disabled={addingStop}
-                            >
-                                <option value="">Seleccionar organización...</option>
-                                {availableOrgs.map(org => (
-                                    <option key={org.id} value={org.id}>
-                                        {org.name} - {org.city || 'Sin ciudad'}
-                                    </option>
-                                ))}
-                            </select>
-                            <button
-                                onClick={handleAddStop}
-                                disabled={!selectedOrg || addingStop}
-                                className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400"
-                            >
-                                {addingStop ? 'Agregando...' : '+ Agregar'}
-                            </button>
-                        </div>
-                        {availableOrgs.length === 0 && (
-                            <p className="text-sm text-gray-500 mt-2">
-                                No hay más organizaciones disponibles en esta zona
-                            </p>
-                        )}
-                    </div>
-                )}
-
-                {/* Stops List */}
-                {route.stops && route.stops.length > 0 ? (
-                    <div className="space-y-2">
-                        {route.stops.map((stop, index) => (
-                            <div
-                                key={stop.id}
-                                className="flex items-center gap-3 p-4 border rounded hover:bg-gray-50"
-                            >
-                                <div className="flex flex-col gap-1">
-                                    <button
-                                        onClick={() => handleMoveStop(stop.id, 'up')}
-                                        disabled={index === 0 || !canEdit}
-                                        className="text-gray-400 hover:text-gray-600 disabled:opacity-30"
-                                    >
-                                        ▲
-                                    </button>
-                                    <button
-                                        onClick={() => handleMoveStop(stop.id, 'down')}
-                                        disabled={index === route.stops.length - 1 || !canEdit}
-                                        className="text-gray-400 hover:text-gray-600 disabled:opacity-30"
-                                    >
-                                        ▼
-                                    </button>
-                                </div>
-
-                                <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold">
-                                    {stop.stop_order}
-                                </div>
-
-                                <div className="flex-1">
-                                    <div className="font-semibold">{stop.organization_name}</div>
-                                    <div className="text-sm text-gray-600">
-                                        {stop.city && `${stop.city}, `}
-                                        {stop.department || 'Sin ubicación'}
-                                    </div>
-                                    {stop.notes && (
-                                        <div className="text-xs text-gray-500 mt-1">{stop.notes}</div>
-                                    )}
-                                </div>
-
-                                <div className="text-sm">
-                                    <span className={`px-2 py-1 rounded text-xs ${stop.status === 'completada' ? 'bg-green-100 text-green-700' :
-                                        stop.status === 'cancelada' ? 'bg-gray-100 text-gray-700' :
-                                            'bg-blue-100 text-blue-700'
-                                        }`}>
-                                        {stop.status === 'completada' ? '✓ Completada' :
-                                            stop.status === 'cancelada' ? '✕ Cancelada' :
-                                                'Pendiente'}
-                                    </span>
-                                </div>
-
-                                {canEdit && route.status !== 'completado' && (
-                                    <button
-                                        onClick={() => handleDeleteStop(stop.id)}
-                                        className="text-red-600 hover:text-red-800 px-2"
-                                    >
-                                        🗑️
-                                    </button>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                ) : (
-                    <div className="text-center p-8 bg-gray-50 rounded">
-                        <div className="text-gray-400 text-4xl mb-2">📍</div>
-                        <p className="text-gray-600">No hay paradas en este recorrido</p>
-                        <p className="text-sm text-gray-500 mt-1">
-                            Agrega organizaciones para planificar tu recorrido
-                        </p>
-                    </div>
-                )}
-
-                {/* Mapa de Recorrido */}
-                {route.stops && route.stops.length > 0 && (
-                    <div className="mt-6">
-                        <h4 className="text-lg font-bold mb-3">🗺️ Mapa del Recorrido</h4>
-                        <RouteMap
-                            stops={route.stops}
-                            zoneColor={route.zone_color || '#3B82F6'}
-                        />
-                    </div>
-                )}
-            </div>
+  return (
+    <div className="overflow-hidden rounded bg-white shadow-xl">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b p-5">
+        <div><div className="mb-1 flex flex-wrap items-center gap-2"><h2 className="text-xl font-semibold">{route.name}</h2>
+          <span className={"rounded px-2 py-1 text-xs font-medium " + (colors[route.status] || colors.borrador)}>{labels[route.status] || route.status}</span></div>
+          <div className="text-sm text-gray-600">{(route.cities || []).map((city) => city.name).join(', ') || route.legacy_zone_name || 'Recorrido historico'}</div>
+          <div className="mt-1 text-sm text-gray-500">{dateOnly(route.start_date)} a {dateOnly(route.end_date)} · {route.workday_start?.slice(0, 5)} a {route.workday_end?.slice(0, 5)} · {route.user_name || 'Sin ejecutivo'}</div>
         </div>
-    );
+        <button type="button" className="h-9 w-9 rounded border text-xl" onClick={onClose} title="Cerrar">x</button>
+      </div>
+
+      {canEdit && <div className="flex flex-wrap gap-2 border-b bg-gray-50 p-3">
+        <button type="button" className="rounded border bg-white px-3 py-2 text-sm" onClick={() => setShowEdit(true)}>Editar datos</button>
+        {route.status === 'borrador' && <button type="button" className="rounded bg-emerald-700 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" onClick={confirmRoute} disabled={busy}>Confirmar y crear visitas</button>}
+        {route.status === 'planificado' && <button type="button" className="rounded bg-amber-600 px-3 py-2 text-sm font-medium text-white" onClick={() => setStatus('en_curso')}>Iniciar</button>}
+        {route.status === 'en_curso' && <button type="button" className="rounded bg-emerald-700 px-3 py-2 text-sm font-medium text-white" onClick={() => setStatus('completado')}>Completar recorrido</button>}
+        {!['completado', 'cancelado'].includes(route.status) && <button type="button" className="rounded border border-red-300 bg-white px-3 py-2 text-sm text-red-700" onClick={() => setStatus('cancelado')}>Cancelar</button>}
+        {route.status === 'borrador' && <button type="button" className="ml-auto rounded border border-red-300 bg-white px-3 py-2 text-sm text-red-700" onClick={deleteRoute}>Eliminar borrador</button>}
+        {mapsUrl && <a className="rounded border bg-white px-3 py-2 text-sm font-medium text-emerald-800" href={mapsUrl} target="_blank" rel="noreferrer">Abrir en Google Maps</a>}
+      </div>}
+
+      <div className="space-y-5 p-5">
+        {route.notes && <div className="border-l-4 border-gray-300 pl-3 text-sm text-gray-700">{route.notes}</div>}
+
+        {route.status === 'borrador' && canEdit && <div className="flex flex-wrap gap-2 rounded border bg-gray-50 p-3">
+          <select className="min-w-[280px] flex-1 rounded border bg-white px-3 py-2 text-sm" value={candidateKey} onChange={(e) => setCandidateKey(e.target.value)}>
+            <option value="">Agregar empresa o sucursal...</option>
+            {availableCandidates.map((row) => <option key={row.location_key} value={row.location_key}>{row.organization_name} - {row.location_name} ({row.city_name})</option>)}
+          </select>
+          <button type="button" className="rounded border bg-white px-4 py-2 text-sm font-medium disabled:opacity-50" onClick={addStop} disabled={!candidateKey || busy}>+ Agregar</button>
+        </div>}
+
+        <div className="overflow-x-auto rounded border">
+          <table className="min-w-full text-left text-sm">
+            <thead className="bg-gray-100"><tr><th className="p-2">Orden</th><th className="p-2">Empresa / ubicacion</th><th className="p-2">Contacto</th><th className="p-2">Agenda</th><th className="p-2">Estado</th><th className="p-2"></th></tr></thead>
+            <tbody>{(route.stops || []).map((stop, index) => <tr key={stop.id} className="border-t">
+              <td className="whitespace-nowrap p-2">{route.status === 'borrador' && canEdit ? <><button type="button" className="h-7 w-7 rounded border" disabled={!index} onClick={() => moveStop(stop, -1)}>↑</button><button type="button" className="ml-1 h-7 w-7 rounded border" disabled={index === route.stops.length - 1} onClick={() => moveStop(stop, 1)}>↓</button></> : stop.stop_order}</td>
+              <td className="p-2"><strong>{stop.organization_name}</strong><div className="text-xs text-gray-500">{stop.branch_name || stop.location_name || 'Casa matriz'} · {stop.city_name || 'Sin ciudad'}</div><div className="max-w-[340px] truncate text-xs text-gray-500">{stop.address_snapshot || '-'}</div></td>
+              <td className="p-2">{stop.contact_name || 'Sin definir'}{stop.contact_phone && <div className="text-xs text-gray-500">{stop.contact_phone}</div>}</td>
+              <td className="whitespace-nowrap p-2">{dateOnly(stop.planned_date)} {String(stop.planned_time || '').slice(0, 5)}<div className="text-xs text-gray-500">{stop.duration_minutes || 60} min</div></td>
+              <td className="p-2">{stop.visit_status ? labels[stop.visit_status] || stop.visit_status : stop.status || 'Pendiente'}</td>
+              <td className="p-2 text-right">{route.status === 'borrador' && canEdit && <button type="button" className="rounded border px-2 py-1 text-red-700" onClick={() => removeStop(stop.id)}>Quitar</button>}</td>
+            </tr>)}</tbody>
+          </table>
+          {!route.stops?.length && <div className="p-8 text-center text-gray-500">Este recorrido todavia no tiene paradas.</div>}
+        </div>
+
+        <div><h3 className="mb-2 font-semibold">Mapa del recorrido</h3><RouteMap stops={route.stops || []} /></div>
+      </div>
+    </div>
+  );
 }

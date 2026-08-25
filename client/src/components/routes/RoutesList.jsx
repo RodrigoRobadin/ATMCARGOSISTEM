@@ -1,235 +1,139 @@
-// client/src/components/routes/RoutesList.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { api } from '../../api';
-import RouteForm from './RouteForm';
+import { useAuth } from '../../auth';
+import RouteCoverage from './RouteCoverage';
 import RouteDetail from './RouteDetail';
+import RouteForm from './RouteForm';
+import RouteLocationsAdmin from './RouteLocationsAdmin';
 
-export default function RoutesList({ onSelectRoute, userId = '' }) {
-    const [routes, setRoutes] = useState([]);
-    const [zones, setZones] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [filterZone, setFilterZone] = useState('');
-    const [filterStatus, setFilterStatus] = useState('');
-    const [showForm, setShowForm] = useState(false);
-    const [selectedRouteId, setSelectedRouteId] = useState(null);
-    useEffect(() => {
-        loadData();
-    }, [filterZone, filterStatus, userId]);
+const statusLabels = {
+  borrador: 'Borrador',
+  planificado: 'Planificado',
+  en_curso: 'En curso',
+  completado: 'Completado',
+  cancelado: 'Cancelado',
+};
 
-    async function loadData() {
-        setLoading(true);
-        try {
-            const params = {};
-            if (filterZone) params.zone_id = filterZone;
-            if (filterStatus) params.status = filterStatus;
-            if (userId) params.user_id = userId;
+const statusStyles = {
+  borrador: 'bg-gray-100 text-gray-700',
+  planificado: 'bg-blue-100 text-blue-800',
+  en_curso: 'bg-amber-100 text-amber-800',
+  completado: 'bg-emerald-100 text-emerald-800',
+  cancelado: 'bg-red-100 text-red-700',
+};
 
-            const [routesRes, zonesRes] = await Promise.all([
-                api.get('/routes', { params }),
-                api.get('/zones')
-            ]);
+function formatDate(value) {
+  if (!value) return '-';
+  return new Date(String(value).slice(0, 10) + 'T12:00:00').toLocaleDateString('es-PY');
+}
 
-            setRoutes(routesRes.data || []);
-            setZones(zonesRes.data || []);
-        } catch (err) {
-            console.error('Error loading routes:', err);
-            alert('Error al cargar recorridos');
-        } finally {
-            setLoading(false);
-        }
+export default function RoutesList({ userId = '' }) {
+  const { user } = useAuth();
+  const isAdmin = String(user?.role || '').toLowerCase() === 'admin';
+  const [view, setView] = useState('routes');
+  const [routes, setRoutes] = useState([]);
+  const [cities, setCities] = useState([]);
+  const [filters, setFilters] = useState({ city_id: '', status: '' });
+  const [loading, setLoading] = useState(true);
+  const [showPlanner, setShowPlanner] = useState(false);
+  const [plannerSeed, setPlannerSeed] = useState(null);
+  const [selectedRouteId, setSelectedRouteId] = useState(null);
+
+  async function loadData() {
+    setLoading(true);
+    try {
+      const params = {};
+      if (filters.city_id) params.city_id = filters.city_id;
+      if (filters.status) params.status = filters.status;
+      if (userId) params.user_id = userId;
+      const [routesResponse, citiesResponse] = await Promise.all([
+        api.get('/routes', { params }),
+        api.get('/cities'),
+      ]);
+      setRoutes(routesResponse.data || []);
+      setCities(citiesResponse.data || []);
+    } catch (error) {
+      alert(error.response?.data?.error || 'No se pudieron cargar los recorridos.');
+    } finally {
+      setLoading(false);
     }
+  }
 
-    function getStatusBadge(status) {
-        const styles = {
-            planificado: 'bg-blue-100 text-blue-700',
-            en_curso: 'bg-yellow-100 text-yellow-700',
-            completado: 'bg-green-100 text-green-700',
-            cancelado: 'bg-gray-100 text-gray-700',
-        };
+  useEffect(() => { loadData(); }, [filters.city_id, filters.status, userId]);
 
-        const labels = {
-            planificado: 'Planificado',
-            en_curso: 'En Curso',
-            completado: 'Completado',
-            cancelado: 'Cancelado',
-        };
+  function planLocation(location) {
+    setPlannerSeed(location);
+    setShowPlanner(true);
+  }
 
-        return (
-            <span className={`px-2 py-1 rounded-full text-xs font-medium ${styles[status] || styles.planificado}`}>
-                {labels[status] || status}
-            </span>
-        );
-    }
+  const tabs = [
+    ['routes', 'Recorridos'],
+    ['coverage', 'Mapa de cobertura'],
+    ...(isAdmin ? [['locations', 'Ubicaciones']] : []),
+  ];
 
-    function formatDate(dateStr) {
-        if (!dateStr) return '—';
-        return new Date(dateStr).toLocaleDateString('es-PY');
-    }
-
-    if (loading) {
-        return (
-            <div className="flex justify-center items-center p-8">
-                <div className="text-gray-500">Cargando recorridos...</div>
-            </div>
-        );
-    }
-
-    return (
-        <div className="space-y-4">
-            {/* Header con filtros */}
-            <div className="bg-white rounded-lg shadow p-4">
-                <div className="flex flex-wrap gap-4 items-end">
-                    <div className="flex-1 min-w-[200px]">
-                        <h2 className="text-xl font-bold mb-2">🗺️ Mis Recorridos</h2>
-                        <p className="text-sm text-gray-600">
-                            Gestiona tus recorridos de visitas por zonas
-                        </p>
-                    </div>
-
-                    {/* Filtro por zona */}
-                    <div className="min-w-[150px]">
-                        <label className="block text-xs text-gray-600 mb-1">Zona</label>
-                        <select
-                            className="w-full border rounded px-3 py-2 text-sm"
-                            value={filterZone}
-                            onChange={(e) => setFilterZone(e.target.value)}
-                        >
-                            <option value="">Todas las zonas</option>
-                            {zones.map(zone => (
-                                <option key={zone.id} value={zone.id}>
-                                    {zone.name}
-                                </option>
-                            ))}
-                        </select>
-                    </div>
-
-                    {/* Filtro por estado */}
-                    <div className="min-w-[150px]">
-                        <label className="block text-xs text-gray-600 mb-1">Estado</label>
-                        <select
-                            className="w-full border rounded px-3 py-2 text-sm"
-                            value={filterStatus}
-                            onChange={(e) => setFilterStatus(e.target.value)}
-                        >
-                            <option value="">Todos</option>
-                            <option value="planificado">Planificado</option>
-                            <option value="en_curso">En Curso</option>
-                            <option value="completado">Completado</option>
-                            <option value="cancelado">Cancelado</option>
-                        </select>
-                    </div>
-
-                    {/* Botón nuevo recorrido */}
-                    <button
-                        className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors text-sm font-medium"
-                        onClick={() => setShowForm(true)}
-                    >
-                        + Nuevo Recorrido
-                    </button>
-                </div>
-            </div>
-
-            {/* Lista de recorridos */}
-            {routes.length === 0 ? (
-                <div className="bg-white rounded-lg shadow p-8 text-center">
-                    <div className="text-gray-400 text-4xl mb-2">🗺️</div>
-                    <p className="text-gray-600">No hay recorridos para mostrar</p>
-                    <p className="text-sm text-gray-500 mt-1">
-                        Crea tu primer recorrido para empezar a planificar visitas
-                    </p>
-                </div>
-            ) : (
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    {routes.map(route => (
-                        <div
-                            key={route.id}
-                            className="bg-white rounded-lg shadow hover:shadow-md transition-shadow cursor-pointer"
-                            onClick={() => setSelectedRouteId(route.id)}
-                        >
-                            <div className="p-4">
-                                {/* Header con zona */}
-                                <div className="flex items-start justify-between mb-2">
-                                    <div className="flex-1">
-                                        <h3 className="font-bold text-lg mb-1">{route.name}</h3>
-                                        <div className="flex items-center gap-2 text-sm">
-                                            <span
-                                                className="inline-block w-3 h-3 rounded-full"
-                                                style={{ backgroundColor: route.zone_color || '#3B82F6' }}
-                                            />
-                                            <span className="text-gray-600">{route.zone_name}</span>
-                                        </div>
-                                    </div>
-                                    {getStatusBadge(route.status)}
-                                </div>
-
-                                {/* Información del recorrido */}
-                                <div className="space-y-2 mt-3 text-sm">
-                                    <div className="flex items-center gap-2 text-gray-600">
-                                        <span>👤</span>
-                                        <span>{route.user_name || 'Sin asignar'}</span>
-                                    </div>
-
-                                    <div className="flex items-center gap-2 text-gray-600">
-                                        <span>📅</span>
-                                        <span>
-                                            {formatDate(route.start_date)} - {formatDate(route.end_date)}
-                                        </span>
-                                    </div>
-
-                                    <div className="flex items-center gap-2 text-gray-600">
-                                        <span>📍</span>
-                                        <span>
-                                            {route.stops_count || 0} paradas
-                                            {route.completed_stops > 0 && (
-                                                <span className="ml-1 text-green-600">
-                                                    ({route.completed_stops} completadas)
-                                                </span>
-                                            )}
-                                        </span>
-                                    </div>
-                                </div>
-
-                                {/* Notas (si existen) */}
-                                {route.notes && (
-                                    <div className="mt-3 pt-3 border-t">
-                                        <p className="text-xs text-gray-500 line-clamp-2">
-                                            {route.notes}
-                                        </p>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            )}
-
-            {/* Modal de formulario */}
-            {showForm && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                    <div className="max-w-2xl w-full">
-                        <RouteForm
-                            onSuccess={() => {
-                                setShowForm(false);
-                                loadData();
-                            }}
-                            onCancel={() => setShowForm(false)}
-                        />
-                    </div>
-                </div>
-            )}
-
-            {/* Modal de detalle */}
-            {selectedRouteId && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
-                    <div className="w-full max-w-4xl my-8">
-                        <RouteDetail
-                            routeId={selectedRouteId}
-                            onClose={() => setSelectedRouteId(null)}
-                            onUpdate={() => loadData()}
-                        />
-                    </div>
-                </div>
-            )}
+  return (
+    <div className="space-y-4">
+      <div className="border-b">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3">
+          <div><h2 className="text-xl font-semibold">Recorridos comerciales</h2>
+            <p className="text-sm text-gray-600">Planifica visitas por ciudad y controla la cobertura del equipo.</p></div>
+          <button type="button" className="rounded bg-emerald-700 px-4 py-2 text-sm font-medium text-white"
+            onClick={() => { setPlannerSeed(null); setShowPlanner(true); }}>+ Nuevo recorrido</button>
         </div>
-    );
+        <div className="flex gap-1 overflow-x-auto">
+          {tabs.map(([key, label]) => <button key={key} type="button"
+            className={"whitespace-nowrap border-b-2 px-4 py-2 text-sm font-medium " + (view === key ? 'border-emerald-700 text-emerald-800' : 'border-transparent text-gray-600')}
+            onClick={() => setView(key)}>{label}</button>)}
+        </div>
+      </div>
+
+      {view === 'routes' && <>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="min-w-[220px] text-sm"><span className="mb-1 block text-gray-600">Ciudad</span>
+            <select className="w-full rounded border px-3 py-2" value={filters.city_id} onChange={(e) => setFilters((v) => ({ ...v, city_id: e.target.value }))}>
+              <option value="">Todas las ciudades</option>{cities.map((city) => <option key={city.id} value={city.id}>{city.name}</option>)}
+            </select>
+          </label>
+          <label className="min-w-[180px] text-sm"><span className="mb-1 block text-gray-600">Estado</span>
+            <select className="w-full rounded border px-3 py-2" value={filters.status} onChange={(e) => setFilters((v) => ({ ...v, status: e.target.value }))}>
+              <option value="">Todos</option>{Object.entries(statusLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+            </select>
+          </label>
+          <span className="pb-2 text-sm text-gray-500">{routes.length} recorridos</span>
+        </div>
+
+        {loading ? <div className="py-16 text-center text-gray-500">Cargando recorridos...</div> : !routes.length ?
+          <div className="rounded border border-dashed py-16 text-center"><div className="font-medium">No hay recorridos con estos filtros</div><div className="mt-1 text-sm text-gray-500">Crea un borrador para empezar a ordenar las visitas.</div></div> :
+          <div className="overflow-x-auto rounded border">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-gray-100"><tr><th className="p-3">Recorrido</th><th className="p-3">Ciudades</th><th className="p-3">Ejecutivo</th><th className="p-3">Fechas</th><th className="p-3">Paradas</th><th className="p-3">Estado</th><th className="p-3"></th></tr></thead>
+              <tbody>{routes.map((route) => <tr key={route.id} className="border-t hover:bg-gray-50">
+                <td className="p-3"><strong>{route.name}</strong>{route.notes && <div className="max-w-[300px] truncate text-xs text-gray-500">{route.notes}</div>}</td>
+                <td className="p-3">{route.city_names || route.legacy_zone_name || 'Dato historico sin ciudad'}</td>
+                <td className="p-3">{route.user_name || 'Sin asignar'}</td>
+                <td className="whitespace-nowrap p-3">{formatDate(route.start_date)} - {formatDate(route.end_date)}</td>
+                <td className="p-3">{route.completed_stops || 0} / {route.stops_count || 0}</td>
+                <td className="p-3"><span className={"rounded px-2 py-1 text-xs font-medium " + (statusStyles[route.status] || statusStyles.borrador)}>{statusLabels[route.status] || route.status}</span></td>
+                <td className="p-3 text-right"><button type="button" className="rounded border px-3 py-1.5 font-medium hover:bg-white" onClick={() => setSelectedRouteId(route.id)}>Ver</button></td>
+              </tr>)}</tbody>
+            </table>
+          </div>}
+      </>}
+
+      {view === 'coverage' && <RouteCoverage userId={userId} onPlanLocation={planLocation} />}
+      {view === 'locations' && isAdmin && <RouteLocationsAdmin />}
+
+      {showPlanner && <div className="fixed inset-0 z-[1000] bg-black/45 p-2 sm:p-5">
+        <div className="mx-auto max-w-7xl overflow-hidden rounded bg-white shadow-xl">
+          <RouteForm initialLocation={plannerSeed} onCancel={() => { setShowPlanner(false); setPlannerSeed(null); }}
+            onSuccess={(created) => { setShowPlanner(false); setPlannerSeed(null); loadData(); if (created?.id) setSelectedRouteId(created.id); }} />
+        </div>
+      </div>}
+
+      {selectedRouteId && <div className="fixed inset-0 z-[1000] overflow-y-auto bg-black/45 p-2 sm:p-5">
+        <div className="mx-auto max-w-6xl"><RouteDetail routeId={selectedRouteId} onClose={() => setSelectedRouteId(null)} onUpdate={loadData} /></div>
+      </div>}
+    </div>
+  );
 }

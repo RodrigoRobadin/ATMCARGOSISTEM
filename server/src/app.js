@@ -34,6 +34,7 @@ import visitsRouter from './routes/visits.js';
 
 // ⭐️ NUEVO: Recorridos (Routes Module)
 import zonesRouter from './routes/zones.js';
+import citiesRouter from './routes/cities.js';
 import routesModuleRouter from './routes/routesModule.js';
 
 import routeStopsRouter from './routes/routeStops.js';
@@ -232,6 +233,7 @@ app.use('/api/visits', visitsRouter);
 
 // ⭐️ NUEVO: Recorridos (Routes Module)
 app.use('/api/zones', zonesRouter);
+app.use('/api/cities', citiesRouter);
 app.use('/api/routes', routesModuleRouter);
 app.use('/api/routes', routeStopsRouter);
 

@@ -374,8 +374,9 @@ export default function OrganizationDetail() {
   const [fleteRoutesLoading, setFleteRoutesLoading] = useState(false);
 
   // Sucursales de la organizacion
-  const emptyBranchDraft = { name: '', address: '', city: '', country: '', phone: '', email: '', is_default: 0 };
+  const emptyBranchDraft = { name: '', address: '', city: '', city_id: '', country: '', phone: '', email: '', latitude: '', longitude: '', maps_url: '', is_default: 0 };
   const [branches, setBranches] = useState([]);
+  const [cities, setCities] = useState([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchDraft, setBranchDraft] = useState(emptyBranchDraft);
   const [branchSaving, setBranchSaving] = useState(false);
@@ -434,6 +435,10 @@ export default function OrganizationDetail() {
     }
   }
 
+  async function loadCities() {
+    const { data } = await api.get('/cities');
+    setCities(Array.isArray(data) ? data : []);
+  }
   async function loadBranches() {
     setBranchesLoading(true);
     try {
@@ -456,13 +461,21 @@ export default function OrganizationDetail() {
       name: (branchDraft.name || '').trim(),
       address: (branchDraft.address || '').trim(),
       city: (branchDraft.city || '').trim(),
+      city_id: branchDraft.city_id ? Number(branchDraft.city_id) : null,
       country: (branchDraft.country || '').trim(),
       phone: (branchDraft.phone || '').trim(),
       email: (branchDraft.email || '').trim(),
+      latitude: branchDraft.latitude === '' ? null : Number(branchDraft.latitude),
+      longitude: branchDraft.longitude === '' ? null : Number(branchDraft.longitude),
+      maps_url: (branchDraft.maps_url || '').trim(),
       is_default: branchDraft.is_default ? 1 : 0,
     };
     if (!payload.name && !payload.address) {
       alert('Carga al menos el nombre o la direccion de la sucursal.');
+      return;
+    }
+    if (!payload.city_id) {
+      alert('Selecciona la ciudad de la sucursal.');
       return;
     }
     setBranchSaving(true);
@@ -487,9 +500,13 @@ export default function OrganizationDetail() {
       name: branch.name || '',
       address: branch.address || '',
       city: branch.city || '',
+      city_id: branch.city_id || '',
       country: branch.country || '',
       phone: branch.phone || '',
       email: branch.email || '',
+      latitude: branch.latitude ?? '',
+      longitude: branch.longitude ?? '',
+      maps_url: branch.maps_url || '',
       is_default: branch.is_default ? 1 : 0,
     });
   }
@@ -565,6 +582,7 @@ export default function OrganizationDetail() {
         await loadCustomFields();
         await loadFleteRoutes();
         await loadBranches();
+        await loadCities();
       } catch (e) {
         if (!cancel) setErr('No se pudo cargar la organización.');
       } finally {
@@ -925,6 +943,7 @@ export default function OrganizationDetail() {
                           {[branch.phone, branch.email].filter(Boolean).join(' - ')}
                         </div>
                       )}
+                      {branch.maps_url && <a className="mt-1 inline-block text-xs text-emerald-700 underline" href={branch.maps_url} target="_blank" rel="noreferrer">Abrir ubicacion</a>}
                     </div>
                     <div className="flex shrink-0 gap-2">
                       <button type="button" className="text-xs text-blue-600 hover:underline" onClick={() => editBranch(branch)}>
@@ -946,12 +965,23 @@ export default function OrganizationDetail() {
                   <input className="w-full rounded-lg border px-3 py-2 text-sm" placeholder="Nombre de sucursal" value={branchDraft.name} onChange={(e) => setBranchDraft((prev) => ({ ...prev, name: e.target.value }))} />
                   <input className="w-full rounded-lg border px-3 py-2 text-sm" placeholder="Direccion" value={branchDraft.address} onChange={(e) => setBranchDraft((prev) => ({ ...prev, address: e.target.value }))} />
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    <input className="w-full rounded-lg border px-3 py-2 text-sm" placeholder="Ciudad" value={branchDraft.city} onChange={(e) => setBranchDraft((prev) => ({ ...prev, city: e.target.value }))} />
+                    <select className="w-full rounded-lg border px-3 py-2 text-sm" value={branchDraft.city_id || ''} onChange={(e) => {
+                      const selected = cities.find((row) => Number(row.id) === Number(e.target.value));
+                      setBranchDraft((prev) => ({ ...prev, city_id: e.target.value, city: selected?.name || '' }));
+                    }}>
+                      <option value="">Seleccionar ciudad *</option>
+                      {cities.map((row) => <option key={row.id} value={row.id}>{row.name}{row.department ? ' - ' + row.department : ''}</option>)}
+                    </select>
                     <input className="w-full rounded-lg border px-3 py-2 text-sm" placeholder="Pais" value={branchDraft.country} onChange={(e) => setBranchDraft((prev) => ({ ...prev, country: e.target.value }))} />
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                     <input className="w-full rounded-lg border px-3 py-2 text-sm" placeholder="Telefono" value={branchDraft.phone} onChange={(e) => setBranchDraft((prev) => ({ ...prev, phone: e.target.value }))} />
                     <input className="w-full rounded-lg border px-3 py-2 text-sm" placeholder="Email" value={branchDraft.email} onChange={(e) => setBranchDraft((prev) => ({ ...prev, email: e.target.value }))} />
+                  </div>
+                  <input className="w-full rounded-lg border px-3 py-2 text-sm" placeholder="Enlace de Google Maps (opcional)" value={branchDraft.maps_url} onChange={(e) => setBranchDraft((prev) => ({ ...prev, maps_url: e.target.value }))} />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <input type="number" step="any" className="w-full rounded-lg border px-3 py-2 text-sm" placeholder="Latitud (opcional)" value={branchDraft.latitude} onChange={(e) => setBranchDraft((prev) => ({ ...prev, latitude: e.target.value }))} />
+                    <input type="number" step="any" className="w-full rounded-lg border px-3 py-2 text-sm" placeholder="Longitud (opcional)" value={branchDraft.longitude} onChange={(e) => setBranchDraft((prev) => ({ ...prev, longitude: e.target.value }))} />
                   </div>
                   <label className="flex items-center gap-2 text-xs text-slate-600">
                     <input type="checkbox" checked={!!branchDraft.is_default} onChange={(e) => setBranchDraft((prev) => ({ ...prev, is_default: e.target.checked ? 1 : 0 }))} />
@@ -1600,6 +1630,7 @@ export default function OrganizationDetail() {
             await loadOrg();
             await loadFleteRoutes();
             await loadBranches();
+        await loadCities();
           }}
         />
       )}
@@ -1672,6 +1703,8 @@ function EditOrgModal({ org, onClose, onSaved }) {
     ruc: org.ruc || '',
     address: org.address || '',
     city: org.city || '',
+    city_id: org.city_id || '',
+    maps_url: org.maps_url || '',
     country: org.country || '',
     label: org.label || '',
     owner_user_id: org.owner_user_id || null,
@@ -1712,6 +1745,7 @@ function EditOrgModal({ org, onClose, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
   const [zones, setZones] = useState([]);
+  const [cityOptions, setCityOptions] = useState([]);
   const [mapsLink, setMapsLink] = useState('');
 
   function upd(k, v) {
@@ -1742,7 +1776,16 @@ function EditOrgModal({ org, onClose, onSaved }) {
         console.error('Error loading zones:', e);
       }
     }
+    async function loadCityOptions() {
+      try {
+        const res = await api.get('/cities');
+        setCityOptions(res.data || []);
+      } catch (e) {
+        console.error('Error loading cities:', e);
+      }
+    }
     loadZones();
+    loadCityOptions();
   }, []);
 
   // Función para extraer coordenadas de un link de Google Maps
@@ -1765,6 +1808,7 @@ function EditOrgModal({ org, onClose, onSaved }) {
         const lng = match[2];
         upd('latitude', lat);
         upd('longitude', lng);
+        upd('maps_url', mapsLink.trim());
         setMapsLink('');
         alert(`Coordenadas extraídas:\nLatitud: ${lat}\nLongitud: ${lng}`);
       } else {
@@ -1877,12 +1921,23 @@ function EditOrgModal({ org, onClose, onSaved }) {
             />
           </label>
           <label className="block text-sm">
-            Ciudad
-            <input
+            Ciudad *
+            <select
               className="w-full border rounded-lg px-3 py-2"
-              value={form.city}
-              onChange={(e) => upd('city', e.target.value)}
-            />
+              value={form.city_id || ''}
+              onChange={(e) => {
+                const selected = cityOptions.find((row) => Number(row.id) === Number(e.target.value));
+                setForm((prev) => ({ ...prev, city_id: e.target.value, city: selected?.name || '' }));
+              }}
+              required
+            >
+              <option value="">Seleccionar ciudad</option>
+              {cityOptions.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.name}{row.department ? ' - ' + row.department : ''}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="block text-sm">
             País

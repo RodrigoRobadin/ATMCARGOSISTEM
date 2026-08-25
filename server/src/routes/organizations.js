@@ -4,8 +4,30 @@ import db from '../services/db.js';
 
 import { requireAuth, requireRole } from '../middlewares/auth.js';
 import { logAudit } from '../services/audit.js';
+import { ensureRoutePlanningSchema, normalizeCityName } from '../services/routePlanning.js';
 
 const router = Router();
+async function resolveCitySelection(cityId, cityName, required = false) {
+  await ensureRoutePlanningSchema();
+  let row = null;
+  if (Number(cityId || 0)) {
+    [[row]] = await db.query(
+      'SELECT id, name, department FROM cities WHERE id = ? AND active = 1 LIMIT 1',
+      [Number(cityId)]
+    );
+  } else if (String(cityName || '').trim()) {
+    [[row]] = await db.query(
+      'SELECT id, name, department FROM cities WHERE country_code = ? AND normalized_name = ? AND active = 1 LIMIT 1',
+      ['PY', normalizeCityName(cityName)]
+    );
+  }
+  if (!row && required) {
+    const error = new Error('Debe seleccionar una ciudad valida del catalogo.');
+    error.statusCode = 400;
+    throw error;
+  }
+  return row;
+}
 const toNull = (v) => (v === '' || typeof v === 'undefined' ? null : v);
 const toUpperText = (v) =>
   v === null || typeof v === 'undefined' ? v : String(v).trim().toUpperCase();
@@ -86,6 +108,9 @@ const toUpperText = (v) =>
         country VARCHAR(120) NULL,
         phone VARCHAR(120) NULL,
         email VARCHAR(180) NULL,
+        latitude DECIMAL(10,7) NULL,
+        longitude DECIMAL(10,7) NULL,
+        maps_url VARCHAR(500) NULL,
         is_default TINYINT(1) NOT NULL DEFAULT 0,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -95,6 +120,9 @@ const toUpperText = (v) =>
           ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+    for (const ddl of ['ADD COLUMN latitude DECIMAL(10,7) NULL','ADD COLUMN longitude DECIMAL(10,7) NULL','ADD COLUMN maps_url VARCHAR(500) NULL']) {
+      try { await db.query(`ALTER TABLE org_branches ${ddl}`); } catch (_) {}
+    }
   } catch (e) {
     console.error('[organizations] No se pudo asegurar tabla org_branches:', e?.message || e);
   }
@@ -147,7 +175,7 @@ router.get('/', requireAuth, async (req, res) => {
         o.id,
         o.razon_social,
         o.name,
-        o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.country,
+        o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.city_id, o.country,
         o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
         o.is_agent, o.modalities_supported,
         o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta, o.default_customs_broker_org_id,
@@ -155,7 +183,7 @@ router.get('/', requireAuth, async (req, res) => {
         o.supplier_bank_account_type, o.supplier_bank_holder, o.supplier_bank_holder_ruc,
         o.supplier_bank_cci_iban, o.supplier_bank_swift, o.supplier_bank_notes,
         o.zone_id, o.department,
-        o.latitude, o.longitude,
+        o.latitude, o.longitude, o.maps_url,
         o.created_at, o.updated_at,
         o.budget_status,
         o.budget_profit AS budget_profit_value,
@@ -203,7 +231,9 @@ router.post('/', requireAuth, async (req, res) => {
       ruc = null,
       address = null,
       city = null,
+      city_id = null,
       country = null,
+      maps_url = null,
       notes = null,
       // legacy (compat)
       label = null,
@@ -235,10 +265,22 @@ router.post('/', requireAuth, async (req, res) => {
       toUpperText(razon_social || '') || toUpperText(name || '');
     if (!rs) return res.status(400).json({ error: 'razon_social es requerido' });
 
+    const selectedCity = await resolveCitySelection(city_id, city, true);
+    const branchList = Array.isArray(branches) ? branches.filter(Boolean) : [];
+    const preparedBranches = [];
+    for (const branch of branchList) {
+      const branchCity = await resolveCitySelection(branch?.city_id, branch?.city, true);
+      preparedBranches.push({
+        ...branch,
+        city_id: branchCity.id,
+        city: branchCity.name,
+      });
+    }
+
     const [ins] = await db.query(
       `
       INSERT INTO organizations
-        (razon_social, name, industry, phone, website, ruc, address, city, country, notes,
+        (razon_social, name, industry, phone, website, ruc, address, city, city_id, country, maps_url, notes,
          label, owner_user_id, created_by_user_id, visibility, is_agent, modalities_supported,
          email, rubro, tipo_org, operacion, hoja_ruta, default_customs_broker_org_id,
          supplier_bank_name, supplier_bank_account, supplier_bank_currency,
@@ -246,7 +288,7 @@ router.post('/', requireAuth, async (req, res) => {
          supplier_bank_cci_iban, supplier_bank_swift, supplier_bank_notes,
          budget_status, budget_profit, created_at, updated_at)
       VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -260,8 +302,10 @@ router.post('/', requireAuth, async (req, res) => {
         website,
         ruc,
         address,
-        city,
+        selectedCity.name,
+        selectedCity.id,
         country,
+        maps_url,
         notes,
         label,
         owner_user_id,
@@ -292,7 +336,7 @@ router.post('/', requireAuth, async (req, res) => {
       SELECT
         o.id,
         o.razon_social, o.name,
-        o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.country,
+        o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.city_id, o.country,
         o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
         o.is_agent, o.modalities_supported,
         o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta, o.default_customs_broker_org_id,
@@ -316,13 +360,14 @@ router.post('/', requireAuth, async (req, res) => {
     );
 
     try {
-      const list = Array.isArray(branches) ? branches.filter(Boolean) : [];
+      const list = preparedBranches;
       if (list.length) {
         const values = list.map((b) => [
           row.id,
           toNull(b?.name),
           toNull(b?.address),
           toNull(b?.city),
+          toNull(b?.city_id),
           toNull(b?.country),
           toNull(b?.phone),
           toNull(b?.email),
@@ -331,7 +376,7 @@ router.post('/', requireAuth, async (req, res) => {
         await db.query(
           `
           INSERT INTO org_branches
-            (org_id, name, address, city, country, phone, email, is_default)
+            (org_id, name, address, city, city_id, country, phone, email, is_default)
           VALUES ?
           `,
           [values]
@@ -431,7 +476,7 @@ router.get('/:id/branches', requireAuth, async (req, res) => {
   try {
     const [rows] = await db.query(
       `
-      SELECT id, org_id, name, address, city, country, phone, email, is_default, created_at, updated_at
+      SELECT id, org_id, name, address, city, city_id, country, phone, email, latitude, longitude, maps_url, is_default, created_at, updated_at
       FROM org_branches
       WHERE org_id = ?
       ORDER BY is_default DESC, name ASC, id ASC
@@ -452,34 +497,43 @@ router.post('/:id/branches', requireAuth, async (req, res) => {
     name = null,
     address = null,
     city = null,
+    city_id = null,
     country = null,
     phone = null,
     email = null,
+    latitude = null,
+    longitude = null,
+    maps_url = null,
     is_default = 0,
   } = req.body || {};
   if (!address && !name) {
     return res.status(400).json({ error: 'name o address requerido' });
   }
   try {
+    const selectedCity = await resolveCitySelection(city_id, city, true);
     const [ins] = await db.query(
       `
       INSERT INTO org_branches
-        (org_id, name, address, city, country, phone, email, is_default)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (org_id, name, address, city, city_id, country, phone, email, latitude, longitude, maps_url, is_default)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         id,
         name,
         address,
-        city,
+        selectedCity.name,
+        selectedCity.id,
         country,
         phone,
         email,
+        Number.isFinite(Number(latitude)) ? Number(latitude) : null,
+        Number.isFinite(Number(longitude)) ? Number(longitude) : null,
+        maps_url,
         is_default ? 1 : 0,
       ]
     );
     const [[row]] = await db.query(
-      'SELECT id, org_id, name, address, city, country, phone, email, is_default, created_at, updated_at FROM org_branches WHERE id = ?',
+      'SELECT id, org_id, name, address, city, city_id, country, phone, email, latitude, longitude, maps_url, is_default, created_at, updated_at FROM org_branches WHERE id = ?',
       [ins.insertId]
     );
     res.status(201).json(row);
@@ -497,9 +551,13 @@ router.put('/:id/branches/:branchId', requireAuth, async (req, res) => {
     name = undefined,
     address = undefined,
     city = undefined,
+    city_id = undefined,
     country = undefined,
     phone = undefined,
     email = undefined,
+    latitude = undefined,
+    longitude = undefined,
+    maps_url = undefined,
     is_default = undefined,
   } = req.body || {};
   try {
@@ -507,10 +565,17 @@ router.put('/:id/branches/:branchId', requireAuth, async (req, res) => {
     const params = [];
     if (name !== undefined) { sets.push('name = ?'); params.push(name); }
     if (address !== undefined) { sets.push('address = ?'); params.push(address); }
-    if (city !== undefined) { sets.push('city = ?'); params.push(city); }
+    if (city !== undefined || city_id !== undefined) {
+      const selectedCity = await resolveCitySelection(city_id, city, true);
+      sets.push('city = ?', 'city_id = ?');
+      params.push(selectedCity.name, selectedCity.id);
+    }
     if (country !== undefined) { sets.push('country = ?'); params.push(country); }
     if (phone !== undefined) { sets.push('phone = ?'); params.push(phone); }
     if (email !== undefined) { sets.push('email = ?'); params.push(email); }
+    if (latitude !== undefined) { sets.push('latitude = ?'); params.push(Number.isFinite(Number(latitude)) ? Number(latitude) : null); }
+    if (longitude !== undefined) { sets.push('longitude = ?'); params.push(Number.isFinite(Number(longitude)) ? Number(longitude) : null); }
+    if (maps_url !== undefined) { sets.push('maps_url = ?'); params.push(maps_url || null); }
     if (is_default !== undefined) { sets.push('is_default = ?'); params.push(is_default ? 1 : 0); }
     if (!sets.length) return res.status(400).json({ error: 'Sin cambios' });
 
@@ -520,7 +585,7 @@ router.put('/:id/branches/:branchId', requireAuth, async (req, res) => {
       params
     );
     const [[row]] = await db.query(
-      'SELECT id, org_id, name, address, city, country, phone, email, is_default, created_at, updated_at FROM org_branches WHERE id = ?',
+      'SELECT id, org_id, name, address, city, city_id, country, phone, email, latitude, longitude, maps_url, is_default, created_at, updated_at FROM org_branches WHERE id = ?',
       [branchId]
     );
     res.json(row || null);
@@ -779,7 +844,7 @@ router.get('/:id', requireAuth, async (req, res) => {
       SELECT
         o.id,
         o.razon_social, o.name,
-        o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.country,
+        o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.city_id, o.country,
         o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
         o.is_agent, o.modalities_supported,
         o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta, o.default_customs_broker_org_id,
@@ -787,7 +852,7 @@ router.get('/:id', requireAuth, async (req, res) => {
         o.supplier_bank_account_type, o.supplier_bank_holder, o.supplier_bank_holder_ruc,
         o.supplier_bank_cci_iban, o.supplier_bank_swift, o.supplier_bank_notes,
         o.zone_id, o.department,
-        o.latitude, o.longitude,
+        o.latitude, o.longitude, o.maps_url,
         o.created_at, o.updated_at,
         o.budget_status, o.budget_profit AS budget_profit_value,
         u.name AS owner_user_name,
@@ -832,6 +897,8 @@ router.patch('/:id', requireAuth, async (req, res) => {
       'ruc',
       'address',
       'city',
+      'city_id',
+      'maps_url',
       'country',
       'label',
       'owner_user_id',
@@ -869,6 +936,14 @@ router.patch('/:id', requireAuth, async (req, res) => {
       req.body.advisor_user_id = req.body.owner_user_id;
     }
 
+    if (
+      Object.prototype.hasOwnProperty.call(req.body, 'city_id') ||
+      Object.prototype.hasOwnProperty.call(req.body, 'city')
+    ) {
+      const selectedCity = await resolveCitySelection(req.body.city_id, req.body.city, true);
+      req.body.city_id = selectedCity.id;
+      req.body.city = selectedCity.name;
+    }
     const sets = [];
     const params = [];
     for (const k of allowed) {
@@ -896,7 +971,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
       SELECT
         o.id,
         o.razon_social, o.name,
-        o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.country,
+        o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.city_id, o.country,
         o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
         o.is_agent, o.modalities_supported,
         o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta, o.default_customs_broker_org_id,
@@ -904,7 +979,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
         o.supplier_bank_account_type, o.supplier_bank_holder, o.supplier_bank_holder_ruc,
         o.supplier_bank_cci_iban, o.supplier_bank_swift, o.supplier_bank_notes,
         o.zone_id, o.department,
-        o.latitude, o.longitude,
+        o.latitude, o.longitude, o.maps_url,
         o.created_at, o.updated_at,
         o.budget_status, o.budget_profit AS budget_profit_value,
         u.name AS owner_user_name,

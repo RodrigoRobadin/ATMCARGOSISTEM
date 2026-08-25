@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { pool } from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
+import { ensureRoutePlanningSchema } from '../services/routePlanning.js';
 
 const router = Router();
 
@@ -85,6 +86,14 @@ function toMySQLDateTime(d) {
     }
 })();
 
+router.use(requireAuth, async (_req, _res, next) => {
+    try {
+        await ensureRoutePlanningSchema();
+        next();
+    } catch (error) {
+        next(error);
+    }
+});
 /* =================== VISITS ENDPOINTS =================== */
 
 // GET /api/visits - Listar visitas
@@ -428,6 +437,35 @@ router.patch('/:id', requireAuth, async (req, res) => {
             );
         }
 
+        if (visit.route_stop_id && status !== undefined) {
+            const stopStatus =
+                status === 'completed'
+                    ? 'completada'
+                    : status === 'cancelled'
+                        ? 'cancelada'
+                        : 'pendiente';
+            await pool.query(
+                'UPDATE route_stops SET status = ? WHERE id = ?',
+                [stopStatus, visit.route_stop_id]
+            );
+
+            const [[routeProgress]] = await pool.query(
+                "SELECT rs.route_id, " +
+                "COUNT(*) AS total, " +
+                "SUM(rs.status IN ('completada','cancelada')) AS finalizadas, " +
+                "SUM(rs.status = 'completada') AS completadas " +
+                "FROM route_stops rs " +
+                "WHERE rs.route_id = (SELECT route_id FROM route_stops WHERE id = ? LIMIT 1) " +
+                "GROUP BY rs.route_id",
+                [visit.route_stop_id]
+            );
+            if (routeProgress && Number(routeProgress.total) === Number(routeProgress.finalizadas)) {
+                await pool.query(
+                    "UPDATE routes SET status = ? WHERE id = ? AND status <> 'cancelado'",
+                    [Number(routeProgress.completadas) > 0 ? 'completado' : 'cancelado', routeProgress.route_id]
+                );
+            }
+        }
         // Actualizar contactos si se proporcionaron
         if (Array.isArray(contact_ids)) {
             // Eliminar contactos existentes

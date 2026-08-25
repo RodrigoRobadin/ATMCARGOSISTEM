@@ -403,6 +403,8 @@ function NewOrganizationModal({
   const [address, setAddress] = useState('');
   const [email, setEmail] = useState('');
   const [city, setCity] = useState('');
+  const [cityId, setCityId] = useState('');
+  const [cities, setCities] = useState([]);
   const [country, setCountry] = useState('');
   const [phone, setPhone] = useState('');
   const [rubro, setRubro] = useState('Seguro'); // fallback
@@ -430,6 +432,9 @@ function NewOrganizationModal({
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  useEffect(() => {
+    api.get('/cities').then(({ data }) => setCities(data || [])).catch(() => setCities([]));
+  }, []);
 
   // Parametría del modal desde props
   const tipoOrgOptions = paramOpts?.org_tipo || [];
@@ -451,6 +456,15 @@ function NewOrganizationModal({
       setError('La Razón Social es obligatoria.');
       return;
     }
+    if (!cityId) {
+      setError('La ciudad es obligatoria.');
+      return;
+    }
+    const activeBranches = (branches || []).filter((branch) => branch?.name || branch?.address);
+    if (activeBranches.some((branch) => !branch.city_id)) {
+      setError('Selecciona la ciudad de cada sucursal cargada.');
+      return;
+    }
     setSaving(true);
     try {
       const execId = accountExecutiveId ? Number(accountExecutiveId) : null;
@@ -461,6 +475,7 @@ function NewOrganizationModal({
         address: address || null,
         email: email || null,
         city: city || null,
+        city_id: cityId ? Number(cityId) : null,
         country: country || null,
         phone: phone || null,
         rubro: rubro || null,
@@ -553,12 +568,24 @@ function NewOrganizationModal({
         {/* Fila 3: Ciudad - País - Teléfono */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <label className="block text-sm">
-            Ciudad
-            <input
+            Ciudad *
+            <select
               className="w-full border rounded-lg px-3 py-2"
-              value={city}
-              onChange={(e) => setCity(e.target.value)}
-            />
+              value={cityId}
+              onChange={(e) => {
+                const selected = cities.find((row) => Number(row.id) === Number(e.target.value));
+                setCityId(e.target.value);
+                setCity(selected?.name || '');
+              }}
+              required
+            >
+              <option value="">Seleccionar ciudad</option>
+              {cities.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.name}{row.department ? ' - ' + row.department : ''}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="block text-sm">
             País
@@ -588,7 +615,7 @@ function NewOrganizationModal({
               onClick={() =>
                 setBranches((prev) => [
                   ...prev,
-                  { name: '', address: '', city: '', country: '', is_default: 0 },
+                  { name: '', address: '', city: '', city_id: '', country: '', is_default: 0 },
                 ])
               }
             >
@@ -622,16 +649,19 @@ function NewOrganizationModal({
                   )
                 }
               />
-              <input
+              <select
                 className="border rounded-lg px-2 py-1 text-sm md:col-span-1"
-                placeholder="Ciudad"
-                value={b.city || ''}
-                onChange={(e) =>
+                value={b.city_id || ''}
+                onChange={(e) => {
+                  const selected = cities.find((row) => Number(row.id) === Number(e.target.value));
                   setBranches((prev) =>
-                    prev.map((x, i) => (i === idx ? { ...x, city: e.target.value } : x))
-                  )
-                }
-              />
+                    prev.map((x, i) => (i === idx ? { ...x, city_id: e.target.value, city: selected?.name || '' } : x))
+                  );
+                }}
+              >
+                <option value="">Ciudad *</option>
+                {cities.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
+              </select>
               <input
                 className="border rounded-lg px-2 py-1 text-sm md:col-span-1"
                 placeholder="País"
