@@ -1507,6 +1507,7 @@ router.get('/monthly-summary', requireAuth, async (req, res) => {
     const [expenseRows] = await pool.query(
       `SELECT e.id,
               e.cost_center_id,
+              e.status,
               COALESCE(cc.name, 'SIN CENTRO DE COSTO') AS detail,
               COALESCE(cc.ord, 999999) AS cost_center_ord,
               MONTH(COALESCE(e.due_date, e.invoice_date, e.expense_date)) AS month_number,
@@ -1590,8 +1591,19 @@ router.get('/monthly-summary', requireAuth, async (req, res) => {
         row.detail,
         row.cost_center_ord
       );
-      const balance = Math.max(0, Number(row.net_amount || 0) - Number(row.paid_total || 0));
+      const netAmount = Number(row.net_amount || 0);
+      const paidTotal = Number(row.paid_total || 0);
+      const isMarkedPaid = String(row.status || '').toLowerCase() === 'pagado';
+      const balance = isMarkedPaid ? 0 : Math.max(0, netAmount - paidTotal);
       item.months[monthIndex].to_pay += balance;
+
+      // Historical expenses may have been marked as paid without a payment row.
+      // Recognize only the missing portion here; registered payments are added below.
+      if (isMarkedPaid) {
+        const paidWithoutRecord = Math.max(0, netAmount - paidTotal);
+        item.months[monthIndex].paid += paidWithoutRecord;
+        item.total_paid += paidWithoutRecord;
+      }
     });
     paymentRows.forEach((row) => {
       const monthIndex = Number(row.month_number || 0) - 1;
