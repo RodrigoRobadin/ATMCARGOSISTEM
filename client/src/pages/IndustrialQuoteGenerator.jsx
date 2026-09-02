@@ -8,6 +8,7 @@ import { API_BASE, api } from '../api';
 
 import { useAuth } from '../auth.jsx';
 import { RichTextContent, RichTextDialogField } from '../components/RichTextEditor.jsx';
+import QuoteEmailModal from '../components/QuoteEmailModal.jsx';
 import { htmlToPlainText, sanitizeRichTextHtml } from '../utils/richText';
 
 import useParamOptions from '../hooks/useParamOptions';
@@ -352,6 +353,22 @@ const CITY_IATA_MAP = {
 
 
 function toKey(s) { return stripAccents(String(s||'').toLowerCase().trim()); }
+
+const INDUSTRIAL_DEFAULT_DELIVERY_TYPE = 'DDP - Entrega a depósito';
+
+function normalizeIndustrialDeliveryType(value) {
+
+  const deliveryType = String(value ?? '').trim();
+
+  if (!deliveryType || deliveryType.toUpperCase() === 'EXW') {
+
+    return INDUSTRIAL_DEFAULT_DELIVERY_TYPE;
+
+  }
+
+  return deliveryType;
+
+}
 
 
 
@@ -787,7 +804,7 @@ export default function QuoteGenerator(){
 
   const [ref, setRef] = useState('');
 
-  const [incoterm, setIncoterm] = useState('EXW');
+  const [incoterm, setIncoterm] = useState(INDUSTRIAL_DEFAULT_DELIVERY_TYPE);
 
 
 
@@ -873,6 +890,8 @@ export default function QuoteGenerator(){
 
   const [selectedTemplateName, setSelectedTemplateName] = useState('');
 
+  const [showQuoteEmail, setShowQuoteEmail] = useState(false);
+  const [sendingQuoteEmail, setSendingQuoteEmail] = useState(false);
   const [quoteBranding, setQuoteBranding] = useState({
     logoUrl: '',
     city: 'Asuncion',
@@ -1108,6 +1127,8 @@ CORDIALES SALUDOS`,
             reference: serviceQuoteAdditionId ? (qInputs.ref_code || caseData?.reference) : caseData?.reference,
             org_name: caseData?.org_name,
             contact_name: caseData?.contact_name || "",
+            contact_email: caseData?.contact_email || qInputs?.contact_email || "",
+            org_email: caseData?.org_email || qInputs?.org_email || qInputs?.email || "",
           });
         } else {
           setDeal(detail.deal);
@@ -1171,11 +1192,11 @@ CORDIALES SALUDOS`,
 
         // ---- Incoterms
 
-        setIncoterm(
+        setIncoterm(normalizeIndustrialDeliveryType(
 
-          pick(merged, ['cf:incoterms', 'cf:incoterm', /incoterm/], 'incoterms') || 'EXW'
+          pick(merged, ['cf:incoterms', 'cf:incoterm', /incoterm/], 'incoterms')
 
-        );
+        ));
 
 
 
@@ -2047,6 +2068,7 @@ CORDIALES SALUDOS`,
 
       await worker.toPdf();
       const pdf = await worker.get('pdf');
+      if (mode === 'blob') return pdf.output('blob');
       pdf.output('dataurlnewwindow');
     } catch (e) {
       console.error('No se pudo generar el PDF formal:', e);
@@ -2062,7 +2084,7 @@ CORDIALES SALUDOS`,
   const formalSubject = buildFormalSubject();
   const formalDeliveryAddress = [ciudadDestino, paisDestino].filter(Boolean).join(', ');
   const formalComment = tagsToText(observacionesProductoTags);
-  const formalDeliveryType = incoterm || 'DDP';
+  const formalDeliveryType = normalizeIndustrialDeliveryType(incoterm);
   const formalFooterWeb = quoteBranding.footerWeb || 'www.atmcargo.com.py';
   const formalFooterAddress = quoteBranding.footerAddress || '';
   const formalFooterPhone = quoteBranding.footerPhone || '';
@@ -2096,6 +2118,53 @@ CORDIALES SALUDOS`,
     includesText: tagsToText(incluyeTags),
     excludesText: tagsToText(noIncluyeTags),
   };
+
+  const quoteEmailFilename = `${String(ref || deal?.reference || 'presupuesto').replace(/[^a-z0-9._-]+/gi, '_')}-formal.pdf`;
+  const quoteEmailRecipient =
+    deal?.contact_email ||
+    deal?.org_email ||
+    cf?.contact_email ||
+    cf?.org_email ||
+    cf?.email ||
+    '';
+  const quoteEmailSubject = `Presupuesto ${ref || deal?.reference || ''}`.trim();
+  const quoteEmailMessage = `Estimado/a ${contacto || cliente || ''},
+
+Adjuntamos el presupuesto correspondiente a la referencia ${ref || deal?.reference || ''}.
+
+Quedamos atentos a sus comentarios.`;
+
+  async function sendQuoteByEmail(fields) {
+    if (hasUnsavedChanges) {
+      alert('Guarda los cambios del presupuesto antes de enviarlo.');
+      return;
+    }
+    setSendingQuoteEmail(true);
+    try {
+      const pdfBlob = await exportFormalPdf('blob');
+      if (!pdfBlob) throw new Error('No se pudo generar el PDF del presupuesto.');
+      const form = new FormData();
+      form.append('pdf', pdfBlob, quoteEmailFilename);
+      form.append('to', fields.to);
+      form.append('cc', fields.cc || '');
+      form.append('subject', fields.subject);
+      form.append('message', fields.message || '');
+      form.append('filename', quoteEmailFilename);
+      form.append('reference', ref || deal?.reference || '');
+      if (isService) form.append('service_case_id', String(baseId));
+      else form.append('deal_id', String(baseId));
+      if (serviceQuoteAdditionId) form.append('service_quote_addition_id', String(serviceQuoteAdditionId));
+      form.append('revision', revisionId ? `Revision ${revisionId}` : 'Actual');
+      await api.post('/quotes/send-email', form);
+      setShowQuoteEmail(false);
+      alert('Presupuesto enviado correctamente.');
+    } catch (error) {
+      console.error('No se pudo enviar el presupuesto:', error);
+      alert(error.response?.data?.error || error.message || 'No se pudo enviar el presupuesto.');
+    } finally {
+      setSendingQuoteEmail(false);
+    }
+  }
 
   if (loading) return <div className="p-4 text-sm text-slate-600">Cargando…</div>;
 
@@ -2713,11 +2782,58 @@ CORDIALES SALUDOS`,
           <button onClick={() => exportFormalPdf('download')} className="px-3 py-2 rounded border border-slate-300 bg-white text-slate-800">
             Descargar PDF formal
           </button>
+          <button type="button" onClick={() => {
+            if (hasUnsavedChanges) {
+              alert('Guarda los cambios del presupuesto antes de enviarlo.');
+              return;
+            }
+            setShowQuoteEmail(true);
+          }} className="px-3 py-2 rounded bg-emerald-700 text-white">
+            Enviar presupuesto
+          </button>
+
           <Link to={`/operations/${id}`} className="px-3 py-2 rounded bg-slate-200 hover:bg-slate-300">
             ← Volver a la operacion
           </Link>
         </div>
       </div>
+
+      {isEmbed && (
+        <div className="sticky top-0 z-30 mb-3 flex items-center justify-between gap-3 border-b bg-white/95 px-3 py-2 shadow-sm backdrop-blur">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-800">
+              Presupuesto REF {deal.reference}
+            </div>
+            <div className="text-xs text-slate-500">
+              {serviceQuoteAdditionId ? 'Presupuesto adicional' : 'Revision ' + (deal.revision || '-')}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (hasUnsavedChanges) {
+                alert('Guarda los cambios del presupuesto antes de enviarlo.');
+                return;
+              }
+              setShowQuoteEmail(true);
+            }}
+            className="shrink-0 rounded bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800"
+          >
+            Enviar presupuesto
+          </button>
+        </div>
+      )}
+
+      <QuoteEmailModal
+        open={showQuoteEmail}
+        onClose={() => !sendingQuoteEmail && setShowQuoteEmail(false)}
+        onSend={sendQuoteByEmail}
+        sending={sendingQuoteEmail}
+        initialTo={quoteEmailRecipient}
+        initialSubject={quoteEmailSubject}
+        initialMessage={quoteEmailMessage}
+        filename={quoteEmailFilename}
+      />
 
       {/* Panel editable */}
       <div className={"grid grid-cols-1 lg:grid-cols-2 gap-4 " + (isEmbed ? "hidden" : "")}>
@@ -2754,7 +2870,7 @@ CORDIALES SALUDOS`,
 
             </label>
 
-            <label className="block">Incoterms
+            <label className="block">Tipo de entrega
 
               <input value={incoterm} onChange={e=>setIncoterm(e.target.value)} className="w-full border rounded px-2 py-1" />
 

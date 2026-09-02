@@ -1,7 +1,10 @@
 // server/src/routes/quotes.js
 import { Router } from "express";
+import multer from "multer";
 import db from "../services/db.js";
 import { requireAuth } from '../middlewares/auth.js';
+import { logAudit } from '../services/audit.js';
+import { sendMail } from '../services/mailer.js';
 
 // ✅ Soporta export named o default (evita el error: "does not provide an export named")
 import computeQuoteDefault, { computeQuote as computeQuoteNamed } from "../services/quoteEngine.js";
@@ -10,6 +13,38 @@ import { buildQuoteXlsxBuffer } from "../services/quoteXlsxTemplate.js";
 import { buildFormalQuotePdfBuffer } from '../services/formalQuotePdf.js';
 
 const router = Router();
+const quoteEmailUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    if (file.mimetype === 'application/pdf' || String(file.originalname || '').toLowerCase().endsWith('.pdf')) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error('El adjunto del presupuesto debe ser un archivo PDF.'));
+  },
+});
+
+function escapeEmailHtml(value = '') {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function parseEmailList(value) {
+  return String(value || '')
+    .split(/[;,]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function safePdfFilename(value, fallback = 'presupuesto.pdf') {
+  const name = String(value || fallback).replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim();
+  return (name || fallback).toLowerCase().endsWith('.pdf') ? (name || fallback) : (name || fallback) + '.pdf';
+}
 
 // Usa el que exista
 const computeQuote = computeQuoteNamed || computeQuoteDefault;
@@ -366,6 +401,70 @@ router.post('/quotes/formal-pdf', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('[quotes][formal-pdf] error:', e);
     res.status(500).json({ error: e?.message || 'No se pudo generar el PDF formal' });
+  }
+});
+
+router.post('/quotes/send-email', requireAuth, quoteEmailUpload.single('pdf'), async (req, res) => {
+  try {
+    const toEmails = parseEmailList(req.body?.to);
+    const ccEmails = parseEmailList(req.body?.cc);
+    const subject = String(req.body?.subject || '').trim();
+    const message = String(req.body?.message || '').trim();
+    const reference = String(req.body?.reference || '').trim();
+    const filename = safePdfFilename(req.body?.filename, reference ? 'presupuesto-' + reference + '.pdf' : 'presupuesto.pdf');
+
+    if (!toEmails.length) return res.status(400).json({ error: 'Debe indicar al menos un destinatario.' });
+    if (!subject) return res.status(400).json({ error: 'El asunto es obligatorio.' });
+    if (!req.file?.buffer?.length) return res.status(400).json({ error: 'No se recibio el PDF del presupuesto.' });
+
+    const safeMessage = escapeEmailHtml(message || 'Adjuntamos el presupuesto solicitado.').replace(/\r?\n/g, '<br>');
+    const safeReference = escapeEmailHtml(reference);
+    const html = [
+      '<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#1f2937">',
+      '<p>' + safeMessage + '</p>',
+      safeReference ? '<p><strong>Referencia:</strong> ' + safeReference + '</p>' : '',
+      '<p>Saludos,<br>Grupo ATM</p>',
+      '</div>',
+    ].join('');
+
+    await sendMail({
+      to: toEmails.join(', '),
+      cc: ccEmails.length ? ccEmails.join(', ') : undefined,
+      subject,
+      html,
+      text: message || 'Adjuntamos el presupuesto solicitado.',
+      attachments: [{ filename, content: req.file.buffer, contentType: 'application/pdf' }],
+    });
+
+    const dealId = Number(req.body?.deal_id || 0) || null;
+    const serviceCaseId = Number(req.body?.service_case_id || 0) || null;
+    const additionId = Number(req.body?.service_quote_addition_id || 0) || null;
+    const revision = String(req.body?.revision || '').trim() || null;
+
+    if (dealId) {
+      try {
+        await db.query(
+          "INSERT INTO activities (type, subject, notes, deal_id, done, created_at) VALUES ('email', ?, ?, ?, 1, NOW())",
+          ['Presupuesto enviado', 'Enviado a: ' + toEmails.join(', ') + '\nAsunto: ' + subject + (revision ? '\nRevision: ' + revision : ''), dealId]
+        );
+      } catch (activityError) {
+        console.warn('[quotes][send-email] no se pudo registrar actividad:', activityError?.message || activityError);
+      }
+    }
+
+    await logAudit({
+      req,
+      action: 'send',
+      entity: 'quote_email',
+      entityId: dealId || serviceCaseId || additionId,
+      description: 'Envio presupuesto ' + (reference || filename),
+      meta: { deal_id: dealId, service_case_id: serviceCaseId, service_quote_addition_id: additionId, revision, to: toEmails, cc: ccEmails, filename },
+    });
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('[quotes][send-email] error:', error);
+    res.status(500).json({ error: error?.message || 'No se pudo enviar el presupuesto.' });
   }
 });
 

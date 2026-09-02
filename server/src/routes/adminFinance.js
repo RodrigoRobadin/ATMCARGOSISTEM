@@ -465,7 +465,7 @@ function ensureSalesRow(map, seed) {
 }
 
 function pushSalesInvoice(map, row, amount, kind, expectedDate, budget) {
-  const month = String(expectedDate || row.issue_date || '').slice(0, 7);
+  const month = String(expectedDate || (kind === 'actual' ? row.issue_date : '') || '').slice(0, 7);
   if (!month) return;
   const saleAmount = round2(amount);
   const purchaseAmount = round2(saleAmount * (budget.purchase_ratio || 0));
@@ -491,8 +491,8 @@ function pushSalesInvoice(map, row, amount, kind, expectedDate, budget) {
   else target.receivable += saleAmount;
   if (budget.source_status !== 'ok') target.warnings.push('Sin revision/costo presupuestado completo');
   target.documents.push({
-    source_type: kind === 'actual' ? 'receipt' : 'invoice',
-    source_id: row.source_id || row.id,
+    source_type: kind === 'actual' ? 'receipt' : (row._source_type || 'invoice'),
+    source_id: row._source_id ?? row.source_id ?? row.id,
     label: row.receipt_number || row.invoice_number || `Factura #${row.id}`,
     kind,
     direction: 'in',
@@ -783,6 +783,94 @@ function normalizeMoneyBuckets(obj) {
   }
 }
 
+async function loadIndustrialInstallmentProjection(invoiceRows = []) {
+  const industrialRows = (invoiceRows || []).filter(
+    (row) => String(row.business_unit_key || '').toLowerCase() === 'atm-industrial' && row.operation_type === 'deal'
+  );
+  const invoiceIds = industrialRows.map((row) => Number(row.id)).filter(Boolean);
+  const empty = { available: false, byInvoice: new Map() };
+  if (!invoiceIds.length) return { available: true, byInvoice: new Map() };
+  if (!(await tableExists('industrial_collection_plans')) || !(await tableExists('industrial_collection_installments'))) return empty;
+  const placeholders = invoiceIds.map(() => '?').join(',');
+  const [plans] = await pool.query(`SELECT * FROM industrial_collection_plans WHERE invoice_id IN (${placeholders})`, invoiceIds);
+  const planIds = (plans || []).map((row) => Number(row.id));
+  if (!planIds.length) return { available: true, byInvoice: new Map() };
+  const planPlaceholders = planIds.map(() => '?').join(',');
+  const [items] = await pool.query(
+    `SELECT * FROM industrial_collection_installments WHERE plan_id IN (${planPlaceholders}) ORDER BY plan_id, sequence_no`,
+    planIds
+  );
+  const [receipts] = await pool.query(
+    `SELECT id, invoice_id, amount FROM receipts WHERE invoice_id IN (${placeholders}) AND status <> 'anulado' ORDER BY issue_date, id`,
+    invoiceIds
+  );
+  let manualRows = [];
+  if (await tableExists('industrial_receipt_installment_allocations')) {
+    [manualRows] = await pool.query(
+      `SELECT a.* FROM industrial_receipt_installment_allocations a
+        JOIN receipts r ON r.id=a.receipt_id
+       WHERE r.invoice_id IN (${placeholders}) AND r.status <> 'anulado'`,
+      invoiceIds
+    );
+  }
+  const planByInvoice = new Map((plans || []).map((row) => [Number(row.invoice_id), row]));
+  const manualByReceipt = new Map();
+  for (const allocation of manualRows || []) {
+    const receiptId = Number(allocation.receipt_id);
+    if (!manualByReceipt.has(receiptId)) manualByReceipt.set(receiptId, []);
+    manualByReceipt.get(receiptId).push(allocation);
+  }
+  const byInvoice = new Map();
+  for (const invoice of industrialRows) {
+    const plan = planByInvoice.get(Number(invoice.id));
+    if (!plan) continue;
+    const currency = normalizeCurrency(invoice.currency_code);
+    const precision = currency === 'PYG' ? 0 : 2;
+    const rounded = (value) => Number(num(value).toFixed(precision));
+    const installments = (items || [])
+      .filter((item) => Number(item.plan_id) === Number(plan.id))
+      .map((item) => ({ ...item, effective_amount: rounded(item.planned_amount), applied: 0 }));
+    let creditReduction = Math.max(0, rounded(num(plan.baseline_total) - num(invoice.total_amount)));
+    for (let index = installments.length - 1; index >= 0 && creditReduction > 0; index -= 1) {
+      const reduction = Math.min(creditReduction, installments[index].effective_amount);
+      installments[index].effective_amount = rounded(installments[index].effective_amount - reduction);
+      creditReduction = rounded(creditReduction - reduction);
+    }
+    for (const receipt of (receipts || []).filter((row) => Number(row.invoice_id) === Number(invoice.id))) {
+      const manual = manualByReceipt.get(Number(receipt.id));
+      if (manual?.length) {
+        for (const allocation of manual) {
+          const target = installments.find((item) => Number(item.id) === Number(allocation.installment_id));
+          if (target) target.applied = rounded(target.applied + num(allocation.amount_applied));
+        }
+        continue;
+      }
+      let remaining = rounded(receipt.amount);
+      for (const installment of installments) {
+        if (remaining <= 0) break;
+        const capacity = Math.max(0, rounded(installment.effective_amount - installment.applied));
+        const applied = Math.min(remaining, capacity);
+        installment.applied = rounded(installment.applied + applied);
+        remaining = rounded(remaining - applied);
+      }
+    }
+    const projected = installments.map((item) => ({
+      id: Number(item.id),
+      concept: item.concept || `Cuota ${item.sequence_no}`,
+      expected_date: item.expected_date ? String(item.expected_date).slice(0, 10) : null,
+      amount: rounded(Math.max(0, item.effective_amount - item.applied)),
+    })).filter((item) => item.amount > (currency === 'PYG' ? 0.5 : 0.009));
+    const projectedTotal = rounded(projected.reduce((sum, item) => sum + item.amount, 0));
+    const invoiceBalance = rounded(invoice.balance);
+    const difference = rounded(Math.max(0, invoiceBalance - projectedTotal));
+    if (difference > (currency === 'PYG' ? 0.5 : 0.009)) {
+      projected.push({ id: `invoice-${invoice.id}`, concept: 'Saldo sin distribuir', expected_date: null, amount: difference });
+    }
+    byInvoice.set(Number(invoice.id), projected);
+  }
+  return { available: true, byInvoice };
+}
+
 async function buildCashFlowData(query = {}) {
   await ensureCashFlowTables();
   const settings = await getCashFlowSettings();
@@ -811,7 +899,7 @@ async function buildCashFlowData(query = {}) {
            i.percentage, i.exchange_rate,
            COALESCE(r.currency_code, i.currency_code, 'PYG') AS currency_code,
            r.net_amount AS amount,
-           COALESCE(NULLIF(i.net_total_amount,0), i.total_amount, 0) AS total_amount,
+           GREATEST(0, COALESCE(i.total_amount,0) - COALESCE(i.credited_total,0)) AS total_amount,
            o.name AS organization_name,
            COALESCE(d.reference, sc.reference) AS operation_reference,
            COALESCE(d.id, sc.id) AS operation_id,
@@ -883,9 +971,9 @@ async function buildCashFlowData(query = {}) {
     `
     SELECT i.id, i.invoice_number, i.issue_date, i.due_date, i.payment_terms, i.payment_condition,
            i.percentage, i.exchange_rate, COALESCE(i.currency_code, 'PYG') AS currency_code,
-           COALESCE(NULLIF(i.net_total_amount,0), i.total_amount, 0) AS total_amount,
+           GREATEST(0, COALESCE(i.total_amount,0) - COALESCE(i.credited_total,0)) AS total_amount,
            COALESCE(rc.paid_amount, i.paid_amount, 0) AS paid_amount,
-           GREATEST(0, COALESCE(NULLIF(i.net_total_amount,0), i.total_amount, 0) - COALESCE(rc.paid_amount, i.paid_amount, 0)) AS balance,
+           GREATEST(0, COALESCE(i.total_amount,0) - COALESCE(i.credited_total,0) - COALESCE(rc.paid_amount, i.paid_amount, 0)) AS balance,
            o.name AS organization_name, COALESCE(d.reference, sc.reference) AS operation_reference,
            COALESCE(d.id, sc.id) AS operation_id,
            CASE WHEN i.service_case_id IS NOT NULL THEN 'service' ELSE 'deal' END AS operation_type,
@@ -932,12 +1020,46 @@ async function buildCashFlowData(query = {}) {
          GROUP BY invoice_id
       ) rc ON rc.invoice_id = i.id
      WHERE i.status NOT IN ('anulada','borrador')
-       AND GREATEST(0, COALESCE(NULLIF(i.net_total_amount,0), i.total_amount, 0) - COALESCE(rc.paid_amount, i.paid_amount, 0)) > 0.009
+       AND GREATEST(0, COALESCE(i.total_amount,0) - COALESCE(i.credited_total,0) - COALESCE(rc.paid_amount, i.paid_amount, 0)) > 0.009
        ${buFilter}
     `,
     businessUnitId ? [businessUnitId] : []
   );
+  const projectedInvoiceRows = [];
+  const industrialProjection = await loadIndustrialInstallmentProjection(invoiceRows || []);
   for (const row of invoiceRows || []) {
+    const isIndustrialDeal = row.operation_type === 'deal' && String(row.business_unit_key || '').toLowerCase() === 'atm-industrial';
+    const installmentProjection = industrialProjection.byInvoice.get(Number(row.id));
+    if (isIndustrialDeal && industrialProjection.available) {
+      const parts = installmentProjection || [{ id: `invoice-${row.id}`, concept: 'Cobro sin planificar', expected_date: null, amount: num(row.balance) }];
+      for (const part of parts) {
+        const doc = {
+          source_type: installmentProjection ? 'industrial_installment' : 'invoice',
+          source_id: part.id,
+          direction: 'in',
+          kind: 'projected',
+          expected_date: part.expected_date || null,
+          label: `${row.invoice_number || `Factura #${row.id}`} - ${part.concept}`,
+          party_name: row.organization_name || '',
+          operation_reference: row.operation_reference || '',
+          document_number: row.invoice_number || '',
+          amount: num(part.amount),
+          paid_amount: num(row.paid_amount),
+          balance: num(part.amount),
+          total_amount: num(row.total_amount),
+          currency_code: normalizeCurrency(row.currency_code),
+          percentage: row.percentage,
+          payment_condition: row.payment_condition || '',
+          status: part.expected_date ? 'por_cobrar' : 'sin_planificar',
+          installment_concept: part.concept,
+          operation_id: row.operation_id,
+        };
+        doc.schedule_status = classifyScheduleDate(doc.expected_date, fromStr, toStr);
+        docs.push(doc);
+        projectedInvoiceRows.push({ ...row, expected_date: doc.expected_date, balance: doc.amount, currency_code: doc.currency_code, _source_type: doc.source_type, _source_id: doc.source_id });
+      }
+      continue;
+    }
     let doc = {
       source_type: 'invoice',
       source_id: row.id,
@@ -959,10 +1081,8 @@ async function buildCashFlowData(query = {}) {
     };
     doc = applyAdjustment(doc, adjustments);
     doc.schedule_status = classifyScheduleDate(doc.expected_date, fromStr, toStr);
-    row.expected_date = doc.expected_date;
-    row.balance = doc.amount;
-    row.currency_code = doc.currency_code;
     docs.push(doc);
+    projectedInvoiceRows.push({ ...row, expected_date: doc.expected_date, balance: doc.amount, currency_code: doc.currency_code, _source_type: doc.source_type, _source_id: doc.source_id });
   }
 
   const [opPayRows] = await pool.query(
@@ -1132,8 +1252,8 @@ async function buildCashFlowData(query = {}) {
   const visibleSourceKeys = new Set(
     visibleDocs.map((doc) => sourceKey(doc.source_type, doc.source_id, doc.direction))
   );
-  const visibleInvoiceRows = (invoiceRows || []).filter((row) =>
-    visibleSourceKeys.has(sourceKey('invoice', row.id, 'in'))
+  const visibleInvoiceRows = (projectedInvoiceRows || []).filter((row) =>
+    visibleSourceKeys.has(sourceKey(row._source_type || 'invoice', row._source_id ?? row.id, 'in'))
   );
   const visibleReceiptRows = (receiptRows || []).filter((row) =>
     visibleSourceKeys.has(sourceKey('receipt', row.source_id, 'in'))

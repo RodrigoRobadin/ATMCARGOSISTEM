@@ -5,6 +5,7 @@ import { api, API_BASE } from '../api';
 import { useAuth } from '../auth.jsx';
 import useParamOptions from '../hooks/useParamOptions';
 import LogisticsAutocomplete from '../components/LogisticsAutocomplete.jsx';
+import QuoteEmailModal from '../components/QuoteEmailModal.jsx';
 
 // 👉 Cabecera gráfica desde /public (no requiere import):
 const HEADER_SRC = `${import.meta.env.BASE_URL}quote-header.png`;
@@ -379,6 +380,8 @@ export default function QuoteGenerator(){
     formaPago: 'TRANSFERENCIA',
   });
   const [quoteBranding, setQuoteBranding] = useState({ logoUrl: '' });
+  const [showQuoteEmail, setShowQuoteEmail] = useState(false);
+  const [sendingQuoteEmail, setSendingQuoteEmail] = useState(false);
 
   // ✨ NUEVOS estados como TAGS
   const [incluyeTags, setIncluyeTags] = useState([]);     // string[]
@@ -832,6 +835,64 @@ export default function QuoteGenerator(){
     }
   }
 
+  const quoteEmailFilename = `${String(ref || deal?.reference || 'presupuesto').replace(/[^a-z0-9._-]+/gi, '_')}.pdf`;
+  const quoteEmailRecipient =
+    deal?.contact_email ||
+    deal?.org_email ||
+    cf?.contact_email ||
+    cf?.org_email ||
+    cf?.email ||
+    '';
+  const quoteEmailSubject = `Presupuesto ${ref || deal?.reference || ''}`.trim();
+  const quoteEmailMessage = `Estimado/a ${contacto || cliente || ''},
+
+Adjuntamos el presupuesto correspondiente a la referencia ${ref || deal?.reference || ''}.
+
+Quedamos atentos a sus comentarios.`;
+
+  async function buildQuotePdfBlob() {
+    const el = document.getElementById('quote-print');
+    if (!el) throw new Error('No se encontro la vista del presupuesto.');
+    const html2pdf = await ensureHtml2Pdf();
+    const opt = {
+      margin: [PDF_MARGIN.top, PDF_MARGIN.right, PDF_MARGIN.bottom, PDF_MARGIN.left],
+      filename: quoteEmailFilename,
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2.5, useCORS: true, backgroundColor: '#ffffff' },
+      jsPDF: { unit: 'mm', format: [PDF_PAGE_W_MM, PDF_PAGE_H_MM], orientation: 'portrait' },
+      pagebreak: { mode: ['css', 'legacy'] },
+    };
+    const worker = html2pdf().from(el).set(opt);
+    await worker.toPdf();
+    const pdf = await worker.get('pdf');
+    return pdf.output('blob');
+  }
+
+  async function sendQuoteByEmail(fields) {
+    setSendingQuoteEmail(true);
+    try {
+      const pdfBlob = await buildQuotePdfBlob();
+      const form = new FormData();
+      form.append('pdf', pdfBlob, quoteEmailFilename);
+      form.append('to', fields.to);
+      form.append('cc', fields.cc || '');
+      form.append('subject', fields.subject);
+      form.append('message', fields.message || '');
+      form.append('filename', quoteEmailFilename);
+      form.append('reference', ref || deal?.reference || '');
+      form.append('deal_id', String(id));
+      form.append('revision', loadedCostSheetVersionNumber ? `DET COS ${loadedCostSheetVersionNumber}` : 'Actual');
+      await api.post('/quotes/send-email', form);
+      setShowQuoteEmail(false);
+      alert('Presupuesto enviado correctamente.');
+    } catch (error) {
+      console.error('No se pudo enviar el presupuesto:', error);
+      alert(error.response?.data?.error || error.message || 'No se pudo enviar el presupuesto.');
+    } finally {
+      setSendingQuoteEmail(false);
+    }
+  }
+
   if (loading) return <div className="p-4 text-sm text-slate-600">Cargando…</div>;
   if (!deal) return <div className="p-4 text-sm text-slate-600">Operación no encontrada.</div>;
 
@@ -1047,11 +1108,46 @@ export default function QuoteGenerator(){
           <button onClick={downloadPdf} className="px-3 py-2 rounded bg-black text-white">
             Descargar PDF
           </button>
+          <button type="button" onClick={() => setShowQuoteEmail(true)} className="px-3 py-2 rounded bg-emerald-700 text-white">
+            Enviar presupuesto
+          </button>
+
           <Link to={`/operations/${id}`} className="px-3 py-2 rounded bg-slate-200 hover:bg-slate-300">
             ← Volver a la operación
           </Link>
         </div>
       </div>
+
+      {isEmbed && (
+        <div className="sticky top-0 z-30 mb-3 flex items-center justify-between gap-3 border-b bg-white/95 px-3 py-2 shadow-sm backdrop-blur">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-800">
+              Presupuesto REF {deal.reference}
+            </div>
+            {loadedCostSheetVersionNumber ? (
+              <div className="text-xs text-slate-500">DET COS {loadedCostSheetVersionNumber}</div>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowQuoteEmail(true)}
+            className="shrink-0 rounded bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800"
+          >
+            Enviar presupuesto
+          </button>
+        </div>
+      )}
+
+      <QuoteEmailModal
+        open={showQuoteEmail}
+        onClose={() => !sendingQuoteEmail && setShowQuoteEmail(false)}
+        onSend={sendQuoteByEmail}
+        sending={sendingQuoteEmail}
+        initialTo={quoteEmailRecipient}
+        initialSubject={quoteEmailSubject}
+        initialMessage={quoteEmailMessage}
+        filename={quoteEmailFilename}
+      />
 
       {/* Panel editable */}
       {!previewOnly && (

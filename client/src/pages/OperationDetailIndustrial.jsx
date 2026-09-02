@@ -15,6 +15,7 @@ import OperationExpenseInvoices from "../components/OperationExpenseInvoices.jsx
 import OperationFinancialStatement from "../components/OperationFinancialStatement.jsx";
 import IndustrialDoorList from "../components/op-details/IndustrialDoorList";
 import AdminOpsPanel from "../components/op-details/AdminOpsPanel.jsx";
+import IndustrialLogisticsCollections from "../components/op-details/IndustrialLogisticsCollections.jsx";
 import { attachOperationToAssistant } from "../utils/assistantContext";
 import {
   buildQuoteEmailPlainText,
@@ -1257,12 +1258,17 @@ export default function OperationDetailIndustrial() {
     doc: d,
   }));
 
+  const hasIssuedSalesInvoice = opDocs.some((doc) =>
+    doc.kind !== 'credit_note' && !['borrador', 'anulada'].includes(String(doc.status || '').toLowerCase())
+  );
+
   const topTabs = [
     { id: "detalle", kind: "base", label: "Detalle" },
     { id: "documentos", kind: "base", label: "Documentos" },
     { id: "gastos", kind: "base", label: "Gastos" },
     ...(canAccessAdminOps ? [{ id: "administracion", kind: "base", label: "Administración" }] : []),
     { id: "estado-cuenta", kind: "base", label: "Estado de cuenta" },
+    ...(hasIssuedSalesInvoice ? [{ id: "logistica-cobros", kind: "base", label: "Logística y cobros" }] : []),
     {
       id: "detcos",
       kind: "base",
@@ -2147,6 +2153,11 @@ export default function OperationDetailIndustrial() {
               operationType="deal"
               quoteRevisionId={currentIndustrialRevisionId || null}
               quoteId={quoteId || null}
+            />
+          ) : activeTab === "logistica-cobros" ? (
+            <IndustrialLogisticsCollections
+              dealId={Number(id)}
+              selectedRevisionId={currentIndustrialRevisionId || null}
             />
           ) : activeTab === "detalle-oferta" ? (
             quoteLoading ? (
