@@ -31,6 +31,7 @@ import searchRouter from './routes/search.js';
 import followupsRouter from './routes/followups.js';
 import followupManagementRouter from './routes/followupManagement.js';
 import visitsRouter from './routes/visits.js';
+import systemCalendarRouter from './routes/systemCalendar.js';
 
 // ⭐️ NUEVO: Recorridos (Routes Module)
 import zonesRouter from './routes/zones.js';
@@ -231,6 +232,7 @@ app.use('/api/audit', auditRouter);
 app.use('/api/followups', followupManagementRouter);
 app.use('/api/followups', followupsRouter);
 app.use('/api/visits', visitsRouter);
+app.use('/api/system-calendar', systemCalendarRouter);
 
 // ⭐️ NUEVO: Recorridos (Routes Module)
 app.use('/api/zones', zonesRouter);
