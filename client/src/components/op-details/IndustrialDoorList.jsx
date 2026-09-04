@@ -36,12 +36,68 @@ function Field({ label, children }) {
     );
 }
 
+const ACTUATOR_OPTIONS = [
+    "BOTONERA",
+    "TIRADOR (TECHO)",
+    "TIRADOR (PARED)",
+    "LAZO INDUCTIVO",
+    "RADAR DE MOVIENTO",
+    "BOTONERA NO TOUCH",
+    "CONTROL REMOTO",
+];
+
+function normalizeActuatorName(value) {
+    return String(value || "")
+        .trim()
+        .toUpperCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\s+/g, " ");
+}
+
+function parseActuators(value) {
+    const items = [];
+    const legacy = [];
+    String(value || "")
+        .split(/[,;\n]+/)
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .forEach((part) => {
+            const match = part.match(/^(\d+)\s*(?:X\s*)?(.+)$/i);
+            const quantity = match ? Math.max(1, Number(match[1]) || 1) : 1;
+            const rawName = match ? match[2] : part;
+            const normalized = normalizeActuatorName(rawName);
+            const option = ACTUATOR_OPTIONS.find(
+                (candidate) => normalizeActuatorName(candidate) === normalized
+            );
+            if (!option) {
+                legacy.push(part);
+                return;
+            }
+            const existing = items.find((item) => item.type === option);
+            if (existing) existing.quantity += quantity;
+            else items.push({ type: option, quantity });
+        });
+    return { items, legacy };
+}
+
+function formatActuators(items, legacy = []) {
+    return [
+        ...(Array.isArray(items) ? items : [])
+            .filter((item) => item?.type && Number(item.quantity) > 0)
+            .map((item) => `${Math.trunc(Number(item.quantity))} ${item.type}`),
+        ...(Array.isArray(legacy) ? legacy : []).filter(Boolean),
+    ].join(", ");
+}
+
 export default function IndustrialDoorList({ dealId, editMode, dealReference }) {
     const [doors, setDoors] = useState([]);
     const [catalogItems, setCatalogItems] = useState([]);
     const [loading, setLoading] = useState(false);
     const [editingDoorId, setEditingDoorId] = useState(null);
     const [doorFormData, setDoorFormData] = useState({});
+    const [actuatorToAdd, setActuatorToAdd] = useState("");
+    const [actuatorQuantity, setActuatorQuantity] = useState(1);
     const [uploadingImage, setUploadingImage] = useState(null);
     const fileInputRef = useRef(null);
 
@@ -107,6 +163,7 @@ export default function IndustrialDoorList({ dealId, editMode, dealReference }) 
 
     // Iniciar edición de una puerta
     function startEditDoor(door) {
+        const parsedActuators = parseActuators(door.actuators);
         setEditingDoorId(door.id);
         setDoorFormData({
             identifier: door.identifier || "",
@@ -122,6 +179,8 @@ export default function IndustrialDoorList({ dealId, editMode, dealReference }) 
             clearance_left: door.clearance_left || "",
             motor_side: door.motor_side || "",
             actuators: door.actuators || "",
+            actuator_items: parsedActuators.items,
+            legacy_actuators: parsedActuators.legacy,
             visor_lines: door.visor_lines || "",
             right_leg: door.right_leg || "",
             notes: door.notes || "",
@@ -132,6 +191,8 @@ export default function IndustrialDoorList({ dealId, editMode, dealReference }) 
             place: door.place || "",
             canvas_color: door.canvas_color || "",
         });
+        setActuatorToAdd("");
+        setActuatorQuantity(1);
     }
 
     // Guardar cambios de una puerta
@@ -151,7 +212,10 @@ export default function IndustrialDoorList({ dealId, editMode, dealReference }) 
                 clearance_right: doorFormData.clearance_right ? Number(doorFormData.clearance_right) : null,
                 clearance_left: doorFormData.clearance_left ? Number(doorFormData.clearance_left) : null,
                 motor_side: doorFormData.motor_side || null,
-                actuators: doorFormData.actuators || null,
+                actuators: formatActuators(
+                    doorFormData.actuator_items,
+                    doorFormData.legacy_actuators
+                ) || null,
                 visor_lines: doorFormData.visor_lines || null,
                 right_leg: doorFormData.right_leg || null,
                 notes: doorFormData.notes || null,
@@ -194,6 +258,42 @@ export default function IndustrialDoorList({ dealId, editMode, dealReference }) 
     // Actualizar campo del formulario
     function updateFormField(field, value) {
         setDoorFormData((prev) => ({ ...prev, [field]: value }));
+    }
+
+    function addActuator() {
+        const quantity = Math.max(1, Math.trunc(Number(actuatorQuantity) || 1));
+        if (!actuatorToAdd) return;
+        setDoorFormData((prev) => {
+            const current = Array.isArray(prev.actuator_items) ? prev.actuator_items : [];
+            const exists = current.some((item) => item.type === actuatorToAdd);
+            return {
+                ...prev,
+                actuator_items: exists
+                    ? current.map((item) => item.type === actuatorToAdd
+                        ? { ...item, quantity: item.quantity + quantity }
+                        : item)
+                    : [...current, { type: actuatorToAdd, quantity }],
+            };
+        });
+        setActuatorToAdd("");
+        setActuatorQuantity(1);
+    }
+
+    function updateActuatorQuantity(type, value) {
+        const quantity = Math.max(1, Math.trunc(Number(value) || 1));
+        setDoorFormData((prev) => ({
+            ...prev,
+            actuator_items: (prev.actuator_items || []).map((item) =>
+                item.type === type ? { ...item, quantity } : item
+            ),
+        }));
+    }
+
+    function removeActuator(type) {
+        setDoorFormData((prev) => ({
+            ...prev,
+            actuator_items: (prev.actuator_items || []).filter((item) => item.type !== type),
+        }));
     }
 
     function updateDoorCatalogProduct(productId) {
@@ -529,17 +629,77 @@ Asunto: ${subject}`);
                                         </Field>
                                     </div>
 
-                                    <Field label="Accionadores (Ej: 2 Botonera, 1 Lazo inductivo, 2 Sensor)">
-                                        <textarea
-                                            className="border rounded-lg px-2 py-1 text-sm w-full focus:outline-none focus:ring-2 focus:ring-black/10"
-                                            rows={2}
-                                            value={doorFormData.actuators || ""}
-                                            onChange={(e) => updateFormField("actuators", e.target.value)}
-                                            placeholder="Ej: 2 Botonera, 1 Lazo inductivo, 2 Sensor"
-                                        />
-                                        <div className="text-xs text-slate-500 mt-1">
-                                            Tipos disponibles: Botonera, Lazo inductivo, Sensor, Tirador, Control
+                                    <Field label="Accionadores">
+                                        <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_7rem_auto] gap-2">
+                                            <Select
+                                                value={actuatorToAdd}
+                                                onChange={(e) => setActuatorToAdd(e.target.value)}
+                                            >
+                                                <option value="">Seleccionar accionador</option>
+                                                {ACTUATOR_OPTIONS.map((option) => (
+                                                    <option key={option} value={option}>{option}</option>
+                                                ))}
+                                            </Select>
+                                            <Input
+                                                type="number"
+                                                min="1"
+                                                step="1"
+                                                value={actuatorQuantity}
+                                                onChange={(e) => setActuatorQuantity(e.target.value)}
+                                                aria-label="Cantidad del accionador"
+                                            />
+                                            <button
+                                                type="button"
+                                                className="px-3 py-1 rounded-lg bg-slate-900 text-white text-sm disabled:opacity-50"
+                                                onClick={addActuator}
+                                                disabled={!actuatorToAdd}
+                                            >
+                                                Agregar
+                                            </button>
                                         </div>
+
+                                        {(doorFormData.actuator_items || []).length > 0 && (
+                                            <div className="mt-2 border rounded-lg divide-y bg-white">
+                                                {doorFormData.actuator_items.map((item) => (
+                                                    <div key={item.type} className="grid grid-cols-[minmax(0,1fr)_6rem_auto] gap-2 items-center px-2 py-2">
+                                                        <span className="text-sm font-medium">{item.type}</span>
+                                                        <Input
+                                                            type="number"
+                                                            min="1"
+                                                            step="1"
+                                                            value={item.quantity}
+                                                            onChange={(e) => updateActuatorQuantity(item.type, e.target.value)}
+                                                            aria-label={`Cantidad de ${item.type}`}
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            className="px-2 py-1 rounded border text-red-600 text-xs"
+                                                            onClick={() => removeActuator(item.type)}
+                                                        >
+                                                            Quitar
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        {(doorFormData.legacy_actuators || []).length > 0 && (
+                                            <div className="mt-2 flex items-start justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                                                <div>
+                                                    <div className="text-xs font-medium text-amber-800">Datos anteriores conservados</div>
+                                                    <div className="text-xs text-amber-700">
+                                                        {doorFormData.legacy_actuators.join(", ")}
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    className="text-xs text-red-600 hover:underline shrink-0"
+                                                    onClick={() => updateFormField("legacy_actuators", [])}
+                                                >
+                                                    Descartar
+                                                </button>
+                                            </div>
+                                        )}
                                     </Field>
 
                                     <Field label="Observaciones / Detalles adicionales">

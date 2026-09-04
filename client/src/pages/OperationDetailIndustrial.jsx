@@ -16,6 +16,7 @@ import OperationFinancialStatement from "../components/OperationFinancialStateme
 import IndustrialDoorList from "../components/op-details/IndustrialDoorList";
 import AdminOpsPanel from "../components/op-details/AdminOpsPanel.jsx";
 import IndustrialLogisticsCollections from "../components/op-details/IndustrialLogisticsCollections.jsx";
+import LogisticsAutocomplete from "../components/LogisticsAutocomplete.jsx";
 import { attachOperationToAssistant } from "../utils/assistantContext";
 import {
   buildQuoteEmailPlainText,
@@ -537,17 +538,11 @@ export default function OperationDetailIndustrial() {
   const [showReportPreview, setShowReportPreview] = useState(false);
   const requestedTab = String(searchParams.get("tab") || "").toLowerCase();
 
-  useEffect(() => {
-    if (!canAccessAdminOps) return;
-    if (requestedTab === "administracion") {
-      setActiveTab("administracion");
-    }
-  }, [canAccessAdminOps, requestedTab, id]);
-
   function handleTabChange(nextTab) {
     setActiveTab(nextTab);
     const nextParams = new URLSearchParams(searchParams);
     if (canAccessAdminOps && nextTab === "administracion") nextParams.set("tab", "administracion");
+    else if (nextTab === "logistica-cobros") nextParams.set("tab", "logistica-cobros");
     else nextParams.delete("tab");
     setSearchParams(nextParams, { replace: true });
   }
@@ -1261,6 +1256,15 @@ export default function OperationDetailIndustrial() {
   const hasIssuedSalesInvoice = opDocs.some((doc) =>
     doc.kind !== 'credit_note' && !['borrador', 'anulada'].includes(String(doc.status || '').toLowerCase())
   );
+
+  useEffect(() => {
+    if (requestedTab === "administracion" && canAccessAdminOps) {
+      setActiveTab("administracion");
+    }
+    if (requestedTab === "logistica-cobros" && hasIssuedSalesInvoice) {
+      setActiveTab("logistica-cobros");
+    }
+  }, [canAccessAdminOps, requestedTab, hasIssuedSalesInvoice, id]);
 
   const topTabs = [
     { id: "detalle", kind: "base", label: "Detalle" },
@@ -2691,29 +2695,31 @@ export default function OperationDetailIndustrial() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 mb-3">
                   <Field label="Origen (fábrica / depósito)">
-                    <Input
+                    <LogisticsAutocomplete
                       readOnly={!editMode}
                       value={getCF("origen_pto")}
-                      onChange={(e) =>
+                      onChange={(value) =>
                         setCFAndDirty(
                           "origen_pto",
                           "Origen",
-                          e.target.value
+                          value
                         )
                       }
+                      placeholder="Selecciona o escribe una ciudad / país"
                     />
                   </Field>
                   <Field label="Destino (obra / planta)">
-                    <Input
+                    <LogisticsAutocomplete
                       readOnly={!editMode}
                       value={getCF("destino_pto")}
-                      onChange={(e) =>
+                      onChange={(value) =>
                         setCFAndDirty(
                           "destino_pto",
                           "Destino",
-                          e.target.value
+                          value
                         )
                       }
+                      placeholder="Selecciona o escribe una ciudad / país"
                     />
                   </Field>
                 </div>

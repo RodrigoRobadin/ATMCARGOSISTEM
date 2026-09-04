@@ -57,6 +57,7 @@ import ContainerBilling from './pages/container/ContainerBilling.jsx';
 import Invoices from './pages/Invoices.jsx';
 import CreditNotes from './pages/CreditNotes.jsx';
 import FollowUpManagement from './pages/FollowUpManagement.jsx';
+import SystemCalendar from './pages/SystemCalendar.jsx';
 import InvoiceDetail from './pages/InvoiceDetail.jsx';
 import PurchaseOrders from './pages/PurchaseOrders.jsx';
 import PurchaseOrderDetail from './pages/PurchaseOrderDetail.jsx';
@@ -84,6 +85,7 @@ const sidebarIcons = {
   container: String.fromCodePoint(0x1F4E6),
   industrial: String.fromCodePoint(0x1F3ED),
   service: String.fromCodePoint(0x1F527),
+  calendar: String.fromCodePoint(0x1F4C5),
   admin: String.fromCodePoint(0x1F4C4),
   user: String.fromCodePoint(0x1F464),
   params: String.fromCodePoint(0x2699),
@@ -241,6 +243,7 @@ function Layout({ children }) {
           {(role === 'admin' || role === 'service') && (
             <SideLink to="/service" icon={sidebarIcons.service} label="Reparación y mantenimiento" />
           )}
+          <SideLink to="/calendar" icon={sidebarIcons.calendar} label="Calendario general" />
 
           {canSeeAdminBlock && (
             <>
@@ -682,6 +685,7 @@ export default function App() {
                   }
                 />
                 <Route path="/followup" element={<Navigate to="/followup-management" replace />} />
+                <Route path="/calendar" element={<SystemCalendar />} />
               </Routes>
             </Layout>
           </RequireAuth>

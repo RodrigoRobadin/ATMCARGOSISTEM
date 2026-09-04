@@ -275,8 +275,8 @@ const CF_SCHEMA = {
   pais_destino:       { label: 'País Destino', type: 'text' },
   ciudad_origen:      { label: 'Ciudad Origen', type: 'text' },
   ciudad_destino:     { label: 'Ciudad Destino', type: 'text' },
-  aeropuerto_origen:  { label: 'Aeropuerto Origen', type: 'text' },
-  aeropuerto_destino: { label: 'Aeropuerto Destino', type: 'text' },
+  aeropuerto_origen:  { label: 'Aeropuerto / Puerto Origen', type: 'text' },
+  aeropuerto_destino: { label: 'Aeropuerto / Puerto Destino', type: 'text' },
 
   volumen_m3:         { label: 'Volumen (m³)', type: 'number' },
   peso_bruto_kg:      { label: 'Peso bruto (kg)', type: 'number' },
@@ -1201,10 +1201,10 @@ Quedamos atentos a sus comentarios.`;
             <label className="block">Ciudad Destino
               <LogisticsAutocomplete value={ciudadDestino} onChange={setCiudadDestino} inputClassName="w-full border rounded px-2 py-1" />
             </label>
-            <label className="block">Aeropuerto Origen
+            <label className="block">Aeropuerto / Puerto Origen
               <LogisticsAutocomplete includeTypes={["airport", "port", "city"]} value={aeropuertoOrigen} onChange={setAeropuertoOrigen} inputClassName="w-full border rounded px-2 py-1" />
             </label>
-            <label className="block">Aeropuerto Destino
+            <label className="block">Aeropuerto / Puerto Destino
               <LogisticsAutocomplete includeTypes={["airport", "port", "city"]} value={aeropuertoDestino} onChange={setAeropuertoDestino} inputClassName="w-full border rounded px-2 py-1" />
             </label>
           </div>
@@ -1366,7 +1366,7 @@ Quedamos atentos a sus comentarios.`;
                 <KVRow label="Tipo de Operación" value={tipoOperacion} />
                 <KVRow label="País de Origen" value={paisOrigen} />
                 <KVRow label="Ciudad de Origen" value={ciudadOrigen} />
-                <KVRow label="Aeropuerto/Puerto Origen" value={aeropuertoOrigen} />
+                <KVRow label="Aeropuerto / Puerto Origen" value={aeropuertoOrigen} />
                 <KVRow label="Volumen (m³)" value={volumenM3} />
                 <KVRow label="Mercadería" value={mercaderia} />
                 <KVRow label="Seguro de Carga" value={seguroTipo} />
@@ -1375,7 +1375,7 @@ Quedamos atentos a sus comentarios.`;
                 <KVRow label="Tipo de Transporte" value={tipoTransporte} />
                 <KVRow label="País de Destino" value={paisDestino} />
                 <KVRow label="Ciudad de Destino" value={ciudadDestino} />
-                <KVRow label="Aeropuerto/Puerto Destino" value={aeropuertoDestino} />
+                <KVRow label="Aeropuerto / Puerto Destino" value={aeropuertoDestino} />
                 <KVRow label="Peso Bruto (kg)" value={pesoBrutoKg} />
                 <KVRow label="Monto asegurado" value={montoAsegurado} />
                 <KVRow label="Aseguradora" value={aseguradora} />

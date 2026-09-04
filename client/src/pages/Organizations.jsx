@@ -400,6 +400,7 @@ function NewOrganizationModal({
 }) {
   const [razonSocial, setRazonSocial] = useState('');
   const [ruc, setRuc] = useState('');
+  const [contactName, setContactName] = useState('');
   const [address, setAddress] = useState('');
   const [email, setEmail] = useState('');
   const [city, setCity] = useState('');
@@ -411,7 +412,9 @@ function NewOrganizationModal({
   const [tipoOrg, setTipoOrg] = useState('');
   const [operacion, setOperacion] = useState('');
   const [notes, setNotes] = useState('');
-  const [branches, setBranches] = useState([]);
+  const [branches, setBranches] = useState([
+    { name: 'Casa matriz', address: '', city: '', city_id: '', country: '', is_default: 1 },
+  ]);
   const [supplierBank, setSupplierBank] = useState({
     supplier_bank_name: '',
     supplier_bank_account: '',
@@ -456,11 +459,39 @@ function NewOrganizationModal({
       setError('La Razón Social es obligatoria.');
       return;
     }
+    if (!ruc.trim()) {
+      setError('El RUC es obligatorio.');
+      return;
+    }
+    if (!contactName.trim()) {
+      setError('El contacto principal es obligatorio.');
+      return;
+    }
+    if (!email.trim()) {
+      setError('El email de la organización es obligatorio.');
+      return;
+    }
     if (!cityId) {
       setError('La ciudad es obligatoria.');
       return;
     }
-    const activeBranches = (branches || []).filter((branch) => branch?.name || branch?.address);
+    const activeBranches = (branches || [])
+      .filter((branch) => branch?.name || branch?.address)
+      .map((branch) => ({
+        ...branch,
+        address: branch.address || address || '',
+        city_id: branch.city_id || cityId || '',
+        city: branch.city || city || '',
+        country: branch.country || country || '',
+      }));
+    if (!activeBranches.length) {
+      setError('Debe cargar una sucursal o casa matriz.');
+      return;
+    }
+    if (activeBranches.some((branch) => !String(branch.name || '').trim())) {
+      setError('Indica el nombre de cada sucursal o matriz.');
+      return;
+    }
     if (activeBranches.some((branch) => !branch.city_id)) {
       setError('Selecciona la ciudad de cada sucursal cargada.');
       return;
@@ -471,9 +502,10 @@ function NewOrganizationModal({
       await api.post('/organizations', {
         razon_social: razonSocial.trim(),
         name: razonSocial.trim(),
-        ruc: ruc || null,
+        ruc: ruc.trim(),
+        contact_name: contactName.trim(),
         address: address || null,
-        email: email || null,
+        email: email.trim(),
         city: city || null,
         city_id: cityId ? Number(cityId) : null,
         country: country || null,
@@ -484,7 +516,12 @@ function NewOrganizationModal({
         notes: notes || null,
         hoja_ruta: hojaRuta || null,
         ...(isSupplierOrg ? supplierBank : {}),
-        branches: (branches || []).filter((b) => b?.name || b?.address),
+        branches: activeBranches.map((branch, index) => ({
+          ...branch,
+          is_default: activeBranches.some((item) => item.is_default)
+            ? (branch.is_default ? 1 : 0)
+            : (index === 0 ? 1 : 0),
+        })),
 
         // Asignación comercial tolerante
         account_executive_id: execId,
@@ -499,7 +536,7 @@ function NewOrganizationModal({
         e?.response?.data
           ? typeof e.response.data === 'string'
             ? e.response.data
-            : 'No se pudo crear la organización.'
+            : e.response.data?.error || 'No se pudo crear la organización.'
           : 'No se pudo crear la organización.'
       );
     } finally {
@@ -524,22 +561,33 @@ function NewOrganizationModal({
           <div className="text-sm text-red-600 break-words">{error}</div>
         )}
 
-        {/* Fila 1: Razón Social - RUC */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {/* Fila 1: identificación */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <label className="block text-sm">
             Razón Social *
             <input
               className="w-full border rounded-lg px-3 py-2"
               value={razonSocial}
               onChange={(e) => setRazonSocial(e.target.value.toUpperCase())}
+              required
             />
           </label>
           <label className="block text-sm">
-            RUC
+            RUC *
             <input
               className="w-full border rounded-lg px-3 py-2"
               value={ruc}
               onChange={(e) => setRuc(e.target.value)}
+              required
+            />
+          </label>
+          <label className="block text-sm">
+            Contacto principal *
+            <input
+              className="w-full border rounded-lg px-3 py-2"
+              value={contactName}
+              onChange={(e) => setContactName(e.target.value)}
+              required
             />
           </label>
         </div>
@@ -555,12 +603,13 @@ function NewOrganizationModal({
             />
           </label>
           <label className="block text-sm">
-            Email
+            Email *
             <input
               type="email"
               className="w-full border rounded-lg px-3 py-2"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              required
             />
           </label>
         </div>
@@ -608,7 +657,7 @@ function NewOrganizationModal({
         {/* Sucursales */}
         <div className="border rounded-xl p-3">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-sm font-medium">Sucursales</div>
+            <div className="text-sm font-medium">Sucursal / matriz *</div>
             <button
               type="button"
               className="px-2 py-1 text-xs rounded-lg border bg-white hover:bg-slate-50"
@@ -624,7 +673,7 @@ function NewOrganizationModal({
           </div>
           {branches.length === 0 && (
             <div className="text-xs text-slate-500">
-              No hay sucursales cargadas.
+              Debe cargar una sucursal o casa matriz.
             </div>
           )}
           {branches.map((b, idx) => (
@@ -633,6 +682,7 @@ function NewOrganizationModal({
                 className="border rounded-lg px-2 py-1 text-sm md:col-span-1"
                 placeholder="Nombre"
                 value={b.name || ''}
+                required
                 onChange={(e) =>
                   setBranches((prev) =>
                     prev.map((x, i) => (i === idx ? { ...x, name: e.target.value } : x))
@@ -677,11 +727,9 @@ function NewOrganizationModal({
                   <input
                     type="checkbox"
                     checked={!!b.is_default}
-                    onChange={(e) =>
+                    onChange={() =>
                       setBranches((prev) =>
-                        prev.map((x, i) =>
-                          i === idx ? { ...x, is_default: e.target.checked ? 1 : 0 } : x
-                        )
+                        prev.map((x, i) => ({ ...x, is_default: i === idx ? 1 : 0 }))
                       )
                     }
                   />

@@ -121,46 +121,29 @@ function formatShortDate(value) {
   return date.toLocaleDateString("es-PY");
 }
 
-function getOperationSignalMeta(deal, isProspectStage) {
-  const activityCount = Number(deal.deal_activity_count || 0);
-  const noteCount = Number(deal.followup_note_count || 0);
-  const reminderCount = Number(deal.pending_reminders_count || 0);
-  const taskCount = Number(deal.pending_followup_tasks_count || 0);
+function getOperationSignalMeta(deal) {
+  const pendingTaskCount = Number(deal.pending_followup_tasks_count || 0);
+  const completedTaskCount = Number(deal.completed_followup_tasks_count || 0);
+  const taskCount = Number(deal.tracked_followup_tasks_count || (pendingTaskCount + completedTaskCount));
   const overdueTaskCount = Number(deal.overdue_followup_tasks_count || 0);
-  const hasQuote = Number(deal.has_quote || 0) === 1;
-  const hasFollowup = activityCount > 0 || noteCount > 0 || reminderCount > 0 || taskCount > 0;
+  const isRed = taskCount === 0 || overdueTaskCount > 0;
+  const label = taskCount === 0
+    ? "Sin tareas"
+    : overdueTaskCount > 0
+    ? "Tiene tareas vencidas"
+    : pendingTaskCount > 0
+    ? "Tiene tareas vigentes"
+    : "Tareas completadas";
 
-  let tone = "red";
-  let label = "Sin seguimiento";
-
-  if (isProspectStage) {
-    if (hasFollowup) {
-      tone = "green";
-      label = "Con seguimiento";
-    }
-  } else if (hasQuote && hasFollowup) {
-    tone = "green";
-    label = "Operacion al dia";
-  } else if (hasQuote || hasFollowup) {
-    tone = "yellow";
-    label = hasQuote ? "Tiene cotizacion, falta seguimiento" : "Tiene seguimiento, falta cotizacion";
-  }
-
-  const dotClass =
-    tone === "green"
-      ? "bg-emerald-500"
-      : tone === "yellow"
-      ? "bg-amber-400"
-      : "bg-red-500";
+  const dotClass = isRed ? "bg-red-500" : "bg-emerald-500";
 
   const tooltip = [
     label,
-    `Actividades: ${activityCount}${deal.last_activity_at ? ` | Ultima: ${formatShortDate(deal.last_activity_at)}` : ""}`,
-    `Notas: ${noteCount}${deal.last_note_at ? ` | Ultima: ${formatShortDate(deal.last_note_at)}` : ""}`,
-    `Recordatorios: ${reminderCount}${deal.next_reminder_at ? ` | Proximo: ${formatShortDate(deal.next_reminder_at)}` : ""}`,
-    `Tareas: ${taskCount}${overdueTaskCount > 0 ? ` | Vencidas: ${overdueTaskCount}` : ""}${deal.next_task_due_at ? ` | Proxima: ${formatShortDate(deal.next_task_due_at)}` : ""}`,
-    `Cotizacion: ${hasQuote ? `Si | Ultima: ${formatShortDate(deal.last_quote_at)}` : "No"}`,
-  ].join("\n");
+    `Pendientes: ${pendingTaskCount}`,
+    `Completadas: ${completedTaskCount}`,
+    `Vencidas: ${overdueTaskCount}`,
+    deal.next_task_due_at ? `Proxima: ${formatShortDate(deal.next_task_due_at)}` : null,
+  ].filter(Boolean).join("\n");
 
   return { dotClass, tooltip };
 }
@@ -565,7 +548,7 @@ export default function Workspace() {
                           ? getOrganizationUrl(deal.org_id)
                           : getOperationUrl(deal.id);
 
-                      const signalMeta = getOperationSignalMeta(deal, isProspectStage);
+                      const signalMeta = getOperationSignalMeta(deal);
                       const hasOverBudget = String(deal.expense_control_status || "") === "over_budget";
 
                       return (

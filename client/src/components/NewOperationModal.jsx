@@ -1,7 +1,6 @@
 // client/src/components/NewOperationModal.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import { useAuth } from "../auth.jsx";
 import useParamOptions from "../hooks/useParamOptions";
 import { LOGISTICS_COUNTRIES, LOGISTICS_LOCATION_OPTIONS } from "../data/logisticsCatalog";
 
@@ -358,8 +357,6 @@ export default function NewOperationModal({
   onCreated,
   defaultBusinessUnitId,
 }) {
-  const { user } = useAuth();
-  const isAdmin = String(user?.role || "").toLowerCase() === "admin";
   const [referencePreview, setReferencePreview] = useState("—");
 
   // Transporte / carga
@@ -403,7 +400,7 @@ export default function NewOperationModal({
   const [businessUnits, setBusinessUnits] = useState([]);
   const [businessUnitId, setBusinessUnitId] = useState(defaultBusinessUnitId || "");
   const [stageId, setStageId] = useState(stages?.[0]?.id || null);
-  const [execId, setExecId] = useState(""); // Ejecutivo de cuenta (opcional)
+  const [execId, setExecId] = useState("");
 
   const [saving, setSaving] = useState(false);
 
@@ -421,6 +418,7 @@ export default function NewOperationModal({
   const [orgLoading, setOrgLoading] = useState(false);
   const [orgResults, setOrgResults] = useState([]);
   const [selectedOrg, setSelectedOrg] = useState(null);
+  const [selectedContact, setSelectedContact] = useState(null);
 
   // Contactos: locales por organización
   const [contacts, setContacts] = useState([]);
@@ -568,13 +566,20 @@ export default function NewOperationModal({
     return (
       pipelineId &&
       stageId &&
+      businessUnitId &&
       (modo || "").length &&
       (clase || "").length &&
       (origen || "").length &&
       (destino || "").length &&
-      (orgName || "").length
+      selectedOrg?.id &&
+      orgName.trim().length &&
+      orgRuc.trim().length &&
+      contactName.trim().length &&
+      contactPhone.trim().length &&
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim()) &&
+      execId
     );
-  }, [pipelineId, stageId, modo, clase, origen, destino, orgName]);
+  }, [pipelineId, stageId, businessUnitId, modo, clase, origen, destino, selectedOrg, orgName, orgRuc, contactName, contactPhone, contactEmail, execId]);
 
   // Autocomplete ORG
   useEffect(() => {
@@ -597,10 +602,11 @@ export default function NewOperationModal({
   }, [debOrg]);
 
   function handleOrgInput(e) {
-    const v = e.target.value;
+    const v = e.target.value.toUpperCase();
     setOrgName(v);
     setOrgQuery(v);
     setSelectedOrg(null);
+    setSelectedContact(null);
     setOrgRuc("");
     setContacts([]);
     setContactName("");
@@ -610,24 +616,32 @@ export default function NewOperationModal({
   }
 
   async function selectOrganization(org) {
-    setSelectedOrg(org);
-    setOrgName(org.name);
-    setOrgRuc(org.ruc || "");
-    setOrgQuery(org.name);
+    const uppercaseName = String(org.name || '').toUpperCase();
+    setSelectedOrg({ ...org, name: uppercaseName });
+    setOrgName(uppercaseName);
+    setOrgQuery(uppercaseName);
     setOrgOpen(false);
+    setSelectedContact(null);
 
-    const list = await fetchContactsByOrg(org.id);
+    const [detailResponse, list] = await Promise.all([
+      api.get(`/organizations/${org.id}`).catch(() => ({ data: org })),
+      fetchContactsByOrg(org.id),
+    ]);
+    const detail = detailResponse?.data?.organization || detailResponse?.data || org;
+    setOrgRuc(detail?.ruc || detail?.tax_id || org.ruc || "");
     setContacts(list || []);
 
     if (list?.length === 1) {
       const c = list[0];
+      setSelectedContact(c);
       setContactName(c.name || "");
-      setContactEmail(c.email || "");
-      setContactPhone(c.phone || "");
+      setContactEmail(c.email || detail?.email || "");
+      setContactPhone(c.phone || detail?.phone || "");
     } else {
+      setSelectedContact(null);
       setContactName("");
-      setContactEmail("");
-      setContactPhone("");
+      setContactEmail(detail?.email || "");
+      setContactPhone(detail?.phone || "");
     }
   }
 
@@ -682,6 +696,7 @@ export default function NewOperationModal({
 
   function handleContactInput(e) {
     const v = e.target.value;
+    setSelectedContact(null);
     setContactName(v);
     setContactFilter(v);
     if ((selectedOrg && contacts.length) || v.trim().length >= 2) {
@@ -690,6 +705,7 @@ export default function NewOperationModal({
   }
 
   function selectContact(c) {
+    setSelectedContact(c);
     setContactName(c.name || "");
     setContactEmail(c.email || "");
     setContactPhone(c.phone || "");
@@ -745,12 +761,15 @@ async function handleCreate(e) {
         title: safeTitle,
         value: 0,
         business_unit_id: businessUnitId || null,
-        ...(isAdmin ? { account_exec_id: execId || null } : {}),
-        org_name: orgName || null,
-        org_ruc: orgRuc || null,
-        contact_name: contactName || null,
-        contact_phone: contactPhone || null,
-        contact_email: contactEmail || null,
+        enforce_complete_data: true,
+        account_exec_id: Number(execId),
+        organization: { id: selectedOrg.id, name: orgName.trim().toUpperCase(), ruc: orgRuc.trim() },
+        contact: {
+          ...(selectedContact?.id ? { id: selectedContact.id } : {}),
+          name: contactName.trim(),
+          phone: contactPhone.trim(),
+          email: contactEmail.trim(),
+        },
       };
 
       const { data: created } = await api.post("/deals", payload);
@@ -947,7 +966,7 @@ async function handleCreate(e) {
             <div className="font-medium mb-2">Cliente</div>
             <div className="grid gap-2">
               <label className="text-sm" ref={orgBoxRef}>
-                Organización
+                Organización *
                 <div className="relative">
                   <Input
                     value={orgName}
@@ -956,6 +975,7 @@ async function handleCreate(e) {
                     placeholder="Ej: ACME S.A."
                     autoComplete="off"
                     spellCheck={false}
+                    required
                   />
                   {orgOpen && (
                     <div className="absolute z-20 mt-1 w-full bg-white border rounded-lg shadow-lg max-h-64 overflow-auto">
@@ -984,17 +1004,18 @@ async function handleCreate(e) {
               </label>
 
               <label className="text-sm">
-                RUC
+                RUC *
                 <Input
                   value={orgRuc}
                   onChange={(e) => setOrgRuc(e.target.value)}
                   placeholder="Ej: 80000000-1"
                   autoComplete="off"
+                  required
                 />
               </label>
 
               <label className="text-sm" ref={contactBoxRef}>
-                Contacto
+                Contacto *
                 <div className="relative">
                   <Input
                     value={contactName}
@@ -1007,6 +1028,7 @@ async function handleCreate(e) {
                     placeholder="Escribí para buscar o crear…"
                     autoComplete="off"
                     spellCheck={false}
+                    required
                   />
                   {contactOpen && (
                     <div className="absolute z-20 mt-1 w-full bg-white border rounded-lg shadow-lg max-h-64 overflow-auto">
@@ -1065,19 +1087,22 @@ async function handleCreate(e) {
 
               <div className="grid grid-cols-2 gap-2">
                 <label className="text-sm">
-                  Teléfono
+                  Nro. de contacto *
                   <Input
                     value={contactPhone}
                     onChange={(e) => setContactPhone(e.target.value)}
                     placeholder="+595 ..."
+                    required
                   />
                 </label>
                 <label className="text-sm">
-                  Email
+                  Email de contacto *
                   <Input
+                    type="email"
                     value={contactEmail}
                     onChange={(e) => setContactEmail(e.target.value)}
                     placeholder="correo@dominio.com"
+                    required
                   />
                 </label>
               </div>
@@ -1293,6 +1318,7 @@ async function handleCreate(e) {
                 <Select
                   value={businessUnitId || ""}
                   onChange={(e) => setBusinessUnitId(e.target.value)}
+                  required
                 >
                   <option value="">—</option>
                   {businessUnits.map((bu) => (
@@ -1303,12 +1329,10 @@ async function handleCreate(e) {
                 </Select>
               </label>
 
-              {isAdmin && (
-                <label className="text-sm">
-                  Ejecutivo de cuenta (opcional)
-                  <ExecSelect value={execId} onChange={setExecId} />
-                </label>
-              )}
+              <label className="text-sm">
+                Ejecutivo de cuenta *
+                <ExecSelect value={execId} onChange={setExecId} />
+              </label>
             </div>
           </div>
 

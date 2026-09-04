@@ -482,6 +482,8 @@ router.get('/', requireAuth, async (req, res) => {
        COALESCE(fn.total_notes, 0) AS followup_note_count,
        fn.last_note_at,
        COALESCE(ft.pending_tasks_count, 0) AS pending_followup_tasks_count,
+       COALESCE(ft.completed_tasks_count, 0) AS completed_followup_tasks_count,
+       COALESCE(ft.tracked_tasks_count, 0) AS tracked_followup_tasks_count,
        COALESCE(ft.overdue_tasks_count, 0) AS overdue_followup_tasks_count,
        ft.next_task_due_at,
        COALESCE(qs.has_quote, 0) AS has_quote,
@@ -528,6 +530,8 @@ router.get('/', requireAuth, async (req, res) => {
        SELECT
          deal_id,
          SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_tasks_count,
+         SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS completed_tasks_count,
+         SUM(CASE WHEN status IN ('pending', 'done') THEN 1 ELSE 0 END) AS tracked_tasks_count,
          SUM(CASE WHEN status = 'pending' AND due_at < NOW() THEN 1 ELSE 0 END) AS overdue_tasks_count,
          MIN(CASE WHEN status = 'pending' THEN due_at ELSE NULL END) AS next_task_due_at
        FROM followup_tasks
@@ -1053,14 +1057,16 @@ router.post('/', requireAuth, async (req, res) => {
   const organization = body.organization || null;
   const contact      = body.contact || null;
 
-  const org_name     = body.org_name || organization?.name || null;
-  const org_ruc      = body.org_ruc || organization?.ruc || organization?.tax_id || null;
-  const org_id_body  = organization?.id || null;
+  const cleanText = (value) => String(value ?? '').trim();
+  const org_name = cleanText(body.org_name || organization?.name).toUpperCase();
+  const org_ruc = cleanText(body.org_ruc || organization?.ruc || organization?.tax_id);
+  const org_id_body = Number(organization?.id || body.org_id || 0) || null;
 
-  const contact_name    = body.contact_name  || contact?.name  || null;
-  const contact_email   = body.contact_email || contact?.email || null;
-  const contact_phone   = body.contact_phone || contact?.phone || null;
-  const contact_id_body = contact?.id || null;
+  const contact_name = cleanText(body.contact_name || contact?.name);
+  const contact_email = cleanText(body.contact_email || contact?.email).toLowerCase();
+  const contact_phone = cleanText(body.contact_phone || contact?.phone);
+  const contact_id_body = Number(contact?.id || body.contact_id || 0) || null;
+  const org_branch_id_body = Number(body.org_branch_id || 0) || null;
 
   const hints = {
     modalidad_carga : body.transport_type_hint || '',
@@ -1086,15 +1092,48 @@ router.post('/', requireAuth, async (req, res) => {
   try {
     await conn.beginTransaction();
 
+    const [[businessUnit]] = business_unit_id
+      ? await conn.query('SELECT id, key_slug FROM business_units WHERE id = ? LIMIT 1', [business_unit_id])
+      : [[]];
+    const businessUnitKey = String(businessUnit?.key_slug || '').trim().toLowerCase();
+    const requiresCompleteCommercialData =
+      body.enforce_complete_data === true &&
+      ['atm-cargo', 'atm-industrial'].includes(businessUnitKey);
+
+    if (requiresCompleteCommercialData) {
+      if (!org_id_body) throw Object.assign(new Error('Selecciona una organización existente'), { statusCode: 400 });
+      if (!org_name) throw Object.assign(new Error('La organización es obligatoria'), { statusCode: 400 });
+      if (!org_ruc) throw Object.assign(new Error('El RUC es obligatorio'), { statusCode: 400 });
+      if (!contact_name) throw Object.assign(new Error('El contacto es obligatorio'), { statusCode: 400 });
+      if (!contact_phone) throw Object.assign(new Error('El número de contacto es obligatorio'), { statusCode: 400 });
+      if (!contact_email) throw Object.assign(new Error('El email de contacto es obligatorio'), { statusCode: 400 });
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact_email)) {
+        throw Object.assign(new Error('El email de contacto no es válido'), { statusCode: 400 });
+      }
+      if (!body.account_exec_id) {
+        throw Object.assign(new Error('Selecciona un ejecutivo de cuenta'), { statusCode: 400 });
+      }
+    }
+
     let orgId = null;
     if (org_id_body) {
       orgId = org_id_body;
-      if (org_ruc) {
+      const [[existingOrganization]] = await conn.query(
+        'SELECT id FROM organizations WHERE id = ? LIMIT 1',
+        [orgId]
+      );
+      if (!existingOrganization) {
+        throw Object.assign(new Error('La organización seleccionada no existe'), { statusCode: 400 });
+      }
+      if (org_name || org_ruc) {
         await conn.query(
-          'UPDATE organizations SET ruc = ?, updated_at = NOW() WHERE id = ?',
-          [org_ruc, orgId]
+          'UPDATE organizations SET name = COALESCE(NULLIF(?, \'\'), name), razon_social = COALESCE(NULLIF(?, \'\'), razon_social), ruc = COALESCE(NULLIF(?, \'\'), ruc), email = COALESCE(NULLIF(?, \'\'), email), phone = COALESCE(NULLIF(?, \'\'), phone), updated_at = NOW() WHERE id = ?',
+          [org_name, org_name, org_ruc, contact_email, contact_phone, orgId]
         ).catch(async () => {
-          await conn.query('UPDATE organizations SET ruc = ? WHERE id = ?', [org_ruc, orgId]);
+          await conn.query(
+            'UPDATE organizations SET name = COALESCE(NULLIF(?, \'\'), name), razon_social = COALESCE(NULLIF(?, \'\'), razon_social), ruc = COALESCE(NULLIF(?, \'\'), ruc), email = COALESCE(NULLIF(?, \'\'), email), phone = COALESCE(NULLIF(?, \'\'), phone) WHERE id = ?',
+            [org_name, org_name, org_ruc, contact_email, contact_phone, orgId]
+          );
         });
       }
     } else if (org_name) {
@@ -1129,13 +1168,28 @@ router.post('/', requireAuth, async (req, res) => {
     let contactId = null;
     if (contact_id_body) {
       contactId = contact_id_body;
+      const [[existingContact]] = await conn.query(
+        'SELECT id FROM contacts WHERE id = ? LIMIT 1',
+        [contactId]
+      );
+      if (!existingContact) {
+        throw Object.assign(new Error('El contacto seleccionado no existe'), { statusCode: 400 });
+      }
+      await conn.query(
+        'UPDATE contacts SET name = ?, email = ?, phone = ?, org_id = ? WHERE id = ?',
+        [contact_name, contact_email, contact_phone, orgId, contactId]
+      );
     } else if (contact_name) {
       const [cRows] = await conn.query(
-        'SELECT id FROM contacts WHERE name = ? LIMIT 1',
-        [contact_name]
+        'SELECT id FROM contacts WHERE name = ? AND org_id = ? LIMIT 1',
+        [contact_name, orgId]
       );
       if (cRows.length) {
         contactId = cRows[0].id;
+        await conn.query(
+          'UPDATE contacts SET email = ?, phone = ? WHERE id = ?',
+          [contact_email, contact_phone, contactId]
+        );
       } else {
         const [ins] = await conn.query(
           'INSERT INTO contacts(name, email, phone, org_id) VALUES(?,?,?,?)',
@@ -1145,33 +1199,37 @@ router.post('/', requireAuth, async (req, res) => {
       }
     }
 
+    if (org_branch_id_body) {
+      const [[branch]] = await conn.query(
+        'SELECT id FROM org_branches WHERE id = ? AND org_id = ? LIMIT 1',
+        [org_branch_id_body, orgId]
+      );
+      if (!branch) {
+        throw Object.assign(new Error('La sucursal seleccionada no pertenece a la organización'), { statusCode: 400 });
+      }
+    }
+
     const createdById = req.user?.id ?? null;
-    const isAdmin = String(req.user?.role || '').toLowerCase() === 'admin';
-    let dealAdvisorId = null;
-
-    if (!isAdmin) {
-      dealAdvisorId = createdById;
-    } else {
-      if (body.account_exec_id != null && body.account_exec_id !== '') {
-        dealAdvisorId = Number(body.account_exec_id) || null;
-      } else if (body.deal_advisor_user_id != null && body.deal_advisor_user_id !== '') {
-        dealAdvisorId = Number(body.deal_advisor_user_id) || null;
-      } else if (body.advisor_user_id != null && body.advisor_user_id !== '') {
-        dealAdvisorId = Number(body.advisor_user_id) || null;
-      }
-
-      if (!dealAdvisorId && orgId) {
-        const [[oAdv] = []] = await conn.query(
-          'SELECT advisor_user_id FROM organizations WHERE id = ? LIMIT 1',
-          [orgId]
-        );
-        if (oAdv && oAdv.advisor_user_id) {
-          dealAdvisorId = Number(oAdv.advisor_user_id) || null;
-        }
-      }
-
-      if (!dealAdvisorId) {
-        dealAdvisorId = createdById;
+    let dealAdvisorId = Number(
+      body.account_exec_id || body.deal_advisor_user_id || body.advisor_user_id || 0
+    ) || null;
+    if (!dealAdvisorId && !requiresCompleteCommercialData && orgId) {
+      const [[organizationAdvisor]] = await conn.query(
+        'SELECT advisor_user_id FROM organizations WHERE id = ? LIMIT 1',
+        [orgId]
+      );
+      dealAdvisorId = Number(organizationAdvisor?.advisor_user_id || createdById || 0) || null;
+    }
+    if (!dealAdvisorId && !requiresCompleteCommercialData) {
+      dealAdvisorId = Number(createdById || 0) || null;
+    }
+    if (dealAdvisorId) {
+      const [[advisor]] = await conn.query(
+        'SELECT id FROM users WHERE id = ? AND is_active = 1 LIMIT 1',
+        [dealAdvisorId]
+      );
+      if (!advisor) {
+        throw Object.assign(new Error('El ejecutivo seleccionado no está disponible'), { statusCode: 400 });
       }
     }
 
@@ -1181,10 +1239,10 @@ router.post('/', requireAuth, async (req, res) => {
       `INSERT INTO deals(
          reference, title, value, status,
          pipeline_id, business_unit_id, stage_id,
-         contact_id, org_id,
+         contact_id, org_id, org_branch_id,
          advisor_user_id, created_by_user_id
        )
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         tmpRef,
         title,
@@ -1195,6 +1253,7 @@ router.post('/', requireAuth, async (req, res) => {
         stage_id,
         contactId,
         orgId,
+        org_branch_id_body,
         dealAdvisorId ?? null,
         createdById ?? null
       ]
@@ -1260,6 +1319,7 @@ router.post('/', requireAuth, async (req, res) => {
         stage_id,
         business_unit_id,
         org_id: orgId,
+        org_branch_id: org_branch_id_body,
         contact_id: contactId,
         advisor_user_id: dealAdvisorId,
         created_by_user_id: createdById,
@@ -1273,13 +1333,14 @@ router.post('/', requireAuth, async (req, res) => {
       id: newId,
       reference,
       title,
+      org_branch_id: org_branch_id_body,
       advisor_user_id: dealAdvisorId,
       created_by_user_id: createdById
     });
   } catch (e) {
     await conn.rollback();
     console.error('POST /deals error:', e);
-    res.status(500).json({ error: 'No se pudo crear el deal' });
+    res.status(e?.statusCode || 500).json({ error: e?.message || 'No se pudo crear la operación' });
   } finally {
     conn.release();
   }

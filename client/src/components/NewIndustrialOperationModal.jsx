@@ -307,30 +307,33 @@ function useDebounced(value, ms = 250) {
   return v;
 }
 
-/* ==================== Helpers productos catálogo ==================== */
+function buildOrganizationLocations(organization, rawBranches) {
+  const branches = Array.isArray(rawBranches) ? rawBranches : [];
+  const locations = branches.map((branch) => ({
+    ...branch,
+    key: `branch-${branch.id}`,
+    label: `${branch.is_default ? 'Casa matriz' : branch.name || 'Sucursal'}${
+      branch.city || branch.address ? ` · ${[branch.city, branch.address].filter(Boolean).join(' · ')}` : ''
+    }`,
+  }));
 
-// Normalizar items de catálogo para uso en el modal
-function normalizeCatalogItem(item) {
-  if (!item) return null;
-  const id = item.id ?? item.item_id ?? item.code_id ?? null;
-  const name = item.name ?? item.title ?? item.descripcion ?? "";
-  if (!id || !name) return null;
-
-  const type = item.type ?? item.kind ?? item.tipo ?? "PRODUCTO";
-  const brand =
-    item.brand ??
-    item.marca ??
-    item.industrial_brand ??
-    item.brand_code ??
-    "";
-
-  return {
-    id,
-    name: String(name),
-    sku: item.sku ?? item.code ?? item.item_code ?? "",
-    type,
-    brand: String(brand || "").toUpperCase(), // RAYFLEX / BOPLAN / ""
-  };
+  if (!branches.some((branch) => Number(branch.is_default) === 1)) {
+    locations.unshift({
+      id: null,
+      key: 'matrix',
+      is_default: 1,
+      name: 'Casa matriz',
+      address: organization?.address || '',
+      city: organization?.city || '',
+      country: organization?.country || '',
+      label: `Casa matriz${
+        organization?.city || organization?.address
+          ? ` · ${[organization?.city, organization?.address].filter(Boolean).join(' · ')}`
+          : ''
+      }`,
+    });
+  }
+  return locations;
 }
 
 /* ==================== Modal principal (Industrial) ==================== */
@@ -375,6 +378,21 @@ export default function NewIndustrialOperationModal({
   const [orgLoading, setOrgLoading] = useState(false);
   const [orgResults, setOrgResults] = useState([]);
   const [selectedOrg, setSelectedOrg] = useState(null);
+  const [selectedContact, setSelectedContact] = useState(null);
+  const [organizationLocations, setOrganizationLocations] = useState([]);
+  const [selectedLocationKey, setSelectedLocationKey] = useState('');
+  const [branchFormOpen, setBranchFormOpen] = useState(false);
+  const [branchSaving, setBranchSaving] = useState(false);
+  const [branchError, setBranchError] = useState('');
+  const [cities, setCities] = useState([]);
+  const [newBranch, setNewBranch] = useState({
+    name: '',
+    address: '',
+    city_id: '',
+    country: 'Paraguay',
+    phone: '',
+    email: '',
+  });
 
   // Contactos
   const [contacts, setContacts] = useState([]);
@@ -386,12 +404,6 @@ export default function NewIndustrialOperationModal({
 
   const orgBoxRef = useRef(null);
   const contactBoxRef = useRef(null);
-
-  // ------- Productos catálogo (Rayflex / Boplan / otros) -------
-  const [catalogItems, setCatalogItems] = useState([]);
-  const [productsLoading, setProductsLoading] = useState(false);
-  const [productToAddId, setProductToAddId] = useState("");
-  const [dealProducts, setDealProducts] = useState([]); // lista de productos para esta operación
 
   // Cargar unidades de negocio
   useEffect(() => {
@@ -412,75 +424,36 @@ export default function NewIndustrialOperationModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Cargar productos del catálogo (todos activos) y filtrar a PRODUCTO
   useEffect(() => {
-    (async () => {
-      setProductsLoading(true);
-      try {
-        const ts = Date.now();
-        const { data } = await api.get("/catalog/items", {
-          params: { active: 1, t: ts },
-        });
-        const list = Array.isArray(data)
-          ? data
-          : Array.isArray(data?.items)
-          ? data.items
-          : [];
-        const normalized = list
-          .map(normalizeCatalogItem)
-          .filter(Boolean)
-          .filter((it) => it.type === "PRODUCTO");
-        setCatalogItems(normalized);
-      } catch (err) {
-        console.error("[industrial] load catalog items error", err);
-        setCatalogItems([]);
-      } finally {
-        setProductsLoading(false);
-      }
-    })();
-  }, []);
+    if (!branchFormOpen || cities.length) return;
+    let live = true;
+    api.get('/cities')
+      .then(({ data }) => {
+        if (live) setCities(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (live) setBranchError('No se pudo cargar el catálogo de ciudades.');
+      });
+    return () => {
+      live = false;
+    };
+  }, [branchFormOpen, cities.length]);
 
   const canSave = useMemo(() => {
-    return pipelineId && stageId && orgName.trim().length > 0;
-  }, [pipelineId, stageId, orgName]);
-
-  // Productos agrupados por marca (para mostrar en el select)
-  const brandsInCatalog = useMemo(() => {
-    const set = new Set();
-    catalogItems.forEach((it) => {
-      if (it.brand) set.add(it.brand);
-    });
-    return Array.from(set);
-  }, [catalogItems]);
-
-  const productToAdd = useMemo(
-    () =>
-      catalogItems.find((it) => String(it.id) === String(productToAddId)) ||
-      null,
-    [catalogItems, productToAddId]
-  );
-
-  function handleAddProduct() {
-    if (!productToAdd) return;
-    setDealProducts((prev) => [
-      ...prev,
-      {
-        tempId: `tmp-${Date.now()}-${Math.random()}`,
-        product_id: productToAdd.id,
-        product_name: productToAdd.name,
-        brand: productToAdd.brand || "",
-      },
-    ]);
-    setProductToAddId("");
-    // Si aún no definiste marca principal, podés usar la de este primer producto
-    if (!mainBrand && productToAdd.brand) {
-      setMainBrand(productToAdd.brand.toUpperCase());
-    }
-  }
-
-  function handleRemoveProduct(tempId) {
-    setDealProducts((prev) => prev.filter((p) => p.tempId !== tempId));
-  }
+    return Boolean(
+      pipelineId &&
+      stageId &&
+      businessUnitId &&
+      selectedOrg?.id &&
+      orgName.trim() &&
+      orgRuc.trim() &&
+      contactName.trim() &&
+      contactPhone.trim() &&
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim()) &&
+      selectedLocationKey &&
+      execId
+    );
+  }, [pipelineId, stageId, businessUnitId, selectedOrg, orgName, orgRuc, contactName, contactPhone, contactEmail, selectedLocationKey, execId]);
 
   // Referencia visual
   useEffect(() => {
@@ -491,12 +464,11 @@ export default function NewIndustrialOperationModal({
         ? "Boplan"
         : mainBrand
       : "";
-    const firstProd = dealProducts[0]?.product_name || "";
-    const parts = [brandLabel, orgName, projectType, location, firstProd]
+    const parts = [brandLabel, orgName, projectType, location]
       .map((x) => (x || "").trim())
       .filter(Boolean);
     setReferencePreview(parts.length ? parts.join(" • ") : "—");
-  }, [mainBrand, orgName, projectType, location, dealProducts]);
+  }, [mainBrand, orgName, projectType, location]);
 
   // Autocomplete ORG
   useEffect(() => {
@@ -524,10 +496,15 @@ export default function NewIndustrialOperationModal({
   }, [debOrg]);
 
   function handleOrgInput(e) {
-    const v = e.target.value;
+    const v = e.target.value.toUpperCase();
     setOrgName(v);
     setOrgQuery(v);
     setSelectedOrg(null);
+    setSelectedContact(null);
+    setOrganizationLocations([]);
+    setSelectedLocationKey('');
+    setLocation('');
+    setBranchFormOpen(false);
     setOrgRuc("");
     setContacts([]);
     setContactName("");
@@ -537,24 +514,40 @@ export default function NewIndustrialOperationModal({
   }
 
   async function selectOrganization(org) {
-    setSelectedOrg(org);
-    setOrgName(org.name);
-    setOrgRuc(org.ruc || "");
-    setOrgQuery(org.name);
+    const uppercaseName = String(org.name || '').toUpperCase();
+    setSelectedOrg({ ...org, name: uppercaseName });
+    setOrgName(uppercaseName);
+    setOrgQuery(uppercaseName);
     setOrgOpen(false);
+    setSelectedContact(null);
 
-    const list = await fetchContactsByOrg(org.id);
+    const [detailResponse, list, branchesResponse] = await Promise.all([
+      api.get(`/organizations/${org.id}`).catch(() => ({ data: org })),
+      fetchContactsByOrg(org.id),
+      api.get(`/organizations/${org.id}/branches`).catch(() => ({ data: [] })),
+    ]);
+    const detail = detailResponse?.data?.organization || detailResponse?.data || org;
+    const locations = buildOrganizationLocations(detail, branchesResponse?.data);
+    const defaultLocation = locations.find((item) => Number(item.is_default) === 1) || locations[0] || null;
+
+    setOrgRuc(detail?.ruc || detail?.tax_id || org.ruc || "");
+    setSelectedOrg({ ...detail, id: org.id, name: uppercaseName });
+    setOrganizationLocations(locations);
+    setSelectedLocationKey(defaultLocation?.key || '');
+    setLocation(defaultLocation?.label || '');
     setContacts(list || []);
 
     if (list && list.length === 1) {
       const c = list[0];
+      setSelectedContact(c);
       setContactName(c.name || "");
-      setContactEmail(c.email || "");
-      setContactPhone(c.phone || "");
+      setContactEmail(c.email || detail?.email || "");
+      setContactPhone(c.phone || detail?.phone || "");
     } else {
+      setSelectedContact(null);
       setContactName("");
-      setContactEmail("");
-      setContactPhone("");
+      setContactEmail(detail?.email || "");
+      setContactPhone(detail?.phone || "");
     }
   }
 
@@ -628,6 +621,7 @@ export default function NewIndustrialOperationModal({
 
   function handleContactInput(e) {
     const v = e.target.value;
+    setSelectedContact(null);
     setContactName(v);
     setContactFilter(v);
     if ((selectedOrg && contacts.length) || v.trim().length >= 2) {
@@ -636,10 +630,134 @@ export default function NewIndustrialOperationModal({
   }
 
   function selectContact(c) {
+    setSelectedContact(c);
     setContactName(c.name || "");
     setContactEmail(c.email || "");
     setContactPhone(c.phone || "");
     setContactOpen(false);
+  }
+
+  function openBranchForm() {
+    setBranchError('');
+    setNewBranch({
+      name: '',
+      address: '',
+      city_id: selectedOrg?.city_id ? String(selectedOrg.city_id) : '',
+      country: selectedOrg?.country || 'Paraguay',
+      phone: selectedOrg?.phone || contactPhone || '',
+      email: selectedOrg?.email || contactEmail || '',
+    });
+    setBranchFormOpen(true);
+  }
+
+  async function createBranch(e) {
+    e?.preventDefault?.();
+    if (branchSaving) return;
+    const name = newBranch.name.trim();
+    const cityId = Number(newBranch.city_id || 0);
+    const isNewOrganization = !selectedOrg?.id;
+    if (isNewOrganization && !orgName.trim()) {
+      setBranchError('Escribe el nombre de la organización.');
+      return;
+    }
+    if (isNewOrganization && !orgRuc.trim()) {
+      setBranchError('El RUC de la organización es obligatorio.');
+      return;
+    }
+    if (isNewOrganization && !contactName.trim()) {
+      setBranchError('El contacto principal es obligatorio.');
+      return;
+    }
+    if (isNewOrganization && !contactEmail.trim()) {
+      setBranchError('El email es obligatorio.');
+      return;
+    }
+    if (!name) {
+      setBranchError('El nombre de la sucursal es obligatorio.');
+      return;
+    }
+    if (!cityId) {
+      setBranchError('Selecciona la ciudad de la sucursal.');
+      return;
+    }
+
+    setBranchSaving(true);
+    setBranchError('');
+    try {
+      let organization = selectedOrg;
+      let createdBranchId = null;
+
+      if (isNewOrganization) {
+        const { data: createdOrganization } = await api.post('/organizations', {
+          razon_social: orgName.trim().toUpperCase(),
+          name: orgName.trim().toUpperCase(),
+          ruc: orgRuc.trim(),
+          contact_name: contactName.trim(),
+          email: contactEmail.trim(),
+          phone: contactPhone.trim() || null,
+          address: newBranch.address.trim() || null,
+          city_id: cityId,
+          country: newBranch.country.trim() || 'Paraguay',
+          skip_prospect: true,
+          branches: [{
+            name,
+            address: newBranch.address.trim() || null,
+            city_id: cityId,
+            country: newBranch.country.trim() || 'Paraguay',
+            phone: newBranch.phone.trim() || contactPhone.trim() || null,
+            email: newBranch.email.trim() || contactEmail.trim() || null,
+            is_default: 1,
+          }],
+        });
+        organization = createdOrganization;
+        const uppercaseName = String(createdOrganization?.name || orgName).toUpperCase();
+        setSelectedOrg({ ...createdOrganization, name: uppercaseName });
+        setOrgName(uppercaseName);
+        setOrgQuery(uppercaseName);
+        setOrgRuc(createdOrganization?.ruc || orgRuc.trim());
+
+        const contactList = await fetchContactsByOrg(createdOrganization?.id);
+        setContacts(contactList);
+        const primaryContact = contactList[0] || null;
+        setSelectedContact(primaryContact);
+      } else {
+        const { data: created } = await api.post(
+          `/organizations/${selectedOrg.id}/branches`,
+          {
+          name,
+          address: newBranch.address.trim() || null,
+          city_id: cityId,
+          country: newBranch.country.trim() || 'Paraguay',
+          phone: newBranch.phone.trim() || null,
+          email: newBranch.email.trim() || null,
+          }
+        );
+        createdBranchId = created?.id || null;
+      }
+
+      const { data: refreshed } = await api.get(
+        `/organizations/${organization.id}/branches`
+      );
+      const locations = buildOrganizationLocations(
+        organization,
+        Array.isArray(refreshed) ? refreshed : []
+      );
+      const createdLocation = locations.find(
+        (item) => createdBranchId
+          ? Number(item.id) === Number(createdBranchId)
+          : Number(item.is_default) === 1
+      ) || locations[0];
+      setOrganizationLocations(locations);
+      setSelectedLocationKey(createdLocation?.key || '');
+      setLocation(createdLocation?.label || '');
+      setBranchFormOpen(false);
+    } catch (error) {
+      setBranchError(
+        error?.response?.data?.error || 'No se pudo guardar la sucursal.'
+      );
+    } finally {
+      setBranchSaving(false);
+    }
   }
 
   async function handleCreate(e) {
@@ -655,12 +773,14 @@ export default function NewIndustrialOperationModal({
           ? "Boplan"
           : mainBrand || "";
 
-      const firstProd = dealProducts[0]?.product_name || "";
-      const titleFromForm = [brandLabel, orgName, firstProd]
+      const titleFromForm = [brandLabel, orgName]
         .map((x) => (x || "").trim())
         .filter(Boolean)
         .join(" · ");
       const safeTitle = titleFromForm || "Operación industrial";
+      const selectedLocation = organizationLocations.find(
+        (item) => item.key === selectedLocationKey
+      );
 
       const payload = {
         pipeline_id: pipelineId,
@@ -668,12 +788,16 @@ export default function NewIndustrialOperationModal({
         title: safeTitle,
         value: 0, // ya no usamos valor estimado
         business_unit_id: businessUnitId || null,
-        account_exec_id: execId || null,
-        org_name: orgName || null,
-        org_ruc: orgRuc || null,
-        contact_name: contactName || null,
-        contact_phone: contactPhone || null,
-        contact_email: contactEmail || null,
+        enforce_complete_data: true,
+        account_exec_id: Number(execId),
+        organization: { id: selectedOrg.id, name: orgName.trim().toUpperCase(), ruc: orgRuc.trim() },
+        contact: {
+          ...(selectedContact?.id ? { id: selectedContact.id } : {}),
+          name: contactName.trim(),
+          phone: contactPhone.trim(),
+          email: contactEmail.trim(),
+        },
+        org_branch_id: selectedLocation?.id || null,
       };
 
       const { data: created } = await api.post("/deals", payload);
@@ -712,21 +836,6 @@ export default function NewIndustrialOperationModal({
         cfPayloads.map((p) => api.post(`/deals/${dealId}/custom-fields`, p))
       );
 
-      // Crear puertas iniciales en industrial_doors según los productos seleccionados
-      if (dealProducts.length) {
-        await Promise.all(
-          dealProducts.map((p, idx) =>
-            api.post(`/deals/${dealId}/industrial-doors`, {
-              product_id: p.product_id,
-              // Identifier inicial: P1, P2, ...
-              identifier: `P${idx + 1}`,
-              // Opcionalmente podríamos enviar brand/product_name,
-              // pero el backend ya los puede resolver desde catalog_items.
-            })
-          )
-        );
-      }
-
       onCreated && onCreated(created);
       onClose && onClose();
     } catch (err) {
@@ -747,7 +856,7 @@ export default function NewIndustrialOperationModal({
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-3xl bg-white rounded-2xl shadow-xl">
+      <div className={`w-full max-w-3xl bg-white rounded-2xl shadow-xl transition-[margin] ${branchFormOpen ? 'lg:mr-96' : ''}`}>
         <div className="px-4 py-3 border-b flex items-center justify-between">
           <div>
             <div className="text-xs text-slate-500">
@@ -772,7 +881,7 @@ export default function NewIndustrialOperationModal({
             <div className="font-medium mb-2">Cliente</div>
             <div className="grid gap-2">
               <label className="text-sm" ref={orgBoxRef}>
-                Organización
+                Organización *
                 <div className="relative">
                   <Input
                     value={orgName}
@@ -816,17 +925,18 @@ export default function NewIndustrialOperationModal({
               </label>
 
               <label className="text-sm">
-                RUC
+                RUC *
                 <Input
                   value={orgRuc}
                   onChange={(e) => setOrgRuc(e.target.value)}
                   placeholder="Ej: 80000000-1"
                   autoComplete="off"
+                  required
                 />
               </label>
 
               <label className="text-sm" ref={contactBoxRef}>
-                Contacto
+                Contacto *
                 <div className="relative">
                   <Input
                     value={contactName}
@@ -842,6 +952,7 @@ export default function NewIndustrialOperationModal({
                     placeholder="Escribí para buscar o crear…"
                     autoComplete="off"
                     spellCheck={false}
+                    required
                   />
                   {contactOpen && (
                     <div className="absolute z-20 mt-1 w-full bg-white border rounded-lg shadow-lg max-h-64 overflow-auto">
@@ -908,19 +1019,22 @@ export default function NewIndustrialOperationModal({
 
               <div className="grid grid-cols-2 gap-2">
                 <label className="text-sm">
-                  Teléfono
+                  Nro. de contacto *
                   <Input
                     value={contactPhone}
                     onChange={(e) => setContactPhone(e.target.value)}
                     placeholder="+595 ..."
+                    required
                   />
                 </label>
                 <label className="text-sm">
-                  Email
+                  Email de contacto *
                   <Input
+                    type="email"
                     value={contactEmail}
                     onChange={(e) => setContactEmail(e.target.value)}
                     placeholder="correo@dominio.com"
+                    required
                   />
                 </label>
               </div>
@@ -953,12 +1067,32 @@ export default function NewIndustrialOperationModal({
               </label>
 
               <label className="text-sm">
-                Ubicación / Planta
-                <Input
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  placeholder="Ciudad, planta, sucursal…"
-                />
+                Ubicación / Planta *
+                <Select
+                  value={selectedLocationKey}
+                  onChange={(e) => {
+                    const key = e.target.value;
+                    const selected = organizationLocations.find((item) => item.key === key);
+                    setSelectedLocationKey(key);
+                    setLocation(selected?.label || '');
+                  }}
+                  disabled={!selectedOrg}
+                  required
+                >
+                  <option value="">
+                    {selectedOrg ? 'Seleccionar matriz o sucursal' : 'Primero selecciona una organización'}
+                  </option>
+                  {organizationLocations.map((item) => (
+                    <option key={item.key} value={item.key}>{item.label}</option>
+                  ))}
+                </Select>
+                <button
+                  type="button"
+                  className="mt-2 text-sm text-emerald-700 hover:underline"
+                  onClick={openBranchForm}
+                >
+                  {selectedOrg ? '+ Agregar sucursal' : '+ Crear organización y sucursal'}
+                </button>
               </label>
 
               <label className="text-sm">
@@ -972,99 +1106,6 @@ export default function NewIndustrialOperationModal({
                 />
               </label>
             </div>
-          </div>
-
-          {/* Productos industriales seleccionados */}
-          <div className="bg-slate-50 rounded-xl p-3 md:col-span-2">
-            <div className="font-medium mb-2">Productos industriales</div>
-
-            <div className="flex flex-col md:flex-row gap-2 mb-3">
-              <div className="flex-1">
-                <Select
-                  value={productToAddId || ""}
-                  onChange={(e) => setProductToAddId(e.target.value)}
-                >
-                  <option value="">
-                    {productsLoading
-                      ? "Cargando productos…"
-                      : "Seleccionar producto del catálogo…"}
-                  </option>
-                  {brandsInCatalog.map((b) => (
-                    <optgroup key={b || "sin-marca"} label={b || "Sin marca"}>
-                      {catalogItems
-                        .filter((it) => it.brand === b)
-                        .map((it) => (
-                          <option key={it.id} value={it.id}>
-                            {it.name}
-                            {it.sku ? ` · ${it.sku}` : ""}
-                          </option>
-                        ))}
-                    </optgroup>
-                  ))}
-                  {/* También listamos productos sin marca, si existiesen */}
-                  {catalogItems
-                    .filter((it) => !it.brand)
-                    .map((it) => (
-                      <option key={it.id} value={it.id}>
-                        {it.name}
-                        {it.sku ? ` · ${it.sku}` : ""}
-                      </option>
-                    ))}
-                </Select>
-              </div>
-              <button
-                type="button"
-                className="px-3 py-2 text-sm rounded-lg bg-black text-white disabled:opacity-60"
-                onClick={handleAddProduct}
-                disabled={!productToAdd}
-              >
-                + Agregar a la operación
-              </button>
-            </div>
-
-            {dealProducts.length === 0 ? (
-              <div className="text-xs text-slate-500">
-                No hay productos agregados. Seleccioná uno del catálogo y haga
-                clic en &quot;Agregar a la operación&quot;. Podés mezclar Rayflex,
-                Boplan y otros productos.
-              </div>
-            ) : (
-              <div className="border rounded-lg bg-white overflow-hidden">
-                <table className="min-w-full text-xs">
-                  <thead className="bg-slate-100 text-slate-600">
-                    <tr>
-                      <th className="px-2 py-1 text-left w-24">Marca</th>
-                      <th className="px-2 py-1 text-left">Producto</th>
-                      <th className="px-2 py-1 text-right w-16">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {dealProducts.map((p) => (
-                      <tr key={p.tempId} className="border-t">
-                        <td className="px-2 py-1 align-top">
-                          {p.brand || "—"}
-                        </td>
-                        <td className="px-2 py-1 align-top">{p.product_name}</td>
-                        <td className="px-2 py-1 align-top text-right">
-                          <button
-                            type="button"
-                            className="px-2 py-0.5 rounded border border-red-500 text-red-600"
-                            onClick={() => handleRemoveProduct(p.tempId)}
-                          >
-                            Quitar
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <div className="px-3 py-2 text-[11px] text-slate-500">
-                  Los detalles de medidas, SECOT, lado de instalación, etc. se
-                  completan luego en el <strong>detalle de operación
-                  industrial</strong>, puerta por puerta.
-                </div>
-              </div>
-            )}
           </div>
 
           {/* CRM */}
@@ -1091,6 +1132,7 @@ export default function NewIndustrialOperationModal({
                 <Select
                   value={businessUnitId || ""}
                   onChange={(e) => setBusinessUnitId(e.target.value)}
+                  required
                 >
                   <option value="">—</option>
                   {businessUnits.map((bu) => (
@@ -1102,7 +1144,7 @@ export default function NewIndustrialOperationModal({
               </label>
 
               <label className="text-sm">
-                Ejecutivo de cuenta (opcional)
+                Ejecutivo de cuenta *
                 <ExecSelect value={execId} onChange={setExecId} />
               </label>
             </div>
@@ -1127,6 +1169,108 @@ export default function NewIndustrialOperationModal({
           </div>
         </form>
       </div>
+
+      {branchFormOpen && (
+        <div className="fixed inset-4 lg:inset-auto lg:right-4 lg:top-1/2 lg:-translate-y-1/2 lg:w-96 z-[60] bg-white border shadow-xl rounded-lg overflow-hidden">
+          <div className="px-4 py-3 border-b flex items-center justify-between">
+            <div>
+              <div className="font-semibold">
+                {selectedOrg ? 'Nueva sucursal' : 'Nueva organización y sucursal'}
+              </div>
+              <div className="text-xs text-slate-500 truncate max-w-72">
+                {selectedOrg?.name || orgName || 'Completa primero los datos del cliente'}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="px-2 py-1 rounded border text-sm"
+              onClick={() => setBranchFormOpen(false)}
+                aria-label="Cerrar formulario de sucursal"
+            >
+              ×
+            </button>
+          </div>
+
+          <form onSubmit={createBranch} className="p-4 grid gap-3 max-h-[calc(100vh-7rem)] overflow-y-auto">
+            {branchError && (
+              <div className="text-sm text-red-600">{branchError}</div>
+            )}
+            <label className="text-sm">
+              Nombre de sucursal *
+              <Input
+                value={newBranch.name}
+                onChange={(e) => setNewBranch((prev) => ({ ...prev, name: e.target.value }))}
+                placeholder="Ej: Sucursal San Lorenzo"
+                autoFocus
+                required
+              />
+            </label>
+            <label className="text-sm">
+              Dirección
+              <Input
+                value={newBranch.address}
+                onChange={(e) => setNewBranch((prev) => ({ ...prev, address: e.target.value }))}
+                placeholder="Calle, número y referencia"
+              />
+            </label>
+            <label className="text-sm">
+              Ciudad *
+              <Select
+                value={newBranch.city_id}
+                onChange={(e) => setNewBranch((prev) => ({ ...prev, city_id: e.target.value }))}
+                required
+              >
+                <option value="">Seleccionar ciudad</option>
+                {cities.map((city) => (
+                  <option key={city.id} value={city.id}>
+                    {city.name}{city.department ? ` · ${city.department}` : ''}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <label className="text-sm">
+              País
+              <Input
+                value={newBranch.country}
+                onChange={(e) => setNewBranch((prev) => ({ ...prev, country: e.target.value }))}
+              />
+            </label>
+            <label className="text-sm">
+              Teléfono
+              <Input
+                value={newBranch.phone}
+                onChange={(e) => setNewBranch((prev) => ({ ...prev, phone: e.target.value }))}
+                placeholder="+595 ..."
+              />
+            </label>
+            <label className="text-sm">
+              Email
+              <Input
+                type="email"
+                value={newBranch.email}
+                onChange={(e) => setNewBranch((prev) => ({ ...prev, email: e.target.value }))}
+                placeholder="sucursal@empresa.com"
+              />
+            </label>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                className="px-3 py-2 rounded-lg border text-sm"
+                onClick={() => setBranchFormOpen(false)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="px-3 py-2 rounded-lg bg-emerald-700 text-white text-sm disabled:opacity-60"
+                disabled={branchSaving}
+              >
+                {branchSaving ? 'Guardando…' : 'Guardar sucursal'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

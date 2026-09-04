@@ -554,9 +554,9 @@ const CF_SCHEMA = {
 
   ciudad_destino:     { label: 'Ciudad Destino', type: 'text' },
 
-  aeropuerto_origen:  { label: 'Aeropuerto Origen', type: 'text' },
+  aeropuerto_origen:  { label: 'Aeropuerto / Puerto Origen', type: 'text' },
 
-  aeropuerto_destino: { label: 'Aeropuerto Destino', type: 'text' },
+  aeropuerto_destino: { label: 'Aeropuerto / Puerto Destino', type: 'text' },
 
 
 
@@ -2936,13 +2936,13 @@ Quedamos atentos a sus comentarios.`;
 
             </label>
 
-            <label className="block">Aeropuerto Origen
+            <label className="block">Aeropuerto / Puerto Origen
 
               <input value={aeropuertoOrigen} onChange={e=>setAeropuertoOrigen(e.target.value)} className="w-full border rounded px-2 py-1" />
 
             </label>
 
-            <label className="block">Aeropuerto Destino
+            <label className="block">Aeropuerto / Puerto Destino
 
               <input value={aeropuertoDestino} onChange={e=>setAeropuertoDestino(e.target.value)} className="w-full border rounded px-2 py-1" />
 

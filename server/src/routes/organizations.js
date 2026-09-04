@@ -244,6 +244,7 @@ router.post('/', requireAuth, async (req, res) => {
       modalities_supported = null,
       // nuevos
       email = null,
+      contact_name = null,
       rubro = null,
       tipo_org = null,
       operacion = null,
@@ -259,25 +260,61 @@ router.post('/', requireAuth, async (req, res) => {
       supplier_bank_swift = null,
       supplier_bank_notes = null,
       branches = null,
+      skip_prospect = false,
     } = req.body || {};
 
     const rs =
       toUpperText(razon_social || '') || toUpperText(name || '');
     if (!rs) return res.status(400).json({ error: 'razon_social es requerido' });
+    const normalizedRuc = String(ruc || '').trim();
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const normalizedContactName = String(contact_name || '').trim();
+    if (!normalizedRuc) return res.status(400).json({ error: 'ruc es requerido' });
+    if (!normalizedContactName) return res.status(400).json({ error: 'contact_name es requerido' });
+    if (!normalizedEmail) return res.status(400).json({ error: 'email es requerido' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return res.status(400).json({ error: 'email no es válido' });
+    }
 
     const selectedCity = await resolveCitySelection(city_id, city, true);
     const branchList = Array.isArray(branches) ? branches.filter(Boolean) : [];
+    if (!branchList.length) {
+      return res.status(400).json({ error: 'Debe cargar una sucursal o casa matriz' });
+    }
     const preparedBranches = [];
-    for (const branch of branchList) {
-      const branchCity = await resolveCitySelection(branch?.city_id, branch?.city, true);
+    for (let index = 0; index < branchList.length; index += 1) {
+      const branch = branchList[index];
+      const branchName = String(branch?.name || '').trim();
+      if (!branchName) return res.status(400).json({ error: 'El nombre de la sucursal o matriz es requerido' });
+      const branchCity = await resolveCitySelection(
+        branch?.city_id || selectedCity.id,
+        branch?.city || selectedCity.name,
+        true
+      );
       preparedBranches.push({
         ...branch,
+        name: branchName,
+        address: toNull(branch?.address) || toNull(address),
         city_id: branchCity.id,
         city: branchCity.name,
+        country: toNull(branch?.country) || toNull(country),
+        is_default: branch?.is_default ? 1 : 0,
       });
     }
+    if (!preparedBranches.some((branch) => branch.is_default)) {
+      preparedBranches[0].is_default = 1;
+    }
+    let defaultFound = false;
+    preparedBranches.forEach((branch) => {
+      if (branch.is_default && !defaultFound) defaultFound = true;
+      else branch.is_default = 0;
+    });
 
-    const [ins] = await db.query(
+    const conn = await db.getConnection();
+    let row;
+    try {
+      await conn.beginTransaction();
+      const [ins] = await conn.query(
       `
       INSERT INTO organizations
         (razon_social, name, industry, phone, website, ruc, address, city, city_id, country, maps_url, notes,
@@ -300,7 +337,7 @@ router.post('/', requireAuth, async (req, res) => {
         industry,
         phone,
         website,
-        ruc,
+        normalizedRuc,
         address,
         selectedCity.name,
         selectedCity.id,
@@ -313,7 +350,7 @@ router.post('/', requireAuth, async (req, res) => {
         visibility,
         is_agent ? 1 : 0,
         modalities_supported,
-        email,
+        normalizedEmail,
         rubro,
         tipo_org,
         operacion,
@@ -331,7 +368,7 @@ router.post('/', requireAuth, async (req, res) => {
       ]
     );
 
-    const [[row]] = await db.query(
+      [[row]] = await conn.query(
       `
       SELECT
         o.id,
@@ -359,7 +396,6 @@ router.post('/', requireAuth, async (req, res) => {
       [ins.insertId]
     );
 
-    try {
       const list = preparedBranches;
       if (list.length) {
         const values = list.map((b) => [
@@ -373,7 +409,7 @@ router.post('/', requireAuth, async (req, res) => {
           toNull(b?.email),
           b?.is_default ? 1 : 0,
         ]);
-        await db.query(
+        await conn.query(
           `
           INSERT INTO org_branches
             (org_id, name, address, city, city_id, country, phone, email, is_default)
@@ -382,15 +418,26 @@ router.post('/', requireAuth, async (req, res) => {
           [values]
         );
       }
-    } catch (e) {
-      console.error('[organizations:post] No se pudieron guardar sucursales:', e?.message || e);
+      await conn.query(
+        `INSERT INTO contacts(name, email, phone, org_id, visibility)
+         VALUES (?, ?, ?, ?, 'company')`,
+        [normalizedContactName, normalizedEmail, toNull(phone), row.id]
+      );
+      await conn.commit();
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
     }
 
     // Crear tarjeta de Prospecto en ATM INDUSTRIAL (pipeline 1) solo para clientes/prospectos
     const orgTypeLc = String(tipo_org || '').trim().toLowerCase();
     const shouldCreateProspect =
-      !orgTypeLc ||
-      !['despachante', 'proveedor', 'flete'].includes(orgTypeLc);
+      !skip_prospect && (
+        !orgTypeLc ||
+        !['despachante', 'proveedor', 'flete'].includes(orgTypeLc)
+      );
     if (shouldCreateProspect) try {
       const pipelineId = 1;
       const stageName = 'Prospecto';
@@ -465,7 +512,7 @@ router.post('/', requireAuth, async (req, res) => {
     res.status(201).json(row);
   } catch (e) {
     console.error('[organizations:post]', e);
-    res.status(400).json({ error: 'Create failed' });
+    res.status(400).json({ error: e?.message || 'No se pudo crear la organización' });
   }
 });
 
