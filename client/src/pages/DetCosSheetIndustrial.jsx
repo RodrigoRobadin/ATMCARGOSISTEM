@@ -666,8 +666,8 @@ export default function DetCosSheet() {
         }
 
         // cargar estado presupuesto
-        if (detail.deal?.org_id) {
-          const { data: b } = await api.get(`/organizations/${detail.deal.org_id}/budget`);
+        if (detail.deal?.id) {
+          const { data: b } = await api.get(`/deals/${detail.deal.id}/budget`);
           setBudgetStatus(b.budget_status || "borrador");
         }
 
@@ -743,15 +743,15 @@ export default function DetCosSheet() {
 
   // 🔁 Polling liviano para estado presupuesto (cada 10s)
   useEffect(() => {
-    if (!orgId) return;
+    if (!id) return;
     const timer = setInterval(async () => {
       try {
-        const { data } = await api.get(`/organizations/${orgId}/budget`);
+        const { data } = await api.get(`/deals/${id}/budget`);
         setBudgetStatus((prev) => (data?.budget_status && data.budget_status !== prev ? data.budget_status : prev));
       } catch { }
     }, 10000);
     return () => clearInterval(timer);
-  }, [orgId]);
+  }, [id]);
 
   // Totales base de venta
   // Si All-in está activo, el total base viene de la suma de “ventaInt”;
@@ -1000,20 +1000,20 @@ export default function DetCosSheet() {
   }
 
   async function confirmBudget() {
-    if (!orgId) return;
+    if (!id) return;
     await updateDealValue(profitGeneral);
-    await api.post(`/organizations/${orgId}/budget/confirm`, { profit_value: profitGeneral });
+    await api.post(`/deals/${id}/budget/confirm`, { profit_value: profitGeneral });
     setBudgetStatus("confirmado");
   }
   async function lockBudget() {
-    if (!orgId) return;
+    if (!id) return;
     await updateDealValue(profitGeneral);
-    await api.post(`/organizations/${orgId}/budget/lock`);
+    await api.post(`/deals/${id}/budget/lock`);
     setBudgetStatus("bloqueado");
   }
   async function reopenBudget() {
-    if (!orgId) return;
-    await api.post(`/organizations/${orgId}/budget/reopen`);
+    if (!id) return;
+    await api.post(`/deals/${id}/budget/reopen`);
     setBudgetStatus("borrador");
   }
 

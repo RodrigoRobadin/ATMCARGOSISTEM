@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api';
 import { attachContactToAssistant } from '../utils/assistantContext';
+import OrganizationEngagementPanel from '../components/OrganizationEngagementPanel.jsx';
 
 function FieldRow({ label, value, children }) {
   return (
@@ -38,7 +39,272 @@ function InlineCFEditor({ cf, onSave }) {
   );
 }
 
+function contactInitials(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  return (parts.slice(0, 2).map((part) => part[0]).join('') || 'P').toUpperCase();
+}
+
+function formatDealValue(deal) {
+  const amount = Number(deal?.value || 0);
+  const currency = String(deal?.currency || 'PYG').toUpperCase();
+  return `${currency} ${amount.toLocaleString('es-PY', {
+    minimumFractionDigits: currency === 'PYG' ? 0 : 2,
+    maximumFractionDigits: currency === 'PYG' ? 0 : 2,
+  })}`;
+}
+
 export default function ContactDetail() {
+  const { id } = useParams();
+  const [contact, setContact] = useState(null);
+  const [activities, setActivities] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [activitiesLoading, setActivitiesLoading] = useState(false);
+  const [err, setErr] = useState('');
+  const [cfLoading, setCfLoading] = useState(false);
+  const [customFields, setCustomFields] = useState([]);
+  const [cfSupported, setCfSupported] = useState(true);
+  const [openAddCF, setOpenAddCF] = useState(false);
+  const [openDeal, setOpenDeal] = useState(false);
+  const [openEdit, setOpenEdit] = useState(false);
+  const [openOrgPicker, setOpenOrgPicker] = useState(false);
+
+  async function load() {
+    const { data } = await api.get(`/contacts/${id}`);
+    setContact(data);
+  }
+
+  async function loadActivities() {
+    setActivitiesLoading(true);
+    try {
+      const { data } = await api.get('/activities', {
+        params: { person_id: id, limit: 500, sort: 'created_at', order: 'desc' },
+      });
+      setActivities(Array.isArray(data) ? data : []);
+    } finally {
+      setActivitiesLoading(false);
+    }
+  }
+
+  async function loadCFs() {
+    setCfLoading(true);
+    try {
+      const { data } = await api.get(`/contacts/${id}/custom-fields`);
+      setCustomFields(Array.isArray(data) ? data : []);
+      setCfSupported(true);
+    } catch {
+      setCustomFields([]);
+      setCfSupported(false);
+    } finally {
+      setCfLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setErr('');
+      try {
+        await Promise.all([load(), loadActivities(), loadCFs()]);
+      } catch {
+        if (!cancelled) setErr('No se pudo cargar el contacto.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [id]);
+
+  async function unlinkOrganization() {
+    if (!contact?.org_id) return;
+    try {
+      await api.patch(`/contacts/${contact.id}`, { org_id: null });
+      await load();
+    } catch {
+      alert('No se pudo quitar la organización.');
+    }
+  }
+
+  if (loading) return <p className="text-sm text-slate-600 dark:text-slate-300">Cargando...</p>;
+  if (err) return <p className="text-sm text-red-600">{err}</p>;
+  if (!contact) return <p className="text-sm text-slate-600 dark:text-slate-300">Contacto no encontrado.</p>;
+
+  const deals = Array.isArray(contact.deals) ? contact.deals : [];
+  const completedActivities = activities.filter((item) => Number(item.done)).length;
+  const pendingActivities = activities.filter((item) => item.type !== 'note' && !Number(item.done)).length;
+  const accountExec = contact.owner_user_id ? {
+    id: Number(contact.owner_user_id),
+    name: contact.owner_user_name || `Usuario #${contact.owner_user_id}`,
+    email: contact.owner_user_email || '',
+  } : null;
+  const whatsappNumber = String(contact.phone || '').replace(/\D/g, '');
+
+  return (
+    <div className="min-w-0 max-w-full space-y-4 overflow-x-hidden">
+      <header className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-sm font-bold text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+              {contactInitials(contact.name)}
+            </div>
+            <div className="min-w-0">
+              <h1 className="truncate text-xl font-semibold text-slate-950 dark:text-white">
+                {contact.name || contact.email || `Contacto #${contact.id}`}
+              </h1>
+              <p className="truncate text-xs text-slate-500">
+                {accountExec?.name ? `Ejecutivo: ${accountExec.name}` : 'Sin ejecutivo asignado'}
+                {contact.title ? ` · ${contact.title}` : ''}
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => setOpenDeal(true)} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700">
+              + Operación
+            </button>
+            <button type="button" onClick={() => setOpenEdit(true)} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium dark:border-slate-700">
+              Editar
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[400px_minmax(0,1fr)]">
+        <aside className="space-y-3 lg:max-h-[calc(100vh-155px)] lg:overflow-y-auto lg:pr-1">
+          <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+            <header className="border-b border-slate-200 px-4 py-3 text-sm font-semibold dark:border-slate-700">Resumen</header>
+            <div className="space-y-3 p-4 text-sm">
+              {contact.email ? <a href={`mailto:${contact.email}`} className="block break-all text-blue-600 hover:underline dark:text-blue-300">{contact.email}</a> : <div className="text-slate-500">Sin email</div>}
+              {contact.phone ? <a href={`tel:${contact.phone}`} className="block text-blue-600 hover:underline dark:text-blue-300">{contact.phone}</a> : <div className="text-slate-500">Sin teléfono</div>}
+              {whatsappNumber ? <a href={`https://wa.me/${whatsappNumber}`} target="_blank" rel="noreferrer" className="block text-emerald-700 hover:underline dark:text-emerald-300">Abrir WhatsApp</a> : null}
+              {contact.org_id ? <Link to={`/organizations/${contact.org_id}`} className="block font-medium text-blue-600 hover:underline dark:text-blue-300">{contact.org_name || `Organización #${contact.org_id}`}</Link> : <div className="text-slate-500">Sin organización vinculada</div>}
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+            <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+              <span className="text-sm font-semibold">Detalles</span>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  draggable
+                  className="text-xs text-slate-600 hover:underline dark:text-slate-300"
+                  onDragStart={(event) => event.dataTransfer.setData('application/x-assistant-context', JSON.stringify({
+                    type: 'contact', id: contact.id, label: contact.name || `Contacto ${contact.id}`,
+                    meta: { href: `/contacts/${contact.id}`, org_name: contact.org_name || '' },
+                  }))}
+                  onClick={() => attachContactToAssistant({ id: contact.id, name: contact.name, org_name: contact.org_name })}
+                >
+                  Enviar a IA
+                </button>
+                <button type="button" className="text-xs text-blue-600 hover:underline dark:text-blue-300" onClick={() => setOpenEdit(true)}>Editar</button>
+              </div>
+            </header>
+            <div className="px-4 py-2 dark:text-slate-100">
+              <FieldRow label="Nombre" value={contact.name} />
+              <FieldRow label="Cargo" value={contact.title} />
+              <FieldRow label="Etiqueta" value={contact.label} />
+              <FieldRow label="Visibilidad" value={contact.visibility} />
+              <FieldRow label="Creado" value={contact.created_at ? new Date(contact.created_at).toLocaleDateString('es-PY') : ''} />
+              <FieldRow label="Notas" value={contact.notes} />
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+            <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+              <span className="text-sm font-semibold">Organización</span>
+              <div className="flex items-center gap-2 text-xs">
+                {contact.org_id ? <button type="button" onClick={unlinkOrganization} className="text-slate-500 hover:underline">Quitar</button> : null}
+                <button type="button" onClick={() => setOpenOrgPicker(true)} className="text-blue-600 hover:underline dark:text-blue-300">{contact.org_id ? 'Cambiar' : '+ Añadir'}</button>
+              </div>
+            </header>
+            <div className="p-4 text-sm">
+              {contact.org_id ? <Link to={`/organizations/${contact.org_id}`} className="font-medium text-blue-600 hover:underline dark:text-blue-300">{contact.org_name || `Organización #${contact.org_id}`}</Link> : <span className="text-slate-500">Sin organización vinculada.</span>}
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+            <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+              <span className="text-sm font-semibold">Operaciones ({deals.length})</span>
+              <button type="button" onClick={() => setOpenDeal(true)} className="text-lg leading-none text-blue-600" title="Agregar operación">+</button>
+            </header>
+            <div className="divide-y divide-slate-100 dark:divide-slate-800">
+              {deals.length ? deals.map((deal) => (
+                <Link key={deal.id} to={`/operations/${deal.id}`} className="block px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800">
+                  <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{deal.reference || deal.title || `Operación #${deal.id}`}</div>
+                  <div className="mt-1 flex items-center justify-between gap-2 text-xs text-slate-500">
+                    <span className="truncate">{deal.title || deal.status || 'Operación'}</span>
+                    <span className="shrink-0">{formatDealValue(deal)}</span>
+                  </div>
+                </Link>
+              )) : <div className="p-4 text-sm text-slate-500">Sin operaciones vinculadas.</div>}
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+            <header className="border-b border-slate-200 px-4 py-3 text-sm font-semibold dark:border-slate-700">Descripción general</header>
+            <div className="grid grid-cols-2 gap-3 p-4 text-sm">
+              <div><div className="text-xs text-slate-500">Pendientes</div><div className="mt-1 text-lg font-semibold">{pendingActivities}</div></div>
+              <div><div className="text-xs text-slate-500">Completadas</div><div className="mt-1 text-lg font-semibold">{completedActivities}</div></div>
+              <div><div className="text-xs text-slate-500">Operaciones</div><div className="mt-1 text-lg font-semibold">{deals.length}</div></div>
+              <div><div className="text-xs text-slate-500">Ejecutivo</div><div className="mt-1 truncate font-medium">{accountExec?.name || 'Sin asignar'}</div></div>
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+            <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+              <span className="text-sm font-semibold">Campos personalizados</span>
+              {cfSupported ? <button type="button" className="text-xs text-blue-600 hover:underline dark:text-blue-300" onClick={() => setOpenAddCF(true)}>+ Añadir</button> : null}
+            </header>
+            <div className="space-y-3 p-4">
+              {!cfSupported ? <div className="text-sm text-slate-500">Campos personalizados no disponibles.</div> : null}
+              {cfSupported && cfLoading ? <div className="text-sm text-slate-500">Cargando campos...</div> : null}
+              {cfSupported && !cfLoading && customFields.length ? customFields.map((cf) => (
+                <div key={cf.id} className="space-y-1 border-b border-slate-100 pb-3 last:border-0 last:pb-0 dark:border-slate-800">
+                  <div className="text-xs font-medium text-slate-500">{cf.label || cf.key}</div>
+                  <InlineCFEditor cf={cf} onSave={async (newValue) => {
+                    await api.put(`/contacts/${id}/custom-fields/${cf.id}`, { value: newValue });
+                    await loadCFs();
+                  }} />
+                </div>
+              )) : null}
+              {cfSupported && !cfLoading && !customFields.length ? <div className="text-sm text-slate-500">No hay campos personalizados.</div> : null}
+            </div>
+          </section>
+
+          <Link to="/contacts" className="inline-block px-1 text-sm text-blue-600 hover:underline dark:text-blue-300">Volver a contactos</Link>
+        </aside>
+
+        <main className="min-w-0">
+          <OrganizationEngagementPanel
+            person={contact}
+            activities={activities}
+            activitiesLoading={activitiesLoading}
+            deals={deals}
+            accountExec={accountExec}
+            onActivitiesChanged={loadActivities}
+          />
+        </main>
+      </div>
+
+      {openDeal ? <NewDealModal contact={contact} onClose={() => setOpenDeal(false)} onCreated={load} /> : null}
+      {openEdit ? <EditContactModal contact={contact} onClose={() => setOpenEdit(false)} onSaved={load} /> : null}
+      {openAddCF ? <AddCustomFieldModal personId={id} onClose={() => setOpenAddCF(false)} onCreated={loadCFs} /> : null}
+      {openOrgPicker ? (
+        <PickOrganizationModal
+          currentOrgId={contact.org_id}
+          onClose={() => setOpenOrgPicker(false)}
+          onPicked={async (orgId) => {
+            await api.patch(`/contacts/${contact.id}`, { org_id: orgId });
+            await load();
+            setOpenOrgPicker(false);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function LegacyContactDetail() {
   const { id } = useParams();
   const [contact, setContact] = useState(null);
   const [loading, setLoading] = useState(true);

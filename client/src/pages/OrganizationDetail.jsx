@@ -4,6 +4,7 @@ import { useParams, Link } from 'react-router-dom';
 import { api } from '../api';
 import AccountExecutiveSelect from '../components/AccountExecutiveSelect.jsx';
 import OrganizationLookupField from '../components/OrganizationLookupField.jsx';
+import OrganizationEngagementPanel from '../components/OrganizationEngagementPanel.jsx';
 import { attachOrganizationToAssistant } from '../utils/assistantContext';
 
 function FieldRow({ label, value, children }) {
@@ -777,8 +778,8 @@ export default function OrganizationDetail() {
   return (
     <div className="space-y-4">
       {/* ====== Header estilo Pipedrive ====== */}
-      <div className="bg-white rounded-2xl shadow p-4">
-        <div className="flex items-center justify-between gap-3">
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center text-slate-600">
               🏢
@@ -788,25 +789,17 @@ export default function OrganizationDetail() {
                 {org.razon_social || org.name || '—'}
               </div>
               <div className="text-xs text-slate-600 truncate">
-                Propietario: {org.owner_user_id || '—'} • Visibilidad:{' '}
-                {org.visibility || 'company'}
+                Ejecutivo: {accountExec?.name || (execLoading ? 'Cargando...' : 'Sin asignar')} · Visibilidad:{' '}
+                {org.visibility || 'empresa'}
               </div>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button
-              className="px-3 py-2 text-sm rounded-lg border"
-              onClick={() =>
-                alert('Próximamente: seguir/seguidores')
-              }
-            >
-              1 seguidor
-            </button>
-            <button
               className="px-3 py-2 text-sm rounded-lg bg-emerald-600 text-white"
               onClick={() => setOpenDeal(true)}
             >
-              + Trato
+              + Operación
             </button>
             <button
               className="px-3 py-2 text-sm rounded-lg border"
@@ -814,22 +807,35 @@ export default function OrganizationDetail() {
             >
               Editar
             </button>
-            <button
-              className="px-3 py-2 text-sm rounded-lg border"
-              onClick={() => alert('Opciones')}
-            >
-              ⋯
-            </button>
           </div>
         </div>
       </div>
 
       {/* ====== Layout de dos columnas ====== */}
-      <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-4">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[400px_minmax(0,1fr)]">
         {/* ===== Sidebar izquierda ===== */}
-        <aside className="space-y-4">
+        <aside className="space-y-3 lg:max-h-[calc(100vh-155px)] lg:overflow-y-auto lg:pr-2">
+          {/* Resumen */}
+          <section className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+            <header className="flex items-center justify-between border-b px-4 py-3 font-medium dark:border-slate-700">
+              <span>Resumen</span>
+              <span className="text-xs font-normal text-slate-500">{org.contacts?.length || 0} persona(s)</span>
+            </header>
+            <div className="space-y-3 p-4 text-sm">
+              <div>
+                <div className="font-semibold text-slate-900 dark:text-slate-100">{org.name || org.razon_social}</div>
+                <div className="mt-1 text-slate-500">{[org.address, org.city, org.country].filter(Boolean).join(' · ') || 'Sin dirección cargada'}</div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {org.phone ? <a href={`tel:${org.phone}`} className="rounded-md border border-slate-200 px-3 py-2 text-emerald-700 hover:bg-emerald-50 dark:border-slate-700">Llamar</a> : null}
+                {org.phone ? <a href={`https://wa.me/${String(org.phone).replace(/\D/g, '')}`} target="_blank" rel="noreferrer" className="rounded-md border border-slate-200 px-3 py-2 text-emerald-700 hover:bg-emerald-50 dark:border-slate-700">WhatsApp</a> : null}
+                {org.email ? <a href={`mailto:${org.email}`} className="rounded-md border border-slate-200 px-3 py-2 text-blue-700 hover:bg-blue-50 dark:border-slate-700">Correo</a> : null}
+              </div>
+            </div>
+          </section>
+
           {/* Detalles */}
-          <section className="bg-white rounded-2xl shadow">
+          <section className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
             <header className="px-4 py-3 border-b font-medium flex items-center justify-between">
               <span>Detalles</span>
               <div className="flex items-center gap-3">
@@ -917,7 +923,7 @@ export default function OrganizationDetail() {
 
           {/* 👇 Hoja de ruta (solo flete) */}
           {/* Sucursales */}
-          <section className="bg-white rounded-2xl shadow">
+          <section className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
             <header className="px-4 py-3 border-b font-medium flex items-center justify-between">
               <span>Sucursales</span>
               {branchesLoading && <span className="text-xs text-slate-500">Cargando...</span>}
@@ -998,7 +1004,7 @@ export default function OrganizationDetail() {
             </div>
           </section>
           {isFreightOrg && (
-            <section className="bg-white rounded-2xl shadow">
+            <section className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
               <header className="px-4 py-3 border-b font-medium flex items-center justify-between">
                 <span>Hoja de ruta (flete)</span>
                 <button
@@ -1093,7 +1099,7 @@ export default function OrganizationDetail() {
           )}
 
           {/* Campos personalizados */}
-          <section className="bg-white rounded-2xl shadow">
+          <section className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
             <header className="px-4 py-3 border-b font-medium flex items-center justify-between">
               <span>Campos personalizados</span>
               {cfSupported && (
@@ -1160,10 +1166,10 @@ export default function OrganizationDetail() {
             </div>
           </section>
 
-          {/* Tratos */}
-          <section className="bg-white rounded-2xl shadow">
+          {/* Operaciones */}
+          <section className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
             <header className="px-4 py-3 border-b font-medium flex items-center justify-between">
-              <span>Tratos</span>
+              <span>Operaciones</span>
               <button
                 className="text-sm text-blue-600 hover:underline"
                 onClick={() => setOpenDeal(true)}
@@ -1173,31 +1179,33 @@ export default function OrganizationDetail() {
             </header>
             <div className="p-4 text-sm">
               {dealsLoading ? (
-                <div className="text-slate-600">Cargando tratos…</div>
+                <div className="text-slate-600">Cargando operaciones…</div>
               ) : orgDeals.length ? (
                 <ul className="space-y-2">
                   {orgDeals.map((d) => (
                     <li
                       key={d.id}
-                      className="flex items-center justify-between"
+                      className="flex items-center justify-between gap-2"
                     >
-                      <span className="truncate">{d.title}</span>
+                      <Link to={`/operations/${d.id}`} className="min-w-0 truncate text-blue-700 hover:underline">
+                        {d.reference || d.title || `Operación #${d.id}`}
+                      </Link>
                       <span className="text-slate-600">
-                        ${Number(d.value || 0).toLocaleString()}
+                        {d.currency || ''} {Number(d.value || 0).toLocaleString('es-PY')}
                       </span>
                     </li>
                   ))}
                 </ul>
               ) : (
                 <div className="text-slate-600">
-                  Sin tratos vinculados.
+                  Sin operaciones vinculadas.
                 </div>
               )}
             </div>
           </section>
 
           {/* Personas */}
-          <section className="bg-white rounded-2xl shadow">
+          <section className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
             <header className="px-4 py-3 border-b font-medium flex items-center justify-between">
               <span>Personas</span>
               <button
@@ -1211,7 +1219,7 @@ export default function OrganizationDetail() {
               <ul className="space-y-2">
                 {(org.contacts || []).map((c) => (
                   <li key={c.id} className="text-sm">
-                    {c.name}{' '}
+                    <Link to={`/contacts/${c.id}`} className="text-blue-700 hover:underline">{c.name}</Link>{' '}
                     <span className="text-slate-500">
                       ({c.email || 'sin email'})
                     </span>
@@ -1227,7 +1235,7 @@ export default function OrganizationDetail() {
           </section>
 
           {/* ===== Ejecutivo de cuenta ===== */}
-          <section className="bg-white rounded-2xl shadow">
+          <section className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
             <header className="px-4 py-3 border-b font-medium flex items-center justify-between">
               <span>Ejecutivo de cuenta</span>
               <button
@@ -1299,294 +1307,19 @@ export default function OrganizationDetail() {
           </section>
         </aside>
 
-        {/* ===== Panel principal ===== */}
-        <section className="space-y-4">
-          {/* Tabs */}
-          <div className="bg-white rounded-2xl shadow">
-            <div className="px-4 pt-3 border-b">
-              <div className="flex items-center gap-2">
-                {[
-                  { key: 'activity', label: 'Actividad', icon: '📅' },
-                  { key: 'timeline', label: 'Timeline', icon: '⏱️' },
-                  { key: 'notes', label: 'Notas', icon: '📝' },
-                  { key: 'files', label: 'Archivos', icon: '📎' },
-                  { key: 'docs', label: 'Documentos', icon: '📄' },
-                ].map((t) => (
-                  <button
-                    key={t.key}
-                    onClick={() => setTab(t.key)}
-                    className={`px-3 py-2 rounded-t-lg text-sm ${tab === t.key
-                      ? 'bg-black text-white'
-                      : 'hover:bg-slate-100'
-                      }`}
-                  >
-                    <span className="mr-1">{t.icon}</span>
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Composer (solo en Actividad) */}
-            {tab === 'activity' && (
-              <div className="p-4 border-b">
-                <textarea
-                  className="w-full border rounded-lg px-3 py-2 text-sm"
-                  rows={2}
-                  placeholder="Haz clic aquí para añadir una actividad…"
-                  value={composer}
-                  onChange={(e) => setComposer(e.target.value)}
-                />
-                <div className="mt-2 flex items-center gap-2">
-                  <button
-                    className="px-3 py-2 text-sm rounded-lg bg-black text-white"
-                    onClick={saveQuickActivity}
-                  >
-                    Guardar
-                  </button>
-                  <button
-                    className="px-3 py-2 text-sm rounded-lg border"
-                    onClick={() => setComposer('')}
-                  >
-                    Cancelar
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Composer Notas (solo en Notas) */}
-            {tab === 'notes' && (
-              <div className="p-4 border-b">
-                <label className="block text-sm mb-2">Nueva nota</label>
-                <textarea
-                  className="w-full border rounded-lg px-3 py-2 text-sm"
-                  rows={3}
-                  placeholder="Escribí la nota…"
-                  value={noteText}
-                  onChange={(e) => setNoteText(e.target.value)}
-                />
-                <div className="mt-2 grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-2 items-end">
-                  <div className="text-xs text-slate-600">
-                    Si dejás la fecha y hora vacías, se usará la fecha/hora
-                    actual del servidor.
-                  </div>
-                  <label className="text-sm">
-                    <div className="text-slate-600 mb-1">Fecha</div>
-                    <input
-                      type="date"
-                      className="border rounded-lg px-2 py-1 text-sm"
-                      value={noteDate}
-                      onChange={(e) => setNoteDate(e.target.value)}
-                    />
-                  </label>
-                  <label className="text-sm">
-                    <div className="text-slate-600 mb-1">Hora</div>
-                    <input
-                      type="time"
-                      className="border rounded-lg px-2 py-1 text-sm"
-                      value={noteTime}
-                      onChange={(e) => setNoteTime(e.target.value)}
-                    />
-                  </label>
-                </div>
-                <div className="mt-3 flex items-center gap-2">
-                  <button
-                    className="px-3 py-2 text-sm rounded-lg bg-black text-white disabled:opacity-60"
-                    onClick={addOrgNote}
-                    disabled={savingNote || !noteText.trim()}
-                  >
-                    {savingNote ? 'Guardando…' : 'Guardar nota'}
-                  </button>
-                  <button
-                    className="px-3 py-2 text-sm rounded-lg border"
-                    onClick={() => {
-                      setNoteText('');
-                      setNoteDate('');
-                      setNoteTime('');
-                    }}
-                    disabled={savingNote}
-                  >
-                    Limpiar
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Contenido del tab */}
-            <div className="p-4">
-              {tab === 'activity' && (
-                <div className="space-y-3">
-                  <div className="text-sm text-slate-600 mb-2">
-                    Enfoque — Aquí aparecerán actividades programadas, notas
-                    ancladas, borradores, etc.
-                  </div>
-
-                  <button
-                    className="text-blue-600 hover:underline text-sm"
-                    onClick={() => setOpenAct(true)}
-                  >
-                    + Programar una actividad
-                  </button>
-
-                  <h4 className="mt-4 font-medium">Historial</h4>
-                  {actsLoading ? (
-                    <div className="text-sm text-slate-600">
-                      Cargando actividades…
-                    </div>
-                  ) : acts.length ? (
-                    <ul className="space-y-2">
-                      {acts.map((a) => (
-                        <li
-                          key={a.id}
-                          className="border rounded-xl p-3"
-                        >
-                          <div className="text-sm font-medium">
-                            {a.type || 'actividad'} —{' '}
-                            {a.subject || 'sin asunto'}
-                          </div>
-                          <div className="text-xs text-slate-600">
-                            Vence: {a.due_date || '—'} • Creado:{' '}
-                            {a.created_at
-                              ? new Date(
-                                a.created_at
-                              ).toLocaleDateString()
-                              : '—'}
-                          </div>
-                          {a.notes && (
-                            <div className="text-sm mt-1">
-                              {a.notes}
-                            </div>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="text-sm text-slate-500">
-                      Sin actividades.
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {tab === 'timeline' && (
-                <div className="space-y-3">
-                  <h4 className="font-medium">Timeline</h4>
-                  {timelineItems.length ? (
-                    <ul className="space-y-2">
-                      {timelineItems.map((item) => (
-                        <li
-                          key={item.id}
-                          className="flex items-start gap-2"
-                        >
-                          <div className="mt-1">
-                            {item.kind === 'activity' && '📅'}
-                            {item.kind === 'deal' && '💼'}
-                            {item.kind !== 'activity' &&
-                              item.kind !== 'deal' &&
-                              '•'}
-                          </div>
-                          <div className="flex-1 border rounded-xl p-3">
-                            <div className="flex justify-between text-xs text-slate-600 mb-1">
-                              <span className="uppercase tracking-wide">
-                                {item.kind === 'activity'
-                                  ? 'Actividad'
-                                  : item.kind === 'deal'
-                                    ? 'Trato'
-                                    : item.kind}
-                              </span>
-                              <span>
-                                {fmtDate(item.date)}{' '}
-                                {fmtTime(item.date)}
-                              </span>
-                            </div>
-                            <div className="text-sm font-medium">
-                              {item.title}
-                            </div>
-                            {item.description && (
-                              <div className="text-sm text-slate-700 whitespace-pre-wrap mt-1">
-                                {item.description}
-                              </div>
-                            )}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="text-sm text-slate-500">
-                      No hay eventos aún en el timeline.
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {tab === 'notes' && (
-                <div className="space-y-3">
-                  <h4 className="font-medium">Notas</h4>
-                  {notesLoading ? (
-                    <div className="text-sm text-slate-600">
-                      Cargando notas…
-                    </div>
-                  ) : notes.length ? (
-                    <ul className="space-y-2">
-                      {notes
-                        .slice()
-                        .sort(
-                          (a, b) =>
-                            new Date(b.created_at || 0) -
-                            new Date(a.created_at || 0)
-                        )
-                        .map((n) => (
-                          <li
-                            key={
-                              n.id ||
-                              `${n.created_at}-${Math.random()}`
-                            }
-                            className="border rounded-xl p-3"
-                          >
-                            <div className="text-sm whitespace-pre-wrap">
-                              {n.content || '—'}
-                            </div>
-                            <div className="text-xs text-slate-600 mt-1">
-                              {n.user_name ||
-                                (n.user_id
-                                  ? `Usuario #${n.user_id}`
-                                  : '—')}{' '}
-                              • {fmtDate(n.created_at)}{' '}
-                              {fmtTime(n.created_at)}
-                            </div>
-                          </li>
-                        ))}
-                    </ul>
-                  ) : (
-                    <div className="text-sm text-slate-500">
-                      Sin notas todavía.
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {tab === 'files' && (
-                <div className="text-sm text-slate-600">
-                  Archivos (placeholder).
-                </div>
-              )}
-              {tab === 'docs' && (
-                <div className="text-sm text-slate-600">
-                  Documentos (placeholder).
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Volver */}
-          <div>
-            <Link
-              to="/organizations"
-              className="text-blue-600 hover:underline"
-            >
-              ← Volver a lista
-            </Link>
-          </div>
+        {/* ===== Panel operativo ===== */}
+        <section className="min-w-0 space-y-4">
+          <OrganizationEngagementPanel
+            org={org}
+            activities={acts}
+            activitiesLoading={actsLoading}
+            deals={orgDeals}
+            accountExec={accountExec}
+            onActivitiesChanged={loadActivities}
+          />
+          <Link to="/organizations" className="inline-flex text-sm text-blue-600 hover:underline">
+            ← Volver a organizaciones
+          </Link>
         </section>
       </div>
 

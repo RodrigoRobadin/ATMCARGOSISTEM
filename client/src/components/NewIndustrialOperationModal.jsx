@@ -345,6 +345,7 @@ export default function NewIndustrialOperationModal({
   defaultBusinessUnitId,
 }) {
   const [referencePreview, setReferencePreview] = useState("—");
+  const [operationTitle, setOperationTitle] = useState("");
 
   // Marca principal de la operación (para referencia / filtros)
   const [mainBrand, setMainBrand] = useState("RAYFLEX");
@@ -444,6 +445,7 @@ export default function NewIndustrialOperationModal({
       pipelineId &&
       stageId &&
       businessUnitId &&
+      operationTitle.trim() &&
       selectedOrg?.id &&
       orgName.trim() &&
       orgRuc.trim() &&
@@ -453,7 +455,7 @@ export default function NewIndustrialOperationModal({
       selectedLocationKey &&
       execId
     );
-  }, [pipelineId, stageId, businessUnitId, selectedOrg, orgName, orgRuc, contactName, contactPhone, contactEmail, selectedLocationKey, execId]);
+  }, [pipelineId, stageId, businessUnitId, operationTitle, selectedOrg, orgName, orgRuc, contactName, contactPhone, contactEmail, selectedLocationKey, execId]);
 
   // Referencia visual
   useEffect(() => {
@@ -766,18 +768,7 @@ export default function NewIndustrialOperationModal({
     setSaving(true);
 
     try {
-      const brandLabel =
-        mainBrand === "RAYFLEX"
-          ? "Rayflex"
-          : mainBrand === "BOPLAN"
-          ? "Boplan"
-          : mainBrand || "";
-
-      const titleFromForm = [brandLabel, orgName]
-        .map((x) => (x || "").trim())
-        .filter(Boolean)
-        .join(" · ");
-      const safeTitle = titleFromForm || "Operación industrial";
+      const safeTitle = operationTitle.trim();
       const selectedLocation = organizationLocations.find(
         (item) => item.key === selectedLocationKey
       );
@@ -1045,6 +1036,17 @@ export default function NewIndustrialOperationModal({
           <div className="bg-slate-50 rounded-xl p-3">
             <div className="font-medium mb-2">Proyecto industrial</div>
             <div className="grid gap-2">
+              <label className="text-sm">
+                Titulo de la operacion *
+                <Input
+                  value={operationTitle}
+                  onChange={(e) => setOperationTitle(e.target.value)}
+                  placeholder="Ej: Puertas rapidas para deposito central"
+                  maxLength={255}
+                  required
+                />
+              </label>
+
               <label className="text-sm">
                 Marca principal
                 <Select

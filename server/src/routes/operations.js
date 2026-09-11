@@ -551,12 +551,16 @@ router.get('/:id/followup-feed', requireAuth, async (req, res) => {
         a.notes,
         a.due_date,
         a.done,
+        a.priority,
+        a.assigned_to,
         a.created_at,
         a.created_by,
         u.name AS created_by_name,
-        u.email AS created_by_email
+        u.email AS created_by_email,
+        au.name AS assigned_to_name
       FROM activities a
       LEFT JOIN users u ON u.id = a.created_by
+      LEFT JOIN users au ON au.id = a.assigned_to
       WHERE a.deal_id = ?
       ORDER BY a.created_at DESC, a.id DESC
       `,
@@ -588,17 +592,15 @@ router.get('/:id/followup-feed', requireAuth, async (req, res) => {
         id: `activity-${row.id}`,
         source_id: row.id,
         source_type: 'activity',
-        entry_type:
-          row.type === 'note'
-            ? 'note'
-            : row.type === 'reminder' || (row.due_date && Number(row.done || 0) === 0)
-            ? 'reminder'
-            : 'activity',
+        entry_type: row.type || 'activity',
         type: row.type,
         title: row.subject || (row.type === 'note' ? 'Nota' : 'Actividad'),
         content: row.notes || '',
         due_at: row.due_date || null,
         done: Number(row.done || 0) === 1,
+        priority: row.priority || 'medium',
+        assigned_to: row.assigned_to || null,
+        assigned_to_name: row.assigned_to_name || null,
         created_at: row.created_at,
         created_by: row.created_by,
         created_by_name: row.created_by_name,
@@ -647,6 +649,8 @@ router.post('/:id/followup-feed', requireAuth, async (req, res) => {
     const content = String(req.body?.content || '').trim();
     const dueAt = String(req.body?.due_at || '').trim();
     const priority = String(req.body?.priority || 'medium').trim().toLowerCase();
+    const assignedTo = Number(req.body?.assigned_to) || Number(req.user?.id) || null;
+    const done = req.body?.done === true || Number(req.body?.done) === 1;
     const userId = Number(req.user?.id) || null;
 
     const [[deal]] = await db.query(
@@ -675,7 +679,7 @@ router.post('/:id/followup-feed', requireAuth, async (req, res) => {
         VALUES (?,?,?,?,?,?, 'pending', ?)
         `,
         [
-          userId,
+          assignedTo,
           deal.org_id || null,
           deal.contact_id || null,
           deal.id,
@@ -685,11 +689,22 @@ router.post('/:id/followup-feed', requireAuth, async (req, res) => {
         ]
       );
 
+      if (done) {
+        await db.query(
+          `UPDATE followup_tasks SET status = 'done', completed_at = NOW() WHERE id = ?`,
+          [ins.insertId]
+        );
+      }
+
       return res.status(201).json({ ok: true, source_type: 'followup_task', id: ins.insertId });
     }
 
-    const activityType =
-      entryType === 'note' ? 'note' : entryType === 'reminder' ? 'reminder' : 'activity';
+    const supportedActivityTypes = ['activity', 'reminder', 'call', 'meeting', 'email'];
+    const activityType = entryType === 'note'
+      ? 'note'
+      : supportedActivityTypes.includes(entryType)
+      ? entryType
+      : 'activity';
     const subject =
       title ||
       (entryType === 'note'
@@ -701,7 +716,7 @@ router.post('/:id/followup-feed', requireAuth, async (req, res) => {
     if (!content && entryType === 'note') {
       return res.status(400).json({ error: 'content es requerido' });
     }
-    if (entryType === 'reminder' && !dueAt) {
+    if (entryType !== 'note' && !dueAt) {
       return res.status(400).json({ error: 'due_at es requerido' });
     }
 
@@ -710,19 +725,21 @@ router.post('/:id/followup-feed', requireAuth, async (req, res) => {
     const [ins] = await db.query(
       `
       INSERT INTO activities
-        (type, subject, due_date, done, org_id, person_id, deal_id, notes, created_by)
-      VALUES (?,?,?,?,?,?,?,?,?)
+        (type, subject, due_date, done, priority, org_id, person_id, deal_id, notes, created_by, assigned_to)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)
       `,
       [
         activityType,
         subject,
         dueSql,
-        0,
+        done ? 1 : 0,
+        ['low', 'medium', 'high'].includes(priority) ? priority : 'medium',
         deal.org_id || null,
         deal.contact_id || null,
         deal.id,
         content || null,
         userId,
+        assignedTo,
       ]
     );
 

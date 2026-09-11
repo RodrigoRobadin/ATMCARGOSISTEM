@@ -115,9 +115,11 @@ router.get('/:id', async (req, res) => {
        c.id, c.name, c.email, c.phone, c.title,
        c.org_id, o.name AS org_name,
        c.label, c.owner_user_id, c.visibility,
-       c.notes, c.created_at, c.deleted_at
+       c.notes, c.created_at, c.deleted_at,
+       u.name AS owner_user_name, u.email AS owner_user_email
      FROM contacts c
      LEFT JOIN organizations o ON o.id = c.org_id
+     LEFT JOIN users u ON u.id = c.owner_user_id
      WHERE c.id = ?`,
     [id]
   );
@@ -135,8 +137,9 @@ router.get('/:id', async (req, res) => {
 
   const [deals] = await pool.query(
     `SELECT 
-       d.id, d.title, d.value, d.status, d.stage_id, d.pipeline_id, d.business_unit_id,
-       d.org_id, o.name AS org_name, d.created_at
+       d.id, d.reference, d.title, d.value, d.status,
+       d.stage_id, d.pipeline_id, d.business_unit_id,
+       d.org_id, o.name AS org_name, d.created_at, d.updated_at
      FROM deals d
      LEFT JOIN organizations o ON o.id = d.org_id
      WHERE d.contact_id = ?

@@ -135,9 +135,24 @@ const ALLOWED_OUTCOMES = [
 router.get('/calls', requireAuth, async (req, res) => {
   try {
     const userId = pickUserFilter(req);
-    const { limit = 500, offset = 0 } = req.query;
+    const { limit = 500, offset = 0, org_id, contact_id, deal_id } = req.query;
     const safeLimit = Math.min(Number(limit) || 500, 1000);
     const safeOffset = Math.max(Number(offset) || 0, 0);
+    const where = ['c.user_id = ?'];
+    const params = [userId];
+
+    if (org_id) {
+      where.push('c.org_id = ?');
+      params.push(Number(org_id));
+    }
+    if (contact_id) {
+      where.push('c.contact_id = ?');
+      params.push(Number(contact_id));
+    }
+    if (deal_id) {
+      where.push('c.deal_id = ?');
+      params.push(Number(deal_id));
+    }
 
     const [rows] = await pool.query(
       `
@@ -148,11 +163,11 @@ router.get('/calls', requireAuth, async (req, res) => {
       FROM followup_calls c
       LEFT JOIN organizations o ON o.id = c.org_id
       LEFT JOIN contacts ct     ON ct.id = c.contact_id
-      WHERE c.user_id = ?
+      WHERE ${where.join(' AND ')}
       ORDER BY c.happened_at DESC, c.id DESC
       LIMIT ? OFFSET ?
     `,
-      [userId, safeLimit, safeOffset]
+      [...params, safeLimit, safeOffset]
     );
 
     res.json(rows);

@@ -58,7 +58,18 @@ function formatMoney(value, currencyCode = 'USD') {
 }
 
 function formatDateLong(value, city = 'Asuncion') {
-  const raw = value ? new Date(value) : new Date();
+  const textValue = String(value || '').trim();
+  const iso = textValue.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  const local = textValue.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/);
+  let raw;
+  if (iso) {
+    raw = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  } else if (local) {
+    const year = Number(local[3].length === 2 ? `20${local[3]}` : local[3]);
+    raw = new Date(year, Number(local[2]) - 1, Number(local[1]));
+  } else {
+    raw = value ? new Date(value) : new Date();
+  }
   if (value && Number.isNaN(raw.getTime())) {
     return `${city} ${String(value)}`;
   }

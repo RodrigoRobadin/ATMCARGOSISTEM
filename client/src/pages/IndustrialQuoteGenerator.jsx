@@ -153,14 +153,28 @@ const FORMAL_MONTHS = [
   'diciembre',
 ];
 
+function todayInParaguayIso() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Asuncion',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 function parseLooseDate(raw) {
   if (!raw) return new Date();
   if (raw instanceof Date && !Number.isNaN(raw.getTime())) return raw;
   const text = String(raw).trim();
   if (!text) return new Date();
 
-  const direct = new Date(text);
-  if (!Number.isNaN(direct.getTime())) return direct;
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) {
+    const parsed = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
 
   const match = text.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/);
   if (match) {
@@ -171,7 +185,20 @@ function parseLooseDate(raw) {
     if (!Number.isNaN(parsed.getTime())) return parsed;
   }
 
+  const direct = new Date(text);
+  if (!Number.isNaN(direct.getTime())) return direct;
+
   return new Date();
+}
+
+function normalizeQuoteDate(raw) {
+  const date = parseLooseDate(raw || todayInParaguayIso());
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function displayQuoteDate(raw) {
+  const date = parseLooseDate(raw);
+  return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
 }
 
 function formatFormalDate(raw, city = 'Asuncion') {
@@ -535,6 +562,7 @@ function buildQuoteFileName({ deal, cfMap, ui }) {
 // =================== esquema CF para guardar ===================
 
 const CF_SCHEMA = {
+  fecha_presupuesto:  { label: 'Fecha del presupuesto', type: 'text' },
 
   tipo_operacion:     { label: 'Tipo de Operación', type: 'text' },
 
@@ -800,7 +828,7 @@ export default function QuoteGenerator(){
 
   const [contacto, setContacto] = useState('');
 
-  const [fecha, setFecha] = useState(() => new Date().toLocaleDateString());
+  const [fecha, setFecha] = useState(todayInParaguayIso);
 
   const [ref, setRef] = useState('');
 
@@ -1187,6 +1215,10 @@ CORDIALES SALUDOS`,
           setContacto(detail.deal?.contact_name || '');
           setRef(detail.deal?.reference || '');
         }
+        setFecha(normalizeQuoteDate(
+          pick(merged, ['cf:fecha_presupuesto', 'cf:fecha', 'hdr:fecha'], 'Fecha del presupuesto')
+          || todayInParaguayIso()
+        ));
 
 
 
@@ -1718,6 +1750,7 @@ CORDIALES SALUDOS`,
 
   const customFieldEntries = useMemo(
     () => [
+      ['fecha_presupuesto', fecha],
       ['tipo_operacion', tipoOperacion],
       ['tipo_transporte', tipoTransporte],
       ['tipo_envio', tipoEnvio],
@@ -1752,6 +1785,7 @@ CORDIALES SALUDOS`,
       ['industrial_items_json', JSON.stringify(normalizedItems)],
     ],
     [
+      fecha,
       tipoOperacion,
       tipoTransporte,
       tipoEnvio,
@@ -2860,7 +2894,7 @@ Quedamos atentos a sus comentarios.`;
 
             <label className="block">Fecha
 
-              <input value={fecha} onChange={e=>setFecha(e.target.value)} className="w-full border rounded px-2 py-1" />
+              <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)} className="w-full border rounded px-2 py-1" />
 
             </label>
 
@@ -3361,7 +3395,7 @@ Quedamos atentos a sus comentarios.`;
 
             <div className="text-right text-[13px] text-slate-700">
 
-              <div>Asunción {fecha}</div>
+              <div>Asunción {displayQuoteDate(fecha)}</div>
 
               <div className="font-semibold">REF. N° {ref || deal.reference}</div>
 

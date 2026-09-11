@@ -163,6 +163,23 @@ function resolveChromePath() {
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
+function formatQuoteDate(value) {
+  const text = String(value || '').trim();
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return `${String(iso[3]).padStart(2, '0')}/${String(iso[2]).padStart(2, '0')}/${iso[1]}`;
+  const local = text.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/);
+  if (local) {
+    const year = local[3].length === 2 ? `20${local[3]}` : local[3];
+    return `${String(local[1]).padStart(2, '0')}/${String(local[2]).padStart(2, '0')}/${year}`;
+  }
+  return new Intl.DateTimeFormat('es-PY', {
+    timeZone: 'America/Asuncion',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(new Date());
+}
+
 function buildHtml({ deal = {}, quote = {}, inputs = {}, computed = {}, documentSnapshot = {}, user = {} } = {}) {
   const snapshot = documentSnapshot || {};
   const currency = String(
@@ -178,7 +195,7 @@ function buildHtml({ deal = {}, quote = {}, inputs = {}, computed = {}, document
   const customer = pickFirst(snapshot.cliente, quote.client_name, deal.org_name, 'Cliente');
   const contact = pickFirst(snapshot.contacto, deal.contact_name, '-');
   const ref = pickFirst(snapshot.referencia, snapshot.ref, quote.ref_code, deal.reference);
-  const date = pickFirst(snapshot.fecha, new Date().toLocaleDateString('es-PY'));
+  const date = formatQuoteDate(pickFirst(snapshot.fecha_presupuesto, snapshot.fecha));
   const terms = {
     condicionVenta: pickFirst(snapshot.condicion_venta, snapshot.condicionVenta),
     formaPago: pickFirst(snapshot.forma_pago, snapshot.formaPago),

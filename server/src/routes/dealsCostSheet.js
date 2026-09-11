@@ -1,7 +1,8 @@
 // server/src/routes/dealsCostSheet.js
 import { Router } from 'express';
 import { pool } from '../services/db.js';
-import { requireAuth } from '../middlewares/auth.js';
+import { requireAuth, requireRole } from '../middlewares/auth.js';
+import { ensureDealBudgetStateSchema, getDealBudgetState } from '../services/dealBudgetState.js';
 
 const router = Router();
 
@@ -56,6 +57,66 @@ async function ensureCostSheetVersionSchema() {
 }
 
 void ensureCostSheetVersionSchema();
+void ensureDealBudgetStateSchema().catch((error) => {
+  console.error('[deal-budget] No se pudo asegurar el esquema:', error?.message || error);
+});
+
+router.get('/:id/budget', requireAuth, async (req, res) => {
+  try {
+    const state = await getDealBudgetState(req.params.id);
+    if (!state) return res.status(404).json({ error: 'Operacion no encontrada' });
+    res.json(state);
+  } catch (err) {
+    console.error('[deal-budget][GET] error', err);
+    res.status(500).json({ error: 'No se pudo cargar el estado del presupuesto' });
+  }
+});
+
+router.post('/:id/budget/lock', requireAuth, async (req, res) => {
+  try {
+    const state = await getDealBudgetState(req.params.id);
+    if (!state) return res.status(404).json({ error: 'Operacion no encontrada' });
+    if (state.budget_status === 'confirmado') return res.status(409).json({ error: 'Ya confirmado' });
+    await pool.query(
+      `UPDATE deals SET budget_status = 'bloqueado', budget_updated_by = ?, budget_updated_at = NOW(), updated_at = NOW() WHERE id = ?`,
+      [req.user.id, req.params.id]
+    );
+    res.json({ ok: true, budget_status: 'bloqueado' });
+  } catch (err) {
+    console.error('[deal-budget][lock] error', err);
+    res.status(500).json({ error: 'No se pudo bloquear el presupuesto' });
+  }
+});
+
+router.post('/:id/budget/confirm', requireAuth, async (req, res) => {
+  try {
+    const state = await getDealBudgetState(req.params.id);
+    if (!state) return res.status(404).json({ error: 'Operacion no encontrada' });
+    await pool.query(
+      `UPDATE deals SET budget_status = 'confirmado', budget_profit = ?, budget_updated_by = ?, budget_updated_at = NOW(), updated_at = NOW() WHERE id = ?`,
+      [req.body?.profit_value ?? null, req.user.id, req.params.id]
+    );
+    res.json({ ok: true, budget_status: 'confirmado', budget_profit: req.body?.profit_value ?? null });
+  } catch (err) {
+    console.error('[deal-budget][confirm] error', err);
+    res.status(500).json({ error: 'No se pudo confirmar el presupuesto' });
+  }
+});
+
+router.post('/:id/budget/reopen', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const state = await getDealBudgetState(req.params.id);
+    if (!state) return res.status(404).json({ error: 'Operacion no encontrada' });
+    await pool.query(
+      `UPDATE deals SET budget_status = 'borrador', budget_updated_by = ?, budget_updated_at = NOW(), updated_at = NOW() WHERE id = ?`,
+      [req.user.id, req.params.id]
+    );
+    res.json({ ok: true, budget_status: 'borrador' });
+  } catch (err) {
+    console.error('[deal-budget][reopen] error', err);
+    res.status(500).json({ error: 'No se pudo rehabilitar el presupuesto' });
+  }
+});
 
 // Helper para parsear JSON sin romper
 
@@ -434,16 +495,9 @@ router.put('/:id/cost-sheet', requireAuth, async (req, res) => {
   const data = (req.body && typeof req.body === 'object') ? req.body : {};
 
   try {
-    // Deal y org
-    const [[deal]] = await pool.query('SELECT org_id FROM deals WHERE id = ? LIMIT 1', [id]);
-    if (!deal) return res.status(404).json({ error: 'Deal no encontrado' });
-
-    // Estado de presupuesto
-    const [[org]] = await pool.query(
-      'SELECT budget_status FROM organizations WHERE id = ? LIMIT 1',
-      [deal.org_id]
-    );
-    const locked = org && (org.budget_status === 'bloqueado' || org.budget_status === 'confirmado');
+    const budgetState = await getDealBudgetState(id);
+    if (!budgetState) return res.status(404).json({ error: 'Deal no encontrado' });
+    const locked = ['bloqueado', 'confirmado'].includes(budgetState.budget_status);
     if (locked && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Presupuesto bloqueado' });
     }
@@ -588,17 +642,9 @@ router.post('/:id/cost-sheet/versions', requireAuth, async (req, res) => {
 
   try {
     await ensureCostSheetVersionSchema();
-    // Verificar que el deal existe
-    const [[deal]] = await pool.query('SELECT org_id FROM deals WHERE id = ?', [id]);
-    if (!deal) return res.status(404).json({ error: 'Deal no encontrado' });
-
-    // Verificar permisos (solo admin puede crear versiones si está bloqueado)
-    const [[org]] = await pool.query(
-      'SELECT budget_status FROM organizations WHERE id = ?',
-      [deal.org_id]
-    );
-
-    const locked = org?.budget_status === 'bloqueado';
+    const budgetState = await getDealBudgetState(id);
+    if (!budgetState) return res.status(404).json({ error: 'Deal no encontrado' });
+    const locked = budgetState.budget_status === 'bloqueado';
     if (locked && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Presupuesto bloqueado' });
     }
@@ -741,14 +787,15 @@ router.post('/:id/cost-sheet/versions/:versionId/confirm', requireAuth, async (r
       [req.user.id, versionId]
     );
 
-    // Actualizar organización
-    const [[deal]] = await pool.query('SELECT org_id FROM deals WHERE id = ?', [id]);
-    if (deal?.org_id) {
-      await pool.query(
-        'UPDATE organizations SET budget_status = \'confirmado\' WHERE id = ?',
-        [deal.org_id]
-      );
-    }
+    await pool.query(
+      `UPDATE deals
+          SET budget_status = 'confirmado',
+              budget_updated_by = ?,
+              budget_updated_at = NOW(),
+              updated_at = NOW()
+        WHERE id = ?`,
+      [req.user.id, id]
+    );
 
     res.json({ ok: true });
   } catch (err) {

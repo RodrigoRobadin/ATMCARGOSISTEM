@@ -45,6 +45,22 @@ function getUserId(req) {
       console.log('[activities] Columna created_by agregada.');
     }
 
+    if (!byName.priority) {
+      await pool.query(`
+        ALTER TABLE activities
+        ADD COLUMN priority VARCHAR(16) NOT NULL DEFAULT 'medium' AFTER done
+      `);
+      console.log('[activities] Columna priority agregada.');
+    }
+
+    if (!byName.assigned_to) {
+      await pool.query(`
+        ALTER TABLE activities
+        ADD COLUMN assigned_to BIGINT NULL AFTER created_by
+      `);
+      console.log('[activities] Columna assigned_to agregada.');
+    }
+
     if (byName.due_date && !['datetime', 'timestamp'].includes(String(byName.due_date.DATA_TYPE || '').toLowerCase())) {
       await pool.query(`
         ALTER TABLE activities
@@ -83,8 +99,8 @@ router.get('/mine', requireAuth, async (req, res) => {
     const whereSql = `WHERE ${where.join(' AND ')}`;
 
     const [rows] = await pool.query(
-      `SELECT a.id, a.type, a.subject, a.due_date, a.done, a.created_at,
-              a.org_id, o.name AS org_name
+      `SELECT a.id, a.type, a.subject, a.due_date, a.done, a.priority, a.created_at,
+              a.org_id, a.person_id, a.deal_id, a.assigned_to, o.name AS org_name
        FROM activities a
        LEFT JOIN organizations o ON o.id = a.org_id
        ${whereSql}
@@ -138,13 +154,19 @@ router.get('/', async (req, res) => {
 
     const [rows] = await pool.query(
       `SELECT
-         a.id, a.type, a.subject, a.due_date, a.done,
+         a.id, a.type, a.subject, a.due_date, a.done, a.priority,
          a.person_id, a.org_id, a.deal_id,
-         a.notes, a.created_at, a.created_by,
+         a.notes, a.created_at, a.created_by, a.assigned_to,
          u.name  AS created_by_name,
-         u.email AS created_by_email
+         u.email AS created_by_email,
+         au.name AS assigned_to_name,
+         c.name AS person_name,
+         d.reference AS deal_reference
        FROM activities a
        LEFT JOIN users u ON u.id = a.created_by
+       LEFT JOIN users au ON au.id = a.assigned_to
+       LEFT JOIN contacts c ON c.id = a.person_id
+       LEFT JOIN deals d ON d.id = a.deal_id
        ${whereSql}
        ORDER BY a.${sortCol} ${sortDir}
        LIMIT ? OFFSET ?`,
@@ -212,12 +234,17 @@ router.post('/', requireAuth, async (req, res) => {
     const notes      = toNullIfEmpty(req.body.notes);
     const created_at = toNullIfEmpty(req.body.created_at); // opcional
     const created_by = getUserId(req) || toIntOrNull(req.body.created_by);
+    const priority = ['low', 'medium', 'high'].includes(String(req.body.priority || '').toLowerCase())
+      ? String(req.body.priority).toLowerCase()
+      : 'medium';
+    const assigned_to = toIntOrNull(req.body.assigned_to) || created_by;
 
-    const cols = ['type','subject','due_date','done','org_id','person_id','deal_id','notes'];
-    const vals = [ type,   subject,  due_date,  done,  org_id,  person_id,  deal_id,  notes ];
+    const cols = ['type','subject','due_date','done','priority','org_id','person_id','deal_id','notes'];
+    const vals = [ type,   subject,  due_date,  done,  priority,  org_id,  person_id,  deal_id,  notes ];
 
     if (created_at) { cols.push('created_at'); vals.push(created_at); }
     cols.push('created_by'); vals.push(created_by);
+    cols.push('assigned_to'); vals.push(assigned_to);
 
     const placeholders = cols.map(() => '?').join(', ');
     const sql = `INSERT INTO activities (${cols.join(', ')}) VALUES (${placeholders})`;
@@ -236,13 +263,19 @@ router.post('/', requireAuth, async (req, res) => {
 router.patch('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const allowed = ['type','subject','due_date','done','org_id','person_id','deal_id','notes'];
+    const allowed = ['type','subject','due_date','done','priority','org_id','person_id','deal_id','notes','assigned_to'];
 
     const body = { ...req.body };
     if ('done' in body)      body.done = toDoneFlag(body.done);
     if ('org_id' in body)    body.org_id = toIntOrNull(body.org_id);
     if ('person_id' in body) body.person_id = toIntOrNull(body.person_id);
     if ('deal_id' in body)   body.deal_id = toIntOrNull(body.deal_id);
+    if ('assigned_to' in body) body.assigned_to = toIntOrNull(body.assigned_to);
+    if ('priority' in body) {
+      body.priority = ['low', 'medium', 'high'].includes(String(body.priority || '').toLowerCase())
+        ? String(body.priority).toLowerCase()
+        : 'medium';
+    }
     if ('notes' in body)     body.notes = toNullIfEmpty(body.notes);
     if ('due_date' in body)  body.due_date = toNullIfEmpty(body.due_date);
 

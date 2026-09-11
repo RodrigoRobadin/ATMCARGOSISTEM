@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { pool } from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
 import { logAudit } from '../services/audit.js';
+import { ensureDealBudgetStateSchema } from '../services/dealBudgetState.js';
 
 import multer from 'multer';
 import fs from 'fs';
@@ -472,7 +473,7 @@ router.get('/', requireAuth, async (req, res) => {
        lu.name                    AS lost_by_name,
        ru.name                    AS reopened_by_name,
 
-       c.name  AS contact_name, c.email AS contact_email,
+       c.name  AS contact_name, c.email AS contact_email, c.phone AS contact_phone,
        o.name  AS org_name,
        COALESCE(oa.has_activity, 0) AS org_has_activity,
        COALESCE(da.total_activities, 0) AS deal_activity_count,
@@ -527,16 +528,20 @@ router.get('/', requireAuth, async (req, res) => {
        GROUP BY deal_id
      ) fn ON fn.deal_id = d.id
      LEFT JOIN (
-       SELECT
-         deal_id,
-         SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_tasks_count,
-         SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS completed_tasks_count,
-         SUM(CASE WHEN status IN ('pending', 'done') THEN 1 ELSE 0 END) AS tracked_tasks_count,
-         SUM(CASE WHEN status = 'pending' AND due_at < NOW() THEN 1 ELSE 0 END) AS overdue_tasks_count,
-         MIN(CASE WHEN status = 'pending' THEN due_at ELSE NULL END) AS next_task_due_at
-       FROM followup_tasks
-       WHERE deal_id IS NOT NULL
-       GROUP BY deal_id
+       SELECT tracked.deal_id,
+         SUM(CASE WHEN tracked.status = 'pending' THEN 1 ELSE 0 END) AS pending_tasks_count,
+         SUM(CASE WHEN tracked.status = 'done' THEN 1 ELSE 0 END) AS completed_tasks_count,
+         COUNT(*) AS tracked_tasks_count,
+         SUM(CASE WHEN tracked.status = 'pending' AND tracked.due_at < NOW() THEN 1 ELSE 0 END) AS overdue_tasks_count,
+         MIN(CASE WHEN tracked.status = 'pending' THEN tracked.due_at ELSE NULL END) AS next_task_due_at
+       FROM (
+         SELECT deal_id, status, due_at FROM followup_tasks
+         WHERE deal_id IS NOT NULL AND status IN ('pending', 'done')
+         UNION ALL
+         SELECT deal_id, IF(done = 1, 'done', 'pending') AS status, due_date AS due_at
+         FROM activities WHERE deal_id IS NOT NULL AND type <> 'note'
+       ) tracked
+       GROUP BY tracked.deal_id
      ) ft ON ft.deal_id = d.id
      LEFT JOIN (
        SELECT
@@ -1044,6 +1049,7 @@ router.delete('/:id/files/:fileId', requireAuth, async (req, res) => {
 });
 
 router.post('/', requireAuth, async (req, res) => {
+  await ensureDealBudgetStateSchema();
   const body = req.body || {};
   const pipeline_id      = body.pipeline_id;
   const stage_id         = body.stage_id;
@@ -1082,8 +1088,9 @@ router.post('/', requireAuth, async (req, res) => {
   };
 
   const trim = (s) => (typeof s === 'string' ? s.trim() : '');
+  const requestedTitle = trim(body.title);
   const title =
-    trim(body.title) ||
+    requestedTitle ||
     [trim(hints.modalidad_carga), trim(hints.tipo_carga), trim(hints.mercaderia)].filter(Boolean).join(' • ') ||
     'Operación';
 
@@ -1099,6 +1106,10 @@ router.post('/', requireAuth, async (req, res) => {
     const requiresCompleteCommercialData =
       body.enforce_complete_data === true &&
       ['atm-cargo', 'atm-industrial'].includes(businessUnitKey);
+
+    if (businessUnitKey === 'atm-industrial' && !requestedTitle) {
+      throw Object.assign(new Error('El título de la operación es obligatorio'), { statusCode: 400 });
+    }
 
     if (requiresCompleteCommercialData) {
       if (!org_id_body) throw Object.assign(new Error('Selecciona una organización existente'), { statusCode: 400 });
@@ -1237,12 +1248,12 @@ router.post('/', requireAuth, async (req, res) => {
 
     const [dealIns] = await conn.query(
       `INSERT INTO deals(
-         reference, title, value, status,
+         reference, title, value, status, budget_status, budget_profit,
          pipeline_id, business_unit_id, stage_id,
          contact_id, org_id, org_branch_id,
          advisor_user_id, created_by_user_id
        )
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+       VALUES (?,?,?,?,'borrador',NULL,?,?,?,?,?,?,?,?)`,
       [
         tmpRef,
         title,

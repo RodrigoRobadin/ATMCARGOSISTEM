@@ -10,6 +10,7 @@ import { useAuth } from "../auth.jsx";
 import {
   DealOutcomeContextMenu,
   MarkDealNotClosedModal,
+  QuickDealActivityModal,
 } from "../components/DealCommercialOutcomeControls.jsx";
 
 /* helpers */
@@ -173,6 +174,7 @@ export default function Workspace() {
   const initializedAdvisorFilter = useRef(false);
   const [outcomeMenu, setOutcomeMenu] = useState(null);
   const [dealToMarkNotClosed, setDealToMarkNotClosed] = useState(null);
+  const [dealForActivity, setDealForActivity] = useState(null);
 
   const isIndustrial =
     key === "atm-industrial" || (bu && bu.key_slug === "atm-industrial");
@@ -283,7 +285,7 @@ export default function Workspace() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [key, location.key]);
 
   useEffect(() => {
     if (!isIndustrial || !isAdmin || !pipelineId || !bu?.id) return;
@@ -539,6 +541,10 @@ export default function Workspace() {
 
                       const titleText = isProspectStage
                         ? deal.org_name || deal.title || "Prospecto"
+                        : isIndustrial
+                        ? [deal.reference, deal.title]
+                            .filter((value, index, values) => value && (index === 0 || value !== values[0]))
+                            .join(" - ")
                         : deal.reference || deal.title;
                       const secondaryRight = isProspectStage
                         ? deal.created_by_name || deal.contact_name || "—"
@@ -581,7 +587,7 @@ export default function Workspace() {
                                 className={`absolute top-2 right-2 h-2.5 w-2.5 rounded-full ${signalMeta.dotClass}`}
                                 title={signalMeta.tooltip}
                               />
-                              <div className="text-sm font-semibold truncate">
+                              <div className="text-sm font-semibold truncate" title={titleText}>
                                 {titleText}
                               </div>
                               <div className="text-xs text-slate-600 truncate">
@@ -648,11 +654,18 @@ export default function Workspace() {
         position={outcomeMenu?.position}
         onClose={() => setOutcomeMenu(null)}
         onMarkNotClosed={setDealToMarkNotClosed}
+        onAssignActivity={setDealForActivity}
       />
 
       <MarkDealNotClosedModal
         deal={dealToMarkNotClosed}
         onClose={() => setDealToMarkNotClosed(null)}
+        onSaved={() => refresh()}
+      />
+
+      <QuickDealActivityModal
+        deal={dealForActivity}
+        onClose={() => setDealForActivity(null)}
         onSaved={() => refresh()}
       />
 

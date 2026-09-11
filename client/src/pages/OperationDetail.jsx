@@ -12,6 +12,7 @@ import AdminOpsPanel from "../components/op-details/AdminOpsPanel.jsx";
 import OrganizationLookupField from "../components/OrganizationLookupField.jsx";
 import LogisticsAutocomplete from "../components/LogisticsAutocomplete.jsx";
 import { attachOperationToAssistant } from "../utils/assistantContext";
+import OperationFollowupComposer from "../components/OperationFollowupComposer.jsx";
 
 // 👇 Ajustá la ruta real según tu backend
 const PROVIDERS_ENDPOINT = "/organizations";
@@ -583,6 +584,9 @@ export default function OperationDetail() {
   const [noteTitle, setNoteTitle] = useState("");
   const [noteDueAt, setNoteDueAt] = useState("");
   const [notePriority, setNotePriority] = useState("medium");
+  const [noteAssignedTo, setNoteAssignedTo] = useState("");
+  const [noteMarkDone, setNoteMarkDone] = useState(false);
+  const [followupSaving, setFollowupSaving] = useState(false);
 
   const [profitUSD, setProfitUSD] = useState(null);
 
@@ -1875,11 +1879,12 @@ useEffect(() => {
       alert("Completa el titulo o el contenido.");
       return;
     }
-    if ((entryType === "reminder" || entryType === "task") && !dueAt) {
+    if (entryType !== "note" && !dueAt) {
       alert("Completa la fecha y hora.");
       return;
     }
 
+    setFollowupSaving(true);
     try {
       const { data: created } = await api.post(`/operations/${id}/followup-feed`, {
         entry_type: entryType,
@@ -1887,6 +1892,8 @@ useEffect(() => {
         content: txt,
         due_at: dueAt || null,
         priority: notePriority,
+        assigned_to: noteAssignedTo || user?.id || null,
+        done: noteMarkDone,
       });
 
       const activityId = created?.source_type === "activity" ? created?.id : null;
@@ -1916,11 +1923,14 @@ useEffect(() => {
       setNoteTitle("");
       setNoteDueAt("");
       setNotePriority("medium");
+      setNoteMarkDone(false);
       setNotePendingFiles([]);
       await loadNotes();
     } catch (err) {
       console.error("No se pudo crear el seguimiento", err);
       alert("No se pudo crear el seguimiento.");
+    } finally {
+      setFollowupSaving(false);
     }
   }
 
@@ -3463,6 +3473,32 @@ function providerHasFreightTag(p = {}) {
                             </div>
                           </div>
 
+                          <OperationFollowupComposer
+                            deal={deal}
+                            currentUser={user}
+                            entries={notesList}
+                            entryType={noteEntryType}
+                            setEntryType={(nextType) => {
+                              setNoteEntryType(nextType);
+                              if (nextType !== "note") setNotePendingFiles([]);
+                            }}
+                            title={noteTitle}
+                            setTitle={setNoteTitle}
+                            content={note}
+                            setContent={setNote}
+                            dueAt={noteDueAt}
+                            setDueAt={setNoteDueAt}
+                            priority={notePriority}
+                            setPriority={setNotePriority}
+                            assignedTo={noteAssignedTo}
+                            setAssignedTo={setNoteAssignedTo}
+                            markDone={noteMarkDone}
+                            setMarkDone={setNoteMarkDone}
+                            onSave={addNote}
+                            saving={followupSaving}
+                          />
+
+                          <div className="hidden">
                           <div className="grid md:grid-cols-2 gap-2 mb-2">
                             <select
                               className="border rounded-lg px-3 py-2 text-sm"
@@ -3554,6 +3590,7 @@ function providerHasFreightTag(p = {}) {
                               </div>
                             )}
                           </div>
+                          </div>
 
                           {noteEntryType === "note" && (
                             <>
@@ -3635,30 +3672,31 @@ function providerHasFreightTag(p = {}) {
                                 const attachFiles = (attachIds || [])
                                   .map((fid) => fileById[fid])
                                   .filter(Boolean);
-                                const typeLabel =
-                                  a.entry_type === "note"
-                                    ? "Nota"
-                                    : a.entry_type === "activity"
-                                    ? "Actividad"
-                                    : a.entry_type === "reminder"
-                                    ? "Recordatorio"
-                                    : "Tarea";
+                                const typeLabel = ({
+                                  note: "Nota",
+                                  activity: "Actividad",
+                                  reminder: "Recordatorio",
+                                  task: "Tarea",
+                                  call: "Llamada",
+                                  meeting: "Reunion",
+                                  email: "Correo electronico",
+                                })[a.entry_type] || "Actividad";
                                 const typeClass =
                                   a.entry_type === "note"
                                     ? "bg-slate-100 text-slate-700"
-                                    : a.entry_type === "activity"
-                                    ? "bg-blue-100 text-blue-700"
                                     : a.entry_type === "reminder"
                                     ? "bg-amber-100 text-amber-700"
-                                    : "bg-emerald-100 text-emerald-700";
+                                    : a.entry_type === "task"
+                                    ? "bg-emerald-100 text-emerald-700"
+                                    : "bg-blue-100 text-blue-700";
                                 const tooltip =
                                   a.entry_type === "note"
                                     ? "Nota interna de la operacion"
-                                    : a.entry_type === "activity"
-                                    ? "Actividad registrada en la operacion"
                                     : a.entry_type === "reminder"
                                     ? `Recordatorio pendiente${a.due_at ? ` hasta ${new Date(a.due_at).toLocaleString()}` : ""}`
-                                    : `Tarea ${a.status || "pending"}${a.due_at ? ` con vencimiento ${new Date(a.due_at).toLocaleString()}` : ""}`;
+                                    : a.entry_type === "task"
+                                    ? `Tarea ${a.status || "pending"}${a.due_at ? ` con vencimiento ${new Date(a.due_at).toLocaleString()}` : ""}`
+                                    : `${typeLabel} registrada en la operacion`;
                                 const dueMeta = getFollowupDueMeta(a);
                                 const canMarkDone =
                                   !a.done &&

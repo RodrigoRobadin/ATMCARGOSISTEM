@@ -90,6 +90,35 @@ function taxRateToQuoteLabel(value) {
 const BRAND_BLUE = '#2F4866';
 const PUBLIC_BASE = String(API_BASE || '').replace(/\/api$/, '');
 
+function todayInParaguayIso() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Asuncion',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function normalizeQuoteDate(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return todayInParaguayIso();
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const local = text.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/);
+  if (local) {
+    const year = local[3].length === 2 ? `20${local[3]}` : local[3];
+    return `${year}-${String(local[2]).padStart(2, '0')}-${String(local[1]).padStart(2, '0')}`;
+  }
+  return todayInParaguayIso();
+}
+
+function displayQuoteDate(raw) {
+  const [year, month, day] = normalizeQuoteDate(raw).split('-');
+  return `${day}/${month}/${year}`;
+}
+
 const resolvePublicAssetUrl = (value = '') => {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -266,6 +295,7 @@ function buildQuoteFileName({ deal, cfMap, ui }) {
 
 // =================== esquema CF para guardar ===================
 const CF_SCHEMA = {
+  fecha_presupuesto:  { label: 'Fecha del presupuesto', type: 'text' },
   tipo_operacion:     { label: 'Tipo de Operación', type: 'text' },
   tipo_transporte:    { label: 'Tipo de Transporte', type: 'text' },
   tipo_envio:         { label: 'Tipo de Envío', type: 'text' },
@@ -348,7 +378,7 @@ export default function QuoteGenerator(){
   // Cabecera
   const [cliente, setCliente] = useState('');
   const [contacto, setContacto] = useState('');
-  const [fecha, setFecha] = useState(() => new Date().toLocaleDateString());
+  const [fecha, setFecha] = useState(todayInParaguayIso);
   const [ref, setRef] = useState('');
   const [incoterm, setIncoterm] = useState('EXW');
 
@@ -457,6 +487,10 @@ export default function QuoteGenerator(){
         setCliente(detail.deal?.org_name || '');
         setContacto(detail.deal?.contact_name || '');
         setRef(detail.deal?.reference || '');
+        setFecha(normalizeQuoteDate(
+          pick(merged, ['cf:fecha_presupuesto', 'cf:fecha', 'hdr:fecha'], 'Fecha del presupuesto')
+          || todayInParaguayIso()
+        ));
 
         // ---- Incoterms
         setIncoterm(
@@ -715,6 +749,7 @@ export default function QuoteGenerator(){
     try {
       setSaving(true);
       const entries = [
+        ['fecha_presupuesto', fecha],
         ['tipo_operacion',   tipoOperacion],
         ['tipo_transporte',  tipoTransporte],
         ['tipo_envio',       tipoEnvio],
@@ -1163,7 +1198,7 @@ Quedamos atentos a sus comentarios.`;
               <input value={contacto} onChange={e=>setContacto(e.target.value)} className="w-full border rounded px-2 py-1" />
             </label>
             <label className="block">Fecha
-              <input value={fecha} onChange={e=>setFecha(e.target.value)} className="w-full border rounded px-2 py-1" />
+              <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)} className="w-full border rounded px-2 py-1" />
             </label>
             <label className="block">Referencia
               <input value={ref} onChange={e=>setRef(e.target.value)} className="w-full border rounded px-2 py-1" />
@@ -1320,7 +1355,7 @@ Quedamos atentos a sus comentarios.`;
               <div className="text-slate-600">Atn. {contacto || deal.contact_name || '—'}</div>
             </div>
             <div className="text-right text-[13px] text-slate-700">
-              <div>Asunción {fecha}</div>
+              <div>Asunción {displayQuoteDate(fecha)}</div>
               <div className="font-semibold">REF. N° {ref || deal.reference}</div>
             </div>
           </div>
