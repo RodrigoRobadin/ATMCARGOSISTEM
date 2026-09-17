@@ -367,8 +367,8 @@ export default function GlobalSearchPanel() {
                 )}
               </section>
             ) : (
-              <section className="grid max-h-[calc(100vh-90px)] grid-cols-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900 sm:grid-cols-[230px_minmax(0,1fr)]">
-                <nav className="flex overflow-x-auto border-b border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-950 sm:block sm:overflow-y-auto sm:border-b-0 sm:border-r">
+              <section className="grid h-[calc(100dvh-90px)] max-h-[680px] min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900 sm:grid-cols-[230px_minmax(0,1fr)] sm:grid-rows-1">
+                <nav className="flex min-h-0 overflow-x-auto border-b border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-950 sm:block sm:overflow-y-auto sm:border-b-0 sm:border-r">
                   {CATEGORIES.map((category) => {
                     const count = category.key === "all" ? allResults.length : (normalized[category.key] || []).length;
                     const selected = activeCategory === category.key;
@@ -394,7 +394,7 @@ export default function GlobalSearchPanel() {
                   })}
                 </nav>
 
-                <div className="min-h-[280px] overflow-y-auto sm:min-h-[460px]">
+                <div className="min-h-0 overflow-y-auto overscroll-contain">
                   <div className="sticky top-0 z-10 border-b border-slate-100 bg-white/95 px-5 py-3 text-sm font-semibold text-slate-700 backdrop-blur dark:border-slate-700 dark:bg-slate-900/95 dark:text-slate-200">
                     {activeCategory === "all"
                       ? "Todos los resultados de la búsqueda"
