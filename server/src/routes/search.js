@@ -41,7 +41,7 @@ router.get('/', requireAuth, async (req, res) => {
   const warnings = [];
 
   try {
-    const [people, organizations, activities, deals, files, prospects, products] = await Promise.all([
+    const [people, organizations, activities, deals, serviceDeals, files, prospects, products] = await Promise.all([
       safeQuery(
         'Personas',
         `SELECT c.id, c.name, c.email, c.phone, c.title, c.label,
@@ -125,6 +125,32 @@ router.get('/', requireAuth, async (req, res) => {
         warnings
       ),
       safeQuery(
+        'Operaciones de Servicio',
+        `SELECT sc.id, sc.reference,
+                CONCAT_WS(' · ', NULLIF(d.placa_id, ''), NULLIF(d.nombre, ''), NULLIF(d.marca, ''), NULLIF(d.modelo, '')) AS title,
+                NULL AS value, sc.status AS status_ops, sc.created_at,
+                o.name AS org_name, NULL AS contact_name,
+                NULL AS contact_email, NULL AS contact_phone,
+                s.name AS stage_name, 'Servicio y Mantenimiento' AS business_unit_name,
+                COALESCE(NULLIF(d.nombre, ''), NULLIF(d.placa_id, ''), NULLIF(d.modelo, '')) AS mercaderia,
+                NULL AS tipo_carga, NULL AS modalidad_carga,
+                ob.city AS origen_pto, NULL AS destino_pto, NULL AS incoterm,
+                'service' AS operation_kind
+           FROM service_cases sc
+           LEFT JOIN organizations o ON o.id = sc.org_id
+           LEFT JOIN client_doors d ON d.id = sc.door_id
+           LEFT JOIN org_branches ob ON ob.id = sc.org_branch_id
+           LEFT JOIN service_stages s ON s.id = sc.stage_id
+          WHERE sc.reference LIKE ? OR sc.status LIKE ?
+             OR o.name LIKE ? OR o.razon_social LIKE ? OR o.ruc LIKE ?
+             OR d.placa_id LIKE ? OR d.nombre LIKE ? OR d.sector LIKE ?
+             OR d.marca LIKE ? OR d.modelo LIKE ? OR s.name LIKE ?
+          ORDER BY sc.id DESC
+          LIMIT ?`,
+        Array(11).fill(like).concat(RESULT_LIMIT),
+        warnings
+      ),
+      safeQuery(
         'Archivos',
         `SELECT f.id, f.deal_id, f.type, f.filename, f.url, f.created_at,
                 d.reference AS deal_reference, d.title AS deal_title,
@@ -180,7 +206,9 @@ router.get('/', requireAuth, async (req, res) => {
       people,
       organizations,
       activities,
-      deals,
+      deals: [...deals, ...serviceDeals]
+        .sort((a, b) => Number(b.id || 0) - Number(a.id || 0))
+        .slice(0, RESULT_LIMIT),
       files,
       prospects,
       products,

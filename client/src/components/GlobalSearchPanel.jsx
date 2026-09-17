@@ -33,7 +33,10 @@ function compact(parts) {
 function resultUrl(category, row) {
   if (category === "people") return `/contacts/${row.id}`;
   if (category === "organizations") return `/organizations/${row.id}`;
-  if (category === "deals" || category === "prospects") return `/operations/${row.id}`;
+  if (category === "deals") {
+    return row.operation_kind === "service" ? `/service/cases/${row.id}` : `/operations/${row.id}`;
+  }
+  if (category === "prospects") return `/operations/${row.id}`;
   if (category === "products") return `/catalog?item_id=${row.id}`;
   if (category === "activities") {
     if (row.deal_id) return `/operations/${row.deal_id}`;
