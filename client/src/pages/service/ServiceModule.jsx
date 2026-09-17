@@ -216,13 +216,14 @@ export default function ServiceModule() {
   const [componentTypes, setComponentTypes] = useState([]);
   const [actuatorTypes, setActuatorTypes] = useState([]);
   const [orgOptions, setOrgOptions] = useState([]);
+  const [cityOptions, setCityOptions] = useState([]);
   const [orgSearch, setOrgSearch] = useState("");
   const [doorBranches, setDoorBranches] = useState([]);
   const [doorBranchLoading, setDoorBranchLoading] = useState(false);
   const [caseBranches, setCaseBranches] = useState([]);
   const [caseBranchLoading, setCaseBranchLoading] = useState(false);
-  const [doorBranchDraft, setDoorBranchDraft] = useState({ name: "", address: "" });
-  const [caseBranchDraft, setCaseBranchDraft] = useState({ name: "", address: "" });
+  const [doorBranchDraft, setDoorBranchDraft] = useState({ name: "", address: "", city_id: "" });
+  const [caseBranchDraft, setCaseBranchDraft] = useState({ name: "", address: "", city_id: "" });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -251,20 +252,22 @@ export default function ServiceModule() {
       setLoading(true);
       setError("");
       try {
-        const [st, cs, dr, comps, acts] = await Promise.all([
+        const [st, cs, dr, comps, acts, orgs, cities] = await Promise.all([
           api.get("/service/stages"),
           api.get("/service/cases"),
           api.get("/service/doors"),
           api.get("/service/component-types"),
           api.get("/service/actuator-types"),
+          api.get("/organizations"),
+          api.get("/cities"),
         ]);
         setStages(st.data || []);
         setCases(cs.data || []);
         setDoors(dr.data || []);
         setComponentTypes(comps.data || []);
         setActuatorTypes(acts.data || []);
-        const { data: orgs } = await api.get("/organizations");
-        setOrgOptions(Array.isArray(orgs) ? orgs : []);
+        setOrgOptions(Array.isArray(orgs.data) ? orgs.data : []);
+        setCityOptions(Array.isArray(cities.data) ? cities.data : []);
       } catch (e) {
         console.error(e);
         setError("No se pudo cargar Service.");
@@ -338,26 +341,34 @@ export default function ServiceModule() {
     const draft = isDoor ? doorBranchDraft : caseBranchDraft;
     const name = String(draft.name || "").trim();
     const address = String(draft.address || "").trim();
+    const selectedOrg = orgOptions.find((org) => String(org.id) === String(orgId));
+    const cityId = String(draft.city_id || selectedOrg?.city_id || "").trim();
     if (!name && !address) return alert("Carga nombre o direccion de la sucursal");
+    if (!cityId) return alert("Selecciona la ciudad de la sucursal");
     try {
-      const { data: created } = await api.post(`/organizations/${orgId}/branches`, { name, address });
+      const { data: created } = await api.post(`/organizations/${orgId}/branches`, {
+        name,
+        address,
+        city_id: Number(cityId),
+        country: "Paraguay",
+      });
       const createdId = String(created?.id || "");
       const { data: refreshed } = await api.get(`/organizations/${orgId}/branches`);
       const nextBranches = Array.isArray(refreshed) ? refreshed : (created ? [created] : []);
       if (isDoor) {
         setDoorBranches(nextBranches);
         setDoorForm((prev) => ({ ...prev, org_branch_id: createdId }));
-        setDoorBranchDraft({ name: "", address: "" });
+        setDoorBranchDraft({ name: "", address: "", city_id: "" });
       } else {
         setCaseBranches(nextBranches);
         setCaseForm((prev) => ({ ...prev, org_branch_id: createdId, door_ids: [] }));
         setDoorForm((prev) => (
           String(prev.org_id || "") === String(orgId) ? { ...prev, org_branch_id: createdId } : prev
         ));
-        setCaseBranchDraft({ name: "", address: "" });
+        setCaseBranchDraft({ name: "", address: "", city_id: "" });
       }
     } catch (e) {
-      alert("No se pudo crear la sucursal");
+      alert(e.response?.data?.error || "No se pudo crear la sucursal");
     }
   }
 
@@ -366,6 +377,8 @@ export default function ServiceModule() {
     const orgId = isDoor ? doorForm.org_id : caseForm.org_id;
     const draft = isDoor ? doorBranchDraft : caseBranchDraft;
     const setDraft = isDoor ? setDoorBranchDraft : setCaseBranchDraft;
+    const selectedOrg = orgOptions.find((org) => String(org.id) === String(orgId));
+    const selectedCityId = String(draft.city_id || selectedOrg?.city_id || "");
     return (
       <aside className="pointer-events-auto w-full max-w-sm rounded-xl border bg-white p-4 shadow-xl">
         <div className="text-sm font-semibold text-slate-900">Crear sucursal rápida</div>
@@ -390,6 +403,23 @@ export default function ServiceModule() {
               onChange={(e) => setDraft((prev) => ({ ...prev, address: e.target.value }))}
               disabled={!orgId}
             />
+          </label>
+          <label className="block text-sm">
+            <span className="mb-1 block text-xs text-slate-500">Ciudad</span>
+            <select
+              className="w-full rounded border bg-white px-3 py-2 text-sm"
+              value={selectedCityId}
+              onChange={(e) => setDraft((prev) => ({ ...prev, city_id: e.target.value }))}
+              disabled={!orgId}
+              required
+            >
+              <option value="">Seleccionar ciudad</option>
+              {cityOptions.map((city) => (
+                <option key={city.id} value={city.id}>
+                  {city.name}{city.department ? ` - ${city.department}` : ""}
+                </option>
+              ))}
+            </select>
           </label>
           <button
             type="button"
