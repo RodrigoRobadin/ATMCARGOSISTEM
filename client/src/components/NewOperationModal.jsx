@@ -532,6 +532,17 @@ export default function NewOperationModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const availableStages = Array.isArray(stages) ? stages : [];
+    if (!availableStages.length) return;
+    const currentExists = availableStages.some((stage) => String(stage.id) === String(stageId || ""));
+    if (!currentExists) setStageId(availableStages[0].id);
+  }, [stages, stageId]);
+
+  useEffect(() => {
+    if (defaultBusinessUnitId) setBusinessUnitId(defaultBusinessUnitId);
+  }, [defaultBusinessUnitId]);
+
   // Sugerir tipo de operación
   useEffect(() => {
     if (tipoOpManual) return;
@@ -562,24 +573,27 @@ export default function NewOperationModal({
     setReferencePreview(parts.length ? parts.join(" • ") : "—");
   }, [modo, clase, origen, destino]);
 
-  const canSave = useMemo(() => {
-    return (
-      pipelineId &&
-      stageId &&
-      businessUnitId &&
-      (modo || "").length &&
-      (clase || "").length &&
-      (origen || "").length &&
-      (destino || "").length &&
-      selectedOrg?.id &&
-      orgName.trim().length &&
-      orgRuc.trim().length &&
-      contactName.trim().length &&
-      contactPhone.trim().length &&
-      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim()) &&
-      execId
-    );
+  const validationIssues = useMemo(() => {
+    const issues = [];
+    if (!pipelineId) issues.push("pipeline");
+    if (!stageId) issues.push("etapa");
+    if (!businessUnitId) issues.push("unidad de negocio");
+    if (!(modo || "").trim()) issues.push("modalidad");
+    if (!(clase || "").trim()) issues.push("tipo de carga");
+    if (!(origen || "").trim()) issues.push("origen");
+    if (!(destino || "").trim()) issues.push("destino");
+    if (!selectedOrg?.id) issues.push("organización seleccionada de la lista");
+    if (!orgName.trim()) issues.push("organización");
+    if (!orgRuc.trim()) issues.push("RUC");
+    if (!contactName.trim()) issues.push("contacto");
+    if (!contactPhone.trim()) issues.push("número de contacto");
+    if (!contactEmail.trim()) issues.push("email de contacto");
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim())) issues.push("email de contacto válido");
+    if (!execId) issues.push("ejecutivo de cuenta");
+    return issues;
   }, [pipelineId, stageId, businessUnitId, modo, clase, origen, destino, selectedOrg, orgName, orgRuc, contactName, contactPhone, contactEmail, execId]);
+
+  const canSave = validationIssues.length === 0;
 
   // Autocomplete ORG
   useEffect(() => {
@@ -745,7 +759,11 @@ const removeContainerRow = (idx) => {
 
 async function handleCreate(e) {
     e?.preventDefault?.();
-    if (!canSave || saving) return;
+    if (saving) return;
+    if (!canSave) {
+      window.alert(`Completa los siguientes campos: ${validationIssues.join(", ")}.`);
+      return;
+    }
     setSaving(true);
     try {
       const titleFromForm = `${orgName}`.trim();
@@ -1338,6 +1356,11 @@ async function handleCreate(e) {
 
           {/* Acciones */}
           <div className="md:col-span-2 flex items-center justify-end gap-2 pt-2">
+            {!canSave ? (
+              <div className="mr-auto max-w-xl text-xs text-amber-700">
+                Falta completar: {validationIssues.join(", ")}.
+              </div>
+            ) : null}
             <button
               type="button"
               className="px-3 py-2 text-sm rounded-lg border"
@@ -1347,7 +1370,7 @@ async function handleCreate(e) {
             </button>
             <button
               type="submit"
-              disabled={!canSave || saving}
+              disabled={saving}
               className="px-3 py-2 text-sm rounded-lg bg-black text-white disabled:opacity-60"
             >
               {saving ? "Creando…" : "Crear operación"}
