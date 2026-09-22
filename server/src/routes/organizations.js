@@ -892,7 +892,7 @@ router.get('/:id', requireAuth, async (req, res) => {
         o.id,
         o.razon_social, o.name,
         o.industry, o.phone, o.website, o.ruc, o.address, o.city, o.city_id, o.country,
-        o.label, o.owner_user_id, o.created_by_user_id, o.visibility, o.notes,
+        o.label, o.owner_user_id, o.advisor_user_id, o.created_by_user_id, o.visibility, o.notes,
         o.is_agent, o.modalities_supported,
         o.email, o.rubro, o.tipo_org, o.operacion, o.hoja_ruta, o.default_customs_broker_org_id,
         o.supplier_bank_name, o.supplier_bank_account, o.supplier_bank_currency,
@@ -907,9 +907,10 @@ router.get('/:id', requireAuth, async (req, res) => {
         broker.name AS default_customs_broker_name,
         broker.razon_social AS default_customs_broker_razon_social,
         broker.ruc AS default_customs_broker_ruc,
-        NULL AS advisor_name
+        advisor.name AS advisor_name
       FROM organizations o
       LEFT JOIN users u ON u.id = o.owner_user_id
+      LEFT JOIN users advisor ON advisor.id = o.advisor_user_id
       LEFT JOIN organizations broker ON broker.id = o.default_customs_broker_org_id
       WHERE o.id = ?
       LIMIT 1

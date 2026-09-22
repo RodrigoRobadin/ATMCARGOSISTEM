@@ -503,6 +503,7 @@ export default function NewIndustrialOperationModal({
     setOrgQuery(v);
     setSelectedOrg(null);
     setSelectedContact(null);
+    setExecId("");
     setOrganizationLocations([]);
     setSelectedLocationKey('');
     setLocation('');
@@ -533,7 +534,9 @@ export default function NewIndustrialOperationModal({
     const defaultLocation = locations.find((item) => Number(item.is_default) === 1) || locations[0] || null;
 
     setOrgRuc(detail?.ruc || detail?.tax_id || org.ruc || "");
+    const organizationAdvisorId = detail?.advisor_user_id || detail?.owner_user_id || "";
     setSelectedOrg({ ...detail, id: org.id, name: uppercaseName });
+    setExecId(organizationAdvisorId ? String(organizationAdvisorId) : "");
     setOrganizationLocations(locations);
     setSelectedLocationKey(defaultLocation?.key || '');
     setLocation(defaultLocation?.label || '');
@@ -1147,7 +1150,18 @@ export default function NewIndustrialOperationModal({
 
               <label className="text-sm">
                 Ejecutivo de cuenta *
-                <ExecSelect value={execId} onChange={setExecId} />
+                {(selectedOrg?.advisor_user_id || selectedOrg?.owner_user_id) ? (
+                  <div>
+                    <div className="w-full rounded-lg border bg-slate-100 px-3 py-2 text-sm text-slate-700">
+                      {selectedOrg?.advisor_name || selectedOrg?.owner_user_name || "Ejecutivo de la organización"}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      Asignado automáticamente desde la organización.
+                    </div>
+                  </div>
+                ) : (
+                  <ExecSelect value={execId} onChange={setExecId} />
+                )}
               </label>
             </div>
           </div>

@@ -1112,7 +1112,7 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     if (requiresCompleteCommercialData) {
-      if (!org_id_body) throw Object.assign(new Error('Selecciona una organización existente'), { statusCode: 400 });
+      if (!org_id_body && businessUnitKey !== 'atm-cargo') throw Object.assign(new Error('Selecciona una organización existente'), { statusCode: 400 });
       if (!org_name) throw Object.assign(new Error('La organización es obligatoria'), { statusCode: 400 });
       if (!org_ruc) throw Object.assign(new Error('El RUC es obligatorio'), { statusCode: 400 });
       if (!contact_name) throw Object.assign(new Error('El contacto es obligatorio'), { statusCode: 400 });
@@ -1121,9 +1121,7 @@ router.post('/', requireAuth, async (req, res) => {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact_email)) {
         throw Object.assign(new Error('El email de contacto no es válido'), { statusCode: 400 });
       }
-      if (!body.account_exec_id) {
-        throw Object.assign(new Error('Selecciona un ejecutivo de cuenta'), { statusCode: 400 });
-      }
+
     }
 
     let orgId = null;
@@ -1169,8 +1167,10 @@ router.post('/', requireAuth, async (req, res) => {
         }
       } else {
         const [ins] = await conn.query(
-          'INSERT INTO organizations(name, ruc) VALUES(?, ?)',
-          [org_name, org_ruc || null]
+          `INSERT INTO organizations
+             (name, razon_social, ruc, email, phone, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
+          [org_name, org_name, org_ruc || null, contact_email || null, contact_phone || null]
         );
         orgId = ins.insertId;
       }
@@ -1221,18 +1221,30 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     const createdById = req.user?.id ?? null;
-    let dealAdvisorId = Number(
+    const requestedAdvisorId = Number(
       body.account_exec_id || body.deal_advisor_user_id || body.advisor_user_id || 0
     ) || null;
-    if (!dealAdvisorId && !requiresCompleteCommercialData && orgId) {
+    let organizationAdvisorId = null;
+    if (orgId) {
       const [[organizationAdvisor]] = await conn.query(
-        'SELECT advisor_user_id FROM organizations WHERE id = ? LIMIT 1',
+        'SELECT advisor_user_id, owner_user_id FROM organizations WHERE id = ? LIMIT 1',
         [orgId]
       );
-      dealAdvisorId = Number(organizationAdvisor?.advisor_user_id || createdById || 0) || null;
+      organizationAdvisorId = Number(
+        organizationAdvisor?.advisor_user_id || organizationAdvisor?.owner_user_id || 0
+      ) || null;
     }
-    if (!dealAdvisorId && !requiresCompleteCommercialData) {
-      dealAdvisorId = Number(createdById || 0) || null;
+    let dealAdvisorId = organizationAdvisorId || requestedAdvisorId || Number(createdById || 0) || null;
+    if (requiresCompleteCommercialData && !dealAdvisorId) {
+      throw Object.assign(new Error('Selecciona un ejecutivo de cuenta'), { statusCode: 400 });
+    }
+    if (orgId && !organizationAdvisorId && dealAdvisorId) {
+      await conn.query(
+        'UPDATE organizations SET advisor_user_id = ?, updated_at = NOW() WHERE id = ?',
+        [dealAdvisorId, orgId]
+      ).catch(async () => {
+        await conn.query('UPDATE organizations SET advisor_user_id = ? WHERE id = ?', [dealAdvisorId, orgId]);
+      });
     }
     if (dealAdvisorId) {
       const [[advisor]] = await conn.query(

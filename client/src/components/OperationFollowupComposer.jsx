@@ -48,7 +48,6 @@ export default function OperationFollowupComposer({ deal, currentUser, entries =
     <div className="flex flex-wrap items-center border-b border-slate-200 text-sm">
       <button type="button" onClick={() => chooseType("activity")} className={`px-4 py-3 ${!isNote ? "border-b-2 border-emerald-600 text-emerald-700" : "text-slate-600"}`}>Actividad</button>
       <button type="button" onClick={() => chooseType("note")} className={`px-4 py-3 ${isNote ? "border-b-2 border-emerald-600 text-emerald-700" : "text-slate-600"}`}>Notas</button>
-      <button type="button" onClick={() => chooseType("call")} className="px-4 py-3 text-slate-600 hover:bg-slate-50">Llamada</button>
       <button type="button" onClick={openWhatsApp} disabled={!deal?.contact_phone} className="px-4 py-3 text-slate-600 hover:bg-slate-50 disabled:opacity-40">WhatsApp</button>
       <button type="button" onClick={openEmail} disabled={!deal?.contact_email} className="px-4 py-3 text-slate-600 hover:bg-slate-50 disabled:opacity-40">Correo electronico</button>
     </div>

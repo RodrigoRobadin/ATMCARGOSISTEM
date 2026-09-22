@@ -582,7 +582,6 @@ export default function NewOperationModal({
     if (!(clase || "").trim()) issues.push("tipo de carga");
     if (!(origen || "").trim()) issues.push("origen");
     if (!(destino || "").trim()) issues.push("destino");
-    if (!selectedOrg?.id) issues.push("organización seleccionada de la lista");
     if (!orgName.trim()) issues.push("organización");
     if (!orgRuc.trim()) issues.push("RUC");
     if (!contactName.trim()) issues.push("contacto");
@@ -621,6 +620,7 @@ export default function NewOperationModal({
     setOrgQuery(v);
     setSelectedOrg(null);
     setSelectedContact(null);
+    setExecId("");
     setOrgRuc("");
     setContacts([]);
     setContactName("");
@@ -642,6 +642,9 @@ export default function NewOperationModal({
       fetchContactsByOrg(org.id),
     ]);
     const detail = detailResponse?.data?.organization || detailResponse?.data || org;
+    const organizationAdvisorId = detail?.advisor_user_id || detail?.owner_user_id || "";
+    setSelectedOrg({ ...detail, id: org.id, name: uppercaseName });
+    setExecId(organizationAdvisorId ? String(organizationAdvisorId) : "");
     setOrgRuc(detail?.ruc || detail?.tax_id || org.ruc || "");
     setContacts(list || []);
 
@@ -781,7 +784,7 @@ async function handleCreate(e) {
         business_unit_id: businessUnitId || null,
         enforce_complete_data: true,
         account_exec_id: Number(execId),
-        organization: { id: selectedOrg.id, name: orgName.trim().toUpperCase(), ruc: orgRuc.trim() },
+        organization: { ...(selectedOrg?.id ? { id: selectedOrg.id } : {}), name: orgName.trim().toUpperCase(), ruc: orgRuc.trim() },
         contact: {
           ...(selectedContact?.id ? { id: selectedContact.id } : {}),
           name: contactName.trim(),
@@ -1019,6 +1022,11 @@ async function handleCreate(e) {
                     </div>
                   )}
                 </div>
+                {!selectedOrg && orgName.trim() && (
+                  <div className="mt-2 text-xs text-emerald-700">
+                    Organización nueva: se creará al guardar la operación.
+                  </div>
+                )}
               </label>
 
               <label className="text-sm">
@@ -1349,7 +1357,18 @@ async function handleCreate(e) {
 
               <label className="text-sm">
                 Ejecutivo de cuenta *
-                <ExecSelect value={execId} onChange={setExecId} />
+                {(selectedOrg?.advisor_user_id || selectedOrg?.owner_user_id) ? (
+                  <div>
+                    <div className="w-full rounded-lg border bg-slate-100 px-3 py-2 text-sm text-slate-700">
+                      {selectedOrg?.advisor_name || selectedOrg?.owner_user_name || "Ejecutivo de la organización"}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      Asignado automáticamente desde la organización.
+                    </div>
+                  </div>
+                ) : (
+                  <ExecSelect value={execId} onChange={setExecId} />
+                )}
               </label>
             </div>
           </div>
