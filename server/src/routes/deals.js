@@ -1380,6 +1380,63 @@ router.post('/', requireAuth, async (req, res) => {
   }
 });
 
+router.patch('/:id/industrial-advisor', requireAuth, async (req, res) => {
+  const dealId = Number(req.params.id);
+  const nextAdvisorId = Number(req.body?.advisor_user_id);
+  if (!Number.isInteger(dealId) || dealId <= 0 || !Number.isInteger(nextAdvisorId) || nextAdvisorId <= 0) {
+    return res.status(400).json({ error: 'Selecciona un ejecutivo de cuenta válido' });
+  }
+
+  const conn = await pool.getConnection();
+  let committed = false;
+  try {
+    await conn.beginTransaction();
+    const [[deal]] = await conn.query(
+      `SELECT d.advisor_user_id, bu.key_slug AS business_unit_key
+         FROM deals d
+         JOIN business_units bu ON bu.id = d.business_unit_id
+        WHERE d.id = ? FOR UPDATE`,
+      [dealId]
+    );
+    if (!deal) return res.status(404).json({ error: 'Operación no encontrada' });
+    const before = await auditSnapshot(conn, 'deal', dealId);
+    if (deal.business_unit_key !== 'atm-industrial') {
+      return res.status(400).json({ error: 'Esta operación no pertenece a ATM Industrial' });
+    }
+    const isAdmin = String(req.user?.role || '').toLowerCase() === 'admin';
+    if (!isAdmin && Number(deal.advisor_user_id) !== Number(req.user?.id)) {
+      return res.status(403).json({ error: 'No tienes permiso para reasignar esta operación' });
+    }
+    const [[advisor]] = await conn.query(
+      'SELECT id, name FROM users WHERE id = ? AND is_active = 1 LIMIT 1',
+      [nextAdvisorId]
+    );
+    if (!advisor) return res.status(400).json({ error: 'El ejecutivo seleccionado no está disponible' });
+
+    const changed = Number(deal.advisor_user_id) !== nextAdvisorId;
+    if (changed) {
+      await conn.query(
+        'UPDATE deals SET advisor_user_id = ?, updated_at = NOW() WHERE id = ?',
+        [nextAdvisorId, dealId]
+      );
+      await recordAuditChange(conn, {
+        req, action: 'update', entity: 'deal', entityId: dealId,
+        before, after: await auditSnapshot(conn, 'deal', dealId),
+        description: 'Reasignó ejecutivo de cuenta',
+      });
+    }
+    await conn.commit();
+    committed = true;
+    res.json({ advisor_user_id: nextAdvisorId, advisor_name: advisor.name });
+  } catch (error) {
+    console.error('PATCH /deals/:id/industrial-advisor error:', error);
+    if (!res.headersSent) res.status(500).json({ error: 'No se pudo cambiar el ejecutivo de cuenta' });
+  } finally {
+    if (!committed) await conn.rollback().catch(() => {});
+    conn.release();
+  }
+});
+
 router.patch('/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
   const {

@@ -468,6 +468,12 @@ export default function OperationDetailIndustrial() {
 
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState(null);
+  const [advisorEditorOpen, setAdvisorEditorOpen] = useState(false);
+  const [advisorOptions, setAdvisorOptions] = useState([]);
+  const [advisorDraft, setAdvisorDraft] = useState("");
+  const [advisorLoading, setAdvisorLoading] = useState(false);
+  const [advisorSaving, setAdvisorSaving] = useState(false);
+  const [advisorError, setAdvisorError] = useState("");
   const [orgBranches, setOrgBranches] = useState([]);
   const [orgBranchId, setOrgBranchId] = useState(null);
   const [branchLoading, setBranchLoading] = useState(false);
@@ -874,6 +880,44 @@ export default function OperationDetailIndustrial() {
     } catch (err) {
       console.error("No se pudo marcar seguimiento como hecho", err);
       alert("No se pudo marcar como hecho.");
+    }
+  }
+
+  async function openAdvisorEditor() {
+    setAdvisorDraft(String(deal?.deal_advisor_user_id || ""));
+    setAdvisorError("");
+    setAdvisorOptions([]);
+    setAdvisorEditorOpen(true);
+    setAdvisorLoading(true);
+    try {
+      const { data } = await api.get("/users/select", { params: { active: 1 } });
+      setAdvisorOptions(Array.isArray(data) ? data : []);
+    } catch (error) {
+      setAdvisorError(error?.response?.data?.error || "No se pudieron cargar los ejecutivos.");
+    } finally {
+      setAdvisorLoading(false);
+    }
+  }
+
+  async function saveAdvisor() {
+    const nextId = Number(advisorDraft);
+    if (!nextId || advisorSaving) return;
+    setAdvisorSaving(true);
+    setAdvisorError("");
+    try {
+      const { data } = await api.patch(`/deals/${id}/industrial-advisor`, {
+        advisor_user_id: nextId,
+      });
+      setDeal((current) => current ? {
+        ...current,
+        deal_advisor_user_id: data.advisor_user_id,
+        deal_advisor_name: data.advisor_name,
+      } : current);
+      setAdvisorEditorOpen(false);
+    } catch (error) {
+      setAdvisorError(error?.response?.data?.error || "No se pudo cambiar el ejecutivo.");
+    } finally {
+      setAdvisorSaving(false);
     }
   }
 
@@ -1483,6 +1527,10 @@ export default function OperationDetailIndustrial() {
     deal?.advisor_user_name ||
     deal?.advisor_name ||
     "—";
+  const canChangeAdvisor = userRole === "admin" || (
+    Number(deal?.deal_advisor_user_id) > 0 &&
+    Number(deal?.deal_advisor_user_id) === Number(user?.id)
+  );
 
   /* ---------- header label / subject ---------- */
 
@@ -2578,10 +2626,54 @@ export default function OperationDetailIndustrial() {
                   </Field>
 
                   <Field label="Ejecutivo de cuenta">
-                    <Input
-                      readOnly
-                      value={executiveName}
-                    />
+                    {advisorEditorOpen ? (
+                      <div className="space-y-2">
+                        <Select
+                          value={advisorDraft}
+                          onChange={(event) => setAdvisorDraft(event.target.value)}
+                          disabled={advisorLoading || advisorSaving}
+                        >
+                          <option value="">Seleccionar ejecutivo</option>
+                          {advisorOptions.map((option) => (
+                            <option key={option.id} value={option.id}>
+                              {option.name || option.email}
+                            </option>
+                          ))}
+                        </Select>
+                        {advisorError && <p className="text-xs text-red-600">{advisorError}</p>}
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={saveAdvisor}
+                            disabled={advisorLoading || advisorSaving || !advisorDraft || Number(advisorDraft) === Number(deal?.deal_advisor_user_id)}
+                            className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+                          >
+                            {advisorSaving ? "Guardando..." : "Guardar"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAdvisorEditorOpen(false)}
+                            disabled={advisorSaving}
+                            className="rounded-md border px-3 py-1.5 text-xs disabled:opacity-50"
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <div className="min-w-0 flex-1"><Input readOnly value={executiveName} /></div>
+                        {canChangeAdvisor && (
+                          <button
+                            type="button"
+                            onClick={openAdvisorEditor}
+                            className="shrink-0 rounded-md border px-3 py-1.5 text-xs hover:bg-slate-50"
+                          >
+                            Cambiar
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </Field>
                 </div>
               </div>
