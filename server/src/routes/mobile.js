@@ -7,6 +7,7 @@ import db from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
 import { logAudit, auditedRowMutation, auditSnapshot, recordAuditChange } from '../services/audit.js';
 import { buildFormalQuotePdfBuffer } from '../services/formalQuotePdf.js';
+import { isProtectedCommercialDateKey, recordFirstQuoteDate } from '../services/dealCommercialDates.js';
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret';
@@ -963,6 +964,10 @@ router.patch('/operations/:id', requireAuth, async (req, res) => {
       values.push(title);
     }
     const customFields = Array.isArray(req.body?.custom_fields) ? req.body.custom_fields : [];
+    if (customFields.some((field) => isProtectedCommercialDateKey(field?.key))) {
+      await conn.rollback();
+      return res.status(403).json({ error: 'Las fechas comerciales se administran desde la operacion' });
+    }
     if (!fields.length && !customFields.length) { await conn.rollback(); return res.json({ ok: true }); }
     if (fields.length) {
       await conn.query(`UPDATE deals SET ${fields.join(', ')} WHERE id = ?`, [...values, id]);
@@ -1322,7 +1327,11 @@ router.post('/quick-quotes', requireAuth, async (req, res) => {
     };
 
     const refCode = `MOB-${Date.now().toString(36).toUpperCase()}`;
-    const [result] = await db.query(
+    const conn = await db.getConnection();
+    let result;
+    try {
+      await conn.beginTransaction();
+      [result] = await conn.query(
       `INSERT INTO quotes
         (deal_id, ref_code, revision, client_name, status, created_by, inputs_json, document_snapshot_json, computed_json)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1337,7 +1346,15 @@ router.post('/quick-quotes', requireAuth, async (req, res) => {
         null,
         JSON.stringify(computed),
       ]
-    );
+      );
+      await recordFirstQuoteDate(conn, req, dealId, computed);
+      await conn.commit();
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
 
     await logAudit({
       req,

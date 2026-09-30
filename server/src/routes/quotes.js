@@ -4,6 +4,7 @@ import multer from "multer";
 import db from "../services/db.js";
 import { requireAuth } from '../middlewares/auth.js';
 import { logAudit, auditedRowMutation } from '../services/audit.js';
+import { hasQuotedSaleValue, recordFirstQuoteDate } from '../services/dealCommercialDates.js';
 import { sendMail } from '../services/mailer.js';
 
 // ✅ Soporta export named o default (evita el error: "does not provide an export named")
@@ -567,7 +568,7 @@ router.get("/deals/:dealId/quote", async (req, res) => {
   }
 });
 
-router.post("/quotes", async (req, res) => {
+router.post("/quotes", requireAuth, async (req, res) => {
   try {
     const inputs = normalizeInputs(req.body);
     const document_snapshot = normalizeDocumentSnapshot(req.body?.document_snapshot);
@@ -578,7 +579,11 @@ router.post("/quotes", async (req, res) => {
 
     const { ref_code, revision, client_name, status, created_by, deal_id } = inputs;
 
-    const [result] = await db.query(
+    const conn = await db.getConnection();
+    let result;
+    try {
+      await conn.beginTransaction();
+      [result] = await conn.query(
       `INSERT INTO quotes (deal_id, ref_code, revision, client_name, status, created_by, inputs_json, document_snapshot_json, computed_json)
        VALUES (?,?,?,?,?,?,?,?,?)`,
       [
@@ -592,7 +597,15 @@ router.post("/quotes", async (req, res) => {
         document_snapshot ? JSON.stringify(document_snapshot) : null,
         computed ? JSON.stringify(computed) : null,
       ]
-    );
+      );
+      await recordFirstQuoteDate(conn, req, deal_id, computed, document_snapshot);
+      await conn.commit();
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
 
     if (deal_id) {
       await syncDealBranch(req, deal_id, inputs.org_branch_id);
@@ -650,7 +663,7 @@ router.get("/quotes/:id", async (req, res) => {
   }
 });
 
-router.put("/quotes/:id", async (req, res) => {
+router.put("/quotes/:id", requireAuth, async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id) || id <= 0) {
@@ -675,12 +688,15 @@ router.put("/quotes/:id", async (req, res) => {
 
     const { ref_code, revision, client_name, status, created_by, deal_id } = inputs;
 
-    await db.query(
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query(
       `UPDATE quotes
        SET deal_id=?, ref_code=?, revision=?, client_name=?, status=?, created_by=?, inputs_json=?, document_snapshot_json=?, computed_json=?
        WHERE id=?`,
       [
-        deal_id || null,
+        dealId,
         ref_code || null,
         revision || null,
         client_name || null,
@@ -691,7 +707,17 @@ router.put("/quotes/:id", async (req, res) => {
         computed ? JSON.stringify(computed) : null,
         id,
       ]
-    );
+      );
+      if (!hasQuotedSaleValue(asJson(row.computed_json), normalizeDocumentSnapshot(row.document_snapshot_json))) {
+        await recordFirstQuoteDate(conn, req, dealId, computed, document_snapshot);
+      }
+      await conn.commit();
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
 
     if (deal_id) {
       await syncDealBranch(req, deal_id, inputs.org_branch_id);
@@ -704,7 +730,7 @@ router.put("/quotes/:id", async (req, res) => {
   }
 });
 
-router.post("/quotes/:id/recalculate", async (req, res) => {
+router.post("/quotes/:id/recalculate", requireAuth, async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id) || id <= 0) {
@@ -731,10 +757,20 @@ router.post("/quotes/:id/recalculate", async (req, res) => {
       });
     }
 
-    await db.query("UPDATE quotes SET computed_json=? WHERE id=?", [
-      JSON.stringify(computed),
-      id,
-    ]);
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query("UPDATE quotes SET computed_json=? WHERE id=?", [JSON.stringify(computed), id]);
+      if (!hasQuotedSaleValue(asJson(row.computed_json), normalizeDocumentSnapshot(row.document_snapshot_json))) {
+        await recordFirstQuoteDate(conn, req, row.deal_id, computed, normalizeDocumentSnapshot(row.document_snapshot_json));
+      }
+      await conn.commit();
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
 
     res.json({ id, inputs, computed });
   } catch (e) {
@@ -794,7 +830,7 @@ router.post("/quotes/:id/revisions", async (req, res) => {
 });
 
 // Actualizar revisión
-router.put("/quotes/:id/revisions/:revisionId", async (req, res) => {
+router.put("/quotes/:id/revisions/:revisionId", requireAuth, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const revisionId = Number(req.params.revisionId);
@@ -826,7 +862,10 @@ router.put("/quotes/:id/revisions/:revisionId", async (req, res) => {
       : { computed: asJson(rev.computed_json) || null, compute_error: null };
     const name = String(req.body?.name || rev.name || "").trim() || formatQuoteRevisionName(revisionId, rev.created_at);
 
-    await db.query(
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query(
       `UPDATE quote_revisions
          SET name = ?, inputs_json = ?, document_snapshot_json = ?, computed_json = ?
        WHERE id = ? AND quote_id = ?`,
@@ -838,7 +877,18 @@ router.put("/quotes/:id/revisions/:revisionId", async (req, res) => {
         revisionId,
         id,
       ]
-    );
+      );
+      if (!hasQuotedSaleValue(asJson(row.computed_json), normalizeDocumentSnapshot(row.document_snapshot_json)) &&
+          !hasQuotedSaleValue(asJson(rev.computed_json), normalizeDocumentSnapshot(rev.document_snapshot_json))) {
+        await recordFirstQuoteDate(conn, req, row.deal_id, computed, document_snapshot);
+      }
+      await conn.commit();
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
 
     res.json({ id, revision_id: revisionId, inputs, document_snapshot, computed, compute_error: compute_error || null, name });
   } catch (e) {

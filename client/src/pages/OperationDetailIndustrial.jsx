@@ -20,6 +20,7 @@ import LogisticsAutocomplete from "../components/LogisticsAutocomplete.jsx";
 import { attachOperationToAssistant } from "../utils/assistantContext";
 import OperationFollowupComposer from "../components/OperationFollowupComposer.jsx";
 import AuditHistory from "../components/AuditHistory.jsx";
+import CommercialDates from "../components/op-details/CommercialDates.jsx";
 import {
   buildQuoteEmailPlainText,
   buildQuoteEmailHtml,
@@ -2678,38 +2679,20 @@ export default function OperationDetailIndustrial() {
                 </div>
               </div>
 
-              {/* Fechas (para Industrial igual te sirve como timeline) */}
+              {/* Fechas comerciales */}
               <div className="bg-white rounded-2xl shadow p-4">
                 <h3 className="font-medium mb-3">
-                  Fechas de proyecto / logística
+                  Fechas comerciales
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
-                  {[
-                    ["f_inicio", "F. Inicio", "date"],
-                    ["f_cotiz", "F. Cotiz", "date"],
-                    [
-                      "f_cierre_aprox",
-                      "F. Cierre (aprox)",
-                      "date",
-                    ],
-                    ["f_confirm", "F. Confirm", "date"],
-                  ].map(([key, label, type]) => (
-                    <Field key={key} label={label}>
-                      <Input
-                        readOnly={!editMode}
-                        type={type}
-                        value={getCF(key)}
-                        onChange={(e) => {
-                          setCFLocal(key, {
-                            label,
-                            type,
-                            value: e.target.value,
-                          });
-                          markDirty(key);
-                        }}
-                      />
-                    </Field>
-                  ))}
+                  <CommercialDates deal={deal} validity={getCF("validez_oferta")} />
+                  <Field label="F. Cierre (aprox)">
+                    <Input readOnly={!editMode} type="date" value={getCF("f_cierre_aprox")}
+                      onChange={(e) => {
+                        setCFLocal("f_cierre_aprox", { label: "F. Cierre (aprox)", type: "date", value: e.target.value });
+                        markDirty("f_cierre_aprox");
+                      }} />
+                  </Field>
                 </div>
               </div>
 

@@ -4,6 +4,7 @@ import { pool } from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
 import { logAudit, auditedRowMutation, auditSnapshot, recordAuditChange } from '../services/audit.js';
 import { ensureDealBudgetStateSchema } from '../services/dealBudgetState.js';
+import { isProtectedCommercialDateKey, paraguayDate, setDealCustomField } from '../services/dealCommercialDates.js';
 
 import multer from 'multer';
 import fs from 'fs';
@@ -302,6 +303,23 @@ const storage = multer.diskStorage({
   }
 });
 const upload = multer({ storage });
+const confirmationUpload = multer({
+  storage,
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (_req, file, done) => {
+    const allowed = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.eml', '.msg', '.doc', '.docx']);
+    if (!allowed.has(path.extname(file.originalname || '').toLowerCase())) {
+      return done(new Error('Adjunta PDF, imagen, correo o documento Word.'));
+    }
+    done(null, true);
+  },
+}).single('file');
+
+function validDateOnly(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
 
 (async () => {
   try {
@@ -847,11 +865,109 @@ router.get('/:id/custom-fields', async (req, res) => {
   }
 });
 
+router.get('/:id/commercial-dates', requireAuth, async (req, res) => {
+  try {
+    const dealId = Number(req.params.id);
+    if (!Number.isInteger(dealId) || dealId <= 0) return res.status(400).json({ error: 'Operacion invalida' });
+    const [[deal]] = await pool.query('SELECT DATE(created_at) AS started_on FROM deals WHERE id = ?', [dealId]);
+    if (!deal) return res.status(404).json({ error: 'Operacion no encontrada' });
+    const [fields] = await pool.query(
+      "SELECT `key`, `value` FROM deal_custom_fields WHERE deal_id = ? AND `key` IN ('f_cotiz', 'f_confirm', 'confirm_method', 'confirm_file_id')",
+      [dealId]
+    );
+    const values = Object.fromEntries(fields.map((field) => [field.key, field.value]));
+    const fileId = Number(values.confirm_file_id || 0);
+    const [[file]] = fileId ? await pool.query(
+      'SELECT id, filename, url, created_at FROM deal_files WHERE id = ? AND deal_id = ? AND type = ?',
+      [fileId, dealId, 'customer_confirmation']
+    ) : [[]];
+    res.json({
+      started_on: deal.started_on,
+      quoted_on: values.f_cotiz || null,
+      confirmed_on: values.f_confirm || null,
+      confirmation_method: values.confirm_method || null,
+      confirmation_file: file || null,
+    });
+  } catch (error) {
+    console.error('[commercial-dates][GET]', error);
+    res.status(500).json({ error: 'No se pudieron cargar las fechas comerciales' });
+  }
+});
+
+router.post('/:id/confirmation', requireAuth, (req, res) => {
+  const dealId = Number(req.params.id);
+  if (!Number.isInteger(dealId) || dealId <= 0) return res.status(400).json({ error: 'Operacion invalida' });
+  confirmationUpload(req, res, async (uploadError) => {
+    if (uploadError) return res.status(400).json({ error: uploadError.message });
+    const date = String(req.body?.date || '').trim();
+    const method = String(req.body?.method || '').trim();
+    if (!Number.isInteger(dealId) || dealId <= 0 || !validDateOnly(date) || !['email', 'purchase_order', 'other'].includes(method)) {
+      if (req.file?.path) fs.unlink(req.file.path, () => {});
+      return res.status(400).json({ error: 'Fecha o medio de confirmacion invalido' });
+    }
+    if (date > paraguayDate()) {
+      if (req.file?.path) fs.unlink(req.file.path, () => {});
+      return res.status(400).json({ error: 'La confirmacion no puede tener una fecha futura' });
+    }
+    let conn;
+    try {
+      conn = await pool.getConnection();
+      await conn.beginTransaction();
+      const [[deal]] = await conn.query('SELECT id FROM deals WHERE id = ? FOR UPDATE', [dealId]);
+      if (!deal) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Operacion no encontrada' });
+      }
+      const [[previous]] = await conn.query(
+        "SELECT `value` FROM deal_custom_fields WHERE deal_id = ? AND `key` = 'confirm_file_id' LIMIT 1",
+        [dealId]
+      );
+      const previousFileId = Number(previous?.value || 0);
+      const [[previousFile]] = previousFileId ? await conn.query(
+        'SELECT id FROM deal_files WHERE id = ? AND deal_id = ? AND type = ?',
+        [previousFileId, dealId, 'customer_confirmation']
+      ) : [[]];
+      if (!req.file && !previousFile) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'Adjunta el comprobante de confirmacion' });
+      }
+      let fileId = previousFileId;
+      if (req.file) {
+        const url = `/uploads/deals/${dealId}/${req.file.filename}`;
+        const [insert] = await conn.query(
+          'INSERT INTO deal_files (deal_id, type, filename, url) VALUES (?, ?, ?, ?)',
+          [dealId, 'customer_confirmation', req.file.filename, url]
+        );
+        fileId = insert.insertId;
+        await recordAuditChange(conn, {
+          req, action: 'create', entity: 'deal_file', entityId: fileId,
+          rootEntity: 'deal', rootEntityId: dealId,
+          after: await auditSnapshot(conn, 'deal_file', fileId),
+          description: 'Adjunto comprobante de confirmacion',
+        });
+      }
+      await setDealCustomField(conn, req, dealId, 'f_confirm', 'F. Confirm', 'text', date);
+      await setDealCustomField(conn, req, dealId, 'confirm_method', 'Confirmado por', 'text', method);
+      await setDealCustomField(conn, req, dealId, 'confirm_file_id', 'Comprobante de confirmacion', 'text', String(fileId));
+      await conn.commit();
+      res.json({ ok: true, confirmed_on: date, confirmation_method: method, confirmation_file_id: fileId });
+    } catch (error) {
+      if (conn) await conn.rollback().catch(() => {});
+      console.error('[confirmation][POST]', error);
+      res.status(500).json({ error: 'No se pudo guardar la confirmacion' });
+    } finally {
+      conn?.release();
+      if (res.statusCode >= 400 && req.file?.path) fs.unlink(req.file.path, () => {});
+    }
+  });
+});
+
 router.post('/:id/custom-fields', requireAuth, async (req, res) => {
   const { id } = req.params;
   const { key, label, type, value } = req.body;
 
   if (!key) return res.status(400).json({ error: 'key requerido' });
+  if (isProtectedCommercialDateKey(key)) return res.status(403).json({ error: 'Esta fecha se administra desde seguimiento comercial' });
 
   try {
     const [exists] = await pool.query(
@@ -902,6 +1018,7 @@ router.put('/:id/custom-fields/:cfId', requireAuth, async (req, res) => {
       [cfId, id]
     );
     if (!exists) return res.status(404).json({ error: 'Custom field no encontrado' });
+    if (isProtectedCommercialDateKey(exists.key)) return res.status(403).json({ error: 'Esta fecha se administra desde seguimiento comercial' });
 
     const sets = [];
     const params = [];
@@ -1026,6 +1143,12 @@ router.delete('/:id/files/:fileId', requireAuth, async (req, res) => {
       [fileId, id]
     );
     if (!rows.length) return res.status(404).json({ error: 'Archivo no encontrado' });
+
+    const [[confirmation]] = await pool.query(
+      "SELECT id FROM deal_custom_fields WHERE deal_id = ? AND `key` = 'confirm_file_id' AND `value` = ? LIMIT 1",
+      [id, String(fileId)]
+    );
+    if (confirmation) return res.status(409).json({ error: 'No se puede eliminar el comprobante de confirmacion vigente' });
 
     const filename = rows[0].filename;
 
