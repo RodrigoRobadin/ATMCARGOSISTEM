@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import { pool } from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
-import { logAudit } from '../services/audit.js';
+import { auditedRowMutation, auditSnapshot, recordAuditChange } from '../services/audit.js';
 
 const router = Router();
 const toUpperText = (v) =>
@@ -76,34 +76,44 @@ router.post('/:id/custom-fields', requireAuth, async (req, res) => {
   const { key, label, type = 'text', value = null } = req.body;
   if (!key || !label) return res.status(400).json({ error: 'key y label requeridos' });
 
-  const [ins] = await pool.query(
-    `INSERT INTO person_custom_fields(person_id,\`key\`,\`label\`,\`type\`,\`value\`)
-     VALUES (?,?,?,?,?)`,
-    [id, key, label, type, value]
-  );
-
-  await logAudit({
-    req, action: 'create', entity: 'contact_cf', entityId: Number(id),
-    description: `Creó CF ${key}`, meta: { key, value }
-  });
-
-  res.status(201).json({ id: ins.insertId });
+  try {
+    const { result } = await auditedRowMutation(pool, {
+      req, action: 'create', entity: 'contact_custom_field',
+      rootEntity: 'contact', rootEntityId: Number(id), description: `Creó campo ${key}`,
+      run: async (conn) => {
+        const [insert] = await conn.query(
+          `INSERT INTO person_custom_fields(person_id,\`key\`,\`label\`,\`type\`,\`value\`)
+           VALUES (?,?,?,?,?)`,
+          [id, key, label, type, value]
+        );
+        return insert;
+      },
+    });
+    res.status(201).json({ id: result.insertId });
+  } catch (error) {
+    res.status(500).json({ error: 'No se pudo guardar el campo.' });
+  }
 });
 
 router.put('/:id/custom-fields/:cfId', requireAuth, async (req, res) => {
   const { id, cfId } = req.params;
   const { value = null } = req.body;
-  await pool.query(
-    `UPDATE person_custom_fields SET \`value\` = ? WHERE id = ? AND person_id = ?`,
-    [value, cfId, id]
-  );
-
-  await logAudit({
-    req, action: 'update', entity: 'contact_cf', entityId: Number(id),
-    description: `Actualizó CF ${cfId}`, meta: { value }
-  });
-
-  res.json({ ok: true });
+  try {
+    await auditedRowMutation(pool, {
+      req, action: 'update', entity: 'contact_custom_field', entityId: Number(cfId),
+      rootEntity: 'contact', rootEntityId: Number(id), description: `Actualizó campo ${cfId}`,
+      run: async (conn, before) => {
+        if (!before || Number(before.person_id) !== Number(id)) throw Object.assign(new Error('No encontrado'), { status: 404 });
+        await conn.query(
+          `UPDATE person_custom_fields SET \`value\` = ? WHERE id = ? AND person_id = ?`,
+          [value, cfId, id]
+        );
+      },
+    });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: 'No se pudo actualizar el campo.' });
+  }
 });
 
 /* ====== DETALLE ====== */
@@ -169,22 +179,23 @@ router.post('/', requireAuth, async (req, res) => {
     }
   }
 
-  const [ins] = await pool.query(
-    `INSERT INTO contacts(name, email, phone, title, org_id, label, owner_user_id, visibility, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      toUpperText(name) || null, email || null, phone || null, title || null,
-      org_id || null, label || null, owner_user_id || null,
-      visibility || 'company', notes || null
-    ]
-  );
-
-  await logAudit({
-    req, action: 'create', entity: 'contact', entityId: ins.insertId,
-      description: `Creó contacto ${toUpperText(name) || email || ins.insertId}`, meta: { payload: req.body }
-  });
-
-  res.status(201).json({ id: ins.insertId });
+  try {
+    const { result } = await auditedRowMutation(pool, {
+      req, action: 'create', entity: 'contact', description: 'Creó contacto',
+      run: async (conn) => {
+        const [insert] = await conn.query(
+          `INSERT INTO contacts(name, email, phone, title, org_id, label, owner_user_id, visibility, notes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [toUpperText(name) || null, email || null, phone || null, title || null,
+            org_id || null, label || null, owner_user_id || null, visibility || 'company', notes || null]
+        );
+        return insert;
+      },
+    });
+    res.status(201).json({ id: result.insertId });
+  } catch (error) {
+    res.status(500).json({ error: 'No se pudo crear el contacto.' });
+  }
 });
 
 /* ====== ACTUALIZAR ====== */
@@ -207,41 +218,52 @@ router.patch('/:id', requireAuth, async (req, res) => {
 
   if (!fields.length) return res.status(400).json({ error: 'Nada para actualizar' });
 
-  params.push(id);
-  await pool.query(`UPDATE contacts SET ${fields.join(', ')} WHERE id = ?`, params);
-
-  await logAudit({
-    req, action: 'update', entity: 'contact', entityId: Number(id),
-    description: 'Actualizó contacto', meta: { patch: req.body }
-  });
-
-  res.json({ ok: true });
+  try {
+    await auditedRowMutation(pool, {
+      req, action: 'update', entity: 'contact', entityId: Number(id), description: 'Actualizó contacto',
+      run: async (conn, before) => {
+        if (!before) throw Object.assign(new Error('No encontrado'), { status: 404 });
+        await conn.query(`UPDATE contacts SET ${fields.join(', ')} WHERE id = ?`, [...params, id]);
+      },
+    });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: 'No se pudo actualizar el contacto.' });
+  }
 });
 
 /* ====== BORRADO SUAVE ====== */
 router.delete('/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
-  await pool.query('UPDATE contacts SET deleted_at = NOW() WHERE id = ?', [id]);
-
-  await logAudit({
-    req, action: 'delete', entity: 'contact', entityId: Number(id),
-    description: 'Borró contacto (soft)'
-  });
-
-  res.json({ ok: true });
+  try {
+    await auditedRowMutation(pool, {
+      req, action: 'delete', entity: 'contact', entityId: Number(id), description: 'Eliminó contacto',
+      run: async (conn, before) => {
+        if (!before) throw Object.assign(new Error('No encontrado'), { status: 404 });
+        await conn.query('UPDATE contacts SET deleted_at = NOW() WHERE id = ?', [id]);
+      },
+    });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: 'No se pudo eliminar el contacto.' });
+  }
 });
 
 /* ====== RESTAURAR ====== */
 router.post('/restore/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
-  await pool.query('UPDATE contacts SET deleted_at = NULL WHERE id = ?', [id]);
-
-  await logAudit({
-    req, action: 'update', entity: 'contact', entityId: Number(id),
-    description: 'Restauró contacto'
-  });
-
-  res.json({ ok: true });
+  try {
+    await auditedRowMutation(pool, {
+      req, action: 'restore', entity: 'contact', entityId: Number(id), description: 'Restauró contacto',
+      run: async (conn, before) => {
+        if (!before) throw Object.assign(new Error('No encontrado'), { status: 404 });
+        await conn.query('UPDATE contacts SET deleted_at = NULL WHERE id = ?', [id]);
+      },
+    });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: 'No se pudo restaurar el contacto.' });
+  }
 });
 
 /* ====== MERGE ====== */
@@ -251,10 +273,26 @@ router.post('/merge', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'IDs inválidos' });
   }
 
-  await pool.query('UPDATE activities SET person_id = ? WHERE person_id = ?', [keep_id, merge_id]);
-  await pool.query('UPDATE deals SET contact_id = ? WHERE contact_id = ?', [keep_id, merge_id]);
+  const conn = await pool.getConnection();
+  try {
+  await conn.beginTransaction();
+  const keptBefore = await auditSnapshot(conn, 'contact', keep_id, true);
+  const mergedBefore = await auditSnapshot(conn, 'contact', merge_id, true);
+  if (!keptBefore || !mergedBefore) throw Object.assign(new Error('Contacto no encontrado'), { status: 404 });
+  const [linkedDeals] = await conn.query('SELECT id FROM deals WHERE contact_id = ? FOR UPDATE', [merge_id]);
+  const dealBefore = new Map();
+  for (const deal of linkedDeals) dealBefore.set(deal.id, await auditSnapshot(conn, 'deal', deal.id));
+  await conn.query('UPDATE activities SET person_id = ? WHERE person_id = ?', [keep_id, merge_id]);
+  await conn.query('UPDATE deals SET contact_id = ? WHERE contact_id = ?', [keep_id, merge_id]);
+  for (const deal of linkedDeals) {
+    await recordAuditChange(conn, {
+      req, action: 'update', entity: 'deal', entityId: deal.id,
+      before: dealBefore.get(deal.id), after: await auditSnapshot(conn, 'deal', deal.id),
+      description: 'Cambió contacto por fusión',
+    });
+  }
 
-  await pool.query(
+  await conn.query(
     `UPDATE contacts w
      JOIN contacts l ON l.id = ?
      SET 
@@ -270,14 +308,25 @@ router.post('/merge', requireAuth, async (req, res) => {
     [merge_id, keep_id]
   );
 
-  await pool.query('UPDATE contacts SET deleted_at = NOW() WHERE id = ?', [merge_id]);
-
-  await logAudit({
-    req, action: 'update', entity: 'contact', entityId: Number(keep_id),
-    description: 'Fusionó contactos', meta: { keep_id, merge_id }
+  await conn.query('UPDATE contacts SET deleted_at = NOW() WHERE id = ?', [merge_id]);
+  await recordAuditChange(conn, {
+    req, action: 'merge', entity: 'contact', entityId: Number(keep_id),
+    before: keptBefore, after: await auditSnapshot(conn, 'contact', keep_id),
+    description: 'Fusionó contactos', details: { merged_contact_id: Number(merge_id) },
   });
-
+  await recordAuditChange(conn, {
+    req, action: 'delete', entity: 'contact', entityId: Number(merge_id),
+    before: mergedBefore, after: await auditSnapshot(conn, 'contact', merge_id),
+    description: 'Contacto absorbido en una fusión', details: { kept_contact_id: Number(keep_id) },
+  });
+  await conn.commit();
   res.json({ ok: true });
+  } catch (error) {
+    await conn.rollback();
+    res.status(error.status || 500).json({ error: error.message || 'No se pudieron fusionar contactos.' });
+  } finally {
+    conn.release();
+  }
 });
 
 export default router;

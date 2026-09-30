@@ -5,7 +5,7 @@ import path from 'node:path';
 import jwt from 'jsonwebtoken';
 import db from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
-import { logAudit } from '../services/audit.js';
+import { logAudit, auditedRowMutation, auditSnapshot, recordAuditChange } from '../services/audit.js';
 import { buildFormalQuotePdfBuffer } from '../services/formalQuotePdf.js';
 
 const router = Router();
@@ -938,14 +938,17 @@ router.get('/operations/:id/quote-pdf.pdf', requireMobileDownloadAuth, sendMobil
 router.get('/operations/:id/quote-pdf', requireMobileDownloadAuth, sendMobileQuotePdf);
 
 router.patch('/operations/:id', requireAuth, async (req, res) => {
+  const conn = await db.getConnection();
   try {
+    await conn.beginTransaction();
     const id = toNumberOrNull(req.params.id);
-    if (!id) return res.status(400).json({ error: 'ID de operacion requerido' });
+    if (!id) { await conn.rollback(); return res.status(400).json({ error: 'ID de operacion requerido' }); }
     const { where, params } = await getEditableDealWhere(req, 'd');
     where.push('d.id = ?');
     params.push(id);
-    const [[deal]] = await db.query(`SELECT id FROM deals d WHERE ${where.join(' AND ')} LIMIT 1`, params);
-    if (!deal) return res.status(404).json({ error: 'Operacion no encontrada' });
+    const [[deal]] = await conn.query(`SELECT id FROM deals d WHERE ${where.join(' AND ')} LIMIT 1`, params);
+    if (!deal) { await conn.rollback(); return res.status(404).json({ error: 'Operacion no encontrada' }); }
+    const before = await auditSnapshot(conn, 'deal', id, true);
 
     const stageId = toNumberOrNull(req.body?.stage_id);
     const title = cleanText(req.body?.title, 255);
@@ -960,9 +963,9 @@ router.patch('/operations/:id', requireAuth, async (req, res) => {
       values.push(title);
     }
     const customFields = Array.isArray(req.body?.custom_fields) ? req.body.custom_fields : [];
-    if (!fields.length && !customFields.length) return res.json({ ok: true });
+    if (!fields.length && !customFields.length) { await conn.rollback(); return res.json({ ok: true }); }
     if (fields.length) {
-      await db.query(`UPDATE deals SET ${fields.join(', ')} WHERE id = ?`, [...values, id]);
+      await conn.query(`UPDATE deals SET ${fields.join(', ')} WHERE id = ?`, [...values, id]);
     }
 
     for (const field of customFields) {
@@ -972,35 +975,48 @@ router.patch('/operations/:id', requireAuth, async (req, res) => {
       const requestedType = cleanText(field?.type, 40) || 'text';
       const type = requestedType === 'json' ? 'text' : requestedType;
       const value = field?.value == null ? '' : String(field.value);
-      const [existing] = await db.query(
+      const [existing] = await conn.query(
         'SELECT id FROM deal_custom_fields WHERE deal_id = ? AND `key` = ? LIMIT 1',
         [id, key]
       );
       if (existing?.[0]?.id) {
-        await db.query(
+        const beforeField = await auditSnapshot(conn, 'deal_custom_field', existing[0].id, true);
+        await conn.query(
           'UPDATE deal_custom_fields SET label = ?, `type` = ?, `value` = ? WHERE id = ?',
           [label, type, value, existing[0].id]
         );
+        await recordAuditChange(conn, {
+          req, action: 'update', entity: 'deal_custom_field', entityId: existing[0].id,
+          rootEntity: 'deal', rootEntityId: id, before: beforeField,
+          after: await auditSnapshot(conn, 'deal_custom_field', existing[0].id),
+          description: 'Actualizó campo desde móvil',
+        });
       } else {
-        await db.query(
+        const [insert] = await conn.query(
           'INSERT INTO deal_custom_fields (deal_id, `key`, label, `type`, `value`) VALUES (?,?,?,?,?)',
           [id, key, label, type, value]
         );
+        await recordAuditChange(conn, {
+          req, action: 'create', entity: 'deal_custom_field', entityId: insert.insertId,
+          rootEntity: 'deal', rootEntityId: id,
+          after: await auditSnapshot(conn, 'deal_custom_field', insert.insertId),
+          description: 'Creó campo desde móvil',
+        });
       }
     }
 
-    await logAudit({
-      req,
-      action: 'update',
-      entity: 'deal',
-      entityId: id,
-      description: `Actualizo operacion movil ${id}`,
-      meta: { stage_id: stageId, title, custom_fields: customFields.map((field) => field?.key).filter(Boolean) },
+    await recordAuditChange(conn, {
+      req, action: 'update', entity: 'deal', entityId: id, before,
+      after: await auditSnapshot(conn, 'deal', id), description: 'Actualizó operación desde móvil',
     });
+    await conn.commit();
     res.json({ ok: true });
   } catch (e) {
+    await conn.rollback();
     console.error('[mobile/operations:update]', e);
     res.status(500).json({ error: 'No se pudo actualizar la operacion' });
+  } finally {
+    conn.release();
   }
 });
 
@@ -1385,25 +1401,28 @@ router.post('/attachments', requireAuth, upload.single('file'), async (req, res)
     const fileType = cleanText(req.body?.type || 'mobile', 50) || 'mobile';
 
     if (!rawEntityType || !allowedAttachmentTargets.has(rawEntityType)) {
+      if (req.file?.path) fs.unlink(req.file.path, () => {});
       return res.status(400).json({ error: 'entity_type invalido' });
     }
-    if (!entityId) return res.status(400).json({ error: 'entity_id requerido' });
+    if (!entityId) {
+      if (req.file?.path) fs.unlink(req.file.path, () => {});
+      return res.status(400).json({ error: 'entity_id requerido' });
+    }
     if (!req.file) return res.status(400).json({ error: 'file requerido' });
 
     const relUrl = `/uploads/mobile/${rawEntityType}/${entityId}/${req.file.filename}`;
 
     if (rawEntityType === 'deal') {
-      const [ins] = await db.query(
-        `INSERT INTO deal_files (deal_id, type, filename, url) VALUES (?, ?, ?, ?)`,
-        [entityId, fileType, req.file.filename, relUrl]
-      );
-      await logAudit({
-        req,
-        action: 'upload',
-        entity: 'deal_file',
-        entityId: ins.insertId,
-        description: `Archivo movil subido a OP ${entityId}`,
-        meta: { type: fileType, filename: req.file.filename },
+      const { result: ins } = await auditedRowMutation(db, {
+        req, action: 'create', entity: 'deal_file',
+        rootEntity: 'deal', rootEntityId: entityId, description: 'Agregó archivo desde móvil',
+        run: async (conn) => {
+          const [insert] = await conn.query(
+            'INSERT INTO deal_files (deal_id, type, filename, url) VALUES (?, ?, ?, ?)',
+            [entityId, fileType, req.file.filename, relUrl]
+          );
+          return insert;
+        },
       });
       return res.status(201).json({
         ok: true,
@@ -1419,29 +1438,21 @@ router.post('/attachments', requireAuth, upload.single('file'), async (req, res)
       });
     }
 
-    const [ins] = await db.query(
-      `INSERT INTO mobile_attachments
-        (entity_type, entity_id, filename, original_name, mime_type, size_bytes, url, uploaded_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        entityType,
-        entityId,
-        req.file.filename,
-        req.file.originalname || null,
-        req.file.mimetype || null,
-        req.file.size || null,
-        relUrl,
-        req.user?.id || null,
-      ]
-    );
-
-    await logAudit({
-      req,
-      action: 'upload',
-      entity: 'mobile_attachment',
-      entityId: ins.insertId,
-      description: `Archivo movil subido a ${entityType} #${entityId}`,
-      meta: { filename: req.file.filename, original_name: req.file.originalname },
+    const rootEntity = ['organization', 'contact'].includes(entityType) ? entityType : null;
+    const { result: ins } = await auditedRowMutation(db, {
+      req, action: 'create', entity: 'mobile_attachment',
+      rootEntity: rootEntity || 'mobile_attachment', rootEntityId: rootEntity ? entityId : undefined,
+      description: 'Agregó archivo desde móvil',
+      run: async (conn) => {
+        const [insert] = await conn.query(
+          `INSERT INTO mobile_attachments
+            (entity_type, entity_id, filename, original_name, mime_type, size_bytes, url, uploaded_by_user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [entityType, entityId, req.file.filename, req.file.originalname || null,
+            req.file.mimetype || null, req.file.size || null, relUrl, req.user?.id || null]
+        );
+        return insert;
+      },
     });
 
     res.status(201).json({
@@ -1456,6 +1467,7 @@ router.post('/attachments', requireAuth, upload.single('file'), async (req, res)
       url: relUrl,
     });
   } catch (e) {
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
     console.error('[mobile/attachments:create]', e);
     res.status(500).json({ error: e?.message || 'No se pudo subir el archivo' });
   }

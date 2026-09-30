@@ -8,6 +8,7 @@ import InvoiceCreateModal from "../../components/InvoiceCreateModal.jsx";
 import OperationExpenseInvoices from "../../components/OperationExpenseInvoices.jsx";
 import AdminOpsPanel from "../../components/op-details/AdminOpsPanel.jsx";
 import { attachServiceCaseToAssistant } from "../../utils/assistantContext";
+import AuditHistory from "../../components/AuditHistory.jsx";
 
 function safeJsonArray(v) {
   if (!v) return [];
@@ -362,6 +363,7 @@ export default function ServiceCaseDetail() {
     { id: "presupuesto", label: "Presupuesto" },
     { id: "informes", label: "Informes" },
     { id: "gastos", label: "Gastos" },
+    { id: "auditoria", label: "Auditoría" },
     ...(canAccessAdminOps ? [{ id: "administracion", label: "Administración" }] : []),
   ];
 
@@ -1560,6 +1562,8 @@ export default function ServiceCaseDetail() {
               openNewKey={expenseOpenKey}
             />
           )}
+
+          {tab === "auditoria" && <AuditHistory entity="service_case" id={caseId} />}
 
           {tab === "administracion" && (
             <AdminOpsPanel

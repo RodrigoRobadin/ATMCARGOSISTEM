@@ -5,6 +5,7 @@ import { api } from '../api';
 import AccountExecutiveSelect from '../components/AccountExecutiveSelect.jsx';
 import OrganizationLookupField from '../components/OrganizationLookupField.jsx';
 import OrganizationEngagementPanel from '../components/OrganizationEngagementPanel.jsx';
+import AuditHistory from '../components/AuditHistory.jsx';
 import { attachOrganizationToAssistant } from '../utils/assistantContext';
 
 function FieldRow({ label, value, children }) {
@@ -810,6 +811,8 @@ export default function OrganizationDetail() {
           </div>
         </div>
       </div>
+
+      <AuditHistory entity="organization" id={id} />
 
       {/* ====== Layout de dos columnas ====== */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[400px_minmax(0,1fr)]">

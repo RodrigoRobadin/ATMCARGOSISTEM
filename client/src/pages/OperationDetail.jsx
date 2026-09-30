@@ -13,6 +13,7 @@ import OrganizationLookupField from "../components/OrganizationLookupField.jsx";
 import LogisticsAutocomplete from "../components/LogisticsAutocomplete.jsx";
 import { attachOperationToAssistant } from "../utils/assistantContext";
 import OperationFollowupComposer from "../components/OperationFollowupComposer.jsx";
+import AuditHistory from "../components/AuditHistory.jsx";
 
 // 👇 Ajustá la ruta real según tu backend
 const PROVIDERS_ENDPOINT = "/organizations";
@@ -2810,6 +2811,8 @@ function providerHasFreightTag(p = {}) {
           </div>
         </div>
       </div>
+
+      <AuditHistory entity="deal" id={deal.id} />
 
       {/* TABS */}
       <div className="bg-white rounded-2xl shadow px-4 pt-3 pb-0">

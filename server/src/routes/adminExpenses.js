@@ -5,6 +5,7 @@ import path from 'path';
 import multer from 'multer';
 import { pool } from '../services/db.js';
 import { requireAuth, requireAnyRole } from '../middlewares/auth.js';
+import { auditedRowMutation } from '../services/audit.js';
 import { ensureSupplierCreditNoteTables, recalculateSupplierDocument } from '../services/supplierCreditNotes.js';
 import ExcelJS from 'exceljs';
 
@@ -2921,11 +2922,18 @@ router.post('/providers', requireAuth, async (req, res) => {
   const ruc = String(req.body?.ruc || '').trim() || null;
   const tipoOrg = String(req.body?.tipo_org || req.body?.category || 'Proveedor').trim() || 'Proveedor';
   if (!name) return res.status(400).json({ error: 'name is required' });
-  const [result] = await pool.query(
-    `INSERT INTO organizations (razon_social, name, ruc, tipo_org, created_at, updated_at)
-     VALUES (?, ?, ?, ?, NOW(), NOW())`,
-    [name, name, ruc, tipoOrg]
-  );
+  const { result } = await auditedRowMutation(pool, {
+    req, action: 'create', entity: 'organization',
+    description: 'Creó proveedor desde gastos administrativos',
+    run: async (conn) => {
+      const [insert] = await conn.query(
+        `INSERT INTO organizations (razon_social, name, ruc, tipo_org, created_at, updated_at)
+         VALUES (?, ?, ?, ?, NOW(), NOW())`,
+        [name, name, ruc, tipoOrg]
+      );
+      return insert;
+    },
+  });
   const [[row]] = await pool.query(
     `SELECT id, razon_social, name, ruc
      FROM organizations

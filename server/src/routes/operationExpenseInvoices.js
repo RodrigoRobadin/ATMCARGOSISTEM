@@ -8,6 +8,7 @@ import PDFDocument from 'pdfkit';
 import { pool } from '../services/db.js';
 import generatePaymentOrderPDF from '../services/paymentOrderTemplatePdfkit.js';
 import { requireAuth, requireAnyRole } from '../middlewares/auth.js';
+import { auditedRowMutation } from '../services/audit.js';
 import { ensureSupplierCreditNoteTables, recalculateSupplierDocument } from '../services/supplierCreditNotes.js';
 
 const router = Router();
@@ -563,7 +564,7 @@ async function updateInvoicePaymentStatus(invoiceId, conn = pool) {
   return recalculateSupplierDocument('operation-expense', invoiceId, conn);
 }
 
-async function ensureSupplierId(payload) {
+async function ensureSupplierId(payload, req) {
   if (payload.supplier_id) return payload.supplier_id;
   const name = String(payload.supplier_name || '').trim();
   const ruc = String(payload.supplier_ruc || '').trim();
@@ -587,11 +588,18 @@ async function ensureSupplierId(payload) {
 
   if (!name) return null;
 
-  const [ins] = await pool.query(
-    `INSERT INTO organizations (razon_social, name, ruc, tipo_org, created_at, updated_at)
-     VALUES (?, ?, ?, 'Proveedor', NOW(), NOW())`,
-    [name, name, ruc || null]
-  );
+  const { result: ins } = await auditedRowMutation(pool, {
+    req, action: 'create', entity: 'organization',
+    description: 'Creó proveedor desde factura de compra',
+    run: async (conn) => {
+      const [insert] = await conn.query(
+        `INSERT INTO organizations (razon_social, name, ruc, tipo_org, created_at, updated_at)
+         VALUES (?, ?, ?, 'Proveedor', NOW(), NOW())`,
+        [name, name, ruc || null]
+      );
+      return insert;
+    },
+  });
   return ins.insertId || null;
 }
 
@@ -676,7 +684,7 @@ router.post('/:id/expense-invoices', requireAuth, async (req, res) => {
         .json({ error: 'Tipo de cambio es requerido' });
     }
 
-    const supplierId = await ensureSupplierId(payload);
+    const supplierId = await ensureSupplierId(payload, req);
     const scope = revisionScopeFromSource(payload);
 
     if (opType === 'service' && scope.serviceQuoteAdditionId) {

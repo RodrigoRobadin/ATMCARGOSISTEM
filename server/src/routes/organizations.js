@@ -3,7 +3,7 @@ import { Router } from 'express';
 import db from '../services/db.js';
 
 import { requireAuth, requireRole } from '../middlewares/auth.js';
-import { logAudit } from '../services/audit.js';
+import { logAudit, auditedRowMutation, auditSnapshot, recordAuditChange } from '../services/audit.js';
 import { ensureRoutePlanningSchema, normalizeCityName } from '../services/routePlanning.js';
 
 const router = Router();
@@ -418,11 +418,30 @@ router.post('/', requireAuth, async (req, res) => {
           [values]
         );
       }
-      await conn.query(
+      const [contactResult] = await conn.query(
         `INSERT INTO contacts(name, email, phone, org_id, visibility)
          VALUES (?, ?, ?, ?, 'company')`,
         [normalizedContactName, normalizedEmail, toNull(phone), row.id]
       );
+
+      await recordAuditChange(conn, {
+        req, action: 'create', entity: 'organization', entityId: row.id,
+        after: await auditSnapshot(conn, 'organization', row.id),
+        description: `Creó organización ${row.name}`,
+      });
+      const [createdBranches] = await conn.query('SELECT * FROM org_branches WHERE org_id = ?', [row.id]);
+      for (const branch of createdBranches) {
+        await recordAuditChange(conn, {
+          req, action: 'create', entity: 'branch', entityId: branch.id,
+          rootEntity: 'organization', rootEntityId: row.id, after: branch,
+          description: 'Creó sucursal',
+        });
+      }
+      await recordAuditChange(conn, {
+        req, action: 'create', entity: 'contact', entityId: contactResult.insertId,
+        after: await auditSnapshot(conn, 'contact', contactResult.insertId),
+        description: 'Creó contacto principal',
+      });
       await conn.commit();
     } catch (error) {
       await conn.rollback();
@@ -500,15 +519,6 @@ router.post('/', requireAuth, async (req, res) => {
       console.error('[organizations:post] No se pudo crear prospecto en pipeline:', e?.message || e);
     }
 
-    await logAudit({
-      req,
-      action: 'create',
-      entity: 'organization',
-      entityId: row.id,
-      description: `Creó organización ${row.name}`,
-      meta: { payload: req.body },
-    });
-
     res.status(201).json(row);
   } catch (e) {
     console.error('[organizations:post]', e);
@@ -558,7 +568,11 @@ router.post('/:id/branches', requireAuth, async (req, res) => {
   }
   try {
     const selectedCity = await resolveCitySelection(city_id, city, true);
-    const [ins] = await db.query(
+    const { after: row } = await auditedRowMutation(db, {
+      req, action: 'create', entity: 'branch', rootEntity: 'organization', rootEntityId: id,
+      description: 'Creó sucursal',
+      run: async (conn) => {
+        const [insert] = await conn.query(
       `
       INSERT INTO org_branches
         (org_id, name, address, city, city_id, country, phone, email, latitude, longitude, maps_url, is_default)
@@ -578,11 +592,10 @@ router.post('/:id/branches', requireAuth, async (req, res) => {
         maps_url,
         is_default ? 1 : 0,
       ]
-    );
-    const [[row]] = await db.query(
-      'SELECT id, org_id, name, address, city, city_id, country, phone, email, latitude, longitude, maps_url, is_default, created_at, updated_at FROM org_branches WHERE id = ?',
-      [ins.insertId]
-    );
+        );
+        return insert;
+      },
+    });
     res.status(201).json(row);
   } catch (e) {
     console.error('[organizations:branches:create]', e);
@@ -626,15 +639,14 @@ router.put('/:id/branches/:branchId', requireAuth, async (req, res) => {
     if (is_default !== undefined) { sets.push('is_default = ?'); params.push(is_default ? 1 : 0); }
     if (!sets.length) return res.status(400).json({ error: 'Sin cambios' });
 
-    params.push(branchId, id);
-    await db.query(
-      `UPDATE org_branches SET ${sets.join(', ')} WHERE id = ? AND org_id = ?`,
-      params
-    );
-    const [[row]] = await db.query(
-      'SELECT id, org_id, name, address, city, city_id, country, phone, email, latitude, longitude, maps_url, is_default, created_at, updated_at FROM org_branches WHERE id = ?',
-      [branchId]
-    );
+    const { after: row } = await auditedRowMutation(db, {
+      req, action: 'update', entity: 'branch', entityId: branchId,
+      rootEntity: 'organization', rootEntityId: id, description: 'Actualizó sucursal',
+      run: async (conn, before) => {
+        if (!before || Number(before.org_id) !== id) throw Object.assign(new Error('No encontrado'), { statusCode: 404 });
+        await conn.query(`UPDATE org_branches SET ${sets.join(', ')} WHERE id = ? AND org_id = ?`, [...params, branchId, id]);
+      },
+    });
     res.json(row || null);
   } catch (e) {
     console.error('[organizations:branches:update]', e);
@@ -647,7 +659,14 @@ router.delete('/:id/branches/:branchId', requireAuth, async (req, res) => {
   const branchId = Number(req.params.branchId || 0);
   if (!id || !branchId) return res.status(400).json({ error: 'id invalido' });
   try {
-    await db.query('DELETE FROM org_branches WHERE id = ? AND org_id = ?', [branchId, id]);
+    await auditedRowMutation(db, {
+      req, action: 'delete', entity: 'branch', entityId: branchId,
+      rootEntity: 'organization', rootEntityId: id, description: 'Eliminó sucursal',
+      run: async (conn, before) => {
+        if (!before || Number(before.org_id) !== id) throw Object.assign(new Error('No encontrado'), { statusCode: 404 });
+        await conn.query('DELETE FROM org_branches WHERE id = ? AND org_id = ?', [branchId, id]);
+      },
+    });
     res.json({ ok: true });
   } catch (e) {
     console.error('[organizations:branches:delete]', e);
@@ -1007,12 +1026,14 @@ router.patch('/:id', requireAuth, async (req, res) => {
     sets.push('updated_at = NOW()');
     params.push(id);
 
-    const [r] = await db.query(
-      `UPDATE organizations SET ${sets.join(', ')} WHERE id = ?`,
-      params
-    );
-    if (r.affectedRows === 0)
-      return res.status(404).json({ error: 'No encontrado' });
+    await auditedRowMutation(db, {
+      req, action: 'update', entity: 'organization', entityId: Number(id),
+      description: 'Actualizó organización',
+      run: async (conn, before) => {
+        if (!before) throw Object.assign(new Error('No encontrado'), { statusCode: 404 });
+        await conn.query(`UPDATE organizations SET ${sets.join(', ')} WHERE id = ?`, params);
+      },
+    });
 
     const [[row]] = await db.query(
       `
@@ -1029,6 +1050,10 @@ router.patch('/:id', requireAuth, async (req, res) => {
         o.zone_id, o.department,
         o.latitude, o.longitude, o.maps_url,
         o.created_at, o.updated_at,
+      run: async (conn, before) => {
+        if (!before) throw Object.assign(new Error('No encontrado'), { statusCode: 404 });
+        await conn.query('DELETE FROM organizations WHERE id = ?', [id]);
+      },
         o.budget_status, o.budget_profit AS budget_profit_value,
         u.name AS owner_user_name,
         u.email AS owner_user_email,
@@ -1044,19 +1069,10 @@ router.patch('/:id', requireAuth, async (req, res) => {
       [id]
     );
 
-    await logAudit({
-      req,
-      action: 'update',
-      entity: 'organization',
-      entityId: Number(id),
-      description: 'Actualizó organización',
-      meta: { patch: req.body },
-    });
-
     res.json(row);
   } catch (e) {
     console.error('[organizations:patch]', e);
-    res.status(400).json({ error: 'Update failed' });
+    res.status(e.statusCode || 400).json({ error: e.message || 'Update failed' });
   }
 });
 
@@ -1064,22 +1080,15 @@ router.patch('/:id', requireAuth, async (req, res) => {
 router.delete('/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const [r] = await db.query(`DELETE FROM organizations WHERE id = ?`, [id]);
-    if (r.affectedRows === 0)
-      return res.status(404).json({ error: 'No encontrado' });
-
-    await logAudit({
-      req,
-      action: 'delete',
-      entity: 'organization',
-      entityId: Number(id),
+    await auditedRowMutation(db, {
+      req, action: 'delete', entity: 'organization', entityId: Number(id),
       description: 'Eliminó organización',
     });
 
     res.json({ ok: true });
   } catch (e) {
     console.error('[organizations:delete]', e);
-    res.status(400).json({ error: 'Delete failed' });
+    res.status(e.statusCode || 400).json({ error: e.message || 'Delete failed' });
   }
 });
 

@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import { pool } from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
-import { logAudit } from '../services/audit.js';
+import { logAudit, auditedRowMutation, auditSnapshot, recordAuditChange } from '../services/audit.js';
 import { ensureDealBudgetStateSchema } from '../services/dealBudgetState.js';
 
 import multer from 'multer';
@@ -637,6 +637,7 @@ router.post('/:id/mark-not-closed', requireAuth, async (req, res) => {
       await conn.rollback();
       return res.status(409).json({ error: 'No se puede marcar como no cerrada una operación con factura de venta emitida' });
     }
+    const before = await auditSnapshot(conn, 'deal', dealId);
 
     await conn.query(
       `UPDATE deals
@@ -656,15 +657,12 @@ router.post('/:id/mark-not-closed', requireAuth, async (req, res) => {
        VALUES (?, 'lost', ?, ?, ?, ?)`,
       [dealId, reasonCategory, reasonDetail, result.deal.stage_id || null, req.user?.id || null]
     );
-    await conn.commit();
-    await logAudit({
-      req,
-      action: 'mark_not_closed',
-      entity: 'deal',
-      entityId: dealId,
-      description: `Marcó la operación ${result.deal.reference || dealId} como no cerrada`,
-      meta: { reason_category: reasonCategory, reason_detail: reasonDetail },
+    await recordAuditChange(conn, {
+      req, action: 'mark_not_closed', entity: 'deal', entityId: dealId, before,
+      after: await auditSnapshot(conn, 'deal', dealId),
+      description: 'Marcó operación como no cerrada',
     });
+    await conn.commit();
     res.json({ ok: true, commercial_outcome: 'lost' });
   } catch (error) {
     await conn.rollback();
@@ -700,6 +698,7 @@ router.post('/:id/reopen-commercial', requireAuth, async (req, res) => {
       await conn.rollback();
       return res.status(400).json({ error: 'La etapa seleccionada no pertenece al pipeline de la operación' });
     }
+    const before = await auditSnapshot(conn, 'deal', dealId);
 
     await conn.query(
       `UPDATE deals
@@ -717,15 +716,12 @@ router.post('/:id/reopen-commercial', requireAuth, async (req, res) => {
        VALUES (?, 'reopened', ?, ?, ?)`,
       [dealId, result.deal.stage_id || null, stageId, req.user?.id || null]
     );
-    await conn.commit();
-    await logAudit({
-      req,
-      action: 'reopen_commercial',
-      entity: 'deal',
-      entityId: dealId,
-      description: `Rehabilitó la operación ${result.deal.reference || dealId}`,
-      meta: { from_stage_id: result.deal.stage_id || null, to_stage_id: stageId },
+    await recordAuditChange(conn, {
+      req, action: 'reopen_commercial', entity: 'deal', entityId: dealId, before,
+      after: await auditSnapshot(conn, 'deal', dealId),
+      description: 'Rehabilitó operación',
     });
+    await conn.commit();
     res.json({ ok: true, commercial_outcome: 'active', stage_id: stageId });
   } catch (error) {
     await conn.rollback();
@@ -864,33 +860,31 @@ router.post('/:id/custom-fields', requireAuth, async (req, res) => {
     );
 
     if (exists.length) {
-      await pool.query(
-        'UPDATE deal_custom_fields SET label = COALESCE(?, label), `type` = COALESCE(?, `type`), `value` = ? WHERE id = ?',
-        [label ?? null, type ?? null, value ?? null, exists[0].id]
-      );
-      const [row] = await pool.query('SELECT * FROM deal_custom_fields WHERE id = ?', [exists[0].id]);
-
-      await logAudit({
+      const { after } = await auditedRowMutation(pool, {
         req, action: 'update', entity: 'deal_custom_field', entityId: exists[0].id,
-        description: `Actualizó custom field (${key}) en OP ${id}`,
-        meta: { deal_id: Number(id), key, value, label, type }
+        rootEntity: 'deal', rootEntityId: Number(id), description: `Actualizó campo ${key}`,
+        run: async (conn, before) => {
+          if (!before || Number(before.deal_id) !== Number(id)) throw new Error('Campo no encontrado');
+          await conn.query(
+            'UPDATE deal_custom_fields SET label = COALESCE(?, label), `type` = COALESCE(?, `type`), `value` = ? WHERE id = ?',
+            [label ?? null, type ?? null, value ?? null, exists[0].id]
+          );
+        },
       });
-
-      return res.status(200).json(row[0]);
+      return res.status(200).json(after);
     } else {
-      const [ins] = await pool.query(
-        'INSERT INTO deal_custom_fields (deal_id, `key`, label, `type`, `value`) VALUES (?,?,?,?,?)',
-        [id, key, label ?? null, type ?? null, value ?? null]
-      );
-      const [row] = await pool.query('SELECT * FROM deal_custom_fields WHERE id = ?', [ins.insertId]);
-
-      await logAudit({
-        req, action: 'create', entity: 'deal_custom_field', entityId: ins.insertId,
-        description: `Creó custom field (${key}) en OP ${id}`,
-        meta: { deal_id: Number(id), key, value, label, type }
+      const { after } = await auditedRowMutation(pool, {
+        req, action: 'create', entity: 'deal_custom_field',
+        rootEntity: 'deal', rootEntityId: Number(id), description: `Creó campo ${key}`,
+        run: async (conn) => {
+          const [insert] = await conn.query(
+            'INSERT INTO deal_custom_fields (deal_id, `key`, label, `type`, `value`) VALUES (?,?,?,?,?)',
+            [id, key, label ?? null, type ?? null, value ?? null]
+          );
+          return insert;
+        },
       });
-
-      return res.status(201).json(row[0]);
+      return res.status(201).json(after);
     }
   } catch (e) {
     console.error('[custom-fields][POST]', e?.message || e);
@@ -918,17 +912,15 @@ router.put('/:id/custom-fields/:cfId', requireAuth, async (req, res) => {
 
     if (!sets.length) return res.status(400).json({ error: 'Nada para actualizar' });
 
-    await pool.query(`UPDATE deal_custom_fields SET ${sets.join(', ')} WHERE id = ?`, [...params, cfId]);
-
-    const [[row]] = await pool.query('SELECT * FROM deal_custom_fields WHERE id = ?', [cfId]);
-
-    await logAudit({
+    const { after } = await auditedRowMutation(pool, {
       req, action: 'update', entity: 'deal_custom_field', entityId: Number(cfId),
-      description: `Actualizó custom field (${exists.key}) en OP ${id}`,
-      meta: { deal_id: Number(id), ...req.body }
+      rootEntity: 'deal', rootEntityId: Number(id), description: `Actualizó campo ${exists.key}`,
+      run: async (conn, before) => {
+        if (!before || Number(before.deal_id) !== Number(id)) throw new Error('Campo no encontrado');
+        await conn.query(`UPDATE deal_custom_fields SET ${sets.join(', ')} WHERE id = ?`, [...params, cfId]);
+      },
     });
-
-    res.json(row);
+    res.json(after);
   } catch (e) {
     console.error('[custom-fields][PUT]', e?.message || e);
     res.status(500).json({ error: 'No se pudo actualizar el custom field' });
@@ -940,18 +932,23 @@ router.post('/:id/files', requireAuth, upload.single('file'), async (req, res) =
   try {
     const { id } = req.params;
     const { type } = req.body;
-    if (!type) return res.status(400).json({ error: 'Falta type' });
+    if (!type) {
+      if (req.file?.path) fs.unlink(req.file.path, () => {});
+      return res.status(400).json({ error: 'Falta type' });
+    }
     if (!req.file) return res.status(400).json({ error: 'Falta file' });
 
     const relUrl = `/uploads/deals/${id}/${req.file.filename}`;
-    const [ins] = await pool.query(
-      `INSERT INTO deal_files (deal_id, type, filename, url) VALUES (?,?,?,?)`,
-      [id, type, req.file.filename, relUrl]
-    );
-
-    await logAudit({
-      req, action: 'upload', entity: 'deal_file', entityId: ins.insertId,
-      description: `Archivo subido a OP ${id}`, meta: { type, filename: req.file.filename }
+    const { result: ins } = await auditedRowMutation(pool, {
+      req, action: 'create', entity: 'deal_file',
+      rootEntity: 'deal', rootEntityId: Number(id), description: 'Agregó archivo',
+      run: async (conn) => {
+        const [insert] = await conn.query(
+          'INSERT INTO deal_files (deal_id, type, filename, url) VALUES (?,?,?,?)',
+          [id, type, req.file.filename, relUrl]
+        );
+        return insert;
+      },
     });
 
     res.json({
@@ -963,6 +960,7 @@ router.post('/:id/files', requireAuth, upload.single('file'), async (req, res) =
       created_at: new Date().toISOString()
     });
   } catch (e) {
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
     console.error(e);
     res.status(500).json({ error: 'No se pudo subir el archivo' });
   }
@@ -1031,15 +1029,16 @@ router.delete('/:id/files/:fileId', requireAuth, async (req, res) => {
 
     const filename = rows[0].filename;
 
-    const abs = path.resolve('uploads', 'deals', String(id), filename);
-    try { fs.unlinkSync(abs); } catch (_) {}
-
-    await pool.query('DELETE FROM deal_files WHERE id = ?', [fileId]);
-
-    await logAudit({
-      req, action: 'delete', entity: 'deal_file', entityId: fileId,
-      description: `Archivo eliminado de OP ${id}`, meta: { filename }
+    await auditedRowMutation(pool, {
+      req, action: 'delete', entity: 'deal_file', entityId: Number(fileId),
+      rootEntity: 'deal', rootEntityId: Number(id), description: 'Eliminó archivo',
+      run: async (conn, before) => {
+        if (!before || Number(before.deal_id) !== Number(id)) throw new Error('Archivo no encontrado');
+        await conn.query('DELETE FROM deal_files WHERE id = ?', [fileId]);
+      },
     });
+    const abs = path.resolve('uploads', 'deals', String(id), filename);
+    fs.unlink(abs, () => {});
 
     res.json({ ok: true });
   } catch (e) {
@@ -1125,6 +1124,7 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     let orgId = null;
+    let orgBefore = null;
     if (org_id_body) {
       orgId = org_id_body;
       const [[existingOrganization]] = await conn.query(
@@ -1134,6 +1134,7 @@ router.post('/', requireAuth, async (req, res) => {
       if (!existingOrganization) {
         throw Object.assign(new Error('La organización seleccionada no existe'), { statusCode: 400 });
       }
+      orgBefore = await auditSnapshot(conn, 'organization', orgId, true);
       if (org_name || org_ruc) {
         await conn.query(
           'UPDATE organizations SET name = COALESCE(NULLIF(?, \'\'), name), razon_social = COALESCE(NULLIF(?, \'\'), razon_social), ruc = COALESCE(NULLIF(?, \'\'), ruc), email = COALESCE(NULLIF(?, \'\'), email), phone = COALESCE(NULLIF(?, \'\'), phone), updated_at = NOW() WHERE id = ?',
@@ -1157,6 +1158,7 @@ router.post('/', requireAuth, async (req, res) => {
           );
       if (orgRows.length) {
         orgId = orgRows[0].id;
+        orgBefore = await auditSnapshot(conn, 'organization', orgId, true);
         if (org_ruc) {
           await conn.query(
             'UPDATE organizations SET ruc = ?, updated_at = NOW() WHERE id = ?',
@@ -1177,6 +1179,7 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     let contactId = null;
+    let contactBefore = null;
     if (contact_id_body) {
       contactId = contact_id_body;
       const [[existingContact]] = await conn.query(
@@ -1186,6 +1189,7 @@ router.post('/', requireAuth, async (req, res) => {
       if (!existingContact) {
         throw Object.assign(new Error('El contacto seleccionado no existe'), { statusCode: 400 });
       }
+      contactBefore = await auditSnapshot(conn, 'contact', contactId, true);
       await conn.query(
         'UPDATE contacts SET name = ?, email = ?, phone = ?, org_id = ? WHERE id = ?',
         [contact_name, contact_email, contact_phone, orgId, contactId]
@@ -1197,6 +1201,7 @@ router.post('/', requireAuth, async (req, res) => {
       );
       if (cRows.length) {
         contactId = cRows[0].id;
+        contactBefore = await auditSnapshot(conn, 'contact', contactId, true);
         await conn.query(
           'UPDATE contacts SET email = ?, phone = ? WHERE id = ?',
           [contact_email, contact_phone, contactId]
@@ -1329,28 +1334,34 @@ router.post('/', requireAuth, async (req, res) => {
     await upsertCF('vol_m3',          'Vol m³',           'text',   hints.vol_m3);
     await upsertCF('tipo_operacion',  'Tipo de operación','select', hints.tipo_operacion);
 
-    await conn.commit();
-
-    await logAudit({
-      req,
-      action: 'create',
-      entity: 'deal',
-      entityId: newId,
+    if (orgId) {
+      await recordAuditChange(conn, {
+        req, action: orgBefore ? 'update' : 'create', entity: 'organization', entityId: orgId,
+        before: orgBefore, after: await auditSnapshot(conn, 'organization', orgId),
+        description: 'Datos de organización guardados desde nueva operación',
+      });
+    }
+    if (contactId) {
+      await recordAuditChange(conn, {
+        req, action: contactBefore ? 'update' : 'create', entity: 'contact', entityId: contactId,
+        before: contactBefore, after: await auditSnapshot(conn, 'contact', contactId),
+        description: 'Datos de contacto guardados desde nueva operación',
+      });
+    }
+    await recordAuditChange(conn, {
+      req, action: 'create', entity: 'deal', entityId: newId,
+      after: await auditSnapshot(conn, 'deal', newId),
       description: `Creó la operación ${reference}`,
-      meta: {
-        pipeline_id,
-        stage_id,
-        business_unit_id,
-        org_id: orgId,
-        org_branch_id: org_branch_id_body,
-        contact_id: contactId,
-        advisor_user_id: dealAdvisorId,
-        created_by_user_id: createdById,
-        seeded_cf: Object.keys(hints).filter(
-          k => (hints[k] ?? '').toString().trim() !== ''
-        )
-      }
     });
+    const [seededFields] = await conn.query('SELECT * FROM deal_custom_fields WHERE deal_id = ?', [newId]);
+    for (const field of seededFields) {
+      await recordAuditChange(conn, {
+        req, action: 'create', entity: 'deal_custom_field', entityId: field.id,
+        rootEntity: 'deal', rootEntityId: newId, after: field,
+        description: 'Creó campo de operación',
+      });
+    }
+    await conn.commit();
 
     res.status(201).json({
       id: newId,
@@ -1389,6 +1400,11 @@ router.patch('/:id', requireAuth, async (req, res) => {
 
   try {
     await conn.beginTransaction();
+    const before = await auditSnapshot(conn, 'deal', id, true);
+    if (!before) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Operación no encontrada' });
+    }
 
     if (stage_id !== undefined) {
       const [[stageMove]] = await conn.query(
@@ -1463,15 +1479,13 @@ router.patch('/:id', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'No tienes permiso para modificar esta operación' });
     }
 
-    await conn.commit();
-
-    await logAudit({
-      req, action: 'update', entity: 'deal', entityId: Number(id),
-      description: promotedToOperation
-        ? `Convirtió prospecto ${id} en operación ${promotedReference}`
-        : `Actualizó operación ${id}`,
-      meta: { ...req.body, promoted_to_operation: promotedToOperation, reference: promotedReference || undefined }
+    await recordAuditChange(conn, {
+      req, action: promotedToOperation ? 'convert' : 'update',
+      entity: 'deal', entityId: Number(id), before,
+      after: await auditSnapshot(conn, 'deal', id),
+      description: promotedToOperation ? 'Convirtió prospecto en operación' : 'Actualizó operación',
     });
+    await conn.commit();
 
     res.json({ ok: true, promoted_to_operation: promotedToOperation, reference: promotedReference || undefined });
   } catch (e) {

@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { pool } from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
+import { auditSnapshot, recordAuditChange } from '../services/audit.js';
 
 const router = Router();
 
@@ -118,20 +119,37 @@ router.patch('/:id', requireAuth, async (req, res) => {
 router.delete('/:id', requireAuth, async (req, res) => {
   const { id } = req.params;
   const { target_stage_id = null } = req.query; // opcional: mover deals
-
-  const [[st]] = await pool.query('SELECT id, pipeline_id FROM stages WHERE id = ? LIMIT 1', [id]);
-  if (!st) return res.status(404).json({ error: 'Stage no encontrado' });
-
-  const [[cnt]] = await pool.query('SELECT COUNT(*) AS c FROM deals WHERE stage_id = ?', [id]);
-  if (cnt.c > 0) {
-    if (!target_stage_id) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[st]] = await conn.query('SELECT id, pipeline_id FROM stages WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
+    if (!st) { await conn.rollback(); return res.status(404).json({ error: 'Stage no encontrado' }); }
+    const [deals] = await conn.query('SELECT id FROM deals WHERE stage_id = ? FOR UPDATE', [id]);
+    if (deals.length && !target_stage_id) {
+      await conn.rollback();
       return res.status(409).json({ error: 'Etapa con operaciones, indique target_stage_id para mover' });
     }
-    await pool.query('UPDATE deals SET stage_id = ? WHERE stage_id = ?', [target_stage_id, id]);
+    const before = new Map();
+    for (const deal of deals) before.set(deal.id, await auditSnapshot(conn, 'deal', deal.id));
+    if (deals.length) {
+      await conn.query('UPDATE deals SET stage_id = ? WHERE stage_id = ?', [target_stage_id, id]);
+      for (const deal of deals) {
+        await recordAuditChange(conn, {
+          req, action: 'update', entity: 'deal', entityId: deal.id,
+          before: before.get(deal.id), after: await auditSnapshot(conn, 'deal', deal.id),
+          description: 'Cambió etapa por eliminación de etapa anterior',
+        });
+      }
+    }
+    await conn.query('DELETE FROM stages WHERE id = ?', [id]);
+    await conn.commit();
+    res.json({ ok: true });
+  } catch (error) {
+    await conn.rollback();
+    res.status(500).json({ error: 'No se pudo eliminar la etapa.' });
+  } finally {
+    conn.release();
   }
-
-  await pool.query('DELETE FROM stages WHERE id = ?', [id]);
-  res.json({ ok: true });
 });
 
 export default router;

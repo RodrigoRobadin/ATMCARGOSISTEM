@@ -2,6 +2,7 @@
 import { Router } from "express";
 import db from "../services/db.js";
 import { requireAuth, requireAnyRole } from "../middlewares/auth.js";
+import { auditedRowMutation } from "../services/audit.js";
 
 const router = Router();
 let invoiceHasServiceCaseId = null;
@@ -221,10 +222,13 @@ router.patch("/ops/:id/stage", async (req, res) => {
           detail: "No existe la etapa equivalente en service_stages.",
         });
       }
-      await db.query(`UPDATE service_cases SET stage_id = ?, updated_at = NOW() WHERE id = ?`, [
-        serviceStage.id,
-        opId,
-      ]);
+      await auditedRowMutation(db, {
+        req, action: 'update', entity: 'service_case', entityId: opId,
+        description: 'Cambió etapa desde administración',
+        run: async (conn) => {
+          await conn.query('UPDATE service_cases SET stage_id = ?, updated_at = NOW() WHERE id = ?', [serviceStage.id, opId]);
+        },
+      });
       const row = await q1(
         `SELECT
            sc.id,
@@ -263,10 +267,13 @@ router.patch("/ops/:id/stage", async (req, res) => {
     }
 
     // Actualizar etapa
-    await db.query(`UPDATE deals SET stage_id = ?, updated_at = NOW() WHERE id = ?`, [
-      targetStage.id,
-      opId,
-    ]);
+    await auditedRowMutation(db, {
+      req, action: 'update', entity: 'deal', entityId: opId,
+      description: 'Cambió etapa desde administración',
+      run: async (conn) => {
+        await conn.query('UPDATE deals SET stage_id = ?, updated_at = NOW() WHERE id = ?', [targetStage.id, opId]);
+      },
+    });
 
     // Devolver fila actualizada (con in_transit recalculado)
     const row = await q1(

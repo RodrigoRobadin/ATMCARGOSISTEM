@@ -57,6 +57,7 @@ import ContainerBilling from './pages/container/ContainerBilling.jsx';
 import Invoices from './pages/Invoices.jsx';
 import CreditNotes from './pages/CreditNotes.jsx';
 import FollowUpManagement from './pages/FollowUpManagement.jsx';
+import AuditPage from './pages/AuditPage.jsx';
 import SystemCalendar from './pages/SystemCalendar.jsx';
 import InvoiceDetail from './pages/InvoiceDetail.jsx';
 import PurchaseOrders from './pages/PurchaseOrders.jsx';
@@ -87,6 +88,7 @@ const sidebarIcons = {
   service: String.fromCodePoint(0x1F527),
   calendar: String.fromCodePoint(0x1F4C5),
   admin: String.fromCodePoint(0x1F4C4),
+  audit: String.fromCodePoint(0x1F4CB),
   user: String.fromCodePoint(0x1F464),
   params: String.fromCodePoint(0x2699),
   adminOps: String.fromCodePoint(0x1F4C1),
@@ -251,6 +253,7 @@ function Layout({ children }) {
               {canSeeAdminCore && (
                 <>
                   <SideLink to="/admin/users" icon={sidebarIcons.user} label="Usuarios" />
+                  {role === 'admin' && <SideLink to="/audit" icon={sidebarIcons.audit} label="Auditoría" />}
                   <SideLink to="/admin/params" icon={sidebarIcons.params} label="Par\u00e1metros" />
                 </>
               )}
@@ -479,7 +482,8 @@ export default function App() {
                 <Route path="/container/billing" element={<ContainerBilling />} />
 
                 {/* ---- Secciones restringidas a admin/manager ---- */}
-                <Route path="/admin" element={<Navigate to="/followup-management?tab=audit" replace />} />
+                <Route path="/admin" element={<Navigate to="/audit" replace />} />
+                <Route path="/audit" element={<RequireRole allow={['admin']}><AuditPage /></RequireRole>} />
                 <Route
                   path="/admin/users"
                   element={

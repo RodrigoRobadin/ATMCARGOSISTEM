@@ -3,7 +3,7 @@ import multer from 'multer';
 import ExcelJS from 'exceljs';
 import { pool } from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
-import { logAudit } from '../services/audit.js';
+import { logAudit, auditSnapshot, recordAuditChange } from '../services/audit.js';
 import { ensureRoutePlanningSchema, normalizeCityName } from '../services/routePlanning.js';
 
 const router = Router();
@@ -221,22 +221,34 @@ router.post('/locations/import-apply', requireAdmin, async (req, res) => {
       const [[city]] = await connection.query('SELECT id, name, department FROM cities WHERE id = ? AND active = 1', [Number(row.city_id)]);
       if (!city) throw new Error(`Ciudad invalida en fila ${row.row_number || '-'}`);
       if (row.location_type === 'BRANCH') {
+        const before = await auditSnapshot(connection, 'branch', row.branch_id, true);
         const [result] = await connection.query(
           `UPDATE org_branches SET city_id = ?, city = ?, country = ?, maps_url = ?, latitude = ?, longitude = ? WHERE id = ? AND org_id = ?`,
           [city.id, city.name, row.country || 'Paraguay', row.maps_url || null, numberOrNull(row.latitude), numberOrNull(row.longitude), Number(row.branch_id), Number(row.organization_id)]
         );
         if (!result.affectedRows) throw new Error(`Sucursal no encontrada en fila ${row.row_number || '-'}`);
+        await recordAuditChange(connection, {
+          req, action: 'update', entity: 'branch', entityId: Number(row.branch_id),
+          rootEntity: 'organization', rootEntityId: Number(row.organization_id),
+          before, after: await auditSnapshot(connection, 'branch', row.branch_id),
+          description: 'Actualizó ubicación desde Excel',
+        });
       } else {
+        const before = await auditSnapshot(connection, 'organization', row.organization_id, true);
         const [result] = await connection.query(
           `UPDATE organizations SET city_id = ?, city = ?, department = ?, country = ?, maps_url = ?, latitude = ?, longitude = ?, updated_at = NOW() WHERE id = ? AND deleted_at IS NULL`,
           [city.id, city.name, row.department || city.department || null, row.country || 'Paraguay', row.maps_url || null, numberOrNull(row.latitude), numberOrNull(row.longitude), Number(row.organization_id)]
         );
         if (!result.affectedRows) throw new Error(`Organizacion no encontrada en fila ${row.row_number || '-'}`);
+        await recordAuditChange(connection, {
+          req, action: 'update', entity: 'organization', entityId: Number(row.organization_id),
+          before, after: await auditSnapshot(connection, 'organization', row.organization_id),
+          description: 'Actualizó ubicación desde Excel',
+        });
       }
       updated += 1;
     }
     await connection.commit();
-    await logAudit({ req, action: 'bulk_update', entity: 'organization_location', description: `Actualizo ${updated} ubicaciones desde Excel`, meta: { updated } });
     res.json({ updated });
   } catch (error) {
     await connection.rollback();

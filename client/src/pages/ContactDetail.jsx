@@ -4,6 +4,7 @@ import { useParams, Link } from 'react-router-dom';
 import { api } from '../api';
 import { attachContactToAssistant } from '../utils/assistantContext';
 import OrganizationEngagementPanel from '../components/OrganizationEngagementPanel.jsx';
+import AuditHistory from '../components/AuditHistory.jsx';
 
 function FieldRow({ label, value, children }) {
   return (
@@ -167,6 +168,8 @@ export default function ContactDetail() {
           </div>
         </div>
       </header>
+
+      <AuditHistory entity="contact" id={id} />
 
       <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[400px_minmax(0,1fr)]">
         <aside className="space-y-3 lg:max-h-[calc(100vh-155px)] lg:overflow-y-auto lg:pr-1">

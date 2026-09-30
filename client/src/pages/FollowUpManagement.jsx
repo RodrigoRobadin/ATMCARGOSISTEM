@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../auth.jsx';
-import AdminActivity from './AdminActivity.jsx';
 import VisitForm from '../components/visits/VisitForm.jsx';
 import VisitsList from '../components/visits/VisitsList.jsx';
 import RoutesList from '../components/routes/RoutesList.jsx';
@@ -245,7 +244,8 @@ export default function FollowUpManagement() {
   const isAdmin = String(user?.role || '').toLowerCase() === 'admin';
   const requestedTab = searchParams.get('tab') || 'summary';
   const selectedTaskId = Number(searchParams.get('task_id') || 0);
-  const availableTabs = useMemo(() => isAdmin ? [...TABS, ['audit', 'Auditoria']] : TABS, [isAdmin]);
+  const availableTabs = TABS;
+  useEffect(() => { if (requestedTab === 'audit' && isAdmin) navigate('/audit', { replace: true }); }, [requestedTab, isAdmin, navigate]);
   const tab = availableTabs.some(([key]) => key === requestedTab) ? requestedTab : 'summary';
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -267,8 +267,6 @@ export default function FollowUpManagement() {
   const [filters, setFilters] = useState({ from: monthStart(), to: dateOnly(new Date()), q: '', outcome: '', status: '', source: '', task_status: '', org_id: '', contact_id: '', deal_id: '' });
   const [callsOffset, setCallsOffset] = useState(0);
   const callsLimit = 100;
-  const [auditRows, setAuditRows] = useState([]);
-  const [auditFilters, setAuditFilters] = useState({ action: '', entity: '', since: '' });
   const now = new Date();
   const [goalYear, setGoalYear] = useState(now.getFullYear());
   const [goalMonth, setGoalMonth] = useState(now.getMonth() + 1);
@@ -328,17 +326,6 @@ export default function FollowUpManagement() {
     }).catch(() => setGoalForm({ target_prospects: '', target_contacts: '', target_pipeline_amount: '' }));
   }, [tab, goalYear, goalMonth, isAdmin, userId]);
 
-  async function loadAudit() {
-    if (!isAdmin) return;
-    const params = { limit: 300 };
-    if (auditFilters.action) params.action = auditFilters.action;
-    if (auditFilters.entity) params.entity = auditFilters.entity;
-    if (auditFilters.since) params.from = auditFilters.since;
-    if (userId) params.user_id = userId;
-    const { data } = await api.get('/audit', { params });
-    setAuditRows(data || []);
-  }
-  useEffect(() => { if (tab === 'audit') loadAudit().catch(() => setAuditRows([])); }, [tab, userId]);
 
   function selectTab(next) {
     const params = new URLSearchParams(searchParams);
@@ -510,7 +497,6 @@ export default function FollowUpManagement() {
 
       {!loading && tab === 'visits' ? <div className="space-y-6"><SystemCalendar embedded /><section className="space-y-4 border-t pt-5"><div><h2 className="text-lg font-semibold">Gestion de visitas comerciales</h2><p className="text-sm text-slate-500">Programa visitas y consulta su seguimiento sin salir del calendario general.</p></div><VisitForm orgs={orgs} contacts={contacts} onSuccess={load} /><VisitsList visits={visits} onRefresh={load} orgs={orgs} contacts={contacts} /></section></div> : null}
       {!loading && tab === 'routes' ? <RoutesList userId={isAdmin ? userId : ''} onSelectRoute={() => {}} /> : null}
-      {!loading && tab === 'audit' && isAdmin ? <div className="space-y-5"><AdminActivity /><section className="border bg-white"><div className="flex flex-wrap items-end gap-2 border-b p-4"><b className="mr-auto">Historial de auditoria</b><input placeholder="Accion" value={auditFilters.action} onChange={(e)=>setAuditFilters({...auditFilters,action:e.target.value})} className="rounded border px-2 py-1.5 text-sm" /><input placeholder="Entidad" value={auditFilters.entity} onChange={(e)=>setAuditFilters({...auditFilters,entity:e.target.value})} className="rounded border px-2 py-1.5 text-sm" /><input type="date" value={auditFilters.since} onChange={(e)=>setAuditFilters({...auditFilters,since:e.target.value})} className="rounded border px-2 py-1.5 text-sm" /><button onClick={()=>loadAudit()} className="rounded border px-3 py-1.5 text-sm">Aplicar</button></div><div className="overflow-auto"><table className="min-w-[900px] w-full text-sm"><thead className="bg-slate-100"><tr><th className="px-3 py-2 text-left">Fecha</th><th className="px-3 py-2 text-left">Usuario</th><th className="px-3 py-2 text-left">Accion</th><th className="px-3 py-2 text-left">Entidad</th><th className="px-3 py-2 text-left">Detalle</th></tr></thead><tbody>{auditRows.map((row)=><tr key={row.id} className="border-t"><td className="px-3 py-2">{formatDate(row.created_at)}</td><td className="px-3 py-2">{row.user_name||row.user_id||'-'}</td><td className="px-3 py-2">{row.action}</td><td className="px-3 py-2">{row.entity} #{row.entity_id||'-'}</td><td className="px-3 py-2">{row.description||'-'}</td></tr>)}</tbody></table></div></section></div> : null}
 
       {callForm ? <CallForm call={callForm.id ? callForm : null} orgs={orgs} contacts={contacts} deals={deals} onClose={()=>setCallForm(null)} onSaved={load} /> : null}
       {historyCall ? <HistoryDrawer call={historyCall} onClose={()=>setHistoryCall(null)} /> : null}

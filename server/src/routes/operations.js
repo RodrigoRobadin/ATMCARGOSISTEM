@@ -3,7 +3,7 @@ import { Router } from 'express';
 import db from '../services/db.js';
 
 import { requireAuth, requireRole } from '../middlewares/auth.js';
-import { logAudit } from '../services/audit.js';
+import { logAudit, auditedRowMutation } from '../services/audit.js';
 
 const router = Router();
 const toNull = (v) => (v === '' || typeof v === 'undefined' ? null : v);
@@ -95,7 +95,10 @@ router.post('/', requireAuth, async (req, res) => {
     const rs = String(razon_social || '').trim() || String(name || '').trim();
     if (!rs) return res.status(400).json({ error: 'razon_social es requerido' });
 
-    const [ins] = await db.query(
+    const { result: ins } = await auditedRowMutation(db, {
+      req, action: 'create', entity: 'organization', description: 'Creó organización desde operaciones',
+      run: async (conn) => {
+        const [insert] = await conn.query(
       `
       INSERT INTO organizations
         (razon_social, name, industry, phone, website, ruc, address, city, country, notes,
@@ -130,7 +133,10 @@ router.post('/', requireAuth, async (req, res) => {
         operacion,
         hoja_ruta,
       ]
-    );
+        );
+        return insert;
+      },
+    });
 
     const [[row]] = await db.query(
       `
@@ -149,15 +155,6 @@ router.post('/', requireAuth, async (req, res) => {
       `,
       [ins.insertId]
     );
-
-    await logAudit({
-      req,
-      action: 'create',
-      entity: 'organization',
-      entityId: row.id,
-      description: `Creó organización ${row.name}`,
-      meta: { payload: req.body },
-    });
 
     res.status(201).json(row);
   } catch (e) {
@@ -906,12 +903,14 @@ router.patch('/:id', requireAuth, async (req, res) => {
     sets.push('updated_at = NOW()');
     params.push(id);
 
-    const [r] = await db.query(
-      `UPDATE organizations SET ${sets.join(', ')} WHERE id = ?`,
-      params
-    );
-    if (r.affectedRows === 0)
-      return res.status(404).json({ error: 'No encontrado' });
+    await auditedRowMutation(db, {
+      req, action: 'update', entity: 'organization', entityId: Number(id),
+      description: 'Actualizó organización desde operaciones',
+      run: async (conn, before) => {
+        if (!before) throw Object.assign(new Error('No encontrado'), { statusCode: 404 });
+        await conn.query(`UPDATE organizations SET ${sets.join(', ')} WHERE id = ?`, params);
+      },
+    });
 
     const [[row]] = await db.query(
       `
@@ -931,15 +930,6 @@ router.patch('/:id', requireAuth, async (req, res) => {
       [id]
     );
 
-    await logAudit({
-      req,
-      action: 'update',
-      entity: 'organization',
-      entityId: Number(id),
-      description: 'Actualizó organización',
-      meta: { patch: req.body },
-    });
-
     res.json(row);
   } catch (e) {
     console.error('[organizations:patch]', e);
@@ -951,16 +941,13 @@ router.patch('/:id', requireAuth, async (req, res) => {
 router.delete('/:id', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const [r] = await db.query(`DELETE FROM organizations WHERE id = ?`, [id]);
-    if (r.affectedRows === 0)
-      return res.status(404).json({ error: 'No encontrado' });
-
-    await logAudit({
-      req,
-      action: 'delete',
-      entity: 'organization',
-      entityId: Number(id),
-      description: 'Eliminó organización',
+    await auditedRowMutation(db, {
+      req, action: 'delete', entity: 'organization', entityId: Number(id),
+      description: 'Eliminó organización desde operaciones',
+      run: async (conn, before) => {
+        if (!before) throw Object.assign(new Error('No encontrado'), { statusCode: 404 });
+        await conn.query('DELETE FROM organizations WHERE id = ?', [id]);
+      },
     });
 
     res.json({ ok: true });

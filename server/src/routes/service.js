@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { pool } from '../services/db.js';
 import { requireAuth, requireAnyRole } from '../middlewares/auth.js';
+import { auditedRowMutation, auditSnapshot, recordAuditChange } from '../services/audit.js';
 import computeQuoteDefault, { computeQuote as computeQuoteNamed } from '../services/quoteEngine.js';
 import { buildQuoteXlsxBuffer } from '../services/quoteXlsxTemplate.js';
 import puppeteer from 'puppeteer-core';
@@ -513,14 +514,16 @@ function normalizeInputs(body = {}) {
   return body?.inputs || body || {};
 }
 
-async function syncServiceCaseBranch(serviceCaseId, orgBranchId) {
+async function syncServiceCaseBranch(serviceCaseId, orgBranchId, req) {
   if (!serviceCaseId) return;
   const branchVal = orgBranchId == null || orgBranchId === '' ? null : Number(orgBranchId);
-  try {
-    await pool.query('UPDATE service_cases SET org_branch_id = ? WHERE id = ?', [branchVal, serviceCaseId]);
-  } catch (e) {
-    console.error('[service][branch] No se pudo actualizar sucursal:', e?.message || e);
-  }
+  await auditedRowMutation(pool, {
+    req, action: 'update', entity: 'service_case', entityId: serviceCaseId,
+    description: 'Actualizó sucursal del servicio',
+    run: async (conn) => {
+      await conn.query('UPDATE service_cases SET org_branch_id = ? WHERE id = ?', [branchVal, serviceCaseId]);
+    },
+  });
 }
 
 function asJson(v) {
@@ -1439,15 +1442,23 @@ router.post('/cases', requireAuth, requireAnyRole('admin', 'service'), async (re
     return null;
   })();
   const resolvedBranchId = org_branch_id || branchFromDoors || null;
-  const [result] = await pool.query(
-    `INSERT INTO service_cases
-     (reference, door_id, org_id, org_branch_id, pipeline_id, stage_id, status, assigned_to, scheduled_date)
-     VALUES (?, ?, ?, ?, 1, ?, 'abierto', ?, ?)`,
-    [reference, primaryDoorId, orgId, resolvedBranchId, useStage, assigned_to || null, scheduled_date || null]
-  );
+  const { result } = await auditedRowMutation(pool, {
+    req, action: 'create', entity: 'service_case', description: `Creó servicio ${reference}`,
+    run: async (conn) => {
+      const [insert] = await conn.query(
+        `INSERT INTO service_cases
+         (reference, door_id, org_id, org_branch_id, pipeline_id, stage_id, status, assigned_to, scheduled_date)
+         VALUES (?, ?, ?, ?, 1, ?, 'abierto', ?, ?)`,
+        [reference, primaryDoorId, orgId, resolvedBranchId, useStage, assigned_to || null, scheduled_date || null]
+      );
+      await conn.query(
+        'INSERT IGNORE INTO service_case_doors (service_case_id, door_id) VALUES ?',
+        [doors.map((door) => [insert.insertId, door.id])]
+      );
+      return insert;
+    },
+  });
   const caseId = result.insertId;
-  const values = doors.map((d) => [caseId, d.id]);
-  await pool.query('INSERT IGNORE INTO service_case_doors (service_case_id, door_id) VALUES ?', [values]);
   await insertServiceHistory(caseId, 'creado', null, null, useStage, req.user?.id || null);
   res.status(201).json({ id: caseId });
 });
@@ -1492,7 +1503,12 @@ router.patch('/cases/:id', requireAuth, requireAnyRole('admin', 'service'), asyn
     parts_actuators,
   } = req.body || {};
 
-  await pool.query(
+  await auditedRowMutation(pool, {
+    req, action: 'update', entity: 'service_case', entityId: id,
+    description: 'Actualizó servicio',
+    run: async (conn, before) => {
+      if (!before) throw new Error('Servicio no encontrado');
+      await conn.query(
     `UPDATE service_cases
         SET status = COALESCE(?, status),
             assigned_to = COALESCE(?, assigned_to),
@@ -1524,27 +1540,30 @@ router.patch('/cases/:id', requireAuth, requireAnyRole('admin', 'service'), asyn
       parts_actuators ?? null,
       id,
     ]
-  );
-
-  if (Array.isArray(door_ids) && door_ids.length) {
-    const ids = door_ids.map((x) => Number(x)).filter(Boolean);
-    if (ids.length) {
-      const [doors] = await pool.query(
-        `SELECT id, org_id FROM client_doors WHERE id IN (${ids.map(() => '?').join(',')})`,
-        ids
       );
-      if (doors.length) {
-        const orgId = doors[0].org_id;
-        const mismatch = doors.some((d) => d.org_id !== orgId);
-        if (!mismatch) {
-          const values = doors.map((d) => [id, d.id]);
-          await pool.query('DELETE FROM service_case_doors WHERE service_case_id = ?', [id]);
-          await pool.query('INSERT IGNORE INTO service_case_doors (service_case_id, door_id) VALUES ?', [values]);
-          await pool.query('UPDATE service_cases SET door_id = ? WHERE id = ?', [doors[0].id, id]);
+      if (Array.isArray(door_ids) && door_ids.length) {
+        const ids = door_ids.map((item) => Number(item)).filter(Boolean);
+        if (ids.length) {
+          const [doors] = await conn.query(
+            `SELECT id, org_id FROM client_doors WHERE id IN (${ids.map(() => '?').join(',')})`,
+            ids
+          );
+          if (doors.length) {
+            const orgId = doors[0].org_id;
+            if (doors.some((door) => door.org_id !== orgId)) {
+              throw new Error('Todas las puertas deben ser de la misma organización');
+            }
+            await conn.query('DELETE FROM service_case_doors WHERE service_case_id = ?', [id]);
+            await conn.query(
+              'INSERT IGNORE INTO service_case_doors (service_case_id, door_id) VALUES ?',
+              [doors.map((door) => [id, door.id])]
+            );
+            await conn.query('UPDATE service_cases SET door_id = ? WHERE id = ?', [doors[0].id, id]);
+          }
         }
       }
-    }
-  }
+    },
+  });
 
   await insertServiceHistory(id, 'actualizado', null, null, null, req.user?.id || null);
   res.json({ ok: true });
@@ -1715,7 +1734,14 @@ router.patch('/cases/:id/stage', requireAuth, requireAnyRole('admin', 'service')
   const id = Number(req.params.id || 0);
   const stage_id = Number(req.body?.stage_id || 0);
   if (!id || !stage_id) return res.status(400).json({ error: 'Datos inválidos' });
-  await pool.query('UPDATE service_cases SET stage_id = ? WHERE id = ?', [stage_id, id]);
+  await auditedRowMutation(pool, {
+    req, action: 'update', entity: 'service_case', entityId: id,
+    description: 'Cambió etapa de servicio',
+    run: async (conn, before) => {
+      if (!before) throw new Error('Servicio no encontrado');
+      await conn.query('UPDATE service_cases SET stage_id = ? WHERE id = ?', [stage_id, id]);
+    },
+  });
   try {
     const [[stageRow]] = await pool.query('SELECT name FROM service_stages WHERE id = ?', [stage_id]);
     const stageName = String(stageRow?.name || '').toLowerCase();
@@ -1820,12 +1846,35 @@ router.post('/cases/:id/custom-fields', requireAuth, requireAnyRole('admin', 'se
   if (!id) return res.status(400).json({ error: 'id invalido' });
   const { key, value } = req.body || {};
   if (!key) return res.status(400).json({ error: 'key requerido' });
-  await pool.query(
-    `INSERT INTO service_case_custom_fields (service_case_id, ` + '`key`' + `, value)
-     VALUES (?, ?, ?)
-     ON DUPLICATE KEY UPDATE value = VALUES(value)`,
-    [id, key, value ?? null]
-  );
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[existing]] = await conn.query(
+      'SELECT id FROM service_case_custom_fields WHERE service_case_id = ? AND `key` = ? FOR UPDATE',
+      [id, key]
+    );
+    const before = existing ? await auditSnapshot(conn, 'service_case_custom_field', existing.id) : null;
+    await conn.query(
+      'INSERT INTO service_case_custom_fields (service_case_id, `key`, value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)',
+      [id, key, value ?? null]
+    );
+    const [[saved]] = await conn.query(
+      'SELECT id FROM service_case_custom_fields WHERE service_case_id = ? AND `key` = ?',
+      [id, key]
+    );
+    const after = await auditSnapshot(conn, 'service_case_custom_field', saved.id);
+    await recordAuditChange(conn, {
+      req, action: before ? 'update' : 'create', entity: 'service_case_custom_field',
+      entityId: saved.id, rootEntity: 'service_case', rootEntityId: id,
+      before, after, description: `Campo de servicio: ${key}`,
+    });
+    await conn.commit();
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
   res.json({ ok: true });
 });
 
@@ -1911,7 +1960,7 @@ router.get('/cases/:caseId/quote', requireAuth, requireAnyRole('admin', 'service
     );
 
     if (caseId) {
-      await syncServiceCaseBranch(caseId, inputs.org_branch_id);
+      await syncServiceCaseBranch(caseId, inputs.org_branch_id, req);
     }
 
     res.json({
@@ -2168,7 +2217,7 @@ router.put('/quotes/:id', requireAuth, requireAnyRole('admin', 'service'), async
     );
 
     if (serviceCaseId) {
-      await syncServiceCaseBranch(serviceCaseId, inputs.org_branch_id);
+      await syncServiceCaseBranch(serviceCaseId, inputs.org_branch_id, req);
     }
 
     res.json({ id, inputs, document_snapshot, computed, compute_error: compute_error || null });

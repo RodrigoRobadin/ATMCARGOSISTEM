@@ -3,7 +3,7 @@ import { Router } from "express";
 import multer from "multer";
 import db from "../services/db.js";
 import { requireAuth } from '../middlewares/auth.js';
-import { logAudit } from '../services/audit.js';
+import { logAudit, auditedRowMutation } from '../services/audit.js';
 import { sendMail } from '../services/mailer.js';
 
 // ✅ Soporta export named o default (evita el error: "does not provide an export named")
@@ -145,14 +145,17 @@ function normalizeInputs(body = {}) {
   return body?.inputs || body || {};
 }
 
-async function syncDealBranch(dealId, orgBranchId) {
+async function syncDealBranch(req, dealId, orgBranchId) {
   if (!dealId) return;
   const branchVal = orgBranchId == null || orgBranchId === '' ? null : Number(orgBranchId);
-  try {
-    await db.query('UPDATE deals SET org_branch_id = ? WHERE id = ?', [branchVal, dealId]);
-  } catch (e) {
-    console.error('[quotes][branch] No se pudo actualizar sucursal:', e?.message || e);
-  }
+  await auditedRowMutation(db, {
+    req, action: 'update', entity: 'deal', entityId: Number(dealId),
+    description: 'Actualizó sucursal desde presupuesto',
+    run: async (conn, before) => {
+      if (!before) throw new Error('Operación no encontrada');
+      await conn.query('UPDATE deals SET org_branch_id = ? WHERE id = ?', [branchVal, dealId]);
+    },
+  });
 }
 
 // ✅ MySQL puede devolver JSON como string según driver/config
@@ -592,7 +595,7 @@ router.post("/quotes", async (req, res) => {
     );
 
     if (deal_id) {
-      await syncDealBranch(deal_id, inputs.org_branch_id);
+      await syncDealBranch(req, deal_id, inputs.org_branch_id);
     }
 
     res.status(201).json({ id: result.insertId, inputs, document_snapshot, computed, compute_error });
@@ -691,7 +694,7 @@ router.put("/quotes/:id", async (req, res) => {
     );
 
     if (deal_id) {
-      await syncDealBranch(deal_id, inputs.org_branch_id);
+      await syncDealBranch(req, deal_id, inputs.org_branch_id);
     }
 
     res.json({ id, inputs, document_snapshot, computed, compute_error });

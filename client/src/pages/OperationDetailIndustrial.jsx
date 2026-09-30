@@ -19,6 +19,7 @@ import IndustrialLogisticsCollections from "../components/op-details/IndustrialL
 import LogisticsAutocomplete from "../components/LogisticsAutocomplete.jsx";
 import { attachOperationToAssistant } from "../utils/assistantContext";
 import OperationFollowupComposer from "../components/OperationFollowupComposer.jsx";
+import AuditHistory from "../components/AuditHistory.jsx";
 import {
   buildQuoteEmailPlainText,
   buildQuoteEmailHtml,
@@ -2092,6 +2093,8 @@ export default function OperationDetailIndustrial() {
           <div className="mt-2 text-xs text-slate-500">Verificando facturas...</div>
         )}
       </div>
+
+      <AuditHistory entity="deal" id={deal.id} />
 
       {/* TABS */}
       <div className="bg-white rounded-2xl shadow px-4 pt-3 pb-0">

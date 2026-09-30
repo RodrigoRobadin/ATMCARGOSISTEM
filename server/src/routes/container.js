@@ -4,6 +4,7 @@ import path from 'path';
 import multer from 'multer';
 import { pool } from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
+import { auditedRowMutation } from '../services/audit.js';
 import generateContainerContractPDF from '../services/containerContractTemplatePdfkit.js';
 
 const router = Router();
@@ -1257,10 +1258,16 @@ router.put('/deals/:dealId', requireAuth, async (req, res) => {
   if (!dealId) return res.status(400).json({ error: 'dealId inválido' });
 
   const containerBuId = await getContainerBusinessUnitId();
-  await pool.query(
-    'UPDATE deals SET business_unit_id = ? WHERE id = ? AND (business_unit_id IS NULL OR business_unit_id = ?)',
-    [containerBuId, dealId, containerBuId]
-  );
+  await auditedRowMutation(pool, {
+    req, action: 'update', entity: 'deal', entityId: dealId,
+    description: 'Asignó unidad ATM Container',
+    run: async (conn) => {
+      await conn.query(
+        'UPDATE deals SET business_unit_id = ? WHERE id = ? AND (business_unit_id IS NULL OR business_unit_id = ?)',
+        [containerBuId, dealId, containerBuId]
+      );
+    },
+  });
 
   const current = await getContainerDeal(dealId);
   if (!current) {
