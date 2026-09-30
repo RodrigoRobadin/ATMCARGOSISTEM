@@ -3698,6 +3698,7 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
       retentionPct,
       currency,
       receivedFrom: receipt.organization_name || invoice.organization_name || '',
+      customerRuc: invoice.customer_doc || receipt.organization_ruc || invoice.organization_ruc || '',
       invoices: rows,
       issuedByName: receipt.issued_by_name || '',
     };
@@ -4567,7 +4568,6 @@ router.get('/credit-notes/:id/pdf', requireAuth, async (req, res) => {
 });
 
 export default router;
-
 
 
 

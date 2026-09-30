@@ -180,8 +180,13 @@ function drawTopInfo(doc, data, y) {
 
 function drawBody(doc, data, y) {
   let cy = y;
-  doc.font('Helvetica-Bold').fontSize(10).fillColor(COLORS.gray).text(`RECIBIMOS DE ${data.receivedFrom || ''}`, M, cy);
-  cy += 20;
+  const receivedFrom = `RECIBIMOS DE ${data.receivedFrom || ''}`;
+  doc.font('Helvetica-Bold').fontSize(10).fillColor(COLORS.gray);
+  const nameHeight = doc.heightOfString(receivedFrom, { width: W });
+  doc.text(receivedFrom, M, cy, { width: W });
+  cy += Math.max(20, nameHeight + 6);
+  doc.font('Helvetica').fontSize(9.5).text(`RUC: ${data.customerRuc || '-'}`, M, cy, { width: W });
+  cy += 18;
   doc.font('Helvetica-Oblique').fontSize(9.5).fillColor(COLORS.gray).text(
     `LA CANTIDAD DE ${data.currency || 'GS'} ${data.amountWords || ''}`,
     M,
@@ -315,6 +320,7 @@ export async function generateReceiptPDF(data, outputStream) {
       }, y);
       y = drawBody(doc, {
         receivedFrom: data.receivedFrom,
+        customerRuc: data.customerRuc,
         amountWords,
         currency: data.currency || 'GS',
       }, y);
