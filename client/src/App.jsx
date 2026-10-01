@@ -31,6 +31,7 @@ import AccountStatement from './pages/AccountStatement.jsx';
 import Payments from './pages/Payments.jsx';
 import AdminExpenses from './pages/AdminExpenses.jsx';
 import AdminFinance from './pages/AdminFinance.jsx';
+import ConfirmedSalesReport from './pages/ConfirmedSalesReport.jsx';
 import OperationalPurchases from './pages/admin/OperationalPurchases.jsx';
 import PaymentOrders from './pages/admin/PaymentOrders.jsx';
 import AccountsPayable from './pages/admin/AccountsPayable.jsx';
@@ -260,6 +261,7 @@ function Layout({ children }) {
               {canSeeFinanceBlock && (
                 <>
                   <SideLink to="/admin/finance" icon={sidebarIcons.finance} label="Gerencia" />
+                  <SideLink to="/sales-report" icon={sidebarIcons.commercial} label="Informe de ventas" />
                   <div>
                     <button
                       type="button"
@@ -508,6 +510,7 @@ export default function App() {
                     </RequireRole>
                   }
                 />
+                <Route path="/sales-report" element={<RequireRole allow={['admin', 'finanzas']}><ConfirmedSalesReport /></RequireRole>} />
                 <Route
                   path="/admin-ops"
                   element={
