@@ -15,6 +15,7 @@ import { attachOperationToAssistant } from "../utils/assistantContext";
 import OperationFollowupComposer from "../components/OperationFollowupComposer.jsx";
 import AuditHistory from "../components/AuditHistory.jsx";
 import CommercialDates from "../components/op-details/CommercialDates.jsx";
+import OperationStageChange from "../components/OperationStageChange.jsx";
 
 // 👇 Ajustá la ruta real según tu backend
 const PROVIDERS_ENDPOINT = "/organizations";
@@ -2787,12 +2788,18 @@ function providerHasFreightTag(p = {}) {
           {/* LADO DERECHO: BOTONES */}
           <div className="flex gap-2 flex-wrap">
             {!editMode ? (
-              <button
-                className="px-3 py-1.5 text-xs rounded-lg border"
-                onClick={() => setEditMode(true)}
-              >
-                Modificar
-              </button>
+              <>
+                <button
+                  className="px-3 py-1.5 text-xs rounded-lg border"
+                  onClick={() => setEditMode(true)}
+                >
+                  Modificar
+                </button>
+                <OperationStageChange
+                  deal={deal}
+                  onChanged={(stage) => setDeal((current) => current ? { ...current, ...stage } : current)}
+                />
+              </>
             ) : (
               <>
                 <button

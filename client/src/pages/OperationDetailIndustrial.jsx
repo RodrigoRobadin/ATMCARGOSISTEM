@@ -21,6 +21,7 @@ import { attachOperationToAssistant } from "../utils/assistantContext";
 import OperationFollowupComposer from "../components/OperationFollowupComposer.jsx";
 import AuditHistory from "../components/AuditHistory.jsx";
 import CommercialDates from "../components/op-details/CommercialDates.jsx";
+import OperationStageChange from "../components/OperationStageChange.jsx";
 import {
   buildQuoteEmailPlainText,
   buildQuoteEmailHtml,
@@ -2104,16 +2105,22 @@ export default function OperationDetailIndustrial() {
 
           <div className="flex gap-2 flex-wrap">
             {!editMode ? (
-              <button
-                className="px-3 py-1.5 text-xs rounded-lg border"
-                onClick={() => {
-                  if (isLocked) return;
-                  setEditMode(true);
-                }}
-                disabled={isLocked}
-              >
-                Modificar
-              </button>
+              <>
+                <button
+                  className="px-3 py-1.5 text-xs rounded-lg border"
+                  onClick={() => {
+                    if (isLocked) return;
+                    setEditMode(true);
+                  }}
+                  disabled={isLocked}
+                >
+                  Modificar
+                </button>
+                <OperationStageChange
+                  deal={deal}
+                  onChanged={(stage) => setDeal((current) => current ? { ...current, ...stage } : current)}
+                />
+              </>
             ) : (
               <>
                 <button
