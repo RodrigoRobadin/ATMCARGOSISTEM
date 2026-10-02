@@ -57,8 +57,7 @@ export async function loadReport(filters) {
       LEFT JOIN organizations o ON o.id = d.org_id
       LEFT JOIN users u ON u.id = d.advisor_user_id
      WHERE bu.key_slug IN ('atm-cargo', 'atm-industrial')
-       AND COALESCE(d.record_type, 'operation') <> 'prospect'
-       AND COALESCE(d.reference, '') NOT LIKE 'PROS-%'
+       AND d.reference REGEXP '^OP-[0-9]+$'
   `);
   const ids = deals.map((deal) => Number(deal.id));
   if (!ids.length) return buildReport([], new Map(), filters);
