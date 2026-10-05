@@ -504,9 +504,21 @@ router.get('/', requireAuth, async (req, res) => {
        COALESCE(ft.completed_tasks_count, 0) AS completed_followup_tasks_count,
        COALESCE(ft.tracked_tasks_count, 0) AS tracked_followup_tasks_count,
        COALESCE(ft.overdue_tasks_count, 0) AS overdue_followup_tasks_count,
+       COALESCE(ft.future_tasks_count, 0) AS future_followup_tasks_count,
        ft.next_task_due_at,
        COALESCE(qs.has_quote, 0) AS has_quote,
        qs.last_quote_at,
+       GREATEST(
+         d.created_at,
+         COALESCE(da.last_activity_at, d.created_at),
+         COALESCE(fn.last_note_at, d.created_at),
+         COALESCE(ft.last_task_work_at, d.created_at),
+         COALESCE(qs.last_saved_quote_at, d.created_at),
+         COALESCE((SELECT MAX(fc.created_at) FROM followup_calls fc WHERE fc.deal_id = d.id), d.created_at),
+         COALESCE((SELECT MAX(df.created_at) FROM deal_files df WHERE df.deal_id = d.id), d.created_at),
+         COALESCE((SELECT MAX(cs.updated_at) FROM deal_cost_sheets cs WHERE cs.deal_id = d.id), d.created_at),
+         COALESCE((SELECT MAX(i.created_at) FROM invoices i WHERE i.deal_id = d.id), d.created_at)
+       ) AS last_operation_work_at,
        CASE WHEN COALESCE(da.total_activities, 0) > 0
               OR COALESCE(fn.total_notes, 0) > 0
               OR COALESCE(ft.tracked_tasks_count, 0) > 0
@@ -560,12 +572,14 @@ router.get('/', requireAuth, async (req, res) => {
          SUM(CASE WHEN tracked.status = 'done' THEN 1 ELSE 0 END) AS completed_tasks_count,
          COUNT(*) AS tracked_tasks_count,
          SUM(CASE WHEN tracked.status = 'pending' AND tracked.due_at < NOW() THEN 1 ELSE 0 END) AS overdue_tasks_count,
+         SUM(CASE WHEN tracked.status = 'pending' AND tracked.due_at >= NOW() THEN 1 ELSE 0 END) AS future_tasks_count,
+         MAX(tracked.work_at) AS last_task_work_at,
          MIN(CASE WHEN tracked.status = 'pending' THEN tracked.due_at ELSE NULL END) AS next_task_due_at
        FROM (
-         SELECT deal_id, status, due_at FROM followup_tasks
+         SELECT deal_id, status, due_at, COALESCE(completed_at, created_at) AS work_at FROM followup_tasks
          WHERE deal_id IS NOT NULL AND status IN ('pending', 'done')
          UNION ALL
-         SELECT deal_id, IF(done = 1, 'done', 'pending') AS status, due_date AS due_at
+         SELECT deal_id, IF(done = 1, 'done', 'pending') AS status, due_date AS due_at, created_at AS work_at
          FROM activities WHERE deal_id IS NOT NULL AND type <> 'note'
        ) tracked
        GROUP BY tracked.deal_id
@@ -579,6 +593,11 @@ router.get('/', requireAuth, async (req, res) => {
                     OR JSON_LENGTH(inputs_json) > 3
                     OR EXISTS (SELECT 1 FROM quote_revisions qr WHERE qr.quote_id = quotes.id)
                   THEN 1 ELSE 0 END) AS has_saved_quote,
+         MAX(CASE WHEN status <> 'draft'
+                    OR document_snapshot_json IS NOT NULL
+                    OR JSON_LENGTH(inputs_json) > 3
+                    OR EXISTS (SELECT 1 FROM quote_revisions qr WHERE qr.quote_id = quotes.id)
+                  THEN updated_at ELSE NULL END) AS last_saved_quote_at,
          MAX(updated_at) AS last_quote_at
        FROM quotes
        WHERE deal_id IS NOT NULL

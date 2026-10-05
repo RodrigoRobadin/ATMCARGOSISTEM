@@ -7,7 +7,7 @@ import NewOperationModal from "../components/NewOperationModal";
 import NewIndustrialOperationModal from "../components/NewIndustrialOperationModal";
 import NewContainerOperationModal from "../components/NewContainerOperationModal";
 import { useAuth } from "../auth.jsx";
-import { needsOperationAttention } from "../utils/operationAttention.js";
+import { getOperationAttention } from "../utils/operationAttention.js";
 import {
   DealOutcomeContextMenu,
   MarkDealNotClosedModal,
@@ -157,6 +157,7 @@ export default function Workspace() {
   const { user } = useAuth();
   const isAdmin = String(user?.role || "").toLowerCase() === "admin";
   const [attentionNow, setAttentionNow] = useState(Date.now());
+  const [attentionOnly, setAttentionOnly] = useState(false);
   const advisorFilterKey = `pipeline-advisor:${user?.id || 'anonymous'}`;
 
   const [bu, setBu] = useState(null);
@@ -372,12 +373,14 @@ export default function Workspace() {
 
   const grouped = useMemo(() => {
     const g = Object.fromEntries(stages.map((s) => [s.id, []]));
+    const prospectStageIds = new Set(stages.filter((stage) => String(stageAliasMap[String(stage.id)] || stage.name || '').trim().toLowerCase() === 'prospecto').map((stage) => stage.id));
     for (const d of deals) {
+      if (attentionOnly && !getOperationAttention(d, attentionNow, prospectStageIds.has(d.stage_id))) continue;
       if (!g[d.stage_id]) g[d.stage_id] = [];
       g[d.stage_id].push(d);
     }
     return g;
-  }, [stages, deals]);
+  }, [stages, deals, stageAliasMap, attentionOnly, attentionNow]);
 
   function stageLabel(stage) {
     return stageAliasMap[String(stage.id)] || stage.name;
@@ -452,14 +455,18 @@ export default function Workspace() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
         <div>
           <h2 className="text-lg font-semibold">Workspace: {bu.name}</h2>
           <p className="text-xs text-slate-500">
             Pipeline: {pipelineId ?? "—"}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 px-2 text-sm whitespace-nowrap cursor-pointer">
+            <input type="checkbox" checked={attentionOnly} onChange={(event) => setAttentionOnly(event.target.checked)} />
+            Requieren atención
+          </label>
           {isIndustrial && isAdmin ? (
             <select
               className="px-3 py-2 text-sm rounded-lg border bg-white dark:bg-slate-950 dark:border-slate-700"
@@ -586,7 +593,7 @@ export default function Workspace() {
 
                       const signalMeta = getOperationSignalMeta(deal);
                       const hasOverBudget = String(deal.expense_control_status || "") === "over_budget";
-                      const needsAttention = needsOperationAttention(deal, attentionNow, isProspectStage);
+                      const attention = getOperationAttention(deal, attentionNow, isProspectStage);
 
                       return (
                         <Draggable
@@ -610,9 +617,9 @@ export default function Workspace() {
                               }}
                               onContextMenu={(event) => openOutcomeMenu(event, deal)}
                               className={`relative block w-full border rounded-xl p-3 hover:shadow transition cursor-pointer ${
-                                hasOverBudget || needsAttention ? "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30" : "bg-white dark:bg-slate-900 dark:border-slate-800"
+                                hasOverBudget || attention ? "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30" : "bg-white dark:bg-slate-900 dark:border-slate-800"
                               }`}
-                              title={[hasOverBudget ? "Sobrecosto" : null, needsAttention ? "4 días sin actividad, nota, archivo ni presupuesto guardado" : null].filter(Boolean).join(" · ") || "Doble clic para abrir"}
+                              title={[hasOverBudget ? "Sobrecosto" : null, attention?.label].filter(Boolean).join(" · ") || "Doble clic para abrir"}
                             >
                               <span
                                 className={`absolute top-2 right-2 h-2.5 w-2.5 rounded-full ${signalMeta.dotClass}`}
@@ -656,7 +663,7 @@ export default function Workspace() {
                                 {warnText && (
                                   <span className={warnClass}>{warnText}</span>
                                 )}
-                                {needsAttention && <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/50 dark:text-red-200">Sin actividad</span>}
+                                {attention && <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/50 dark:text-red-200">{attention.label}</span>}
                               </div>
 
                               {fCotiz && (
