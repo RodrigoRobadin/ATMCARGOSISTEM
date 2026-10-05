@@ -16,6 +16,8 @@ import OperationFollowupComposer from "../components/OperationFollowupComposer.j
 import AuditHistory from "../components/AuditHistory.jsx";
 import CommercialDates from "../components/op-details/CommercialDates.jsx";
 import OperationStageChange from "../components/OperationStageChange.jsx";
+import OperationDocuments from "../components/OperationDocuments.jsx";
+import OperationHistory from "../components/OperationHistory.jsx";
 
 // 👇 Ajustá la ruta real según tu backend
 const PROVIDERS_ENDPOINT = "/organizations";
@@ -598,6 +600,7 @@ export default function OperationDetail() {
   const noteAttachInputRef = useRef(null); // 👈 input para adjuntos de la nota
 
   const [activeTab, setActiveTab] = useState("detalle");
+  const [documentSelection, setDocumentSelection] = useState("");
   const [filesRefreshKey, setFilesRefreshKey] = useState(0);
   const [uploadingFiles, setUploadingFiles] = useState([]);
   const [expenseOpenKey, setExpenseOpenKey] = useState(0);
@@ -2090,7 +2093,7 @@ useEffect(() => {
     if (!files.length) return;
     for (const file of files) {
       const tempId = pushUploading({ name: file.name, type });
-      setActiveTab(`up-${tempId}`);
+      setActiveTab("documentos");
       try {
         const form = new FormData();
         form.append("type", type);
@@ -2120,11 +2123,11 @@ useEffect(() => {
             markDirty("file_labels_json");
             return next;
           });
-          setActiveTab(`f-${newId}`);
+          setDocumentSelection(`f-${newId}`);
         } else {
           const all = flattenFiles(filesByType);
           const newest = all[0];
-          if (newest) setActiveTab(`f-${newest.id}`);
+          if (newest) setDocumentSelection(`f-${newest.id}`);
         }
       } catch {
         popUploading(tempId);
@@ -2235,15 +2238,13 @@ useEffect(() => {
     ...(canAccessCommissions ? [{ id: "comisiones", kind: "base", label: "Comisiones" }] : []),
     ...currentBudgetTab,
     ...budgetRevisionTabs,
-    ...docTabs,
-    ...flatUploadingTabs,
-    ...flatFileTabs,
   ];
   function openFileTabByType(type) {
     const list = filesByType[type] || [];
     if (!list.length) return false;
     const f = list[0]; // más reciente
-    setActiveTab(`f-${f.id}`);
+    setDocumentSelection(`f-${f.id}`);
+    setActiveTab("documentos");
     return true;
   }
   const isFileTab = (id) =>
@@ -2415,7 +2416,10 @@ const executiveName =
   // abrir archivo por tipo
   const openDocType = (type) => {
     const f = (filesByType[type] || [])[0];
-    if (f) setActiveTab(`f-${f.id}`);
+    if (f) {
+      setDocumentSelection(`f-${f.id}`);
+      setActiveTab("documentos");
+    }
     else alert("No hay archivo cargado para este documento.");
   };
 
@@ -2941,129 +2945,26 @@ function providerHasFreightTag(p = {}) {
           ) : isDocTab(activeTab) ? (
             <OperationDocViewer doc={getDocFromTab(activeTab)} />
           ) : activeTab === "documentos" ? (
-            /* ================= PESTAÑA DOCUMENTOS ================= */
-            <div className="bg-white rounded-2xl shadow p-4">
-              <h3 className="font-medium mb-3">Documentos de la operación</h3>
-              {FILE_TYPES.map((t) => {
-                const cfKey = t.key;
-                const list = filesByType[cfKey] || [];
-                const latest = list[0] || null;
-                const href = latest ? resolveUploadUrl(latest.url) : null;
-
-                return (
-                  <div key={t.key} className="border rounded-xl p-3 mb-3">
-                    <div className="grid grid-cols-1 md:grid-cols-[220px_1fr_auto] items-start gap-2">
-                      <div className="text-sm font-medium">
-  {docLabelFor(t.key, currentTT)}
-</div>
-                      <ul className="mt-2 space-y-1">
-                        {list.map((f) => (
-                          <li
-                            key={f.id}
-                            className="flex items-center justify-between gap-3 text-sm border rounded px-2 py-1"
-                          >
-                            <div className="flex-1 grid grid-cols-1 md:grid-cols-[minmax(220px,1fr)_auto] gap-2 items-center">
-                              {editMode ? (
-                                <input
-                                  className="border rounded-lg px-2 py-1 text-sm w-full"
-                                  value={
-                                    fileLabels?.[f.id] ?? visibleNameOf(f)
-                                  }
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    setFileLabels((prev) => {
-                                      const next = {
-                                        ...(prev || {}),
-                                        [f.id]: val,
-                                      };
-                                      setCFLocal("file_labels_json", {
-                                        label: "Rótulos de archivos",
-                                        type: "json",
-                                        value: JSON.stringify(next),
-                                      });
-                                      markDirty("file_labels_json");
-                                      return next;
-                                    });
-                                  }}
-                                  placeholder="Rótulo visible (lo que se ve en el Detalle)"
-                                  title="Este texto será el que se mostrará en el Detalle como hipervínculo"
-                                />
-                              ) : (
-                                <a
-                                  className="underline text-blue-600 truncate"
-                                  href={resolveUploadUrl(f.url)}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  title={visibleNameOf(f)}
-                                >
-                                  {labelOfFile(f, fileLabels)}
-                                </a>
-                              )}
-
-                              <div className="flex gap-2 justify-end">
-                                <button
-                                  className="px-2 py-0.5 text-xs rounded border"
-                                  onClick={() => setActiveTab(`f-${f.id}`)}
-                                >
-                                  Ver
-                                </button>
-                                {editMode && (
-                                  <button
-                                    className="px-2 py-0.5 text-xs rounded border"
-                                    onClick={() => removeFile(f.id)}
-                                  >
-                                    Eliminar
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-
-                            <div className="hidden md:block text-[11px] text-slate-500 ml-2">
-                              {f.filename || f.original_name}
-                            </div>
-                          </li>
-                        ))}
-                        {!list.length && (
-                          <li className="text-xs text-slate-500">
-                            Sin archivos
-                          </li>
-                        )}
-                      </ul>
-
-                      <div className="flex gap-2">
-                        <input
-                          type="file"
-                          multiple
-                          className="hidden"
-                          ref={(el) =>
-                            (fileInputsRef.current[t.key] = el)
-                          }
-                          onChange={(e) => handleFileChange(t.key, e)}
-                        />
-                        <button
-                          className="px-2 py-1 text-xs rounded border"
-                          onClick={() => triggerUpload(t.key)}
-                        >
-                          Subir archivo
-                        </button>
-                        {latest && (
-                          <button
-                            className="px-2 py-1 text-xs rounded border"
-                            onClick={() =>
-                              openFileTabByType(t.key) ||
-                              window.open(href, "_blank")
-                            }
-                            title="Abrir última versión"
-                          >
-                            Abrir
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <OperationDocuments
+              dealId={id}
+              files={flatFiles}
+              labels={fileLabels}
+              invoices={opDocs}
+              selected={documentSelection}
+              onSelect={setDocumentSelection}
+              onUploaded={loadFiles}
+              onSaveLabel={async (fileId, name) => {
+                const next = { ...fileLabels, [fileId]: name };
+                await upsertCF("file_labels_json", "Rótulos de archivos", "json", next);
+                setFileLabels(next);
+              }}
+              onRemove={removeFile}
+              canDelete={editMode}
+              fileTypeLabel={(type) => docLabelFor(type, currentTT)}
+              fileUrl={resolveUploadUrl}
+              renderFile={(file) => <FileTabViewer context={{ file, docLabel: docLabelFor(file.type, currentTT) }} />}
+              renderInvoice={(doc) => <OperationDocViewer doc={doc} />}
+            />
           ) : (
             <>
               {/* ========= TAB DETALLE ========= */}
@@ -3770,7 +3671,17 @@ function providerHasFreightTag(p = {}) {
                             )}
                           </div>
                         </div>
-
+              <OperationHistory
+                deal={deal}
+                followupItems={notesList}
+                files={flatFiles}
+                fileLabels={fileLabels}
+                invoices={opDocs}
+                onSelectDocument={(selection) => {
+                  setDocumentSelection(selection);
+                  setActiveTab("documentos");
+                }}
+              />
             </>
           )}
         

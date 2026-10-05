@@ -5,6 +5,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { api } from "../api";
 import NewOperationModal from "../components/NewOperationModal";
 import { useAuth } from "../auth.jsx";
+import { needsOperationAttention } from "../utils/operationAttention.js";
 import {
   DealOutcomeContextMenu,
   MarkDealNotClosedModal,
@@ -112,12 +113,20 @@ export default function Pipeline() {
   const location = useLocation();
   const { user } = useAuth();
   const isAdmin = String(user?.role || "").toLowerCase() === "admin";
+  const [attentionNow, setAttentionNow] = useState(Date.now());
+  const advisorFilterKey = `pipeline-advisor:${user?.id || 'anonymous'}`;
 
   const [pipelineId, setPipelineId] = useState(null);
   const [stages, setStages] = useState([]);
   const [deals, setDeals] = useState([]);
   const [advisorUsers, setAdvisorUsers] = useState([]);
-  const [selectedAdvisorUserId, setSelectedAdvisorUserId] = useState("");
+  const [selectedAdvisorUserId, setSelectedAdvisorUserId] = useState(() => {
+    try {
+      return window.localStorage.getItem(`pipeline-advisor:${user?.id || 'anonymous'}`) || "";
+    } catch {
+      return "";
+    }
+  });
   const [dealCFMap, setDealCFMap] = useState({});
   const [quoteTotals, setQuoteTotals] = useState({});
   const [openModal, setOpenModal] = useState(false);
@@ -126,6 +135,22 @@ export default function Pipeline() {
 
   const [stageAliasMap, setStageAliasMap] = useState({});
   const [hiddenStageIds, setHiddenStageIds] = useState(new Set());
+
+  useEffect(() => {
+    if (!isAdmin || !user?.id) return;
+    try {
+      setSelectedAdvisorUserId(window.localStorage.getItem(advisorFilterKey) || "");
+    } catch {
+      setSelectedAdvisorUserId("");
+    }
+  }, [advisorFilterKey, isAdmin, user?.id]);
+
+  function selectAdvisor(value) {
+    setSelectedAdvisorUserId(value);
+    try {
+      window.localStorage.setItem(advisorFilterKey, value);
+    } catch {}
+  }
 
   useEffect(() => {
     (async () => {
@@ -175,6 +200,19 @@ export default function Pipeline() {
     refreshDeals(pipelineId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAdvisorUserId]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setAttentionNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!pipelineId) return;
+    const onFocus = () => { refreshDeals(pipelineId).catch(() => {}); };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pipelineId, selectedAdvisorUserId]);
 
   useEffect(() => {
     if (!deals.length) return;
@@ -284,7 +322,7 @@ export default function Pipeline() {
             <select
               className="px-3 py-2 text-sm rounded-lg border bg-white dark:bg-slate-950 dark:border-slate-700"
               value={selectedAdvisorUserId}
-              onChange={(e) => setSelectedAdvisorUserId(e.target.value)}
+              onChange={(e) => selectAdvisor(e.target.value)}
               title="Filtrar por comercial"
             >
               <option value="">Todos los comerciales</option>
@@ -360,6 +398,7 @@ export default function Pipeline() {
                         }
                       }
                       const hasOverBudget = String(deal.expense_control_status || "") === "over_budget";
+                      const needsAttention = needsOperationAttention(deal, attentionNow, String(stage.name || '').toLowerCase() === 'prospecto');
 
                       return (
                         <Draggable draggableId={String(deal.id)} index={idx} key={deal.id}>
@@ -379,11 +418,11 @@ export default function Pipeline() {
                               }}
                               onContextMenu={(event) => openOutcomeMenu(event, deal)}
                               className={`block w-full border rounded-xl p-3 hover:shadow transition cursor-pointer ${
-                                hasOverBudget
+                                hasOverBudget || needsAttention
                                   ? "border-red-300 bg-red-50 dark:bg-red-950/30 dark:border-red-800"
                                   : "bg-white dark:bg-slate-900 dark:border-slate-800"
                               }`}
-                              title={hasOverBudget ? "Sobrecosto" : "Doble clic para abrir"}
+                              title={[hasOverBudget ? "Sobrecosto" : null, needsAttention ? "4 días sin actividad, nota, archivo ni presupuesto guardado" : null].filter(Boolean).join(" · ") || "Doble clic para abrir"}
                             >
                               <div className="text-sm font-semibold truncate">
                                 {deal.reference || deal.title}
@@ -402,6 +441,7 @@ export default function Pipeline() {
                                   </span>
                                 )}
                                 {warnText && <span className={warnClass}>{warnText}</span>}
+                                {needsAttention && <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/50 dark:text-red-200">Sin actividad</span>}
                               </div>
 
                               {fCotiz && (

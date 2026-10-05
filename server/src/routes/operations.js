@@ -521,6 +521,30 @@ router.get('/:id/timeline', requireAuth, async (req, res) => {
   }
 });
 
+router.get('/:id/history-calls', requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Operacion invalida' });
+    const [[deal]] = await db.query('SELECT id FROM deals WHERE id = ? LIMIT 1', [id]);
+    if (!deal) return res.status(404).json({ error: 'Operacion no encontrada' });
+    const [rows] = await db.query(
+      `SELECT c.id, c.subject, c.notes, c.happened_at, c.created_at, c.outcome,
+              u.name AS user_name, ct.name AS contact_name
+         FROM followup_calls c
+         LEFT JOIN users u ON u.id = c.user_id
+         LEFT JOIN contacts ct ON ct.id = c.contact_id
+        WHERE c.deal_id = ?
+        ORDER BY c.happened_at DESC, c.id DESC
+        LIMIT 200`,
+      [id]
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error('[operations:history-calls]', error);
+    res.status(500).json({ error: 'No se pudo cargar el historial de llamadas' });
+  }
+});
+
 router.get('/:id/followup-feed', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;

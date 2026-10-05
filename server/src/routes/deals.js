@@ -507,6 +507,15 @@ router.get('/', requireAuth, async (req, res) => {
        ft.next_task_due_at,
        COALESCE(qs.has_quote, 0) AS has_quote,
        qs.last_quote_at,
+       CASE WHEN COALESCE(da.total_activities, 0) > 0
+              OR COALESCE(fn.total_notes, 0) > 0
+              OR COALESCE(ft.tracked_tasks_count, 0) > 0
+              OR COALESCE(qs.has_saved_quote, 0) > 0
+              OR EXISTS (SELECT 1 FROM followup_calls fc WHERE fc.deal_id = d.id)
+              OR EXISTS (SELECT 1 FROM deal_files df WHERE df.deal_id = d.id)
+              OR EXISTS (SELECT 1 FROM deal_cost_sheets cs WHERE cs.deal_id = d.id)
+              OR EXISTS (SELECT 1 FROM invoices i WHERE i.deal_id = d.id)
+            THEN 1 ELSE 0 END AS has_operation_work,
 
        bu.name AS business_unit_name, bu.key_slug AS business_unit_key,
        s.name AS stage_name,
@@ -565,6 +574,11 @@ router.get('/', requireAuth, async (req, res) => {
        SELECT
          deal_id,
          1 AS has_quote,
+         MAX(CASE WHEN status <> 'draft'
+                    OR document_snapshot_json IS NOT NULL
+                    OR JSON_LENGTH(inputs_json) > 3
+                    OR EXISTS (SELECT 1 FROM quote_revisions qr WHERE qr.quote_id = quotes.id)
+                  THEN 1 ELSE 0 END) AS has_saved_quote,
          MAX(updated_at) AS last_quote_at
        FROM quotes
        WHERE deal_id IS NOT NULL
