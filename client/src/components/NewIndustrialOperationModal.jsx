@@ -1,6 +1,7 @@
 // client/src/components/NewIndustrialOperationModal.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import { useAuth } from "../auth.jsx";
 
 /* -------------------- UI basics -------------------- */
 const Input = (props) => (
@@ -344,6 +345,8 @@ export default function NewIndustrialOperationModal({
   onCreated,
   defaultBusinessUnitId,
 }) {
+  const { user } = useAuth();
+  const creatorId = String(user?.id || "");
   const [referencePreview, setReferencePreview] = useState("—");
   const [operationTitle, setOperationTitle] = useState("");
 
@@ -361,7 +364,11 @@ export default function NewIndustrialOperationModal({
     defaultBusinessUnitId || ""
   );
   const [stageId, setStageId] = useState(stages?.[0]?.id || null);
-  const [execId, setExecId] = useState("");
+  const [execId, setExecId] = useState(creatorId);
+
+  useEffect(() => {
+    if (creatorId) setExecId((current) => current || creatorId);
+  }, [creatorId]);
 
   const [saving, setSaving] = useState(false);
 
@@ -503,7 +510,7 @@ export default function NewIndustrialOperationModal({
     setOrgQuery(v);
     setSelectedOrg(null);
     setSelectedContact(null);
-    setExecId("");
+    setExecId(creatorId);
     setOrganizationLocations([]);
     setSelectedLocationKey('');
     setLocation('');
@@ -536,7 +543,7 @@ export default function NewIndustrialOperationModal({
     setOrgRuc(detail?.ruc || detail?.tax_id || org.ruc || "");
     const organizationAdvisorId = detail?.advisor_user_id || detail?.owner_user_id || "";
     setSelectedOrg({ ...detail, id: org.id, name: uppercaseName });
-    setExecId(organizationAdvisorId ? String(organizationAdvisorId) : "");
+    setExecId(String(organizationAdvisorId || creatorId));
     setOrganizationLocations(locations);
     setSelectedLocationKey(defaultLocation?.key || '');
     setLocation(defaultLocation?.label || '');

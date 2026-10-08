@@ -1,6 +1,7 @@
 // client/src/components/NewOperationModal.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import { useAuth } from "../auth.jsx";
 import useParamOptions from "../hooks/useParamOptions";
 import { LOGISTICS_COUNTRIES, LOGISTICS_LOCATION_OPTIONS } from "../data/logisticsCatalog";
 
@@ -357,6 +358,8 @@ export default function NewOperationModal({
   onCreated,
   defaultBusinessUnitId,
 }) {
+  const { user } = useAuth();
+  const creatorId = String(user?.id || "");
   const [referencePreview, setReferencePreview] = useState("—");
 
   // Transporte / carga
@@ -400,7 +403,11 @@ export default function NewOperationModal({
   const [businessUnits, setBusinessUnits] = useState([]);
   const [businessUnitId, setBusinessUnitId] = useState(defaultBusinessUnitId || "");
   const [stageId, setStageId] = useState(stages?.[0]?.id || null);
-  const [execId, setExecId] = useState("");
+  const [execId, setExecId] = useState(creatorId);
+
+  useEffect(() => {
+    if (creatorId) setExecId((current) => current || creatorId);
+  }, [creatorId]);
 
   const [saving, setSaving] = useState(false);
 
@@ -620,7 +627,7 @@ export default function NewOperationModal({
     setOrgQuery(v);
     setSelectedOrg(null);
     setSelectedContact(null);
-    setExecId("");
+    setExecId(creatorId);
     setOrgRuc("");
     setContacts([]);
     setContactName("");
@@ -644,7 +651,7 @@ export default function NewOperationModal({
     const detail = detailResponse?.data?.organization || detailResponse?.data || org;
     const organizationAdvisorId = detail?.advisor_user_id || detail?.owner_user_id || "";
     setSelectedOrg({ ...detail, id: org.id, name: uppercaseName });
-    setExecId(organizationAdvisorId ? String(organizationAdvisorId) : "");
+    setExecId(String(organizationAdvisorId || creatorId));
     setOrgRuc(detail?.ruc || detail?.tax_id || org.ruc || "");
     setContacts(list || []);
 
