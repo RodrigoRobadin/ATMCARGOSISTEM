@@ -1053,10 +1053,6 @@ router.patch('/:id', requireAuth, async (req, res) => {
         o.zone_id, o.department,
         o.latitude, o.longitude, o.maps_url,
         o.created_at, o.updated_at,
-      run: async (conn, before) => {
-        if (!before) throw Object.assign(new Error('No encontrado'), { statusCode: 404 });
-        await conn.query('DELETE FROM organizations WHERE id = ?', [id]);
-      },
         o.budget_status, o.budget_profit AS budget_profit_value,
         u.name AS owner_user_name,
         u.email AS owner_user_email,
@@ -1086,6 +1082,10 @@ router.delete('/:id', requireAuth, async (req, res) => {
     await auditedRowMutation(db, {
       req, action: 'delete', entity: 'organization', entityId: Number(id),
       description: 'Eliminó organización',
+      run: async (conn, before) => {
+        if (!before) throw Object.assign(new Error('No encontrado'), { statusCode: 404 });
+        await conn.query('DELETE FROM organizations WHERE id = ?', [id]);
+      },
     });
 
     res.json({ ok: true });
