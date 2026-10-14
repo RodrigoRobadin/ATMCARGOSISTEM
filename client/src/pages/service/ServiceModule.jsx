@@ -4,6 +4,7 @@ import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { Link } from "react-router-dom";
 import { api } from "../../api";
 import ServiceSheet from "./ServiceSheet.jsx";
+import { MarkDealNotClosedModal } from "../../components/DealCommercialOutcomeControls.jsx";
 
 const emptyDoor = {
   org_id: "",
@@ -236,6 +237,8 @@ export default function ServiceModule() {
   const [clientDoorsOpen, setClientDoorsOpen] = useState(false);
   const [pendingStageMove, setPendingStageMove] = useState(null);
   const [stageMoveSaving, setStageMoveSaving] = useState(false);
+  const [outcomeMenu, setOutcomeMenu] = useState(null);
+  const [caseToClose, setCaseToClose] = useState(null);
 
   const [showCaseModal, setShowCaseModal] = useState(false);
   const [caseForm, setCaseForm] = useState({
@@ -834,6 +837,10 @@ export default function ServiceModule() {
                               {...provided.draggableProps}
                               {...provided.dragHandleProps}
                               to={`/service/cases/${c.id}`}
+                              onContextMenu={(event) => {
+                                event.preventDefault();
+                                setOutcomeMenu({ serviceCase: c, x: event.clientX, y: event.clientY });
+                              }}
                               className="block border rounded-xl p-3 bg-white hover:shadow transition cursor-pointer"
                             >
                               <div className="text-sm font-semibold truncate">
@@ -953,6 +960,29 @@ export default function ServiceModule() {
       {view === "sheet" && (
         <ServiceSheet />
       )}
+
+      {outcomeMenu && (
+        <div className="fixed inset-0 z-[90]" onMouseDown={() => setOutcomeMenu(null)}>
+          <div
+            role="menu"
+            className="fixed min-w-52 rounded-md border bg-white p-1 shadow-xl"
+            style={{ left: Math.min(outcomeMenu.x, window.innerWidth - 220), top: Math.min(outcomeMenu.y, window.innerHeight - 55) }}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <button type="button" className="w-full rounded px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50" onClick={() => {
+              setCaseToClose(outcomeMenu.serviceCase);
+              setOutcomeMenu(null);
+            }}>Marcar como no cerrada</button>
+          </div>
+        </div>
+      )}
+      <MarkDealNotClosedModal
+        deal={caseToClose}
+        endpoint={caseToClose ? `/service/cases/${caseToClose.id}/mark-not-closed` : undefined}
+        recordLabel="el servicio"
+        onClose={() => setCaseToClose(null)}
+        onSaved={() => setCases((current) => current.filter((item) => item.id !== caseToClose.id))}
+      />
 
       {clientDoorsOpen && selectedClient && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">

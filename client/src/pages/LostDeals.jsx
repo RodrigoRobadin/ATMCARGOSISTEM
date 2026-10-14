@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { LOSS_REASONS } from "../components/DealCommercialOutcomeControls.jsx";
+import ReopenServiceCaseModal from "./service/ReopenServiceCaseModal.jsx";
 
 const reasonLabel = (value) =>
   LOSS_REASONS.find((reason) => reason.value === value)?.label || value || "-";
@@ -96,7 +97,7 @@ function OutcomeHistoryModal({ deal, onClose }) {
   useEffect(() => {
     if (!deal?.id) return;
     api
-      .get(`/deals/${deal.id}/commercial-outcome-history`)
+      .get(deal.source_type === "service" ? `/service/cases/${deal.id}/commercial-outcome-history` : `/deals/${deal.id}/commercial-outcome-history`)
       .then(({ data }) => setRows(Array.isArray(data) ? data : []))
       .catch((requestError) => setError(requestError?.response?.data?.error || "No se pudo cargar el historial."));
   }, [deal]);
@@ -120,7 +121,7 @@ function OutcomeHistoryModal({ deal, onClose }) {
               <div className="mt-1 text-xs text-slate-500">{formatDate(row.created_at)} · {row.actor_name || "Usuario"}</div>
               {row.reason_category ? <div className="mt-2">Motivo: {reasonLabel(row.reason_category)}</div> : null}
               {row.reason_detail ? <div className="mt-1 whitespace-pre-wrap text-slate-600 dark:text-slate-300">{row.reason_detail}</div> : null}
-              {row.event_type === "reopened" ? <div className="mt-2 text-xs text-slate-500">Etapa: {row.from_stage_name || "-"} → {row.to_stage_name || "-"}</div> : null}
+              {row.event_type === "reopened" ? <div className="mt-2 text-xs text-slate-500">Etapa: {row.stage_name || row.to_stage_name || "-"}</div> : null}
             </div>
           ))}
           {!rows.length && !error ? <div className="text-sm text-slate-500">Sin movimientos registrados.</div> : null}
@@ -142,8 +143,22 @@ export default function LostDeals() {
     setLoading(true);
     setError("");
     try {
-      const { data } = await api.get("/deals", { params: { commercial_outcome: "lost", limit: 500 } });
-      setRows(Array.isArray(data) ? data : []);
+      const [dealsResult, servicesResult] = await Promise.allSettled([
+        api.get("/deals", { params: { commercial_outcome: "lost", limit: 500 } }),
+        api.get("/service/cases", { params: { commercial_outcome: "lost" } }),
+      ]);
+      if (dealsResult.status === "rejected" && servicesResult.status === "rejected") throw dealsResult.reason;
+      const deals = dealsResult.status === "fulfilled" && Array.isArray(dealsResult.value.data)
+        ? dealsResult.value.data.map((row) => ({ ...row, source_type: "deal" })) : [];
+      const services = servicesResult.status === "fulfilled" && Array.isArray(servicesResult.value.data)
+        ? servicesResult.value.data.map((row) => ({ ...row, source_type: "service", business_unit_name: "Servicio y mantenimiento" })) : [];
+      setRows([...deals, ...services].sort((a, b) => new Date(b.lost_at || 0) - new Date(a.lost_at || 0)));
+      const sourceErrors = [];
+      if (dealsResult.status === "rejected") sourceErrors.push("No se pudieron cargar las operaciones comerciales.");
+      if (servicesResult.status === "rejected" && servicesResult.reason?.response?.status !== 403) {
+        sourceErrors.push("No se pudieron cargar los servicios no cerrados.");
+      }
+      setError(sourceErrors.join(" "));
     } catch (requestError) {
       setError(requestError?.response?.data?.error || "No se pudieron cargar las operaciones no cerradas.");
     } finally {
@@ -156,7 +171,7 @@ export default function LostDeals() {
   const filteredRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return rows;
-    return rows.filter((row) => [row.reference, row.title, row.org_name, row.deal_advisor_name, row.lost_reason_detail]
+    return rows.filter((row) => [row.reference, row.title, row.org_name, row.deal_advisor_name, row.assigned_to_name, row.lost_reason_detail]
       .some((value) => String(value || "").toLowerCase().includes(needle)));
   }, [rows, query]);
 
@@ -196,15 +211,15 @@ export default function LostDeals() {
             </thead>
             <tbody>
               {filteredRows.map((row) => (
-                <tr key={row.id} className="border-t align-top dark:border-slate-800">
+                <tr key={`${row.source_type}-${row.id}`} className="border-t align-top dark:border-slate-800">
                   <td className="px-3 py-3">
-                    <Link to={`/operations/${row.id}`} className="font-medium text-blue-700 hover:underline dark:text-blue-300">
+                    <Link to={row.source_type === "service" ? `/service/cases/${row.id}` : `/operations/${row.id}`} className="font-medium text-blue-700 hover:underline dark:text-blue-300">
                       {row.reference || row.title || `#${row.id}`}
                     </Link>
                     <div className="text-xs text-slate-500">{row.business_unit_name || "-"}</div>
                   </td>
                   <td className="px-3 py-3">{row.org_name || "-"}</td>
-                  <td className="px-3 py-3">{row.deal_advisor_name || "-"}</td>
+                  <td className="px-3 py-3">{row.deal_advisor_name || row.assigned_to_name || "-"}</td>
                   <td className="px-3 py-3">{row.stage_name || "-"}</td>
                   <td className="max-w-sm px-3 py-3">
                     <div className="font-medium">{reasonLabel(row.lost_reason_category)}</div>
@@ -223,7 +238,8 @@ export default function LostDeals() {
         </div>
       ) : null}
 
-      <ReopenDealModal deal={dealToReopen} onClose={() => setDealToReopen(null)} onSaved={load} />
+      <ReopenDealModal deal={dealToReopen?.source_type === "deal" ? dealToReopen : null} onClose={() => setDealToReopen(null)} onSaved={load} />
+      <ReopenServiceCaseModal serviceCase={dealToReopen?.source_type === "service" ? dealToReopen : null} onClose={() => setDealToReopen(null)} onSaved={load} />
       <OutcomeHistoryModal deal={dealHistory} onClose={() => setDealHistory(null)} />
     </div>
   );

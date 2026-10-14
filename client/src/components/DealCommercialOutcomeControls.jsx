@@ -179,7 +179,7 @@ export function QuickDealActivityModal({ deal, onClose, onSaved }) {
   );
 }
 
-export function MarkDealNotClosedModal({ deal, onClose, onSaved }) {
+export function MarkDealNotClosedModal({ deal, onClose, onSaved, endpoint, recordLabel = "la venta" }) {
   const [reasonCategory, setReasonCategory] = useState(LOSS_REASONS[0].value);
   const [reasonDetail, setReasonDetail] = useState("");
   const [saving, setSaving] = useState(false);
@@ -191,13 +191,13 @@ export function MarkDealNotClosedModal({ deal, onClose, onSaved }) {
     event.preventDefault();
     const detail = reasonDetail.trim();
     if (!detail) {
-      setError("Explica por qué no se cerró la venta.");
+      setError(`Explica por qué no se cerró ${recordLabel}.`);
       return;
     }
     setSaving(true);
     setError("");
     try {
-      await api.post(`/deals/${deal.id}/mark-not-closed`, {
+      await api.post(endpoint || `/deals/${deal.id}/mark-not-closed`, {
         reason_category: reasonCategory,
         reason_detail: detail,
       });
@@ -233,7 +233,7 @@ export function MarkDealNotClosedModal({ deal, onClose, onSaved }) {
         </label>
 
         <label className="mt-4 block text-sm font-medium">
-          ¿Por qué no se cerró la venta?
+          ¿Por qué no se cerró {recordLabel}?
           <textarea
             className="mt-1 min-h-28 w-full rounded border px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
             value={reasonDetail}

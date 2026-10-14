@@ -1,6 +1,7 @@
 import express from 'express';
 import pool from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
+import { addDealSearchStatuses } from '../services/searchDealStatus.js';
 
 const router = express.Router();
 const RESULT_LIMIT = 30;
@@ -202,11 +203,42 @@ router.get('/', requireAuth, async (req, res) => {
       ),
     ]);
 
+    let dealsWithStatuses = deals;
+    if (deals.length) {
+      const ids = deals.map((deal) => Number(deal.id));
+      const placeholders = ids.map(() => '?').join(',');
+      const [fields, invoices] = await Promise.all([
+        safeQuery(
+          'Confirmaciones',
+          `SELECT deal_id, \`key\`, \`value\` FROM deal_custom_fields
+            WHERE deal_id IN (${placeholders}) AND \`key\` IN ('f_confirm', 'confirm_file_id')
+            ORDER BY id DESC`,
+          ids,
+          warnings
+        ),
+        safeQuery(
+          'Facturas',
+          `SELECT deal_id, status, issue_date FROM invoices WHERE deal_id IN (${placeholders})`,
+          ids,
+          warnings
+        ),
+      ]);
+      const fileIds = [...new Set(fields.filter((field) => field.key === 'confirm_file_id')
+        .map((field) => Number(field.value)).filter((id) => Number.isInteger(id) && id > 0))];
+      const confirmationFiles = fileIds.length ? await safeQuery(
+        'Comprobantes de confirmación',
+        `SELECT id, deal_id FROM deal_files WHERE id IN (${fileIds.map(() => '?').join(',')}) AND type = 'customer_confirmation'`,
+        fileIds,
+        warnings
+      ) : [];
+      dealsWithStatuses = addDealSearchStatuses(deals, fields, confirmationFiles, invoices);
+    }
+
     return res.json({
       people,
       organizations,
       activities,
-      deals: [...deals, ...serviceDeals]
+      deals: [...dealsWithStatuses, ...serviceDeals]
         .sort((a, b) => Number(b.id || 0) - Number(a.id || 0))
         .slice(0, RESULT_LIMIT),
       files,

@@ -87,6 +87,8 @@ function normalizeResult(category, row) {
     return {
       ...base,
       title: compact([row.reference, row.title]).replaceAll(" · ", " — ") || "Operación",
+      isConfirmed: Boolean(row.is_confirmed),
+      isInvoiced: Boolean(row.is_invoiced),
       subtitle: compact([row.org_name, row.contact_name]),
       detail: compact([
         row.business_unit_name,
@@ -292,8 +294,20 @@ export default function GlobalSearchPanel() {
       >
         <CategoryBadge category={item.category} size="small" />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
-            <Highlight text={item.title} query={query} />
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="min-w-0 truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
+              <Highlight text={item.title} query={query} />
+            </span>
+            {item.category === "deals" && item.isConfirmed ? (
+              <span className="shrink-0 rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-200" title="Confirmada por comprobante del cliente o factura emitida">
+                Confirmada
+              </span>
+            ) : null}
+            {item.category === "deals" && item.isInvoiced ? (
+              <span className="shrink-0 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-800 dark:border-blue-700 dark:bg-blue-900/30 dark:text-blue-200" title="Factura de venta emitida">
+                Facturada
+              </span>
+            ) : null}
           </span>
           {item.subtitle ? (
             <span className="mt-0.5 block truncate text-xs text-slate-600 dark:text-slate-300">

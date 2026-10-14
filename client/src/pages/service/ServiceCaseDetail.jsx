@@ -8,6 +8,9 @@ import InvoiceCreateModal from "../../components/InvoiceCreateModal.jsx";
 import OperationExpenseInvoices from "../../components/OperationExpenseInvoices.jsx";
 import AdminOpsPanel from "../../components/op-details/AdminOpsPanel.jsx";
 import { attachServiceCaseToAssistant } from "../../utils/assistantContext";
+import ServiceCaseFollowup from "./ServiceCaseFollowup.jsx";
+import ReopenServiceCaseModal from "./ReopenServiceCaseModal.jsx";
+import { MarkDealNotClosedModal } from "../../components/DealCommercialOutcomeControls.jsx";
 import AuditHistory from "../../components/AuditHistory.jsx";
 
 function safeJsonArray(v) {
@@ -141,6 +144,8 @@ export default function ServiceCaseDetail() {
   const syncTimerRef = useRef(null);
   const syncingRef = useRef(false);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+  const [showMarkNotClosed, setShowMarkNotClosed] = useState(false);
+  const [showReopen, setShowReopen] = useState(false);
   const [invoiceAdditionId, setInvoiceAdditionId] = useState(null);
   const [additionalQuotes, setAdditionalQuotes] = useState([]);
   const [additionalLoading, setAdditionalLoading] = useState(false);
@@ -780,6 +785,7 @@ export default function ServiceCaseDetail() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold">Servicio {data.reference || `#${data.id}`}</h1>
+          {data.commercial_outcome === "lost" && <span className="mt-1 inline-block rounded bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">No cerrada</span>}
           <div className="text-sm text-slate-500">
             {data.org_name || ""} {data.org_ruc ? `? ${data.org_ruc}` : ""}
           </div>
@@ -1406,6 +1412,7 @@ export default function ServiceCaseDetail() {
                 </button>
               </div>
               </fieldset>
+              <ServiceCaseFollowup key={caseId} serviceCase={data} currentUser={user} />
             </div>
           )}
 
@@ -1598,6 +1605,11 @@ export default function ServiceCaseDetail() {
           <div className="bg-white border rounded-lg p-3">
             <div className="text-sm font-semibold mb-2">Acciones</div>
             <div className="space-y-2">
+              {data.commercial_outcome === "lost" ? (
+                <button type="button" className="w-full rounded border border-emerald-300 px-3 py-2 text-left text-sm text-emerald-800 hover:bg-emerald-50" onClick={() => setShowReopen(true)}>Rehabilitar servicio</button>
+              ) : (
+                <button type="button" className="w-full rounded border border-red-300 px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50" onClick={() => setShowMarkNotClosed(true)}>Marcar como no cerrada</button>
+              )}
               <button
                 type="button"
                 draggable
@@ -1714,7 +1726,18 @@ export default function ServiceCaseDetail() {
           }}
         />
       )}
+      <MarkDealNotClosedModal
+        deal={showMarkNotClosed ? data : null}
+        endpoint={`/service/cases/${caseId}/mark-not-closed`}
+        recordLabel="el servicio"
+        onClose={() => setShowMarkNotClosed(false)}
+        onSaved={() => setData((current) => ({ ...current, commercial_outcome: "lost" }))}
+      />
+      <ReopenServiceCaseModal
+        serviceCase={showReopen ? data : null}
+        onClose={() => setShowReopen(false)}
+        onSaved={(stageId, stageName) => setData((current) => ({ ...current, commercial_outcome: "active", stage_id: stageId, stage_name: stageName }))}
+      />
     </div>
   );
 }
-

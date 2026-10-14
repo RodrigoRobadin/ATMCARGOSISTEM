@@ -1267,13 +1267,12 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     if (requiresCompleteCommercialData) {
-      if (!org_id_body && businessUnitKey !== 'atm-cargo') throw Object.assign(new Error('Selecciona una organización existente'), { statusCode: 400 });
       if (!org_name) throw Object.assign(new Error('La organización es obligatoria'), { statusCode: 400 });
       if (!org_ruc) throw Object.assign(new Error('El RUC es obligatorio'), { statusCode: 400 });
       if (!contact_name) throw Object.assign(new Error('El contacto es obligatorio'), { statusCode: 400 });
       if (!contact_phone) throw Object.assign(new Error('El número de contacto es obligatorio'), { statusCode: 400 });
-      if (!contact_email) throw Object.assign(new Error('El email de contacto es obligatorio'), { statusCode: 400 });
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact_email)) {
+      if (businessUnitKey === 'atm-cargo' && !contact_email) throw Object.assign(new Error('El email de contacto es obligatorio'), { statusCode: 400 });
+      if (contact_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact_email)) {
         throw Object.assign(new Error('El email de contacto no es válido'), { statusCode: 400 });
       }
 
@@ -1347,7 +1346,7 @@ router.post('/', requireAuth, async (req, res) => {
       }
       contactBefore = await auditSnapshot(conn, 'contact', contactId, true);
       await conn.query(
-        'UPDATE contacts SET name = ?, email = ?, phone = ?, org_id = ? WHERE id = ?',
+        'UPDATE contacts SET name = ?, email = COALESCE(NULLIF(?, \'\'), email), phone = ?, org_id = ? WHERE id = ?',
         [contact_name, contact_email, contact_phone, orgId, contactId]
       );
     } else if (contact_name) {
@@ -1359,7 +1358,7 @@ router.post('/', requireAuth, async (req, res) => {
         contactId = cRows[0].id;
         contactBefore = await auditSnapshot(conn, 'contact', contactId, true);
         await conn.query(
-          'UPDATE contacts SET email = ?, phone = ? WHERE id = ?',
+          'UPDATE contacts SET email = COALESCE(NULLIF(?, \'\'), email), phone = ? WHERE id = ?',
           [contact_email, contact_phone, contactId]
         );
       } else {

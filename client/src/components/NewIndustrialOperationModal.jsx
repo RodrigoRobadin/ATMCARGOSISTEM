@@ -453,16 +453,14 @@ export default function NewIndustrialOperationModal({
       stageId &&
       businessUnitId &&
       operationTitle.trim() &&
-      selectedOrg?.id &&
       orgName.trim() &&
       orgRuc.trim() &&
       contactName.trim() &&
       contactPhone.trim() &&
-      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim()) &&
-      selectedLocationKey &&
+      (!contactEmail.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim())) &&
       execId
     );
-  }, [pipelineId, stageId, businessUnitId, operationTitle, selectedOrg, orgName, orgRuc, contactName, contactPhone, contactEmail, selectedLocationKey, execId]);
+  }, [pipelineId, stageId, businessUnitId, operationTitle, orgName, orgRuc, contactName, contactPhone, contactEmail, execId]);
 
   // Referencia visual
   useEffect(() => {
@@ -680,10 +678,6 @@ export default function NewIndustrialOperationModal({
       setBranchError('El contacto principal es obligatorio.');
       return;
     }
-    if (isNewOrganization && !contactEmail.trim()) {
-      setBranchError('El email es obligatorio.');
-      return;
-    }
     if (!name) {
       setBranchError('El nombre de la sucursal es obligatorio.');
       return;
@@ -711,6 +705,7 @@ export default function NewIndustrialOperationModal({
           city_id: cityId,
           country: newBranch.country.trim() || 'Paraguay',
           skip_prospect: true,
+          allow_missing_email: true,
           branches: [{
             name,
             address: newBranch.address.trim() || null,
@@ -791,7 +786,7 @@ export default function NewIndustrialOperationModal({
         business_unit_id: businessUnitId || null,
         enforce_complete_data: true,
         account_exec_id: Number(execId),
-        organization: { id: selectedOrg.id, name: orgName.trim().toUpperCase(), ruc: orgRuc.trim() },
+        organization: { ...(selectedOrg?.id ? { id: selectedOrg.id } : {}), name: orgName.trim().toUpperCase(), ruc: orgRuc.trim() },
         contact: {
           ...(selectedContact?.id ? { id: selectedContact.id } : {}),
           name: contactName.trim(),
@@ -1029,13 +1024,12 @@ export default function NewIndustrialOperationModal({
                   />
                 </label>
                 <label className="text-sm">
-                  Email de contacto *
+                  Email de contacto
                   <Input
                     type="email"
                     value={contactEmail}
                     onChange={(e) => setContactEmail(e.target.value)}
                     placeholder="correo@dominio.com"
-                    required
                   />
                 </label>
               </div>
@@ -1079,7 +1073,7 @@ export default function NewIndustrialOperationModal({
               </label>
 
               <label className="text-sm">
-                Ubicación / Planta *
+                Ubicación / Planta
                 <Select
                   value={selectedLocationKey}
                   onChange={(e) => {
@@ -1089,10 +1083,9 @@ export default function NewIndustrialOperationModal({
                     setLocation(selected?.label || '');
                   }}
                   disabled={!selectedOrg}
-                  required
                 >
                   <option value="">
-                    {selectedOrg ? 'Seleccionar matriz o sucursal' : 'Primero selecciona una organización'}
+                    {selectedOrg ? 'Sin ubicación definida' : 'Sin ubicación definida (opcional)'}
                   </option>
                   {organizationLocations.map((item) => (
                     <option key={item.key} value={item.key}>{item.label}</option>

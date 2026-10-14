@@ -218,6 +218,36 @@ async function ensureServiceTables() {
       FOREIGN KEY (door_id) REFERENCES client_doors(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+  for (const [column, definition] of [
+    ['commercial_outcome', "VARCHAR(24) NOT NULL DEFAULT 'active'"],
+    ['lost_at', 'DATETIME NULL'],
+    ['lost_by_user_id', 'INT NULL'],
+    ['lost_reason_category', 'VARCHAR(48) NULL'],
+    ['lost_reason_detail', 'TEXT NULL'],
+    ['reopened_at', 'DATETIME NULL'],
+    ['reopened_by_user_id', 'INT NULL'],
+  ]) {
+    try {
+      await pool.query(`ALTER TABLE service_cases ADD COLUMN ${column} ${definition}`);
+    } catch (error) {
+      if (error?.code !== 'ER_DUP_FIELDNAME') throw error;
+    }
+  }
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS service_case_commercial_outcome_history (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      service_case_id INT NOT NULL,
+      event_type VARCHAR(20) NOT NULL,
+      reason_category VARCHAR(48) NULL,
+      reason_detail TEXT NULL,
+      stage_id INT NULL,
+      actor_user_id INT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_service_outcome_case (service_case_id, id),
+      FOREIGN KEY (service_case_id) REFERENCES service_cases(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS service_case_doors (
@@ -288,6 +318,26 @@ async function ensureServiceTables() {
       created_by INT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_case (service_case_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS service_case_followups (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      service_case_id INT NOT NULL,
+      entry_type VARCHAR(20) NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      content TEXT NULL,
+      due_at DATETIME NULL,
+      priority VARCHAR(10) NOT NULL DEFAULT 'medium',
+      assigned_to INT NULL,
+      done TINYINT(1) NOT NULL DEFAULT 0,
+      created_by INT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      completed_at DATETIME NULL,
+      INDEX idx_case_created (service_case_id, created_at),
+      INDEX idx_assigned_due (assigned_to, done, due_at),
+      FOREIGN KEY (service_case_id) REFERENCES service_cases(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -1352,9 +1402,11 @@ router.put('/doors/:id', requireAuth, requireAnyRole('admin', 'service'), async 
 
 router.get('/cases', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
   const pid = Number(req.query.pipeline_id || 1);
+  const outcome = String(req.query.commercial_outcome || 'active').toLowerCase();
+  if (!['active', 'lost'].includes(outcome)) return res.status(400).json({ error: 'Filtro comercial invalido' });
   const [rows] = await pool.query(
     `SELECT sc.*, d.placa_id, d.marca, d.modelo, d.fecha_ultimo_mantenimiento,
-            o.name AS org_name, s.name AS stage_name,
+            o.name AS org_name, s.name AS stage_name, au.name AS assigned_to_name,
             ob.name AS org_branch_name, ob.address AS org_branch_address, ob.city AS org_branch_city,
             sq.computed_json AS last_quote_computed,
             sq.inputs_json AS last_quote_inputs,
@@ -1364,6 +1416,7 @@ router.get('/cases', requireAuth, requireAnyRole('admin', 'service'), async (req
        LEFT JOIN organizations o ON o.id = sc.org_id
        LEFT JOIN org_branches ob ON ob.id = sc.org_branch_id
        LEFT JOIN service_stages s ON s.id = sc.stage_id
+       LEFT JOIN users au ON au.id = sc.assigned_to
        LEFT JOIN (
          SELECT service_case_id, COUNT(*) AS door_count
            FROM service_case_doors
@@ -1375,9 +1428,9 @@ router.get('/cases', requireAuth, requireAnyRole('admin', 'service'), async (req
           GROUP BY service_case_id
        ) q ON q.service_case_id = sc.id
        LEFT JOIN service_quotes sq ON sq.id = q.last_quote_id
-      WHERE sc.pipeline_id = ?
+      WHERE sc.pipeline_id = ? AND sc.commercial_outcome = ?
       ORDER BY sc.updated_at DESC`,
-    [pid]
+    [pid, outcome]
   );
 
   const list = (rows || []).map((r) => {
@@ -1734,14 +1787,25 @@ router.patch('/cases/:id/stage', requireAuth, requireAnyRole('admin', 'service')
   const id = Number(req.params.id || 0);
   const stage_id = Number(req.body?.stage_id || 0);
   if (!id || !stage_id) return res.status(400).json({ error: 'Datos inválidos' });
-  await auditedRowMutation(pool, {
-    req, action: 'update', entity: 'service_case', entityId: id,
-    description: 'Cambió etapa de servicio',
-    run: async (conn, before) => {
-      if (!before) throw new Error('Servicio no encontrado');
-      await conn.query('UPDATE service_cases SET stage_id = ? WHERE id = ?', [stage_id, id]);
-    },
-  });
+  try {
+    await auditedRowMutation(pool, {
+      req, action: 'update', entity: 'service_case', entityId: id,
+      description: 'Cambió etapa de servicio',
+      run: async (conn, before) => {
+        if (!before) throw Object.assign(new Error('Servicio no encontrado'), { statusCode: 404 });
+        if (before.commercial_outcome === 'lost') {
+          throw Object.assign(new Error('Rehabilita el servicio antes de cambiar su etapa'), { statusCode: 409 });
+        }
+        const [[stage]] = await conn.query(
+          'SELECT id FROM service_stages WHERE id = ? AND pipeline_id = ?', [stage_id, before.pipeline_id]
+        );
+        if (!stage) throw Object.assign(new Error('La etapa no pertenece al pipeline de servicio'), { statusCode: 400 });
+        await conn.query('UPDATE service_cases SET stage_id = ? WHERE id = ?', [stage_id, id]);
+      },
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : 'No se pudo cambiar la etapa' });
+  }
   try {
     const [[stageRow]] = await pool.query('SELECT name FROM service_stages WHERE id = ?', [stage_id]);
     const stageName = String(stageRow?.name || '').toLowerCase();
@@ -1786,11 +1850,250 @@ router.patch('/cases/:id/stage', requireAuth, requireAnyRole('admin', 'service')
 
 
 // ====== case detail + custom fields ======
+const SERVICE_LOSS_REASONS = new Set([
+  'precio', 'competencia', 'plazo', 'sin_presupuesto', 'sin_respuesta',
+  'requisito_tecnico', 'postergado', 'otro',
+]);
+
+async function hasIssuedServiceSalesInvoice(conn, caseId) {
+  try {
+    const [[invoice]] = await conn.query(
+      `SELECT id FROM invoices WHERE service_case_id = ?
+         AND LOWER(COALESCE(status, '')) NOT IN ('anulada', 'borrador')
+         AND COALESCE(net_total_amount, total_amount, 0) > 0.01 LIMIT 1`, [caseId]
+    );
+    return Boolean(invoice);
+  } catch (error) {
+    if (error?.code !== 'ER_BAD_FIELD_ERROR') throw error;
+    const [[invoice]] = await conn.query(
+      `SELECT id FROM invoices WHERE service_case_id = ?
+         AND LOWER(COALESCE(status, '')) NOT IN ('anulada', 'borrador') LIMIT 1`, [caseId]
+    );
+    return Boolean(invoice);
+  }
+}
+
+router.post('/cases/:id/mark-not-closed', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
+  const caseId = Number(req.params.id);
+  const reasonCategory = String(req.body?.reason_category || '').trim().toLowerCase();
+  const reasonDetail = String(req.body?.reason_detail || '').trim();
+  if (!Number.isInteger(caseId) || caseId <= 0) return res.status(400).json({ error: 'Servicio invalido' });
+  if (!SERVICE_LOSS_REASONS.has(reasonCategory)) return res.status(400).json({ error: 'Selecciona un motivo valido' });
+  if (!reasonDetail) return res.status(400).json({ error: 'Explica por que no se cerro el servicio' });
+
+  const conn = await pool.getConnection();
+  let committed = false;
+  try {
+    await conn.beginTransaction();
+    const [[serviceCase]] = await conn.query(
+      'SELECT id, stage_id, commercial_outcome FROM service_cases WHERE id = ? FOR UPDATE', [caseId]
+    );
+    if (!serviceCase) return res.status(404).json({ error: 'Servicio no encontrado' });
+    if (serviceCase.commercial_outcome === 'lost') {
+      return res.status(409).json({ error: 'El servicio ya esta marcado como no cerrado' });
+    }
+    if (await hasIssuedServiceSalesInvoice(conn, caseId)) {
+      return res.status(409).json({ error: 'No se puede marcar como no cerrado un servicio facturado' });
+    }
+    const before = await auditSnapshot(conn, 'service_case', caseId);
+    await conn.query(
+      `UPDATE service_cases SET commercial_outcome = 'lost', lost_at = NOW(),
+         lost_by_user_id = ?, lost_reason_category = ?, lost_reason_detail = ?
+       WHERE id = ?`,
+      [req.user?.id || null, reasonCategory, reasonDetail, caseId]
+    );
+    await conn.query(
+      `INSERT INTO service_case_commercial_outcome_history
+         (service_case_id, event_type, reason_category, reason_detail, stage_id, actor_user_id)
+       VALUES (?, 'lost', ?, ?, ?, ?)`,
+      [caseId, reasonCategory, reasonDetail, serviceCase.stage_id, req.user?.id || null]
+    );
+    await recordAuditChange(conn, {
+      req, action: 'mark_not_closed', entity: 'service_case', entityId: caseId, before,
+      after: await auditSnapshot(conn, 'service_case', caseId), description: 'Marco servicio como no cerrado',
+    });
+    await conn.commit();
+    committed = true;
+    res.json({ ok: true, commercial_outcome: 'lost' });
+  } catch (error) {
+    console.error('[service:mark-not-closed]', error);
+    res.status(500).json({ error: 'No se pudo marcar el servicio como no cerrado' });
+  } finally {
+    if (!committed) await conn.rollback().catch(() => {});
+    conn.release();
+  }
+});
+
+router.post('/cases/:id/reopen-commercial', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
+  const caseId = Number(req.params.id);
+  const stageId = Number(req.body?.stage_id);
+  if (!Number.isInteger(caseId) || caseId <= 0 || !Number.isInteger(stageId) || stageId <= 0) {
+    return res.status(400).json({ error: 'Selecciona una etapa valida' });
+  }
+  const conn = await pool.getConnection();
+  let committed = false;
+  try {
+    await conn.beginTransaction();
+    const [[serviceCase]] = await conn.query(
+      'SELECT id, stage_id, pipeline_id, commercial_outcome FROM service_cases WHERE id = ? FOR UPDATE', [caseId]
+    );
+    if (!serviceCase) return res.status(404).json({ error: 'Servicio no encontrado' });
+    if (serviceCase.commercial_outcome !== 'lost') {
+      return res.status(409).json({ error: 'El servicio no esta marcado como no cerrado' });
+    }
+    const [[stage]] = await conn.query(
+      'SELECT id FROM service_stages WHERE id = ? AND pipeline_id = ?', [stageId, serviceCase.pipeline_id]
+    );
+    if (!stage) return res.status(400).json({ error: 'La etapa no pertenece al pipeline de servicio' });
+    const before = await auditSnapshot(conn, 'service_case', caseId);
+    await conn.query(
+      `UPDATE service_cases SET commercial_outcome = 'active', stage_id = ?,
+         reopened_at = NOW(), reopened_by_user_id = ? WHERE id = ?`,
+      [stageId, req.user?.id || null, caseId]
+    );
+    await conn.query(
+      `INSERT INTO service_case_commercial_outcome_history
+         (service_case_id, event_type, stage_id, actor_user_id)
+       VALUES (?, 'reopened', ?, ?)`,
+      [caseId, stageId, req.user?.id || null]
+    );
+    await recordAuditChange(conn, {
+      req, action: 'reopen_commercial', entity: 'service_case', entityId: caseId, before,
+      after: await auditSnapshot(conn, 'service_case', caseId), description: 'Rehabilito servicio',
+    });
+    await conn.commit();
+    committed = true;
+    res.json({ ok: true, commercial_outcome: 'active', stage_id: stageId });
+  } catch (error) {
+    console.error('[service:reopen-commercial]', error);
+    res.status(500).json({ error: 'No se pudo rehabilitar el servicio' });
+  } finally {
+    if (!committed) await conn.rollback().catch(() => {});
+    conn.release();
+  }
+});
+
+router.get('/cases/:id/commercial-outcome-history', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
+  const caseId = Number(req.params.id);
+  if (!Number.isInteger(caseId) || caseId <= 0) return res.status(400).json({ error: 'Servicio invalido' });
+  try {
+    const [[serviceCase]] = await pool.query('SELECT id FROM service_cases WHERE id = ?', [caseId]);
+    if (!serviceCase) return res.status(404).json({ error: 'Servicio no encontrado' });
+    const [rows] = await pool.query(
+      `SELECT h.*, u.name AS actor_name, s.name AS stage_name
+         FROM service_case_commercial_outcome_history h
+         LEFT JOIN users u ON u.id = h.actor_user_id
+         LEFT JOIN service_stages s ON s.id = h.stage_id
+        WHERE h.service_case_id = ? ORDER BY h.id DESC`, [caseId]
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error('[service:outcome-history]', error);
+    res.status(500).json({ error: 'No se pudo cargar el historial comercial' });
+  }
+});
+
+router.get('/cases/:id/followup-feed', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
+  const caseId = Number(req.params.id);
+  if (!Number.isInteger(caseId) || caseId <= 0) return res.status(400).json({ error: 'Servicio invalido' });
+  try {
+    const [[serviceCase]] = await pool.query('SELECT id FROM service_cases WHERE id = ?', [caseId]);
+    if (!serviceCase) return res.status(404).json({ error: 'Servicio no encontrado' });
+    const [items] = await pool.query(
+      `SELECT f.id, f.id AS source_id, f.entry_type, f.title, f.content,
+              DATE_FORMAT(f.due_at, '%Y-%m-%dT%H:%i') AS due_at,
+              f.priority, f.assigned_to, f.done, f.created_by, f.created_at, f.completed_at,
+              creator.name AS created_by_name, assignee.name AS assigned_to_name
+         FROM service_case_followups f
+         LEFT JOIN users creator ON creator.id = f.created_by
+         LEFT JOIN users assignee ON assignee.id = f.assigned_to
+        WHERE f.service_case_id = ?
+        ORDER BY f.created_at DESC, f.id DESC`,
+      [caseId]
+    );
+    res.json({ items });
+  } catch (error) {
+    console.error('[service:followup-feed]', error);
+    res.status(500).json({ error: 'No se pudo cargar el seguimiento' });
+  }
+});
+
+router.post('/cases/:id/followup-feed', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
+  const caseId = Number(req.params.id);
+  if (!Number.isInteger(caseId) || caseId <= 0) return res.status(400).json({ error: 'Servicio invalido' });
+  const entryType = String(req.body?.entry_type || '').trim().toLowerCase();
+  const title = String(req.body?.title || '').trim();
+  const content = String(req.body?.content || '').trim();
+  const dueAt = String(req.body?.due_at || '').trim();
+  const priority = String(req.body?.priority || 'medium').trim().toLowerCase();
+  const assignedTo = Number(req.body?.assigned_to || req.user?.id);
+  const done = req.body?.done === true || req.body?.done === 1;
+  if (!['note', 'activity', 'reminder', 'call', 'meeting', 'email', 'task'].includes(entryType)) {
+    return res.status(400).json({ error: 'Tipo de seguimiento invalido' });
+  }
+  if (entryType === 'note' ? !content : !title && !content) {
+    return res.status(400).json({ error: 'Completa el titulo o contenido' });
+  }
+  if (title.length > 255) return res.status(400).json({ error: 'El titulo es demasiado largo' });
+  if (entryType !== 'note' && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(dueAt)) {
+    return res.status(400).json({ error: 'Fecha y hora de vencimiento invalidas' });
+  }
+  if (entryType !== 'note' && (
+    !Number.isFinite(new Date(dueAt).getTime()) ||
+    new Date(dueAt).getFullYear() !== Number(dueAt.slice(0, 4)) ||
+    new Date(dueAt).getMonth() + 1 !== Number(dueAt.slice(5, 7)) ||
+    new Date(dueAt).getDate() !== Number(dueAt.slice(8, 10))
+  )) return res.status(400).json({ error: 'Fecha de vencimiento invalida' });
+  if (!Number.isInteger(assignedTo) || assignedTo <= 0) {
+    return res.status(400).json({ error: 'Selecciona un responsable valido' });
+  }
+  try {
+    const [[serviceCase]] = await pool.query('SELECT id, reference FROM service_cases WHERE id = ?', [caseId]);
+    if (!serviceCase) return res.status(404).json({ error: 'Servicio no encontrado' });
+    const [[assignee]] = await pool.query('SELECT id FROM users WHERE id = ? AND is_active = 1', [assignedTo]);
+    if (!assignee) return res.status(400).json({ error: 'El responsable no esta disponible' });
+    const finalTitle = title || (entryType === 'note' ? 'Nota' : `Actividad en ${serviceCase.reference || `servicio ${caseId}`}`);
+    const [result] = await pool.query(
+      `INSERT INTO service_case_followups
+         (service_case_id, entry_type, title, content, due_at, priority, assigned_to, done, created_by, completed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [caseId, entryType, finalTitle, content || null, entryType === 'note' ? null : dueAt.replace('T', ' ') + ':00',
+        ['low', 'medium', 'high'].includes(priority) ? priority : 'medium', assignedTo,
+        entryType !== 'note' && done ? 1 : 0, req.user?.id || null,
+        entryType !== 'note' && done ? new Date() : null]
+    );
+    res.status(201).json({ ok: true, id: result.insertId });
+  } catch (error) {
+    console.error('[service:create-followup]', error);
+    res.status(500).json({ error: 'No se pudo guardar el seguimiento' });
+  }
+});
+
+router.patch('/cases/:id/followup-feed/:itemId/done', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
+  const caseId = Number(req.params.id);
+  const itemId = Number(req.params.itemId);
+  if (!Number.isInteger(caseId) || caseId <= 0 || !Number.isInteger(itemId) || itemId <= 0) {
+    return res.status(400).json({ error: 'Parametros invalidos' });
+  }
+  try {
+    const [result] = await pool.query(
+      `UPDATE service_case_followups SET done = 1, completed_at = COALESCE(completed_at, NOW())
+        WHERE id = ? AND service_case_id = ? AND entry_type <> 'note'`,
+      [itemId, caseId]
+    );
+    if (!result.affectedRows) return res.status(404).json({ error: 'Actividad no encontrada' });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('[service:complete-followup]', error);
+    res.status(500).json({ error: 'No se pudo completar la actividad' });
+  }
+});
+
 router.get('/cases/:id', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
   const id = Number(req.params.id || 0);
   if (!id) return res.status(400).json({ error: 'id invalido' });
   const [[row]] = await pool.query(
-    `SELECT sc.*, o.name AS org_name, o.ruc AS org_ruc,
+    `SELECT sc.*, o.name AS org_name, o.ruc AS org_ruc, o.email AS org_email, o.phone AS org_phone,
             d.placa_id, d.nombre, d.sector, d.marca, d.modelo, d.dimensiones,
             d.fecha_instalacion, d.fecha_ultimo_mantenimiento,
             s.name AS stage_name,

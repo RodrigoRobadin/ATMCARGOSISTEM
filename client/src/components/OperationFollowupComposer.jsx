@@ -16,7 +16,7 @@ const setDateTime = (value, nextDate, nextTime) => {
 };
 const entryLabel = (entry) => TYPES.find((item) => item.value === String(entry?.entry_type || entry?.type || "activity").toLowerCase())?.label || "Actividad";
 
-export default function OperationFollowupComposer({ deal, currentUser, entries = [], entryType, setEntryType, title, setTitle, content, setContent, dueAt, setDueAt, priority, setPriority, assignedTo, setAssignedTo, markDone, setMarkDone, onSave, saving = false }) {
+export default function OperationFollowupComposer({ deal, entityLabel = "Operacion", currentUser, entries = [], entryType, setEntryType, title, setTitle, content, setContent, dueAt, setDueAt, priority, setPriority, assignedTo, setAssignedTo, markDone, setMarkDone, onSave, saving = false }) {
   const [users, setUsers] = useState([]);
   const isNote = entryType === "note";
   const selectedDate = datePart(dueAt) || todayInParaguay();
@@ -65,7 +65,7 @@ export default function OperationFollowupComposer({ deal, currentUser, entries =
         <textarea className={`w-full rounded-md border px-3 py-2 text-sm ${isNote ? "min-h-32 border-amber-200 bg-amber-50" : "min-h-24 border-slate-300"}`} placeholder={isNote ? "Escribe la nota..." : "Descripcion u observaciones de la actividad..."} value={content} onChange={(e) => setContent(e.target.value)} />
         {!isNote && <div className="space-y-2 text-sm">
           <select className="w-full rounded-md border border-slate-300 px-3 py-2" value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}><option value="">Seleccionar responsable</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name || item.email}</option>)}</select>
-          <div className="grid gap-2 sm:grid-cols-3"><div className="rounded-md border border-slate-200 px-3 py-2"><span className="block text-[11px] text-slate-500">Operacion</span>{deal?.reference || deal?.title || "-"}</div><div className="rounded-md border border-slate-200 px-3 py-2"><span className="block text-[11px] text-slate-500">Contacto</span>{deal?.contact_name || "Sin contacto"}</div><div className="rounded-md border border-slate-200 px-3 py-2"><span className="block text-[11px] text-slate-500">Organizacion</span>{deal?.org_name || "Sin organizacion"}</div></div>
+          <div className="grid gap-2 sm:grid-cols-3"><div className="rounded-md border border-slate-200 px-3 py-2"><span className="block text-[11px] text-slate-500">{entityLabel}</span>{deal?.reference || deal?.title || "-"}</div><div className="rounded-md border border-slate-200 px-3 py-2"><span className="block text-[11px] text-slate-500">Contacto</span>{deal?.contact_name || "Sin contacto"}</div><div className="rounded-md border border-slate-200 px-3 py-2"><span className="block text-[11px] text-slate-500">Organizacion</span>{deal?.org_name || "Sin organizacion"}</div></div>
         </div>}
         <div className="flex items-center justify-end gap-3 border-t border-slate-100 pt-3">
           {!isNote && <label className="mr-auto flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={markDone} onChange={(e) => setMarkDone(e.target.checked)} />Marcar como completa</label>}

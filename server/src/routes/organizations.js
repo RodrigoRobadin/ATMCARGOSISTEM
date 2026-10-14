@@ -261,6 +261,7 @@ router.post('/', requireAuth, async (req, res) => {
       supplier_bank_notes = null,
       branches = null,
       skip_prospect = false,
+      allow_missing_email = false,
     } = req.body || {};
 
     const rs =
@@ -271,8 +272,10 @@ router.post('/', requireAuth, async (req, res) => {
     const normalizedContactName = String(contact_name || '').trim();
     if (!normalizedRuc) return res.status(400).json({ error: 'ruc es requerido' });
     if (!normalizedContactName) return res.status(400).json({ error: 'contact_name es requerido' });
-    if (!normalizedEmail) return res.status(400).json({ error: 'email es requerido' });
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    if (!normalizedEmail && !(skip_prospect === true && allow_missing_email === true)) {
+      return res.status(400).json({ error: 'email es requerido' });
+    }
+    if (normalizedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       return res.status(400).json({ error: 'email no es válido' });
     }
 
@@ -350,7 +353,7 @@ router.post('/', requireAuth, async (req, res) => {
         visibility,
         is_agent ? 1 : 0,
         modalities_supported,
-        normalizedEmail,
+        normalizedEmail || null,
         rubro,
         tipo_org,
         operacion,
@@ -421,7 +424,7 @@ router.post('/', requireAuth, async (req, res) => {
       const [contactResult] = await conn.query(
         `INSERT INTO contacts(name, email, phone, org_id, visibility)
          VALUES (?, ?, ?, ?, 'company')`,
-        [normalizedContactName, normalizedEmail, toNull(phone), row.id]
+        [normalizedContactName, normalizedEmail || null, toNull(phone), row.id]
       );
 
       await recordAuditChange(conn, {
