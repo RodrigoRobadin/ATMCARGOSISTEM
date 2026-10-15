@@ -107,6 +107,7 @@ const AUDIT_TABLES = {
   contact_custom_field: 'person_custom_fields', deal_file: 'deal_files',
   mobile_attachment: 'mobile_attachments',
   service_file: 'service_field_files',
+  service_case_file: 'service_case_files',
 };
 
 export async function auditSnapshot(conn, entity, id, lock = false) {

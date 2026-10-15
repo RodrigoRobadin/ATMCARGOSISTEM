@@ -138,8 +138,12 @@ router.get('/', requireAuth, async (req, res) => {
     const q = (req.query.q || '').trim();
     const tipoOrg = (req.query.tipo_org || '').trim();
     const ownerUserId = req.query.owner_user_id ? Number(req.query.owner_user_id) : null;
+    const archived = String(req.query.archived || '') === '1';
+    if (archived && String(req.user?.role || '').toLowerCase() !== 'admin') {
+      return res.status(403).json({ error: 'Permiso denegado' });
+    }
 
-    const where = [];
+    const where = [archived ? 'o.deleted_at IS NOT NULL' : 'o.deleted_at IS NULL'];
     const params = [];
     if (q) {
       const like = `%${q}%`;
@@ -184,7 +188,7 @@ router.get('/', requireAuth, async (req, res) => {
         o.supplier_bank_cci_iban, o.supplier_bank_swift, o.supplier_bank_notes,
         o.zone_id, o.department,
         o.latitude, o.longitude, o.maps_url,
-        o.created_at, o.updated_at,
+        o.created_at, o.updated_at, o.deleted_at,
         o.budget_status,
         o.budget_profit AS budget_profit_value,
         u.name AS owner_user_name,
@@ -922,7 +926,7 @@ router.get('/:id', requireAuth, async (req, res) => {
         o.supplier_bank_cci_iban, o.supplier_bank_swift, o.supplier_bank_notes,
         o.zone_id, o.department,
         o.latitude, o.longitude, o.maps_url,
-        o.created_at, o.updated_at,
+        o.created_at, o.updated_at, o.deleted_at,
         o.budget_status, o.budget_profit AS budget_profit_value,
         u.name AS owner_user_name,
         u.email AS owner_user_email,
@@ -1034,6 +1038,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
       description: 'Actualizó organización',
       run: async (conn, before) => {
         if (!before) throw Object.assign(new Error('No encontrado'), { statusCode: 404 });
+        if (before.deleted_at) throw Object.assign(new Error('La organización está dada de baja'), { statusCode: 409 });
         await conn.query(`UPDATE organizations SET ${sets.join(', ')} WHERE id = ?`, params);
       },
     });
@@ -1052,7 +1057,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
         o.supplier_bank_cci_iban, o.supplier_bank_swift, o.supplier_bank_notes,
         o.zone_id, o.department,
         o.latitude, o.longitude, o.maps_url,
-        o.created_at, o.updated_at,
+        o.created_at, o.updated_at, o.deleted_at,
         o.budget_status, o.budget_profit AS budget_profit_value,
         u.name AS owner_user_name,
         u.email AS owner_user_email,
@@ -1075,23 +1080,43 @@ router.patch('/:id', requireAuth, async (req, res) => {
   }
 });
 
-/* ===================== BORRAR ===================== */
-router.delete('/:id', requireAuth, async (req, res) => {
+/* ===================== BAJA REVERSIBLE ===================== */
+router.delete('/:id', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const { id } = req.params;
     await auditedRowMutation(db, {
       req, action: 'delete', entity: 'organization', entityId: Number(id),
-      description: 'Eliminó organización',
+      description: 'Dio de baja organización',
       run: async (conn, before) => {
         if (!before) throw Object.assign(new Error('No encontrado'), { statusCode: 404 });
-        await conn.query('DELETE FROM organizations WHERE id = ?', [id]);
+        if (before.deleted_at) throw Object.assign(new Error('La organización ya está dada de baja'), { statusCode: 409 });
+        await conn.query('UPDATE organizations SET deleted_at = NOW(), updated_at = NOW() WHERE id = ?', [id]);
       },
     });
 
     res.json({ ok: true });
   } catch (e) {
-    console.error('[organizations:delete]', e);
-    res.status(e.statusCode || 400).json({ error: e.message || 'Delete failed' });
+    console.error('[organizations:archive]', e);
+    res.status(e.statusCode || 500).json({ error: e.message || 'No se pudo dar de baja la organización' });
+  }
+});
+
+router.post('/:id/restore', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    await auditedRowMutation(db, {
+      req, action: 'restore', entity: 'organization', entityId: Number(id),
+      description: 'Restauró organización',
+      run: async (conn, before) => {
+        if (!before) throw Object.assign(new Error('No encontrado'), { statusCode: 404 });
+        if (!before.deleted_at) throw Object.assign(new Error('La organización ya está activa'), { statusCode: 409 });
+        await conn.query('UPDATE organizations SET deleted_at = NULL, updated_at = NOW() WHERE id = ?', [id]);
+      },
+    });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[organizations:restore]', e);
+    res.status(e.statusCode || 500).json({ error: e.message || 'No se pudo restaurar la organización' });
   }
 });
 

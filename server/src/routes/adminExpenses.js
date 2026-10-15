@@ -960,7 +960,7 @@ router.get('/meta', requireAuth, async (_req, res) => {
     const [providers] = await pool.query(
       `SELECT id, razon_social, name, ruc
        FROM organizations
-       WHERE LOWER(tipo_org) = 'proveedor'
+       WHERE deleted_at IS NULL AND LOWER(tipo_org) = 'proveedor'
        ORDER BY name`
     );
     const rate = await getParamValue('admin_expense_exchange_rate', pool);
@@ -2895,7 +2895,7 @@ router.get('/providers', requireAuth, async (_req, res) => {
   const [rows] = await pool.query(
     `SELECT id, razon_social, name, ruc
      FROM organizations
-     WHERE LOWER(tipo_org) IN ('proveedor', 'agente', 'seguro', 'aseguradora', 'despachante', 'transporte', 'ferreteria', 'combustible', 'gasolinera')
+     WHERE deleted_at IS NULL AND LOWER(tipo_org) IN ('proveedor', 'agente', 'seguro', 'aseguradora', 'despachante', 'transporte', 'ferreteria', 'combustible', 'gasolinera')
      ORDER BY name`
   );
   res.json(rows);
@@ -2908,7 +2908,7 @@ router.get('/providers/search', requireAuth, async (req, res) => {
   const [rows] = await pool.query(
     `SELECT id, razon_social, name, ruc
      FROM organizations
-     WHERE LOWER(tipo_org) IN ('proveedor', 'agente', 'seguro', 'aseguradora', 'despachante', 'transporte', 'ferreteria', 'combustible', 'gasolinera')
+     WHERE deleted_at IS NULL AND LOWER(tipo_org) IN ('proveedor', 'agente', 'seguro', 'aseguradora', 'despachante', 'transporte', 'ferreteria', 'combustible', 'gasolinera')
        AND (name LIKE ? OR razon_social LIKE ? OR ruc LIKE ?)
      ORDER BY name
      LIMIT 20`,

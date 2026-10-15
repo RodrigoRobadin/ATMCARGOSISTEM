@@ -7,7 +7,11 @@ import computeQuoteDefault, { computeQuote as computeQuoteNamed } from '../servi
 import { buildQuoteXlsxBuffer } from '../services/quoteXlsxTemplate.js';
 import puppeteer from 'puppeteer-core';
 import fs from 'fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import multer from 'multer';
 import generateWorkOrderPDF from '../services/serviceWorkOrderPdfkit.js';
+import { normalizeDoorPrefix, nextDoorNumber, formatDoorCode } from '../services/serviceDoorCodes.js';
 
 const router = Router();
 const computeQuote = computeQuoteNamed || computeQuoteDefault;
@@ -194,6 +198,7 @@ async function ensureServiceTables() {
     CREATE TABLE IF NOT EXISTS service_cases (
       id INT AUTO_INCREMENT PRIMARY KEY,
       reference VARCHAR(40) NULL,
+      title VARCHAR(255) NULL,
       door_id INT NOT NULL,
       org_id INT NOT NULL,
       org_branch_id INT NULL,
@@ -219,6 +224,7 @@ async function ensureServiceTables() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
   for (const [column, definition] of [
+    ['title', 'VARCHAR(255) NULL'],
     ['commercial_outcome', "VARCHAR(24) NOT NULL DEFAULT 'active'"],
     ['lost_at', 'DATETIME NULL'],
     ['lost_by_user_id', 'INT NULL'],
@@ -501,6 +507,95 @@ async function ensureServiceTables() {
 }
 
 ensureServiceTables().catch((e) => console.error('[service] init tables', e?.message || e));
+
+let doorCodeSchemaPromise;
+function ensureDoorCodeSchema() {
+  if (!doorCodeSchemaPromise) {
+    doorCodeSchemaPromise = pool.query(`
+      CREATE TABLE IF NOT EXISTS service_door_sequences (
+        org_id INT NOT NULL PRIMARY KEY,
+        prefix CHAR(3) NOT NULL UNIQUE,
+        next_number INT UNSIGNED NOT NULL DEFAULT 1
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `).catch((error) => {
+      doorCodeSchemaPromise = null;
+      throw error;
+    });
+  }
+  return doorCodeSchemaPromise;
+}
+
+async function doorCodeState(conn, org, candidatePrefix = '') {
+  const [[sequence]] = await conn.query(
+    'SELECT prefix, next_number FROM service_door_sequences WHERE org_id = ?', [org.id]
+  );
+  const prefix = sequence?.prefix || candidatePrefix || normalizeDoorPrefix(org.name || org.razon_social);
+  const [references] = await conn.query(
+    'SELECT ref_int FROM client_doors WHERE org_id = ? AND ref_int LIKE ?', [org.id, `${prefix}%`]
+  );
+  return {
+    prefix,
+    locked: Boolean(sequence),
+    nextNumber: nextDoorNumber(references, prefix, sequence?.next_number),
+  };
+}
+
+let serviceCaseFileSchemaPromise;
+function ensureServiceCaseFileSchema() {
+  if (!serviceCaseFileSchemaPromise) {
+    serviceCaseFileSchemaPromise = pool.query(`
+      CREATE TABLE IF NOT EXISTS service_case_files (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        service_case_id INT NOT NULL,
+        type VARCHAR(50) NOT NULL DEFAULT 'general',
+        filename VARCHAR(255) NOT NULL,
+        display_name VARCHAR(255) NOT NULL,
+        url VARCHAR(500) NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_service_case_files_case (service_case_id),
+        FOREIGN KEY (service_case_id) REFERENCES service_cases(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `).catch((error) => {
+      serviceCaseFileSchemaPromise = null;
+      throw error;
+    });
+  }
+  return serviceCaseFileSchemaPromise;
+}
+
+const serviceFileExtensions = new Set([
+  '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif',
+  '.doc', '.docx', '.xls', '.xlsx', '.csv', '.txt', '.eml', '.msg',
+]);
+const receiveServiceFile = multer({
+  storage: multer.diskStorage({
+    destination(req, _file, callback) {
+      const caseId = Number(req.params.id);
+      if (!Number.isInteger(caseId) || caseId <= 0) return callback(new Error('Servicio inválido'));
+      const dir = path.resolve('uploads', 'service-cases', String(caseId));
+      fs.mkdir(dir, { recursive: true }, (error) => callback(error, dir));
+    },
+    filename(_req, file, callback) {
+      callback(null, `${randomUUID()}${path.extname(file.originalname || '').toLowerCase()}`);
+    },
+  }),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter(_req, file, callback) {
+    if (!serviceFileExtensions.has(path.extname(file.originalname || '').toLowerCase())) {
+      return callback(new Error('Formato no permitido. Adjuntá PDF, imagen, Office, correo o texto.'));
+    }
+    callback(null, true);
+  },
+}).single('file');
+
+function serviceFileMiddleware(req, res, next) {
+  receiveServiceFile(req, res, (error) => {
+    if (!error) return next();
+    res.status(error.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({
+      error: error.code === 'LIMIT_FILE_SIZE' ? 'El archivo supera los 20 MB.' : error.message,
+    });
+  });
+}
 
 // ====== helpers ======
 async function getParamValue(key, conn = pool) {
@@ -988,6 +1083,32 @@ router.get('/doors', requireAuth, requireAnyRole('admin', 'service'), async (req
 
 });
 
+router.get('/doors/code-preview', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
+  const orgId = Number(req.query.org_id);
+  if (!Number.isInteger(orgId) || orgId <= 0) return res.status(400).json({ error: 'Organización inválida' });
+  try {
+    await ensureDoorCodeSchema();
+    const [[org]] = await pool.query(
+      'SELECT id, name, razon_social FROM organizations WHERE id = ? AND deleted_at IS NULL', [orgId]
+    );
+    if (!org) return res.status(404).json({ error: 'Organización no disponible' });
+    const state = await doorCodeState(pool, org);
+    const [[owner]] = await pool.query(
+      'SELECT org_id FROM service_door_sequences WHERE prefix = ? AND org_id <> ? LIMIT 1',
+      [state.prefix, orgId]
+    );
+    res.json({
+      prefix: state.prefix,
+      prefix_locked: state.locked,
+      next_number: state.nextNumber,
+      prefix_available: !owner,
+    });
+  } catch (error) {
+    console.error('[service:door-code-preview]', error);
+    res.status(500).json({ error: 'No se pudo preparar el Código ATM' });
+  }
+});
+
 router.get('/doors/:id', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
   const id = Number(req.params.id || 0);
   const [[door]] = await pool.query(
@@ -1277,7 +1398,7 @@ router.post('/doors', requireAuth, requireAnyRole('admin', 'service'), async (re
     org_id,
     org_branch_id,
     placa_id,
-    ref_int,
+    code_prefix,
     nro_serie,
     nombre,
     sector,
@@ -1291,58 +1412,82 @@ router.post('/doors', requireAuth, requireAnyRole('admin', 'service'), async (re
     actuator_ids = [],
   } = req.body || {};
 
-  if (!org_id || !placa_id) {
-    return res.status(400).json({ error: 'org_id y placa_id son requeridos' });
+  const orgId = Number(org_id);
+  const plate = String(placa_id || '').trim();
+  const brand = String(marca || 'Rayflex').trim();
+  if (!Number.isInteger(orgId) || orgId <= 0 || !plate) {
+    return res.status(400).json({ error: 'Organización y Placa O.S. son obligatorias' });
   }
+  if (brand.length > 120) return res.status(400).json({ error: 'La marca debe tener 120 caracteres o menos' });
 
-  const [result] = await pool.query(
-    `INSERT INTO client_doors
-     (org_id, org_branch_id, placa_id, ref_int, nro_serie, nombre, sector, marca, modelo, dimensiones, fecha_instalacion, fecha_ultimo_mantenimiento, notas)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      org_id,
-      org_branch_id || null,
-      placa_id,
-      ref_int || null,
-      nro_serie || null,
-      nombre || null,
-      sector || null,
-      marca || 'Rayflex',
-      modelo || null,
-      dimensiones || null,
-      fecha_instalacion || null,
-      fecha_ultimo_mantenimiento || null,
-      notas || null,
-    ]
-  );
-  const doorId = result.insertId;
-
-  if (Array.isArray(component_ids) && component_ids.length) {
-    const values = component_ids.map((cid) => [doorId, Number(cid)]);
-    await pool.query(
-      'INSERT IGNORE INTO service_door_components (door_id, component_id) VALUES ?',
-      [values]
+  let conn;
+  try {
+    await ensureDoorCodeSchema();
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    const [[org]] = await conn.query(
+      'SELECT id, name, razon_social FROM organizations WHERE id = ? AND deleted_at IS NULL FOR UPDATE',
+      [orgId]
     );
-  }
-
-  if (Array.isArray(actuator_ids) && actuator_ids.length) {
-    const values = actuator_ids.map((aid) => [doorId, Number(aid)]);
-    await pool.query(
-      'INSERT IGNORE INTO service_door_actuators (door_id, actuator_id) VALUES ?',
-      [values]
+    if (!org) throw Object.assign(new Error('La organización no está disponible'), { statusCode: 400 });
+    const requestedPrefix = normalizeDoorPrefix(code_prefix);
+    const state = await doorCodeState(conn, org, requestedPrefix);
+    if (!/^[A-Z]{3}$/.test(state.prefix)) {
+      throw Object.assign(new Error('El prefijo ATM debe tener tres letras'), { statusCode: 400 });
+    }
+    if (state.locked && requestedPrefix && requestedPrefix !== state.prefix) {
+      throw Object.assign(new Error('El prefijo ATM de esta organización ya está fijado'), { statusCode: 409 });
+    }
+    const code = formatDoorCode(state.prefix, state.nextNumber);
+    if (!state.locked) {
+      await conn.query(
+        'INSERT INTO service_door_sequences (org_id, prefix, next_number) VALUES (?, ?, ?)',
+        [orgId, state.prefix, state.nextNumber + 1]
+      );
+    } else {
+      await conn.query(
+        'UPDATE service_door_sequences SET next_number = ? WHERE org_id = ?',
+        [state.nextNumber + 1, orgId]
+      );
+    }
+    const [result] = await conn.query(
+      `INSERT INTO client_doors
+       (org_id, org_branch_id, placa_id, ref_int, nro_serie, nombre, sector, marca, modelo, dimensiones, fecha_instalacion, fecha_ultimo_mantenimiento, notas)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [orgId, org_branch_id || null, plate, code, nro_serie || null, nombre || null,
+        sector || null, brand, modelo || null, dimensiones || null,
+        fecha_instalacion || null, fecha_ultimo_mantenimiento || null, notas || null]
     );
+    const doorId = result.insertId;
+    if (Array.isArray(component_ids) && component_ids.length) {
+      await conn.query('INSERT IGNORE INTO service_door_components (door_id, component_id) VALUES ?',
+        [component_ids.map((id) => [doorId, Number(id)])]);
+    }
+    if (Array.isArray(actuator_ids) && actuator_ids.length) {
+      await conn.query('INSERT IGNORE INTO service_door_actuators (door_id, actuator_id) VALUES ?',
+        [actuator_ids.map((id) => [doorId, Number(id)])]);
+    }
+    await conn.commit();
+    res.status(201).json({ id: doorId, ref_int: code });
+  } catch (error) {
+    if (conn) await conn.rollback();
+    if (error?.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'Ese prefijo ATM ya pertenece a otra organización. Elegí otro.' });
+    }
+    console.error('[service:doors:create]', error);
+    res.status(error.statusCode || 500).json({ error: error.message || 'No se pudo crear el equipo' });
+  } finally {
+    conn?.release();
   }
-
-  res.status(201).json({ id: doorId });
 });
 
 router.put('/doors/:id', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
   const id = Number(req.params.id || 0);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Equipo inválido' });
   const {
     org_id,
     org_branch_id,
     placa_id,
-    ref_int,
     nro_serie,
     nombre,
     sector,
@@ -1356,16 +1501,20 @@ router.put('/doors/:id', requireAuth, requireAnyRole('admin', 'service'), async 
     actuator_ids = [],
   } = req.body || {};
 
+  const [[current]] = await pool.query('SELECT org_id FROM client_doors WHERE id = ?', [id]);
+  if (!current) return res.status(404).json({ error: 'Equipo no encontrado' });
+  if (Number(org_id) !== Number(current.org_id)) {
+    return res.status(409).json({ error: 'El cliente de un equipo con Código ATM no puede cambiarse' });
+  }
+
   await pool.query(
     `UPDATE client_doors
-        SET org_id = ?, org_branch_id = ?, placa_id = ?, ref_int = ?, nro_serie = ?, nombre = ?, sector = ?, marca = ?, modelo = ?, dimensiones = ?,
+        SET org_branch_id = ?, placa_id = ?, nro_serie = ?, nombre = ?, sector = ?, marca = ?, modelo = ?, dimensiones = ?,
             fecha_instalacion = ?, fecha_ultimo_mantenimiento = ?, notas = ?
       WHERE id = ?`,
     [
-      org_id,
       org_branch_id || null,
       placa_id,
-      ref_int || null,
       nro_serie || null,
       nombre || null,
       sector || null,
@@ -1466,6 +1615,8 @@ router.get('/cases', requireAuth, requireAnyRole('admin', 'service'), async (req
 
 router.post('/cases', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
   const { door_id, door_ids, scheduled_date, assigned_to, stage_id, org_branch_id } = req.body || {};
+  const title = String(req.body?.title || '').trim();
+  if (title.length > 255) return res.status(400).json({ error: 'El título debe tener 255 caracteres o menos' });
   const doorIds = Array.isArray(door_ids) ? door_ids.map((x) => Number(x)).filter(Boolean) : [];
   if (!doorIds.length && !door_id) return res.status(400).json({ error: 'door_ids requerido' });
   if (!doorIds.length && door_id) doorIds.push(Number(door_id));
@@ -1478,6 +1629,11 @@ router.post('/cases', requireAuth, requireAnyRole('admin', 'service'), async (re
   const orgId = doors[0].org_id;
   const mismatch = doors.some((d) => d.org_id !== orgId);
   if (mismatch) return res.status(400).json({ error: 'Todas las puertas deben ser de la misma organización' });
+  const [[activeOrganization]] = await pool.query(
+    'SELECT id FROM organizations WHERE id = ? AND deleted_at IS NULL LIMIT 1',
+    [orgId]
+  );
+  if (!activeOrganization) return res.status(400).json({ error: 'La organización no está disponible' });
 
   const [[firstStage]] = await pool.query(
     'SELECT id FROM service_stages WHERE pipeline_id = 1 ORDER BY order_index ASC LIMIT 1'
@@ -1500,9 +1656,9 @@ router.post('/cases', requireAuth, requireAnyRole('admin', 'service'), async (re
     run: async (conn) => {
       const [insert] = await conn.query(
         `INSERT INTO service_cases
-         (reference, door_id, org_id, org_branch_id, pipeline_id, stage_id, status, assigned_to, scheduled_date)
-         VALUES (?, ?, ?, ?, 1, ?, 'abierto', ?, ?)`,
-        [reference, primaryDoorId, orgId, resolvedBranchId, useStage, assigned_to || null, scheduled_date || null]
+         (reference, title, door_id, org_id, org_branch_id, pipeline_id, stage_id, status, assigned_to, scheduled_date)
+         VALUES (?, ?, ?, ?, ?, 1, ?, 'abierto', ?, ?)`,
+        [reference, title || null, primaryDoorId, orgId, resolvedBranchId, useStage, assigned_to || null, scheduled_date || null]
       );
       await conn.query(
         'INSERT IGNORE INTO service_case_doors (service_case_id, door_id) VALUES ?',
@@ -2124,6 +2280,108 @@ router.get('/cases/:id', requireAuth, requireAnyRole('admin', 'service'), async 
     [id]
   );
   res.json({ case: row, doors });
+});
+
+router.get('/cases/:id/files', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
+  const caseId = Number(req.params.id);
+  if (!Number.isInteger(caseId) || caseId <= 0) return res.status(400).json({ error: 'Servicio inválido' });
+  try {
+    await ensureServiceCaseFileSchema();
+    const [rows] = await pool.query(
+      'SELECT id, type, filename, display_name, url, created_at FROM service_case_files WHERE service_case_id = ? ORDER BY created_at DESC, id DESC',
+      [caseId]
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error('[service:files:list]', error);
+    res.status(500).json({ error: 'No se pudieron cargar los documentos' });
+  }
+});
+
+router.post('/cases/:id/files', requireAuth, requireAnyRole('admin', 'service'), serviceFileMiddleware, async (req, res) => {
+  const caseId = Number(req.params.id);
+  const displayName = String(req.body?.display_name || '').trim();
+  if (!req.file || !Number.isInteger(caseId) || caseId <= 0 || !displayName || displayName.length > 255) {
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ error: 'Seleccioná un archivo y un nombre de hasta 255 caracteres' });
+  }
+  try {
+    await ensureServiceCaseFileSchema();
+    const [[serviceCase]] = await pool.query('SELECT id FROM service_cases WHERE id = ?', [caseId]);
+    if (!serviceCase) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(404).json({ error: 'Servicio no encontrado' });
+    }
+    const url = `/uploads/service-cases/${caseId}/${req.file.filename}`;
+    const { after } = await auditedRowMutation(pool, {
+      req, action: 'create', entity: 'service_case_file', rootEntity: 'service_case', rootEntityId: caseId,
+      description: 'Agregó documento al servicio',
+      run: async (conn) => {
+        const [result] = await conn.query(
+          'INSERT INTO service_case_files (service_case_id, type, filename, display_name, url) VALUES (?, ?, ?, ?, ?)',
+          [caseId, 'general', req.file.filename, displayName, url]
+        );
+        return result;
+      },
+    });
+    res.status(201).json(after);
+  } catch (error) {
+    fs.unlink(req.file.path, () => {});
+    console.error('[service:files:upload]', error);
+    res.status(500).json({ error: 'No se pudo cargar el documento' });
+  }
+});
+
+router.patch('/cases/:id/files/:fileId', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
+  const caseId = Number(req.params.id);
+  const fileId = Number(req.params.fileId);
+  const displayName = String(req.body?.display_name || '').trim();
+  if (!Number.isInteger(caseId) || caseId <= 0 || !Number.isInteger(fileId) || fileId <= 0 || !displayName || displayName.length > 255) {
+    return res.status(400).json({ error: 'Nombre de documento inválido' });
+  }
+  try {
+    await ensureServiceCaseFileSchema();
+    const { after } = await auditedRowMutation(pool, {
+      req, action: 'update', entity: 'service_case_file', entityId: fileId,
+      rootEntity: 'service_case', rootEntityId: caseId, description: 'Renombró documento del servicio',
+      run: async (conn, before) => {
+        if (!before || Number(before.service_case_id) !== caseId) {
+          throw Object.assign(new Error('Documento no encontrado'), { statusCode: 404 });
+        }
+        await conn.query('UPDATE service_case_files SET display_name = ? WHERE id = ?', [displayName, fileId]);
+      },
+    });
+    res.json(after);
+  } catch (error) {
+    console.error('[service:files:rename]', error);
+    res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : 'No se pudo renombrar el documento' });
+  }
+});
+
+router.delete('/cases/:id/files/:fileId', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
+  const caseId = Number(req.params.id);
+  const fileId = Number(req.params.fileId);
+  if (!Number.isInteger(caseId) || caseId <= 0 || !Number.isInteger(fileId) || fileId <= 0) {
+    return res.status(400).json({ error: 'Documento inválido' });
+  }
+  try {
+    await ensureServiceCaseFileSchema();
+    const { before } = await auditedRowMutation(pool, {
+      req, action: 'delete', entity: 'service_case_file', entityId: fileId,
+      rootEntity: 'service_case', rootEntityId: caseId, description: 'Eliminó documento del servicio',
+      run: async (conn, row) => {
+        if (!row || Number(row.service_case_id) !== caseId) {
+          throw Object.assign(new Error('Documento no encontrado'), { statusCode: 404 });
+        }
+        await conn.query('DELETE FROM service_case_files WHERE id = ?', [fileId]);
+      },
+    });
+    fs.unlink(path.resolve('uploads', 'service-cases', String(caseId), before.filename), () => {});
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('[service:files:delete]', error);
+    res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : 'No se pudo eliminar el documento' });
+  }
 });
 
 router.get('/cases/:id/custom-fields', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {

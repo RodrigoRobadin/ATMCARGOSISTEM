@@ -572,7 +572,7 @@ async function ensureSupplierId(payload, req) {
 
   if (ruc) {
     const [[found]] = await pool.query(
-      `SELECT id FROM organizations WHERE ruc = ? AND LOWER(tipo_org) = 'proveedor' LIMIT 1`,
+      `SELECT id FROM organizations WHERE ruc = ? AND deleted_at IS NULL AND LOWER(tipo_org) = 'proveedor' LIMIT 1`,
       [ruc]
     );
     if (found?.id) return found.id;
@@ -580,7 +580,7 @@ async function ensureSupplierId(payload, req) {
 
   if (name) {
     const [[foundByName]] = await pool.query(
-      `SELECT id FROM organizations WHERE (razon_social = ? OR name = ?) AND LOWER(tipo_org) = 'proveedor' LIMIT 1`,
+      `SELECT id FROM organizations WHERE (razon_social = ? OR name = ?) AND deleted_at IS NULL AND LOWER(tipo_org) = 'proveedor' LIMIT 1`,
       [name, name]
     );
     if (foundByName?.id) return foundByName.id;

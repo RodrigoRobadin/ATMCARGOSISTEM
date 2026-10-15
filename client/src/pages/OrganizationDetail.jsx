@@ -7,6 +7,7 @@ import OrganizationLookupField from '../components/OrganizationLookupField.jsx';
 import OrganizationEngagementPanel from '../components/OrganizationEngagementPanel.jsx';
 import AuditHistory from '../components/AuditHistory.jsx';
 import { attachOrganizationToAssistant } from '../utils/assistantContext';
+import { useAuth } from '../auth.jsx';
 
 function FieldRow({ label, value, children }) {
   return (
@@ -324,9 +325,13 @@ async function enrichNotesAuthors(list) {
 
 export default function OrganizationDetail() {
   const { id } = useParams();
+  const { user } = useAuth();
+  const canManage = String(user?.role || '').toLowerCase() === 'admin';
   const [org, setOrg] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreError, setRestoreError] = useState('');
 
   // tabs panel principal
   const [tab, setTab] = useState('activity'); // activity | timeline | notes | files | docs
@@ -388,6 +393,19 @@ export default function OrganizationDetail() {
   async function loadOrg() {
     const { data } = await api.get(`/organizations/${id}`);
     setOrg(data);
+  }
+  async function restoreOrg() {
+    if (!window.confirm('¿Restaurar esta organización para que vuelva a estar disponible?')) return;
+    setRestoring(true);
+    setRestoreError('');
+    try {
+      await api.post(`/organizations/${id}/restore`);
+      await loadOrg();
+    } catch (error) {
+      setRestoreError(error?.response?.data?.error || 'No se pudo restaurar la organización.');
+    } finally {
+      setRestoring(false);
+    }
   }
   async function loadActivities() {
     setActsLoading(true);
@@ -778,6 +796,14 @@ export default function OrganizationDetail() {
 
   return (
     <div className="space-y-4">
+      {org.deleted_at && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Esta organización está dada de baja. Su historial sigue disponible, pero no puede seleccionarse para nuevos registros.
+          {canManage && <button type="button" onClick={restoreOrg} disabled={restoring}
+            className="ml-3 font-semibold underline disabled:opacity-50">{restoring ? 'Restaurando...' : 'Restaurar'}</button>}
+          {restoreError && <p role="alert" className="mt-2 text-red-700">{restoreError}</p>}
+        </div>
+      )}
       {/* ====== Header estilo Pipedrive ====== */}
       <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -796,18 +822,20 @@ export default function OrganizationDetail() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              className="px-3 py-2 text-sm rounded-lg bg-emerald-600 text-white"
-              onClick={() => setOpenDeal(true)}
-            >
-              + Operación
-            </button>
-            <button
-              className="px-3 py-2 text-sm rounded-lg border"
-              onClick={() => setOpenEdit(true)}
-            >
-              Editar
-            </button>
+            {!org.deleted_at && <>
+              <button
+                className="px-3 py-2 text-sm rounded-lg bg-emerald-600 text-white"
+                onClick={() => setOpenDeal(true)}
+              >
+                + Operación
+              </button>
+              <button
+                className="px-3 py-2 text-sm rounded-lg border"
+                onClick={() => setOpenEdit(true)}
+              >
+                Editar
+              </button>
+            </>}
           </div>
         </div>
       </div>

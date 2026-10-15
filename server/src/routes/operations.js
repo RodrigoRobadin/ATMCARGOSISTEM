@@ -51,6 +51,7 @@ router.get('/', requireAuth, async (req, res) => {
         budget_profit AS budget_profit_value,
         NULL AS advisor_name
       FROM organizations
+      WHERE deleted_at IS NULL
       ORDER BY name ASC
       LIMIT ? OFFSET ?
       `,

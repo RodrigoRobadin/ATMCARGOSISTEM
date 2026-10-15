@@ -231,6 +231,12 @@ export default function ServiceModule() {
   const [showDoorModal, setShowDoorModal] = useState(false);
   const [doorForm, setDoorForm] = useState(emptyDoor);
   const [editingDoorId, setEditingDoorId] = useState(null);
+  const [doorCodePrefix, setDoorCodePrefix] = useState("");
+  const [doorCodeOrgId, setDoorCodeOrgId] = useState(null);
+  const [doorNextNumber, setDoorNextNumber] = useState(1);
+  const [doorCodeLocked, setDoorCodeLocked] = useState(false);
+  const [doorCodeLoading, setDoorCodeLoading] = useState(false);
+  const [doorCodeError, setDoorCodeError] = useState("");
   const [doorModalVariant, setDoorModalVariant] = useState("center"); // center | side
   const [activeModal, setActiveModal] = useState(null); // "case" | "door" | null
   const [selectedClient, setSelectedClient] = useState(null);
@@ -242,6 +248,7 @@ export default function ServiceModule() {
 
   const [showCaseModal, setShowCaseModal] = useState(false);
   const [caseForm, setCaseForm] = useState({
+    title: "",
     org_label: "",
     org_id: "",
     door_ids: [],
@@ -302,6 +309,40 @@ export default function ServiceModule() {
       live = false;
     };
   }, [doorForm.org_id]);
+
+  useEffect(() => {
+    if (!showDoorModal || editingDoorId) return;
+    const orgId = Number(doorForm.org_id || 0);
+    if (!orgId) {
+      setDoorCodePrefix("");
+      setDoorCodeOrgId(null);
+      setDoorNextNumber(1);
+      setDoorCodeLocked(false);
+      setDoorCodeError("");
+      return;
+    }
+    let live = true;
+    setDoorCodePrefix("");
+    setDoorCodeOrgId(null);
+    setDoorCodeLoading(true);
+    setDoorCodeError("");
+    api.get("/service/doors/code-preview", { params: { org_id: orgId } })
+      .then(({ data }) => {
+        if (!live) return;
+        setDoorCodePrefix(data.prefix || "");
+        setDoorCodeOrgId(orgId);
+        setDoorNextNumber(Number(data.next_number) || 1);
+        setDoorCodeLocked(Boolean(data.prefix_locked));
+        if (!data.prefix_available) setDoorCodeError("Ese prefijo ya se usa con otro cliente. Elegí otro.");
+      })
+      .catch((error) => {
+        if (live) setDoorCodeError(error?.response?.data?.error || "No se pudo cargar el Código ATM.");
+      })
+      .finally(() => {
+        if (live) setDoorCodeLoading(false);
+      });
+    return () => { live = false; };
+  }, [doorForm.org_id, editingDoorId, showDoorModal]);
 
   useEffect(() => {
     const orgId = Number(caseForm.org_id || 0);
@@ -594,9 +635,22 @@ export default function ServiceModule() {
         doorForm.ancho && doorForm.alto
           ? `${doorForm.ancho} x ${doorForm.alto}`
           : doorForm.dimensiones || "";
-      const payload = { ...doorForm, org_branch_id: doorForm.org_branch_id || caseForm.org_branch_id || "", dimensiones: dims };
+      const payload = {
+        ...doorForm,
+        code_prefix: doorCodePrefix,
+        org_branch_id: doorForm.org_branch_id || caseForm.org_branch_id || "",
+        dimensiones: dims,
+      };
       if (!payload.org_id || !payload.placa_id) {
-        alert("Org y placa son requeridos");
+        alert("Organización y Placa O.S. son obligatorias");
+        return;
+      }
+      if (!String(payload.marca || "").trim()) {
+        alert("Seleccioná o escribí la marca del equipo");
+        return;
+      }
+      if (!editingDoorId && (doorCodeLoading || doorCodeOrgId !== Number(payload.org_id) || doorCodePrefix.length !== 3)) {
+        alert("Seleccioná un cliente y un prefijo ATM de tres letras");
         return;
       }
       let createdId = null;
@@ -619,7 +673,7 @@ export default function ServiceModule() {
         }));
       }
     } catch (e) {
-      alert("No se pudo crear equipo");
+      alert(e?.response?.data?.error || "No se pudo guardar el equipo");
     }
   }
 
@@ -676,6 +730,7 @@ export default function ServiceModule() {
       if (!caseForm.org_branch_id) return alert("Selecciona una sucursal para el servicio");
       if (!caseForm.door_ids?.length) return alert("Selecciona al menos un equipo");
       await api.post("/service/cases", {
+        title: caseForm.title.trim(),
         door_ids: caseForm.door_ids,
         org_branch_id: caseForm.org_branch_id,
         scheduled_date: caseForm.scheduled_date,
@@ -684,9 +739,9 @@ export default function ServiceModule() {
       const { data } = await api.get("/service/cases");
       setCases(data || []);
       setShowCaseModal(false);
-      setCaseForm({ org_label: "", org_id: "", org_branch_id: "", door_ids: [], scheduled_date: "", stage_id: "" });
+      setCaseForm({ title: "", org_label: "", org_id: "", org_branch_id: "", door_ids: [], scheduled_date: "", stage_id: "" });
     } catch (e) {
-      alert("No se pudo crear caso");
+      alert(e?.response?.data?.error || "No se pudo crear el servicio");
     }
   }
 
@@ -837,14 +892,25 @@ export default function ServiceModule() {
                               {...provided.draggableProps}
                               {...provided.dragHandleProps}
                               to={`/service/cases/${c.id}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(event) => event.preventDefault()}
+                              onDoubleClickCapture={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                window.open(event.currentTarget.href, "_blank", "noopener,noreferrer");
+                              }}
                               onContextMenu={(event) => {
                                 event.preventDefault();
                                 setOutcomeMenu({ serviceCase: c, x: event.clientX, y: event.clientY });
                               }}
                               className="block border rounded-xl p-3 bg-white hover:shadow transition cursor-pointer"
                             >
-                              <div className="text-sm font-semibold truncate">
-                                {c.reference || `#${c.id}`}
+                              <div
+                                className="text-sm font-semibold truncate"
+                                title={[c.reference || `#${c.id}`, c.title].filter(Boolean).join(" - ")}
+                              >
+                                {[c.reference || `#${c.id}`, c.title].filter(Boolean).join(" - ")}
                               </div>
                               <div className="text-xs text-slate-600 truncate">
                                 {(c.org_name || "-") + " - " + (c.door_count > 1 ? `${c.door_count} equipos` : (c.placa_id || "Equipo"))}
@@ -1007,8 +1073,8 @@ export default function ServiceModule() {
                 <thead className="bg-slate-100 text-slate-600">
                   <tr>
                     <th className="text-left px-3 py-2">Nombre</th>
-                    <th className="text-left px-3 py-2">Placa</th>
-                    <th className="text-left px-3 py-2">Reff Int</th>
+                    <th className="text-left px-3 py-2">Placa O.S.</th>
+                    <th className="text-left px-3 py-2">Código ATM</th>
                     <th className="text-left px-3 py-2">Nro. Serie</th>
                     <th className="text-left px-3 py-2">Sector</th>
                     <th className="text-left px-3 py-2">Sucursal</th>
@@ -1074,17 +1140,20 @@ export default function ServiceModule() {
                 Cerrar
               </button>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="space-y-1">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="space-y-1 md:col-span-2">
                 <label className="text-xs text-slate-500">Organización</label>
                 <input
                   className="border rounded px-2 py-1 w-full"
                   placeholder="Buscar organización (nombre o RUC)"
                   list="service-orgs"
                   value={orgSearch}
+                  disabled={Boolean(editingDoorId)}
                   onChange={(e) => {
                     const val = e.target.value;
                     setOrgSearch(val);
+                    setDoorCodePrefix("");
+                    setDoorNextNumber(1);
                     const match = orgOptions.find((o) => {
                       const label = `${o.name}${o.ruc ? ` - ${o.ruc}` : ""}`;
                       return label === val;
@@ -1102,64 +1171,53 @@ export default function ServiceModule() {
                   ))}
                 </datalist>
               </div>
-              <input
-                className="border rounded px-2 py-1"
-                placeholder="Placa ID"
-                value={doorForm.placa_id}
-                onChange={(e) => setDoorForm({ ...doorForm, placa_id: e.target.value })}
-              />
-              <input
-                className="border rounded px-2 py-1"
-                placeholder="Reff Int"
-                value={doorForm.ref_int}
-                onChange={(e) => setDoorForm({ ...doorForm, ref_int: e.target.value })}
-              />
-              <input
-                className="border rounded px-2 py-1"
-                placeholder="Nro. Serie"
-                value={doorForm.nro_serie}
-                onChange={(e) => setDoorForm({ ...doorForm, nro_serie: e.target.value })}
-              />
-              <input
-                className="border rounded px-2 py-1"
-                placeholder="Nombre"
-                value={doorForm.nombre}
-                onChange={(e) => setDoorForm({ ...doorForm, nombre: e.target.value })}
-              />
-              <input
-                className="border rounded px-2 py-1"
-                placeholder="Sector"
-                value={doorForm.sector}
-                onChange={(e) => setDoorForm({ ...doorForm, sector: e.target.value })}
-              />
-                            <div className="md:col-span-2 rounded-lg border bg-slate-50 p-3 space-y-3">
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-slate-600">Sucursal</label>
-                  <select
-                    className="border rounded px-2 py-1 w-full bg-white"
-                    value={doorForm.org_branch_id || ""}
-                    onChange={(e) => setDoorForm({ ...doorForm, org_branch_id: e.target.value })}
-                  >
-                    <option value="">
-                      {doorBranchLoading ? "Cargando sucursales..." : "Sin sucursal"}
-                    </option>
-                    {(doorBranches || []).map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name || b.address || `Sucursal ${b.id}`}
-                      </option>
-                    ))}
-                  </select>
-                </div></div>
+              <label className="space-y-1 md:col-span-2">
+                <span className="block text-xs text-slate-500">Sucursal</span>
+                <select
+                  className="w-full rounded border bg-white px-2 py-1"
+                  value={doorForm.org_branch_id || ""}
+                  onChange={(e) => setDoorForm({ ...doorForm, org_branch_id: e.target.value })}
+                  disabled={!doorForm.org_id || doorBranchLoading}
+                >
+                  <option value="">{doorBranchLoading ? "Cargando sucursales..." : "Sin sucursal"}</option>
+                  {doorBranches.map((b) => (
+                    <option key={b.id} value={b.id}>{b.name || b.address || `Sucursal ${b.id}`}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="space-y-1 md:col-span-2">
+                <div className="text-xs text-slate-500">Código ATM</div>
+                {editingDoorId ? (
+                  <input className="w-full rounded border bg-slate-50 px-2 py-1" value={doorForm.ref_int || ""} readOnly />
+                ) : (
+                  <div className="flex min-w-0 gap-2">
+                    <input
+                      className="w-24 shrink-0 rounded border px-2 py-1 uppercase disabled:bg-slate-50"
+                      aria-label="Prefijo del Código ATM"
+                      value={doorCodePrefix}
+                      maxLength={3}
+                      disabled={!doorForm.org_id || doorCodeLocked || doorCodeLoading}
+                      onChange={(e) => {
+                        setDoorCodePrefix(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3));
+                        setDoorCodeError("");
+                      }}
+                    />
+                    <input
+                      className="min-w-0 flex-1 rounded border bg-slate-50 px-2 py-1"
+                      aria-label="Próximo Código ATM"
+                      value={doorCodePrefix ? `${doorCodePrefix}${String(doorNextNumber).padStart(3, "0")}` : ""}
+                      readOnly
+                    />
+                  </div>
+                )}
+                {doorCodeError && !editingDoorId && <div className="text-xs text-red-600" role="alert">{doorCodeError}</div>}
+              </div>
+              <input className="w-full rounded border px-2 py-1" placeholder="Nombre de la puerta"
+                value={doorForm.nombre} onChange={(e) => setDoorForm({ ...doorForm, nombre: e.target.value })} />
+              <input className="w-full rounded border px-2 py-1" placeholder="Sector de la puerta"
+                value={doorForm.sector} onChange={(e) => setDoorForm({ ...doorForm, sector: e.target.value })} />
               <select
-                className="border rounded px-2 py-1"
-                value={doorForm.marca}
-                onChange={(e) => setDoorForm({ ...doorForm, marca: e.target.value })}
-              >
-                <option value="Rayflex">Rayflex</option>
-                <option value="Ferredoor">Ferredoor</option>
-              </select>
-              <select
-                className="border rounded px-2 py-1"
+                className="w-full rounded border px-2 py-1"
                 value={doorForm.modelo}
                 onChange={(e) => {
                   const model = e.target.value;
@@ -1172,19 +1230,38 @@ export default function ServiceModule() {
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid min-w-0 grid-cols-2 gap-2">
                 <input
-                  className="border rounded px-2 py-1"
+                  className="min-w-0 w-full border rounded px-2 py-1"
                   placeholder="Ancho"
                   value={doorForm.ancho}
                   onChange={(e) => setDoorForm({ ...doorForm, ancho: e.target.value })}
                 />
                 <input
-                  className="border rounded px-2 py-1"
+                  className="min-w-0 w-full border rounded px-2 py-1"
                   placeholder="Alto"
                   value={doorForm.alto}
                   onChange={(e) => setDoorForm({ ...doorForm, alto: e.target.value })}
                 />
+              </div>
+              <input className="w-full rounded border px-2 py-1" placeholder="Nro. de serie"
+                value={doorForm.nro_serie} onChange={(e) => setDoorForm({ ...doorForm, nro_serie: e.target.value })} />
+              <input className="w-full rounded border px-2 py-1" placeholder="Placa O.S."
+                value={doorForm.placa_id} onChange={(e) => setDoorForm({ ...doorForm, placa_id: e.target.value })} />
+              <div className="space-y-1 md:col-span-2">
+                <label className="block text-xs text-slate-500" htmlFor="service-door-brand">Marca</label>
+                <select id="service-door-brand" className="w-full rounded border px-2 py-1"
+                  value={doorForm.marca === "Rayflex" ? "Rayflex" : "other"}
+                  onChange={(e) => setDoorForm({ ...doorForm, marca: e.target.value === "Rayflex" ? "Rayflex" : "" })}
+                >
+                  <option value="Rayflex">Rayflex</option>
+                  <option value="other">Otra marca</option>
+                </select>
+                {doorForm.marca !== "Rayflex" && (
+                  <input className="w-full rounded border px-2 py-1" aria-label="Nombre de otra marca"
+                    placeholder="Escribir marca" maxLength={120} value={doorForm.marca}
+                    onChange={(e) => setDoorForm({ ...doorForm, marca: e.target.value })} />
+                )}
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-slate-500">Fecha de instalación</label>
@@ -1267,6 +1344,16 @@ export default function ServiceModule() {
           >
             <div className="text-lg font-semibold mb-2">Nuevo servicio</div>
             <div className="grid grid-cols-1 gap-3">
+              <label className="space-y-1">
+                <span className="block text-xs text-slate-500">Título del servicio o mantenimiento</span>
+                <input
+                  className="w-full rounded border px-2 py-1"
+                  value={caseForm.title}
+                  onChange={(event) => setCaseForm({ ...caseForm, title: event.target.value })}
+                  maxLength={255}
+                  placeholder="Ej.: Mantenimiento preventivo de portones"
+                />
+              </label>
               <div className="space-y-1">
                 <label className="text-xs text-slate-500">Organizacion</label>
                 <input

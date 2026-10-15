@@ -12,6 +12,17 @@ import ServiceCaseFollowup from "./ServiceCaseFollowup.jsx";
 import ReopenServiceCaseModal from "./ReopenServiceCaseModal.jsx";
 import { MarkDealNotClosedModal } from "../../components/DealCommercialOutcomeControls.jsx";
 import AuditHistory from "../../components/AuditHistory.jsx";
+import OperationDocuments from "../../components/OperationDocuments.jsx";
+
+function resolveServiceFileUrl(urlPath = "") {
+  const base = api.defaults.baseURL || "";
+  try {
+    const url = new URL(base);
+    return `${url.protocol}//${url.host}${urlPath}`;
+  } catch {
+    return urlPath;
+  }
+}
 
 function safeJsonArray(v) {
   if (!v) return [];
@@ -22,6 +33,13 @@ function safeJsonArray(v) {
   } catch {
     return [];
   }
+}
+
+function doorIdentity(door) {
+  return [door.placa_id, door.nombre, door.sector]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" · ") || `Puerta ${door.id}`;
 }
 
 function TabButton({ active, onClick, children }) {
@@ -119,6 +137,9 @@ export default function ServiceCaseDetail() {
   const [serviceQuoteId, setServiceQuoteId] = useState(null);
   const [serviceQuoteRevisions, setServiceQuoteRevisions] = useState([]);
   const [opDocs, setOpDocs] = useState([]);
+  const [serviceFiles, setServiceFiles] = useState([]);
+  const [documentSelection, setDocumentSelection] = useState("");
+  const [documentsError, setDocumentsError] = useState("");
   const [data, setData] = useState(null);
   const [history, setHistory] = useState([]);
   const [doorHistory, setDoorHistory] = useState([]);
@@ -197,6 +218,7 @@ export default function ServiceCaseDetail() {
       return (
         String(d.nombre || "").toLowerCase().includes(q) ||
         String(d.placa_id || "").toLowerCase().includes(q) ||
+        String(d.sector || "").toLowerCase().includes(q) ||
         String(d.modelo || "").toLowerCase().includes(q) ||
         String(d.marca || "").toLowerCase().includes(q) ||
         String(d.ref_int || "").toLowerCase().includes(q)
@@ -364,6 +386,7 @@ export default function ServiceCaseDetail() {
 
   const baseTabs = [
     { id: "detalle", label: "Detalle" },
+    { id: "documentos", label: "Documentos" },
     { id: "oferta", label: "Detalle de oferta" },
     { id: "presupuesto", label: "Presupuesto" },
     { id: "informes", label: "Informes" },
@@ -390,10 +413,24 @@ export default function ServiceCaseDetail() {
     };
   }, [caseId]);
 
-  const docTabs = opDocs.map((d) => ({
-    id: `doc-${d.kind}-${d.id}`,
-    label: `${d.kind === "credit_note" ? "NC" : "Factura"} ${d.number || d.id}`,
-  }));
+  async function loadServiceFiles() {
+    const { data: files } = await api.get(`/service/cases/${caseId}/files`);
+    setServiceFiles(Array.isArray(files) ? files : []);
+    setDocumentsError("");
+  }
+
+  useEffect(() => {
+    if (!caseId) return;
+    let live = true;
+    api.get(`/service/cases/${caseId}/files`)
+      .then(({ data: files }) => {
+        if (live) setServiceFiles(Array.isArray(files) ? files : []);
+      })
+      .catch(() => {
+        if (live) setDocumentsError("No se pudieron cargar los documentos del servicio.");
+      });
+    return () => { live = false; };
+  }, [caseId]);
 
   const revisionTabs = serviceQuoteRevisions.map((r) => ({
     id: `rev-${r.id}`,
@@ -401,7 +438,7 @@ export default function ServiceCaseDetail() {
     revisionId: r.id,
   }));
 
-  const allTabs = [...baseTabs, ...revisionTabs, ...docTabs];
+  const allTabs = [...baseTabs, ...revisionTabs];
 
   const isRevisionTab = (id) => String(id).startsWith("rev-");
   const getRevisionIdFromTab = (id) => {
@@ -452,16 +489,6 @@ export default function ServiceCaseDetail() {
   const serviceIndustrialQuoteHref = currentIndustrialRevisionId
     ? `/service/cases/${caseId}/industrial-quote?serviceCaseId=${caseId}&revision_id=${currentIndustrialRevisionId}`
     : `/service/cases/${caseId}/industrial-quote?serviceCaseId=${caseId}`;
-
-  const isDocTab = (id) => String(id).startsWith("doc-");
-  const getDocFromTab = (id) => {
-    const sid = String(id);
-    if (!sid.startsWith("doc-")) return null;
-    const parts = sid.split("-");
-    const kind = parts[1];
-    const docId = parts.slice(2).join("-");
-    return opDocs.find((d) => String(d.id) === String(docId) && d.kind === kind) || null;
-  };
 
   useEffect(() => {
     if (!serviceQuoteId) return;
@@ -784,7 +811,7 @@ export default function ServiceCaseDetail() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">Servicio {data.reference || `#${data.id}`}</h1>
+          <h1 className="text-xl font-semibold">Servicio {data.reference || `#${data.id}`}{data.title ? ` - ${data.title}` : ""}</h1>
           {data.commercial_outcome === "lost" && <span className="mt-1 inline-block rounded bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">No cerrada</span>}
           <div className="text-sm text-slate-500">
             {data.org_name || ""} {data.org_ruc ? `? ${data.org_ruc}` : ""}
@@ -805,7 +832,7 @@ export default function ServiceCaseDetail() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-6">
+      <div className={tab === "documentos" ? "grid grid-cols-1 gap-6" : "grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-6"}>
         <div className="lg:col-span-1">
           {tab === "detalle" && (
             <div className="space-y-4">
@@ -909,8 +936,7 @@ export default function ServiceCaseDetail() {
                         to={`/service/doors/${d.id}`}
                         className="px-2 py-1 text-xs bg-slate-100 rounded hover:bg-slate-200"
                       >
-                        {(d.nombre || d.placa_id || `Puerta ${d.id}`)}
-                        {d.sector ? ` · ${d.sector}` : ""}
+                        {doorIdentity(d)}
                         {d.modelo ? ` (${d.modelo})` : ""}
                       </Link>
                     ))}
@@ -920,7 +946,7 @@ export default function ServiceCaseDetail() {
                       <div className="text-xs text-slate-500 mb-2">Seleccionar puertas</div>
                       <input
                         className="w-full border rounded px-2 py-1 text-sm mb-2"
-                        placeholder="Buscar por placa, modelo, marca o ref int"
+                        placeholder="Buscar por placa, nombre, sector o modelo"
                         value={doorSearch}
                         onChange={(e) => setDoorSearch(e.target.value)}
                       />
@@ -940,8 +966,7 @@ export default function ServiceCaseDetail() {
                                 }}
                               />
                               <span className="truncate">
-                                {(d.nombre || d.placa_id || `Puerta ${d.id}`)}
-                                {d.sector ? ` · ${d.sector}` : ""}
+                                {doorIdentity(d)}
                                 {d.modelo ? ` (${d.modelo})` : ""}
                               </span>
                             </label>
@@ -1081,14 +1106,14 @@ export default function ServiceCaseDetail() {
                           key={d.id}
                           type="button"
                           className={
-                            "px-2 py-1 rounded text-xs border " +
+                            "max-w-full whitespace-normal break-words px-2 py-1 rounded text-left text-xs border " +
                             (String(selectedDoorId) === String(d.id)
                               ? "bg-black text-white border-black"
                               : "bg-white hover:bg-slate-50")
                           }
                           onClick={() => setSelectedDoorId(d.id)}
                         >
-                          {d.placa_id || `Puerta ${d.id}`}
+                          {doorIdentity(d)}
                         </button>
                       ))}
                       {caseDoors.length === 0 && (
@@ -1428,9 +1453,43 @@ export default function ServiceCaseDetail() {
             </div>
           )}
 
-          {isDocTab(tab) && (
-            <OperationDocViewer doc={getDocFromTab(tab)} />
+          {tab === "documentos" && (
+            <>
+              {documentsError && <p role="alert" className="mb-3 text-sm text-red-700">{documentsError}</p>}
+              <OperationDocuments
+                dealId={caseId}
+                filesEndpoint={`/service/cases/${caseId}/files`}
+                fileListTitle="Archivos del servicio"
+                uploadSavesName
+                files={serviceFiles}
+                labels={Object.fromEntries(serviceFiles.map((item) => [item.id, item.display_name || item.filename]))}
+                invoices={opDocs}
+                selected={documentSelection}
+                onSelect={setDocumentSelection}
+                onUploaded={loadServiceFiles}
+                onSaveLabel={async (fileId, name) => {
+                  const { data: updated } = await api.patch(`/service/cases/${caseId}/files/${fileId}`, { display_name: name });
+                  setServiceFiles((current) => current.map((item) => item.id === fileId ? updated : item));
+                }}
+                onRemove={async (fileId) => {
+                  if (!window.confirm("¿Eliminar este documento?")) return;
+                  try {
+                    await api.delete(`/service/cases/${caseId}/files/${fileId}`);
+                    setServiceFiles((current) => current.filter((item) => item.id !== fileId));
+                    setDocumentSelection((current) => current === `f-${fileId}` ? "" : current);
+                    setDocumentsError("");
+                  } catch (error) {
+                    setDocumentsError(error?.response?.data?.error || "No se pudo eliminar el documento.");
+                  }
+                }}
+                canDelete
+                fileTypeLabel={() => "Archivo"}
+                fileUrl={resolveServiceFileUrl}
+                renderInvoice={(doc) => <OperationDocViewer doc={doc} />}
+              />
+            </>
           )}
+
 
           {tab === "oferta" && (
             <div className="bg-white border rounded-lg p-3">
@@ -1592,7 +1651,7 @@ export default function ServiceCaseDetail() {
           )}
         </div>
 
-        <aside className="space-y-4 justify-self-end lg:sticky lg:top-4 self-start">
+        {tab !== "documentos" && <aside className="space-y-4 justify-self-end lg:sticky lg:top-4 self-start">
           <div className="bg-white border rounded-lg p-3">
             <div className="text-sm font-semibold mb-2">Resumen</div>
             <div className="text-sm text-slate-600">Referencia: <span className="text-slate-900">{data.reference || `#${data.id}`}</span></div>
@@ -1710,7 +1769,7 @@ export default function ServiceCaseDetail() {
               )}
             </div>
           </div>
-        </aside>
+        </aside>}
       </div>
       {showInvoiceModal && (
         <InvoiceCreateModal

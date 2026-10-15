@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api, { fetchUsersByRole } from '../api';
+import { useAuth } from '../auth.jsx';
 
 function normalizeUrl(u) {
   if (!u) return '';
@@ -87,12 +88,17 @@ function ExecSelect({
 }
 
 export default function Organizations() {
+  const { user } = useAuth();
+  const canManage = String(user?.role || '').toLowerCase() === 'admin';
   const [rows, setRows] = useState([]);
   const [open, setOpen] = useState(false);
   const [loadingRows, setLoadingRows] = useState(false);
   const [page, setPage] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   const [ownerFilter, setOwnerFilter] = useState('');
+  const [archived, setArchived] = useState(false);
+  const [changingId, setChangingId] = useState(null);
+  const [actionError, setActionError] = useState('');
   const pageSize = 15;
 
   // Se mantienen para futuro
@@ -129,6 +135,7 @@ export default function Organizations() {
           limit: pageSize,
           offset,
           include_total: 1,
+          ...(archived ? { archived: 1 } : {}),
           ...(ownerFilter ? { owner_user_id: ownerFilter } : {}),
         },
       });
@@ -155,7 +162,26 @@ export default function Organizations() {
 
   useEffect(() => {
     fetchOrgs();
-  }, [page, ownerFilter]);
+  }, [page, ownerFilter, archived]);
+
+  async function changeArchived(org) {
+    const name = org.razon_social || org.name;
+    const message = archived
+      ? `¿Restaurar ${name} para que vuelva a estar disponible?`
+      : `¿Dar de baja ${name}? Dejará de aparecer en las búsquedas y selecciones, pero conservará sus operaciones, contactos e historial.`;
+    if (!window.confirm(message)) return;
+    setChangingId(org.id);
+    setActionError('');
+    try {
+      if (archived) await api.post(`/organizations/${org.id}/restore`);
+      else await api.delete(`/organizations/${org.id}`);
+      await fetchOrgs();
+    } catch (error) {
+      setActionError(error?.response?.data?.error || 'No se pudo actualizar la organización.');
+    } finally {
+      setChangingId(null);
+    }
+  }
 
   useEffect(() => {
     // ✅ Igual que en el VPS: cargamos sin mirar auth
@@ -259,25 +285,38 @@ export default function Organizations() {
           + Nueva organizacion
         </button>
 
-        <label className="text-sm md:w-80">
-          Ejecutivo de cuenta
-          <select
-            className="mt-1 w-full rounded-lg border px-3 py-2"
-            value={ownerFilter}
-            onChange={(e) => {
-              setOwnerFilter(e.target.value);
-              setPage(0);
-            }}
-          >
-            <option value="">Todos los ejecutivos</option>
-            {owners.map((owner) => (
-              <option key={owner.id} value={owner.id}>
-                {owner.name}{owner.email ? ` - ${owner.email}` : ''}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="flex flex-wrap items-end gap-3">
+          {canManage && (
+            <div className="inline-flex rounded-md border text-sm" aria-label="Estado de organizaciones">
+              <button type="button" aria-pressed={!archived}
+                className={`px-3 py-2 ${!archived ? 'bg-slate-900 text-white' : 'hover:bg-slate-50'}`}
+                onClick={() => { setArchived(false); setPage(0); setActionError(''); }}>Activas</button>
+              <button type="button" aria-pressed={archived}
+                className={`border-l px-3 py-2 ${archived ? 'bg-slate-900 text-white' : 'hover:bg-slate-50'}`}
+                onClick={() => { setArchived(true); setPage(0); setActionError(''); }}>Dadas de baja</button>
+            </div>
+          )}
+          <label className="text-sm md:w-80">
+            Ejecutivo de cuenta
+            <select
+              className="mt-1 w-full rounded-lg border px-3 py-2"
+              value={ownerFilter}
+              onChange={(e) => {
+                setOwnerFilter(e.target.value);
+                setPage(0);
+              }}
+            >
+              <option value="">Todos los ejecutivos</option>
+              {owners.map((owner) => (
+                <option key={owner.id} value={owner.id}>
+                  {owner.name}{owner.email ? ` - ${owner.email}` : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
+      {actionError && <p role="alert" className="mb-3 text-sm text-red-700">{actionError}</p>}
 
       <div className="bg-white rounded-2xl shadow overflow-auto">
         <table className="w-full text-sm">
@@ -293,13 +332,14 @@ export default function Organizations() {
               <th className="p-2 text-left">Rubro</th>
               <th className="p-2 text-left">Tipo org</th>
               <th className="p-2 text-left">Operación</th>
+              {canManage && <th className="p-2 text-right">Acción</th>}
             </tr>
           </thead>
           <tbody>
             {loadingRows && (
               <tr>
                 <td
-                  colSpan={10}
+                  colSpan={canManage ? 11 : 10}
                   className="p-6 text-center text-slate-500"
                 >
                   Cargando organizaciones…
@@ -326,15 +366,22 @@ export default function Organizations() {
                   <td className="p-2">{r.rubro || '—'}</td>
                   <td className="p-2">{r.tipo_org || '—'}</td>
                   <td className="p-2">{r.operacion || '—'}</td>
+                  {canManage && <td className="p-2 text-right">
+                    <button type="button" disabled={changingId === r.id}
+                      onClick={() => changeArchived(r)}
+                      className="whitespace-nowrap rounded-md border px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-50">
+                      {changingId === r.id ? 'Guardando...' : archived ? 'Restaurar' : 'Dar de baja'}
+                    </button>
+                  </td>}
                 </tr>
               ))}
             {!loadingRows && !rows.length && (
               <tr>
                 <td
-                  colSpan={10}
+                  colSpan={canManage ? 11 : 10}
                   className="p-6 text-center text-slate-500"
                 >
-                  Sin organizaciones
+                  {archived ? 'No hay organizaciones dadas de baja' : 'Sin organizaciones'}
                 </td>
               </tr>
             )}
@@ -545,24 +592,25 @@ function NewOrganizationModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 md:p-6">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-2 sm:items-center sm:p-4">
       <form
         onSubmit={submit}
-        className="bg-white rounded-2xl p-4 w-full max-w-5xl space-y-3 max-h-[90vh] overflow-y-auto"
+        className="flex max-h-[calc(100dvh-1rem)] w-full min-w-0 max-w-5xl flex-col overflow-hidden rounded-lg bg-white shadow-xl sm:max-h-[calc(100dvh-2rem)]"
       >
-        <div className="flex items-center justify-between">
+        <div className="flex shrink-0 items-center justify-between border-b px-4 py-3">
           <h3 className="text-lg font-semibold">Nueva organización</h3>
           <button type="button" onClick={onClose} className="text-sm">
             ✕
           </button>
         </div>
 
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-4">
         {error && (
           <div className="text-sm text-red-600 break-words">{error}</div>
         )}
 
         {/* Fila 1: identificación */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
           <label className="block text-sm">
             Razón Social *
             <input
@@ -615,7 +663,7 @@ function NewOrganizationModal({
         </div>
 
         {/* Fila 3: Ciudad - País - Teléfono */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
           <label className="block text-sm">
             Ciudad *
             <select
@@ -677,9 +725,9 @@ function NewOrganizationModal({
             </div>
           )}
           {branches.map((b, idx) => (
-            <div key={idx} className="grid grid-cols-1 md:grid-cols-6 gap-2 mb-2">
+            <div key={idx} className="grid min-w-0 grid-cols-1 gap-2 mb-2 sm:grid-cols-2 lg:grid-cols-6">
               <input
-                className="border rounded-lg px-2 py-1 text-sm md:col-span-1"
+                className="min-w-0 w-full border rounded-lg px-2 py-1 text-sm"
                 placeholder="Nombre"
                 value={b.name || ''}
                 required
@@ -690,7 +738,7 @@ function NewOrganizationModal({
                 }
               />
               <input
-                className="border rounded-lg px-2 py-1 text-sm md:col-span-2"
+                className="min-w-0 w-full border rounded-lg px-2 py-1 text-sm lg:col-span-2"
                 placeholder="Dirección"
                 value={b.address || ''}
                 onChange={(e) =>
@@ -700,7 +748,7 @@ function NewOrganizationModal({
                 }
               />
               <select
-                className="border rounded-lg px-2 py-1 text-sm md:col-span-1"
+                className="min-w-0 w-full border rounded-lg px-2 py-1 text-sm"
                 value={b.city_id || ''}
                 onChange={(e) => {
                   const selected = cities.find((row) => Number(row.id) === Number(e.target.value));
@@ -713,7 +761,7 @@ function NewOrganizationModal({
                 {cities.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
               </select>
               <input
-                className="border rounded-lg px-2 py-1 text-sm md:col-span-1"
+                className="min-w-0 w-full border rounded-lg px-2 py-1 text-sm"
                 placeholder="País"
                 value={b.country || ''}
                 onChange={(e) =>
@@ -722,7 +770,7 @@ function NewOrganizationModal({
                   )
                 }
               />
-              <div className="flex items-center gap-2 md:col-span-1">
+              <div className="flex flex-wrap items-center gap-2 sm:col-span-2 lg:col-span-1">
                 <label className="text-xs flex items-center gap-2">
                   <input
                     type="checkbox"
@@ -921,8 +969,9 @@ function NewOrganizationModal({
             onChange={(e) => setNotes(e.target.value)}
           />
         </label>
+        </div>
 
-        <div className="pt-2 flex gap-2 justify-end">
+        <div className="flex shrink-0 justify-end gap-2 border-t bg-white px-4 py-3">
           <button
             type="button"
             onClick={onClose}

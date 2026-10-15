@@ -1283,7 +1283,7 @@ router.post('/', requireAuth, async (req, res) => {
     if (org_id_body) {
       orgId = org_id_body;
       const [[existingOrganization]] = await conn.query(
-        'SELECT id FROM organizations WHERE id = ? LIMIT 1',
+        'SELECT id FROM organizations WHERE id = ? AND deleted_at IS NULL LIMIT 1',
         [orgId]
       );
       if (!existingOrganization) {
@@ -1304,11 +1304,11 @@ router.post('/', requireAuth, async (req, res) => {
     } else if (org_name) {
       const [orgRows] = org_ruc
         ? await conn.query(
-            'SELECT id FROM organizations WHERE ruc = ? OR name = ? LIMIT 1',
+            'SELECT id FROM organizations WHERE deleted_at IS NULL AND (ruc = ? OR name = ?) LIMIT 1',
             [org_ruc, org_name]
           )
         : await conn.query(
-            'SELECT id FROM organizations WHERE name = ? LIMIT 1',
+            'SELECT id FROM organizations WHERE name = ? AND deleted_at IS NULL LIMIT 1',
             [org_name]
           );
       if (orgRows.length) {

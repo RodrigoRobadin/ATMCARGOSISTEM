@@ -1,6 +1,26 @@
 import React, { useState } from 'react';
 import { api } from '../api';
 
+function DocumentPreview({ file, fileUrl }) {
+  const url = fileUrl(file.url);
+  const ext = String(file.filename || '').split('.').pop().toLowerCase();
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-4">
+      <div className="mb-3 text-sm font-medium">{file.display_name || file.filename}</div>
+      {ext === 'pdf' ? (
+        <iframe src={url} title={file.display_name || file.filename} className="h-[70vh] w-full rounded border" />
+      ) : ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext) ? (
+        <img src={url} alt={file.display_name || file.filename} className="max-h-[70vh] max-w-full rounded border" />
+      ) : (
+        <p className="text-sm text-slate-500">Este archivo no tiene vista previa.</p>
+      )}
+      <a href={url} target="_blank" rel="noreferrer" className="mt-3 inline-block text-sm text-blue-700 underline">
+        Abrir en pestaña nueva
+      </a>
+    </div>
+  );
+}
+
 export default function OperationDocuments({
   dealId,
   files,
@@ -16,6 +36,9 @@ export default function OperationDocuments({
   fileUrl,
   renderFile,
   renderInvoice,
+  filesEndpoint = `/deals/${dealId}/files`,
+  fileListTitle = 'Archivos de la operación',
+  uploadSavesName = false,
 }) {
   const [name, setName] = useState('');
   const [file, setFile] = useState(null);
@@ -36,17 +59,20 @@ export default function OperationDocuments({
     try {
       const body = new FormData();
       body.append('type', 'general');
+      body.append('display_name', cleanName);
       body.append('file', file);
-      const { data } = await api.post(`/deals/${dealId}/files`, body);
+      const { data } = await api.post(filesEndpoint, body);
       await onUploaded();
       onSelect(`f-${data.id}`);
       setName('');
       setFile(null);
       formElement.reset();
-      try {
-        await onSaveLabel(data.id, cleanName);
-      } catch {
-        setError('El archivo se cargó, pero no se pudo guardar su nombre. Podés corregirlo en la lista.');
+      if (!uploadSavesName) {
+        try {
+          await onSaveLabel(data.id, cleanName);
+        } catch {
+          setError('El archivo se cargó, pero no se pudo guardar su nombre. Podés corregirlo en la lista.');
+        }
       }
     } catch (requestError) {
       setError(requestError?.response?.data?.error || 'No se pudo cargar el archivo.');
@@ -93,7 +119,7 @@ export default function OperationDocuments({
       <div className="grid gap-4 xl:grid-cols-[minmax(260px,340px)_minmax(0,1fr)]">
         <div className="space-y-4 xl:max-h-[75vh] xl:overflow-y-auto">
       <section className="bg-white rounded-lg border border-slate-200 p-4">
-        <h3 className="text-sm font-semibold text-slate-900">Archivos de la operación ({files.length})</h3>
+        <h3 className="text-sm font-semibold text-slate-900">{fileListTitle} ({files.length})</h3>
         {!files.length ? <p className="mt-3 text-sm text-slate-500">Sin archivos cargados.</p> : (
           <ul className="mt-3 divide-y divide-slate-200">
             {files.map((item) => (
@@ -138,7 +164,7 @@ export default function OperationDocuments({
 
         </div>
         <div className="min-w-0">
-          {selectedFile ? renderFile(selectedFile) : selectedInvoice ? renderInvoice(selectedInvoice) : (
+          {selectedFile ? (renderFile ? renderFile(selectedFile) : <DocumentPreview file={selectedFile} fileUrl={fileUrl} />) : selectedInvoice ? renderInvoice(selectedInvoice) : (
             <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">Seleccioná un documento para verlo aquí.</div>
           )}
         </div>
