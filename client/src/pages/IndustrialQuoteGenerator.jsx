@@ -632,6 +632,8 @@ const CF_SCHEMA = {
 
   condicion_pago:     { label: 'Condicion de pago', type: 'text' },
 
+  tipo_entrega_texto: { label: 'Tipo de entrega en el presupuesto', type: 'text' },
+
   tipo_instalacion:   { label: 'Tipo de instalacion', type: 'text' },
 
   garantia:           { label: 'Garantia', type: 'text' },
@@ -774,6 +776,22 @@ function parseTemplateValue(raw) {
 }
 
 
+function formattedTemplateSection(formats, key, text, fallback) {
+  const entry = formats?.[key];
+  return entry?.html && entry.baseline === text
+    ? <RichTextContent html={entry.html} />
+    : fallback;
+}
+
+function templateHeadingStyle(formats, key) {
+  const size = Number(formats?.[key]?.headingSize);
+  return { fontSize: `${Number.isInteger(size) && size >= 12 && size <= 24 ? size : 16}px`, lineHeight: 1.25 };
+}
+
+function configuredTemplateHeadingStyle(formats, key) {
+  return formats?.[key]?.headingSize ? templateHeadingStyle(formats, key) : undefined;
+}
+
 
 export default function QuoteGenerator(){
 
@@ -877,6 +895,7 @@ export default function QuoteGenerator(){
 
 
   const [observaciones, setObservaciones] = useState('');
+  const [tipoEntregaTexto, setTipoEntregaTexto] = useState('');
 
   const [terminos, setTerminos] = useState({
 
@@ -917,6 +936,7 @@ export default function QuoteGenerator(){
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
 
   const [selectedTemplateName, setSelectedTemplateName] = useState('');
+  const [richConditionSections, setRichConditionSections] = useState({});
 
   const [showQuoteEmail, setShowQuoteEmail] = useState(false);
   const [sendingQuoteEmail, setSendingQuoteEmail] = useState(false);
@@ -989,12 +1009,34 @@ export default function QuoteGenerator(){
     setCondicionPagoTags(normalizeTemplateSection(template.condicion_pago));
 
     setTipoInstalacionTags(normalizeTemplateSection(template.tipo_instalacion));
+    setTipoEntregaTexto(String(template.tipo_entrega ?? '').trim());
 
     setGarantiaTags(normalizeTemplateSection(template.garantia ?? template.asistencia_garantia));
 
     setObservacionesProductoTags(normalizeTemplateSection(template.observaciones_producto));
 
     if (template.observaciones) setObservaciones(template.observaciones);
+
+    const sections = {
+      que_incluye: tagsToText(normalizeTemplateSection(template.incluye ?? template.que_incluye)),
+      que_no_incluye: tagsToText(normalizeTemplateSection(template.no_incluye ?? template.que_no_incluye)),
+      responsabilidad_cliente: tagsToText(normalizeTemplateSection(template.responsabilidad_cliente)),
+      plazo_entrega: tagsToText(normalizeTemplateSection(template.plazos_entrega ?? template.plazo_entrega)),
+      condicion_pago: tagsToText(normalizeTemplateSection(template.condicion_pago)),
+      tipo_instalacion: tagsToText(normalizeTemplateSection(template.tipo_instalacion)),
+      tipo_entrega: String(template.tipo_entrega ?? '').trim(),
+      garantia: tagsToText(normalizeTemplateSection(template.garantia ?? template.asistencia_garantia)),
+      observaciones_producto: tagsToText(normalizeTemplateSection(template.observaciones_producto)),
+      observaciones: template.observaciones || '',
+    };
+    const formatKeys = new Set([...Object.keys(template.rich || {}), ...Object.keys(template.heading_sizes || {})]);
+    setRichConditionSections(Object.fromEntries([...formatKeys]
+      .filter((key) => key === 'terminos_condiciones' || sections[key])
+      .map((key) => [key, {
+        html: template.rich?.[key] ? sanitizeRichTextHtml(template.rich[key]) : '',
+        baseline: sections[key] || '',
+        headingSize: template.heading_sizes?.[key] || null,
+      }])));
 
   };
 
@@ -1231,6 +1273,8 @@ CORDIALES SALUDOS`,
         ));
 
 
+        setTipoEntregaTexto(String(effectiveCfMap.tipo_entrega_texto || ''));
+
 
         // ---- Tipo de Operación / Transporte / Envío
 
@@ -1459,6 +1503,13 @@ CORDIALES SALUDOS`,
           pick(merged, ['cf:quote_template', /quote.*template|plantilla/], 'Plantilla') || ''
 
         );
+
+        try {
+          const rawFormats = pick(merged, ['cf:quote_template_format_json', 'quote_template_format_json'], 'Formato de plantilla');
+          setRichConditionSections(rawFormats ? JSON.parse(rawFormats) : {});
+        } catch (_) {
+          setRichConditionSections({});
+        }
 
         setResponsabilidadClienteTags(parseTags(
 
@@ -1755,6 +1806,7 @@ CORDIALES SALUDOS`,
       ['tipo_transporte', tipoTransporte],
       ['tipo_envio', tipoEnvio],
       ['incoterms', incoterm],
+      ['tipo_entrega_texto', tipoEntregaTexto],
       ['pais_origen', paisOrigen],
       ['pais_destino', paisDestino],
       ['ciudad_origen', ciudadOrigen],
@@ -1776,6 +1828,7 @@ CORDIALES SALUDOS`,
       ['que_incluye', tagsToText(incluyeTags)],
       ['que_no_incluye', tagsToText(noIncluyeTags)],
       ['quote_template', selectedTemplate?.name || selectedTemplateName || ''],
+      ['quote_template_format_json', JSON.stringify(richConditionSections)],
       ['responsabilidad_cliente', tagsToText(responsabilidadClienteTags)],
       ['plazos_entrega', tagsToText(plazosEntregaTags)],
       ['condicion_pago', tagsToText(condicionPagoTags)],
@@ -1790,6 +1843,7 @@ CORDIALES SALUDOS`,
       tipoTransporte,
       tipoEnvio,
       incoterm,
+      tipoEntregaTexto,
       paisOrigen,
       paisDestino,
       ciudadOrigen,
@@ -1808,6 +1862,7 @@ CORDIALES SALUDOS`,
       noIncluyeTags,
       selectedTemplate?.name,
       selectedTemplateName,
+      richConditionSections,
       responsabilidadClienteTags,
       plazosEntregaTags,
       condicionPagoTags,
@@ -2118,7 +2173,7 @@ CORDIALES SALUDOS`,
   const formalSubject = buildFormalSubject();
   const formalDeliveryAddress = [ciudadDestino, paisDestino].filter(Boolean).join(', ');
   const formalComment = tagsToText(observacionesProductoTags);
-  const formalDeliveryType = normalizeIndustrialDeliveryType(incoterm);
+  const formalDeliveryType = tipoEntregaTexto.trim() || normalizeIndustrialDeliveryType(incoterm);
   const formalFooterWeb = quoteBranding.footerWeb || 'www.atmcargo.com.py';
   const formalFooterAddress = quoteBranding.footerAddress || '';
   const formalFooterPhone = quoteBranding.footerPhone || '';
@@ -2151,6 +2206,7 @@ CORDIALES SALUDOS`,
     customerResponsibility: tagsToText(responsabilidadClienteTags),
     includesText: tagsToText(incluyeTags),
     excludesText: tagsToText(noIncluyeTags),
+    richConditionSections,
   };
 
   const quoteEmailFilename = `${String(ref || deal?.reference || 'presupuesto').replace(/[^a-z0-9._-]+/gi, '_')}-formal.pdf`;
@@ -2465,7 +2521,7 @@ Quedamos atentos a sus comentarios.`;
 
         .formal-block h3{
           margin: 0 0 0.8mm;
-          font-size: 9pt;
+          font-size: 12pt;
           font-weight: 700;
           text-transform: uppercase;
           text-decoration: underline;
@@ -3180,6 +3236,7 @@ Quedamos atentos a sus comentarios.`;
                 } else {
 
                   setSelectedTemplateName('');
+                  setRichConditionSections({});
 
                 }
 
@@ -3297,6 +3354,18 @@ Quedamos atentos a sus comentarios.`;
           </label>
 
 
+
+          <label className="text-sm block">
+            Tipo de entrega en el presupuesto
+            <textarea
+              className="w-full mt-1 border rounded px-2 py-1"
+              rows={3}
+              placeholder={normalizeIndustrialDeliveryType(incoterm)}
+              value={tipoEntregaTexto}
+              onChange={(e) => setTipoEntregaTexto(e.target.value)}
+            />
+            <span className="text-xs text-slate-500">Si queda vacio, se usa el tipo de entrega de la cabecera.</span>
+          </label>
 
           <label className="text-sm block">
             Tipo de instalación
@@ -3597,7 +3666,7 @@ Quedamos atentos a sus comentarios.`;
 
             <div className="px-4 mt-4 avoid-break">
 
-              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
+              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE, ...templateHeadingStyle(richConditionSections, 'que_incluye') }}>
 
                 Qué incluye
 
@@ -3605,7 +3674,7 @@ Quedamos atentos a sus comentarios.`;
 
               <div className="border-x border-b p-3 rounded-b" style={{ borderColor: '#d1d5db' }}>
 
-                <ListFromText text={tagsToText(incluyeTags)} />
+                {formattedTemplateSection(richConditionSections, 'que_incluye', tagsToText(incluyeTags), <ListFromText text={tagsToText(incluyeTags)} />)}
 
               </div>
 
@@ -3621,7 +3690,7 @@ Quedamos atentos a sus comentarios.`;
 
             <div className="px-4 mt-4 avoid-break">
 
-              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
+              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE, ...templateHeadingStyle(richConditionSections, 'que_no_incluye') }}>
 
                 Qué no incluye
 
@@ -3629,7 +3698,7 @@ Quedamos atentos a sus comentarios.`;
 
               <div className="border-x border-b p-3 rounded-b" style={{ borderColor: '#d1d5db' }}>
 
-                <ListFromText text={tagsToText(noIncluyeTags)} />
+                {formattedTemplateSection(richConditionSections, 'que_no_incluye', tagsToText(noIncluyeTags), <ListFromText text={tagsToText(noIncluyeTags)} />)}
 
               </div>
 
@@ -3643,7 +3712,7 @@ Quedamos atentos a sus comentarios.`;
 
             <div className="px-4 mt-4 avoid-break">
 
-              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
+              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE, ...templateHeadingStyle(richConditionSections, 'responsabilidad_cliente') }}>
 
                 Responsabilidad del cliente
 
@@ -3651,7 +3720,7 @@ Quedamos atentos a sus comentarios.`;
 
               <div className="border-x border-b p-3 rounded-b" style={{ borderColor: '#d1d5db' }}>
 
-                <ListFromText text={tagsToText(responsabilidadClienteTags)} />
+                {formattedTemplateSection(richConditionSections, 'responsabilidad_cliente', tagsToText(responsabilidadClienteTags), <ListFromText text={tagsToText(responsabilidadClienteTags)} />)}
 
               </div>
 
@@ -3665,7 +3734,7 @@ Quedamos atentos a sus comentarios.`;
 
             <div className="px-4 mt-4 avoid-break">
 
-              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
+              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE, ...templateHeadingStyle(richConditionSections, 'plazo_entrega') }}>
 
                 Plazos de entrega
 
@@ -3673,7 +3742,7 @@ Quedamos atentos a sus comentarios.`;
 
               <div className="border-x border-b p-3 rounded-b" style={{ borderColor: '#d1d5db' }}>
 
-                <ListFromText text={tagsToText(plazosEntregaTags)} />
+                {formattedTemplateSection(richConditionSections, 'plazo_entrega', tagsToText(plazosEntregaTags), <ListFromText text={tagsToText(plazosEntregaTags)} />)}
 
               </div>
 
@@ -3687,14 +3756,14 @@ Quedamos atentos a sus comentarios.`;
 
             <div className="px-4 mt-4 avoid-break">
 
-              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
+              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE, ...templateHeadingStyle(richConditionSections, 'condicion_pago') }}>
 
                 Condicion de pago
 
               </div>
 
               <div className="border-x border-b p-3 rounded-b whitespace-pre-wrap" style={{ borderColor: '#d1d5db' }}>
-                {tagsToText(condicionPagoTags)}
+                {formattedTemplateSection(richConditionSections, 'condicion_pago', tagsToText(condicionPagoTags), tagsToText(condicionPagoTags))}
               </div>
 
             </div>
@@ -3703,18 +3772,34 @@ Quedamos atentos a sus comentarios.`;
 
 
 
+          {tipoEntregaTexto.trim() && (
+
+            <div className="px-4 mt-4 avoid-break">
+
+              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE, ...templateHeadingStyle(richConditionSections, 'tipo_entrega') }}>
+                Tipo de entrega
+              </div>
+
+              <div className="border-x border-b p-3 rounded-b whitespace-pre-wrap" style={{ borderColor: '#d1d5db' }}>
+                {formattedTemplateSection(richConditionSections, 'tipo_entrega', tipoEntregaTexto.trim(), tipoEntregaTexto)}
+              </div>
+
+            </div>
+
+          )}
+
           {tipoInstalacionTags.length > 0 && (
 
             <div className="px-4 mt-4 avoid-break">
 
-              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
+              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE, ...templateHeadingStyle(richConditionSections, 'tipo_instalacion') }}>
 
                 Tipo de instalacion
 
               </div>
 
               <div className="border-x border-b p-3 rounded-b whitespace-pre-wrap" style={{ borderColor: '#d1d5db' }}>
-                {tagsToText(tipoInstalacionTags)}
+                {formattedTemplateSection(richConditionSections, 'tipo_instalacion', tagsToText(tipoInstalacionTags), tagsToText(tipoInstalacionTags))}
 
               </div>
 
@@ -3728,14 +3813,14 @@ Quedamos atentos a sus comentarios.`;
 
             <div className="px-4 mt-4 avoid-break">
 
-              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
+              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE, ...templateHeadingStyle(richConditionSections, 'garantia') }}>
 
                 Garantia
 
               </div>
 
               <div className="border-x border-b p-3 rounded-b whitespace-pre-wrap" style={{ borderColor: '#d1d5db' }}>
-                {tagsToText(garantiaTags)}
+                {formattedTemplateSection(richConditionSections, 'garantia', tagsToText(garantiaTags), tagsToText(garantiaTags))}
 
               </div>
 
@@ -3749,7 +3834,7 @@ Quedamos atentos a sus comentarios.`;
 
             <div className="px-4 mt-4 avoid-break">
 
-              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
+              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE, ...templateHeadingStyle(richConditionSections, 'observaciones_producto') }}>
 
                 Observaciones de producto
 
@@ -3757,7 +3842,7 @@ Quedamos atentos a sus comentarios.`;
 
               <div className="border-x border-b p-3 rounded-b" style={{ borderColor: '#d1d5db' }}>
 
-                <ListFromText text={tagsToText(observacionesProductoTags)} />
+                {formattedTemplateSection(richConditionSections, 'observaciones_producto', tagsToText(observacionesProductoTags), <ListFromText text={tagsToText(observacionesProductoTags)} />)}
 
               </div>
 
@@ -3775,7 +3860,7 @@ Quedamos atentos a sus comentarios.`;
 
             <div className="px-4 mt-4 avoid-break">
 
-              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE }}>
+              <div className="uppercase font-bold text-white px-3 py-2 rounded-t" style={{ backgroundColor: BRAND_BLUE, ...templateHeadingStyle(richConditionSections, 'observaciones') }}>
 
                 Observaciones
 
@@ -3783,7 +3868,7 @@ Quedamos atentos a sus comentarios.`;
 
               <div className="border-x border-b p-3 rounded-b whitespace-pre-wrap" style={{ borderColor: '#d1d5db' }}>
 
-                {observaciones}
+                {formattedTemplateSection(richConditionSections, 'observaciones', observaciones, observaciones)}
 
               </div>
 
@@ -3803,7 +3888,7 @@ Quedamos atentos a sus comentarios.`;
 
                 className="uppercase font-bold text-white px-3 py-2 rounded-t"
 
-                style={{ backgroundColor: BRAND_BLUE }}
+                style={{ backgroundColor: BRAND_BLUE, ...templateHeadingStyle(richConditionSections, 'terminos_condiciones') }}
 
               >
 
@@ -4503,6 +4588,7 @@ function FormalQuoteDocument({
   customerResponsibility,
   includesText,
   excludesText,
+  richConditionSections = {},
 }) {
   return (
     <div id={containerId}>
@@ -4526,24 +4612,24 @@ function FormalQuoteDocument({
         <div className="formal-conditions">
           <div className="formal-conditions-grid">
             <div className="formal-conditions-row">
-              <div className="formal-conditions-label">Condicion de venta:</div>
+              <div className="formal-conditions-label" style={configuredTemplateHeadingStyle(richConditionSections, 'terminos_condiciones')}>Condicion de venta:</div>
               <div>{saleCondition}</div>
             </div>
             <div className="formal-conditions-row">
-              <div className="formal-conditions-label">Plazo de credito:</div>
+              <div className="formal-conditions-label" style={configuredTemplateHeadingStyle(richConditionSections, 'terminos_condiciones')}>Plazo de credito:</div>
               <div>{creditTerm}</div>
             </div>
             <div className="formal-conditions-row">
-              <div className="formal-conditions-label">Forma de pago:</div>
+              <div className="formal-conditions-label" style={configuredTemplateHeadingStyle(richConditionSections, 'terminos_condiciones')}>Forma de pago:</div>
               <div>{paymentMethod}</div>
             </div>
             <div className="formal-conditions-row">
-              <div className="formal-conditions-label">Validez de la oferta:</div>
+              <div className="formal-conditions-label" style={configuredTemplateHeadingStyle(richConditionSections, 'terminos_condiciones')}>Validez de la oferta:</div>
               <div>{offerValidity}</div>
             </div>
             <div className="formal-conditions-row" style={{ gridColumn: '1 / span 2' }}>
-              <div className="formal-conditions-label">Comentario:</div>
-              <div>{comment}</div>
+              <div className="formal-conditions-label" style={configuredTemplateHeadingStyle(richConditionSections, 'observaciones_producto')}>Comentario:</div>
+              <div>{formattedTemplateSection(richConditionSections, 'observaciones_producto', comment, comment)}</div>
             </div>
           </div>
         </div>
@@ -4597,29 +4683,29 @@ function FormalQuoteDocument({
 
         {String(observations || '').trim() ? (
           <div className="formal-block" style={{ marginTop: '4mm' }}>
-            <h3>Observaciones</h3>
-            <FormalLines text={observations} />
+            <h3 style={templateHeadingStyle(richConditionSections, 'observaciones')}>Observaciones</h3>
+            {formattedTemplateSection(richConditionSections, 'observaciones', observations, <FormalLines text={observations} />)}
           </div>
         ) : null}
 
         {String(installationType || '').trim() ? (
           <div className="formal-block">
-            <h3>Tipo de instalacion</h3>
-            <FormalLines text={installationType} />
+            <h3 style={templateHeadingStyle(richConditionSections, 'tipo_instalacion')}>Tipo de instalacion</h3>
+            {formattedTemplateSection(richConditionSections, 'tipo_instalacion', installationType, <FormalLines text={installationType} />)}
           </div>
         ) : null}
 
         {String(paymentCondition || '').trim() ? (
           <div className="formal-block">
-            <h3>Condicion de pago</h3>
-            <FormalLines text={paymentCondition} />
+            <h3 style={templateHeadingStyle(richConditionSections, 'condicion_pago')}>Condicion de pago</h3>
+            {formattedTemplateSection(richConditionSections, 'condicion_pago', paymentCondition, <FormalLines text={paymentCondition} />)}
           </div>
         ) : null}
 
         {String(deliveryType || '').trim() ? (
           <div className="formal-block">
-            <h3>Tipo de entrega</h3>
-            <FormalLines text={deliveryType} />
+            <h3 style={templateHeadingStyle(richConditionSections, 'tipo_entrega')}>Tipo de entrega</h3>
+            {formattedTemplateSection(richConditionSections, 'tipo_entrega', deliveryType, <FormalLines text={deliveryType} />)}
           </div>
         ) : null}
 
@@ -4632,36 +4718,36 @@ function FormalQuoteDocument({
 
         {String(deliveryTerm || '').trim() ? (
           <div className="formal-block">
-            <h3>Plazo de entrega</h3>
-            <FormalLines text={deliveryTerm} />
+            <h3 style={templateHeadingStyle(richConditionSections, 'plazo_entrega')}>Plazo de entrega</h3>
+            {formattedTemplateSection(richConditionSections, 'plazo_entrega', deliveryTerm, <FormalLines text={deliveryTerm} />)}
           </div>
         ) : null}
 
         {String(warrantyText || '').trim() ? (
           <div className="formal-block">
-            <h3>Asistencia y garantia</h3>
-            <FormalLines text={warrantyText} />
+            <h3 style={templateHeadingStyle(richConditionSections, 'garantia')}>Asistencia y garantia</h3>
+            {formattedTemplateSection(richConditionSections, 'garantia', warrantyText, <FormalLines text={warrantyText} />)}
           </div>
         ) : null}
 
         {String(customerResponsibility || '').trim() ? (
           <div className="formal-block">
-            <h3>Responsabilidad del cliente</h3>
-            <FormalLines text={customerResponsibility} />
+            <h3 style={templateHeadingStyle(richConditionSections, 'responsabilidad_cliente')}>Responsabilidad del cliente</h3>
+            {formattedTemplateSection(richConditionSections, 'responsabilidad_cliente', customerResponsibility, <FormalLines text={customerResponsibility} />)}
           </div>
         ) : null}
 
         {String(includesText || '').trim() ? (
           <div className="formal-block">
-            <h3>El presupuesto incluye</h3>
-            <FormalLines text={includesText} />
+            <h3 style={templateHeadingStyle(richConditionSections, 'que_incluye')}>El presupuesto incluye</h3>
+            {formattedTemplateSection(richConditionSections, 'que_incluye', includesText, <FormalLines text={includesText} />)}
           </div>
         ) : null}
 
         {String(excludesText || '').trim() ? (
           <div className="formal-block">
-            <h3>El presupuesto no incluye</h3>
-            <FormalLines text={excludesText} />
+            <h3 style={templateHeadingStyle(richConditionSections, 'que_no_incluye')}>El presupuesto no incluye</h3>
+            {formattedTemplateSection(richConditionSections, 'que_no_incluye', excludesText, <FormalLines text={excludesText} />)}
           </div>
         ) : null}
 

@@ -18,6 +18,8 @@ import CommercialDates from "../components/op-details/CommercialDates.jsx";
 import OperationStageChange from "../components/OperationStageChange.jsx";
 import OperationDocuments from "../components/OperationDocuments.jsx";
 import OperationHistory from "../components/OperationHistory.jsx";
+import FollowupPinControl from "../components/FollowupPinControl.jsx";
+import { sortFollowupEntries } from "../utils/followupPins.js";
 
 // 👇 Ajustá la ruta real según tu backend
 const PROVIDERS_ENDPOINT = "/organizations";
@@ -577,6 +579,7 @@ export default function OperationDetail() {
   const canAccessCommissions = userRole === "admin" || Number(deal?.advisor_user_id || 0) === Number(user?.id || 0);
 
   const [notesList, setNotesList] = useState([]);
+  const [pinningFollowupId, setPinningFollowupId] = useState(null);
   const [notesLoading, setNotesLoading] = useState(false);
   const [desc, setDesc] = useState("");
 
@@ -832,7 +835,7 @@ useEffect(() => {
     setNotesLoading(true);
     try {
       const { data } = await api.get(`/operations/${id}/followup-feed`);
-      setNotesList(Array.isArray(data?.items) ? data.items : []);
+      setNotesList(sortFollowupEntries(Array.isArray(data?.items) ? data.items : []));
     } catch {
       setNotesList([]);
     } finally {
@@ -856,6 +859,22 @@ useEffect(() => {
     } catch (err) {
       console.error("No se pudo marcar seguimiento como hecho", err);
       alert("No se pudo marcar como hecho.");
+    }
+  }
+
+  async function toggleFollowupPin(entry) {
+    if (pinningFollowupId) return;
+    const sourceType = entry.source_type === "followup_task" ? "task" : "activity";
+    setPinningFollowupId(entry.id);
+    try {
+      await api.patch(`/operations/${id}/followup-feed/${sourceType}/${entry.source_id}/pin`, { pinned: !entry.pinned });
+      setNotesList((current) => sortFollowupEntries(current.map((item) =>
+        item.id === entry.id ? { ...item, pinned: !entry.pinned } : item
+      )));
+    } catch (error) {
+      alert(error?.response?.data?.error || "No se pudo actualizar el anclaje.");
+    } finally {
+      setPinningFollowupId(null);
     }
   }
 
@@ -3042,7 +3061,7 @@ function providerHasFreightTag(p = {}) {
               <div className="bg-white rounded-2xl shadow p-4">
                 <h3 className="font-medium mb-3">Fechas comerciales</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
-                  <CommercialDates deal={deal} validity={getCF("validez_oferta")} />
+                  <CommercialDates deal={deal} validity={getCF("validez_oferta")} expectedCloseDate={getCF("expected_close_date")} />
                   <Field label="F. Cierre (aprox)">
                     <Input readOnly={!editMode} type="date" value={getCF("f_cierre_aprox")}
                       onChange={(e) => {
@@ -3602,13 +3621,14 @@ function providerHasFreightTag(p = {}) {
                                   (a.entry_type === "reminder" || a.entry_type === "task" || Boolean(a.due_at));
 
                                 return (
-                                  <div key={a.id} className={`border rounded-xl p-3 ${dueMeta?.cardClass || ""}`}>
+                                  <div key={a.id} className={`border rounded-xl p-3 ${a.pinned ? "border-amber-400 bg-amber-50 shadow-sm" : dueMeta?.cardClass || ""}`}>
                                     <div className="flex items-start justify-between gap-2">
                                       <div>
                                         <div className="text-sm font-medium">{a.title || typeLabel}</div>
                                         <div className="text-xs text-slate-600">{when} • por {author}</div>
                                       </div>
                                       <div className="flex items-center gap-2">
+                                        <FollowupPinControl pinned={a.pinned} busy={pinningFollowupId === a.id} onToggle={() => toggleFollowupPin(a)} />
                                         <span className={`text-[11px] px-2 py-1 rounded-full ${typeClass}`} title={tooltip}>
                                           {typeLabel}
                                         </span>

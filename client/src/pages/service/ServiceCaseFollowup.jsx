@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
 import OperationFollowupComposer from "../../components/OperationFollowupComposer.jsx";
+import FollowupPinControl from "../../components/FollowupPinControl.jsx";
+import { sortFollowupEntries } from "../../utils/followupPins.js";
 
 const LABELS = {
   note: "Nota", activity: "Actividad", reminder: "Recordatorio", task: "Tarea",
@@ -10,6 +12,7 @@ const LABELS = {
 export default function ServiceCaseFollowup({ serviceCase, currentUser }) {
   const caseId = serviceCase.id;
   const [entries, setEntries] = useState([]);
+  const [pinningId, setPinningId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -24,7 +27,7 @@ export default function ServiceCaseFollowup({ serviceCase, currentUser }) {
   const loadEntries = useCallback(async () => {
     try {
       const { data } = await api.get(`/service/cases/${caseId}/followup-feed`);
-      setEntries(Array.isArray(data?.items) ? data.items : []);
+      setEntries(sortFollowupEntries(Array.isArray(data?.items) ? data.items : []));
       setError("");
     } catch (requestError) {
       setError(requestError?.response?.data?.error || "No se pudo cargar el seguimiento.");
@@ -81,6 +84,22 @@ export default function ServiceCaseFollowup({ serviceCase, currentUser }) {
     }
   }
 
+  async function togglePin(entry) {
+    if (pinningId) return;
+    setPinningId(entry.id);
+    setError("");
+    try {
+      await api.patch(`/service/cases/${caseId}/followup-feed/${entry.id}/pin`, { pinned: !entry.pinned });
+      setEntries((current) => sortFollowupEntries(current.map((item) =>
+        item.id === entry.id ? { ...item, pinned: !entry.pinned } : item
+      )));
+    } catch (requestError) {
+      setError(requestError?.response?.data?.error || "No se pudo actualizar el anclaje.");
+    } finally {
+      setPinningId(null);
+    }
+  }
+
   const composerCase = {
     reference: serviceCase.reference || `Servicio ${caseId}`,
     org_name: serviceCase.org_name,
@@ -114,15 +133,18 @@ export default function ServiceCaseFollowup({ serviceCase, currentUser }) {
           const due = entry.due_at ? String(entry.due_at).replace("T", " ").slice(0, 16) : "";
           const isOverdue = !entry.done && entry.due_at && new Date(entry.due_at).getTime() < Date.now();
           return (
-            <article key={entry.id} className={`rounded-md border p-3 ${isOverdue ? "border-red-300 bg-red-50" : "border-slate-200"}`}>
+            <article key={entry.id} className={`rounded-md border p-3 ${entry.pinned ? "border-amber-400 bg-amber-50 shadow-sm" : isOverdue ? "border-red-300 bg-red-50" : "border-slate-200"}`}>
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="text-sm font-medium">{entry.title}</p>
                   <p className="text-xs text-slate-500">{LABELS[entry.entry_type] || "Actividad"} · {entry.created_by_name || "Usuario"} · {String(entry.created_at || "").slice(0, 16).replace("T", " ")}</p>
                 </div>
-                {entry.entry_type !== "note" && !entry.done && (
-                  <button type="button" onClick={() => complete(entry)} className="rounded border border-emerald-300 px-2 py-1 text-xs text-emerald-800 hover:bg-emerald-50">Marcar hecho</button>
-                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <FollowupPinControl pinned={entry.pinned} busy={pinningId === entry.id} onToggle={() => togglePin(entry)} />
+                  {entry.entry_type !== "note" && !entry.done && (
+                    <button type="button" onClick={() => complete(entry)} className="rounded border border-emerald-300 px-2 py-1 text-xs text-emerald-800 hover:bg-emerald-50">Marcar hecho</button>
+                  )}
+                </div>
               </div>
               {entry.content && <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{entry.content}</p>}
               {entry.entry_type !== "note" && (

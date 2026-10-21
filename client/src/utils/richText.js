@@ -13,6 +13,13 @@ const ALLOWED_TAGS = new Set([
   "OL",
   "LI",
   "SPAN",
+  "BLOCKQUOTE",
+  "TABLE",
+  "THEAD",
+  "TBODY",
+  "TR",
+  "TH",
+  "TD",
 ]);
 
 function escapeHtml(value = "") {
@@ -127,4 +134,21 @@ export function normalizeRichTextPayload(input = "") {
     html,
     text: htmlToPlainText(html),
   };
+}
+
+export function richTextToLines(input = "") {
+  const html = sanitizeRichTextHtml(input);
+  if (typeof DOMParser === "undefined") return htmlToPlainText(html);
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");
+  const root = doc.body.firstElementChild;
+  if (!root) return "";
+  root.querySelectorAll("br").forEach((node) => node.replaceWith("\n"));
+  root.querySelectorAll("tr").forEach((row) => {
+    row.querySelectorAll("th, td").forEach((cell, index) => {
+      if (index) cell.before(" | ");
+    });
+    row.after("\n");
+  });
+  root.querySelectorAll("p, div, li, blockquote").forEach((node) => node.after("\n"));
+  return (root.textContent || "").replace(/\u00a0/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }

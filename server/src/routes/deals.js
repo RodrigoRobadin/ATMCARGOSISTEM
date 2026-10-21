@@ -484,6 +484,9 @@ router.get('/', requireAuth, async (req, res) => {
        d.last_active_stage_id, d.reopened_at, d.reopened_by_user_id,
        d.stage_id, d.pipeline_id, d.business_unit_id,
        d.contact_id, d.org_id, d.org_branch_id, d.created_at,
+       (SELECT NULLIF(cf_close.\`value\`, '') FROM deal_custom_fields cf_close
+         WHERE cf_close.deal_id = d.id AND cf_close.\`key\` = 'expected_close_date'
+         ORDER BY cf_close.id DESC LIMIT 1) AS expected_close_date,
        d.advisor_user_id          AS deal_advisor_user_id,
        du.name                    AS deal_advisor_name,
        d.created_by_user_id,
@@ -611,7 +614,7 @@ router.get('/', requireAuth, async (req, res) => {
      LEFT JOIN business_units bu ON bu.id = d.business_unit_id
      LEFT JOIN stages         s  ON s.id = d.stage_id
      ${whereSql}
-     ORDER BY d.${sortCol} ${sortDir}
+     ORDER BY d.${sortCol} ${sortDir}, d.id ${sortDir}
      LIMIT ? OFFSET ?`,
     [...params, safeLimit, safeOffset]
   );
@@ -924,6 +927,45 @@ router.get('/:id/commercial-dates', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('[commercial-dates][GET]', error);
     res.status(500).json({ error: 'No se pudieron cargar las fechas comerciales' });
+  }
+});
+
+router.patch('/:id/expected-close-date', requireAuth, async (req, res) => {
+  const dealId = Number(req.params.id);
+  const date = req.body?.expected_close_date;
+  if (!Number.isInteger(dealId) || dealId <= 0 ||
+      (date !== null && date !== '' && !validDateOnly(date))) {
+    return res.status(400).json({ error: 'Fecha estimada invalida' });
+  }
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[deal]] = await conn.query(
+      `SELECT d.id, d.advisor_user_id, s.name AS stage_name
+         FROM deals d LEFT JOIN stages s ON s.id = d.stage_id
+        WHERE d.id = ? FOR UPDATE`, [dealId]
+    );
+    if (!deal) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Operacion no encontrada' });
+    }
+    if (String(deal.stage_name || '').trim().toLowerCase() === 'prospecto') {
+      await conn.rollback();
+      return res.status(400).json({ error: 'El prospecto todavia no es una operacion' });
+    }
+    if (String(req.user?.role || '').toLowerCase() !== 'admin' && Number(deal.advisor_user_id) !== Number(req.user?.id)) {
+      await conn.rollback();
+      return res.status(403).json({ error: 'No tienes permiso para modificar esta operacion' });
+    }
+    await setDealCustomField(conn, req, dealId, 'expected_close_date', 'Fecha estimada de cierre', 'date', date || null);
+    await conn.commit();
+    res.json({ expected_close_date: date || null });
+  } catch (error) {
+    await conn.rollback().catch(() => {});
+    console.error('[expected-close-date][PATCH]', error);
+    res.status(500).json({ error: 'No se pudo guardar la fecha estimada de cierre' });
+  } finally {
+    conn.release();
   }
 });
 

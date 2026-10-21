@@ -25,14 +25,41 @@ function remainingValidity(quotedOn, validity) {
   return Math.round((expiry.getTime() - today) / 86400000);
 }
 
-export default function CommercialDates({ deal, validity }) {
+export default function CommercialDates({ deal, validity, expectedCloseDate }) {
   const [dates, setDates] = useState(null);
+  const [expectedClose, setExpectedClose] = useState("");
+  const [savedExpectedClose, setSavedExpectedClose] = useState("");
+  const [savingExpectedClose, setSavingExpectedClose] = useState(false);
+  const [expectedCloseError, setExpectedCloseError] = useState("");
   const [date, setDate] = useState("");
   const [method, setMethod] = useState("");
   const [file, setFile] = useState(null);
   const fileInputRef = useRef(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    const value = dateOnly(expectedCloseDate);
+    setExpectedClose(value);
+    setSavedExpectedClose(value);
+    setExpectedCloseError("");
+  }, [deal?.id, expectedCloseDate]);
+
+  async function saveExpectedClose(event) {
+    event.preventDefault();
+    setSavingExpectedClose(true);
+    setExpectedCloseError("");
+    try {
+      const { data } = await api.patch(`/deals/${deal.id}/expected-close-date`, {
+        expected_close_date: expectedClose || null,
+      });
+      setSavedExpectedClose(dateOnly(data?.expected_close_date));
+    } catch (saveError) {
+      setExpectedCloseError(saveError?.response?.data?.error || "No se pudo guardar la fecha estimada.");
+    } finally {
+      setSavingExpectedClose(false);
+    }
+  }
 
   async function load() {
     const { data } = await api.get(`/deals/${deal.id}/commercial-dates`);
@@ -96,6 +123,16 @@ export default function CommercialDates({ deal, validity }) {
           </p>
         )}
       </div>
+      <form onSubmit={saveExpectedClose} className="md:col-span-2">
+        <label htmlFor={`expected-close-${deal?.id}`} className="mb-1 block text-xs font-medium text-slate-600">Fecha estimada de cierre</label>
+        <div className="flex flex-wrap gap-2">
+          <input id={`expected-close-${deal?.id}`} type="date" value={expectedClose} onChange={(event) => setExpectedClose(event.target.value)} className="min-w-44 flex-1 rounded border px-3 py-2 text-sm" />
+          <button type="submit" disabled={savingExpectedClose || expectedClose === savedExpectedClose} className="rounded border px-3 py-2 text-sm disabled:opacity-50">
+            {savingExpectedClose ? "Guardando..." : "Guardar fecha"}
+          </button>
+        </div>
+        {expectedCloseError && <p role="alert" className="mt-1 text-xs text-red-700">{expectedCloseError}</p>}
+      </form>
       <form onSubmit={save} className="space-y-3 md:col-span-2">
         {dates?.confirmed_on && (
           <p className={`text-xs font-medium ${dates.confirmation_file ? "text-emerald-700" : "text-amber-700"}`}>

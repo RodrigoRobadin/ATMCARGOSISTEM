@@ -1,6 +1,6 @@
 // client/src/pages/Workspace.jsx
 import React, { useEffect, useMemo, useState } from "react";
-import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
+import { useParams, useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { api } from "../api";
 import NewOperationModal from "../components/NewOperationModal";
@@ -8,6 +8,8 @@ import NewIndustrialOperationModal from "../components/NewIndustrialOperationMod
 import NewContainerOperationModal from "../components/NewContainerOperationModal";
 import { useAuth } from "../auth.jsx";
 import { getOperationAttention } from "../utils/operationAttention.js";
+import PipelineListViews, { PipelineViewSwitch } from "../components/PipelineListViews.jsx";
+import { loadPipelineDeals } from "../utils/loadPipelineDeals.js";
 import {
   DealOutcomeContextMenu,
   MarkDealNotClosedModal,
@@ -154,10 +156,14 @@ export default function Workspace() {
   const { key } = useParams(); // ej: "atm-cargo", "atm-industrial"
   const nav = useNavigate();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view = ['table', 'forecast'].includes(searchParams.get('view')) ? searchParams.get('view') : 'funnel';
   const { user } = useAuth();
   const isAdmin = String(user?.role || "").toLowerCase() === "admin";
   const [attentionNow, setAttentionNow] = useState(Date.now());
   const [attentionOnly, setAttentionOnly] = useState(false);
+  const [search, setSearch] = useState('');
+  const [selectedStageId, setSelectedStageId] = useState('');
   const advisorFilterKey = `pipeline-advisor:${user?.id || 'anonymous'}`;
 
   const [bu, setBu] = useState(null);
@@ -189,6 +195,8 @@ export default function Workspace() {
     key === "atm-industrial" || (bu && bu.key_slug === "atm-industrial");
   const isContainer =
     key === "atm-container" || (bu && bu.key_slug === "atm-container");
+
+  useEffect(() => setSelectedStageId(''), [key]);
 
   useEffect(() => {
     if (!isIndustrial || !isAdmin) return;
@@ -280,17 +288,15 @@ export default function Workspace() {
         setPipelineId(pid);
 
         // 4) Stages + deals de ese pipeline
-        const [{ data: s }, { data: d }] = await Promise.all([
+        const [{ data: s }, d] = await Promise.all([
           api.get(`/pipelines/${pid}/stages`),
-          api.get("/deals", {
-            params: {
+          loadPipelineDeals(api, {
               pipeline_id: pid,
               business_unit_id: found?.id,
               commercial_outcome: "active",
               ...(key === "atm-industrial" && isAdmin && selectedAdvisorUserId
                 ? { deal_advisor_user_id: selectedAdvisorUserId }
                 : {}),
-            },
           }),
         ]);
 
@@ -305,7 +311,7 @@ export default function Workspace() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, location.key]);
+  }, [key]);
 
   useEffect(() => {
     if (!isIndustrial || !isAdmin || !pipelineId || !bu?.id) return;
@@ -374,13 +380,29 @@ export default function Workspace() {
   const grouped = useMemo(() => {
     const g = Object.fromEntries(stages.map((s) => [s.id, []]));
     const prospectStageIds = new Set(stages.filter((stage) => String(stageAliasMap[String(stage.id)] || stage.name || '').trim().toLowerCase() === 'prospecto').map((stage) => stage.id));
+    const term = search.trim().toLocaleLowerCase();
     for (const d of deals) {
       if (attentionOnly && !getOperationAttention(d, attentionNow, prospectStageIds.has(d.stage_id))) continue;
+      if (selectedStageId && String(d.stage_id) !== selectedStageId) continue;
+      if (term && ![d.reference, d.title, d.org_name, d.contact_name, d.deal_advisor_name]
+        .filter(Boolean).join(' ').toLocaleLowerCase().includes(term)) continue;
       if (!g[d.stage_id]) g[d.stage_id] = [];
       g[d.stage_id].push(d);
     }
     return g;
-  }, [stages, deals, stageAliasMap, attentionOnly, attentionNow]);
+  }, [stages, deals, stageAliasMap, attentionOnly, attentionNow, search, selectedStageId]);
+
+  const displayedStages = useMemo(() => stages.filter((stage) => !selectedStageId || String(stage.id) === selectedStageId), [stages, selectedStageId]);
+  const visibleDeals = useMemo(() => displayedStages.flatMap((stage) => grouped[stage.id] || []), [displayedStages, grouped]);
+
+  function changeView(nextView) {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (nextView === 'funnel') next.delete('view');
+      else next.set('view', nextView);
+      return next;
+    });
+  }
 
   function stageLabel(stage) {
     return stageAliasMap[String(stage.id)] || stage.name;
@@ -427,15 +449,13 @@ export default function Workspace() {
 
   async function refresh() {
     if (!pipelineId || !bu?.id) return;
-    const { data } = await api.get("/deals", {
-      params: {
+    const data = await loadPipelineDeals(api, {
         pipeline_id: pipelineId,
         business_unit_id: bu.id,
         commercial_outcome: "active",
         ...(isIndustrial && isAdmin && selectedAdvisorUserId
           ? { deal_advisor_user_id: selectedAdvisorUserId }
           : {}),
-      },
     });
     setDeals(data || []);
   }
@@ -463,6 +483,14 @@ export default function Workspace() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <PipelineViewSwitch value={view} onChange={changeView} />
+          <input type="search" aria-label="Buscar operaciones" placeholder="Buscar operación o cliente" value={search}
+            onChange={(event) => setSearch(event.target.value)} className="min-w-48 rounded border bg-white px-3 py-2 text-sm" />
+          <select aria-label="Filtrar por etapa" value={selectedStageId} onChange={(event) => setSelectedStageId(event.target.value)}
+            className="rounded border bg-white px-3 py-2 text-sm">
+            <option value="">Todas las etapas</option>
+            {stages.map((stage) => <option key={stage.id} value={stage.id}>{stageLabel(stage)}</option>)}
+          </select>
           <label className="flex items-center gap-2 px-2 text-sm whitespace-nowrap cursor-pointer">
             <input type="checkbox" checked={attentionOnly} onChange={(event) => setAttentionOnly(event.target.checked)} />
             Requieren atención
@@ -496,12 +524,6 @@ export default function Workspace() {
             ✏️ Editar pipeline
           </button>
 
-          <Link
-            to={`/workspace/${key}/table`}
-            className="px-3 py-2 text-sm rounded-lg border hover:bg-slate-50"
-          >
-            Ver como tabla
-          </Link>
           <button
             onClick={() => setOpenModal(true)}
             className="px-3 py-2 text-sm rounded-lg bg-black text-white"
@@ -511,9 +533,9 @@ export default function Workspace() {
         </div>
       </div>
 
-      <DragDropContext onDragEnd={onDragEnd}>
+      {view === 'funnel' ? <DragDropContext onDragEnd={onDragEnd}>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4">
-          {stages.map((stage) => (
+          {displayedStages.map((stage) => (
             <Droppable droppableId={String(stage.id)} key={stage.id}>
               {(provided) => (
                 <div
@@ -521,7 +543,7 @@ export default function Workspace() {
                   {...provided.droppableProps}
                   className="bg-white rounded-2xl shadow p-3 min-h-[200px]"
                 >
-                  <div className="mb-2">
+                  <div className="sticky top-[73px] z-20 -mx-3 -mt-3 mb-2 rounded-t-2xl border-b border-slate-100 bg-white px-3 pb-2 pt-3 shadow-sm dark:border-slate-800 dark:bg-slate-950">
                       <div className="font-medium flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <span>{stageLabel(stage)}</span>
@@ -686,7 +708,10 @@ export default function Workspace() {
             </Droppable>
           ))}
         </div>
-      </DragDropContext>
+      </DragDropContext> : <PipelineListViews view={view} deals={visibleDeals} stages={stages} stageLabel={stageLabel}
+        quoteTotals={quoteTotals} onExpectedCloseSaved={(dealId, date) => setDeals((current) => current.map((deal) =>
+          Number(deal.id) === Number(dealId) ? { ...deal, expected_close_date: date } : deal
+        ))} />}
 
       <DealOutcomeContextMenu
         deal={outcomeMenu?.deal}

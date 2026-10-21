@@ -1,6 +1,6 @@
 import { auditSnapshot, recordAuditChange } from './audit.js';
 
-const protectedKeys = new Set(['f_inicio', 'f_cotiz', 'f_confirm', 'confirm_method', 'confirm_file_id']);
+const protectedKeys = new Set(['f_inicio', 'f_cotiz', 'f_confirm', 'confirm_method', 'confirm_file_id', 'expected_close_date']);
 
 export function isProtectedCommercialDateKey(key) {
   return protectedKeys.has(String(key || '').toLowerCase());

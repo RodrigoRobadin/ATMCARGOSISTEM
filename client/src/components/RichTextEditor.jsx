@@ -7,14 +7,15 @@ function exec(command, value = null) {
   } catch (_) {}
 }
 
-function ToolbarButton({ label, onClick, title }) {
+function ToolbarButton({ label, onClick, title, disabled = false }) {
   return (
     <button
       type="button"
-      className="px-2 py-1 text-xs border rounded bg-white hover:bg-slate-50"
+      className="px-2 py-1 text-xs border rounded bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
       title={title || label}
+      disabled={disabled}
     >
       {label}
     </button>
@@ -29,6 +30,8 @@ export function RichTextEditor({
 }) {
   const editorRef = useRef(null);
   const [focused, setFocused] = useState(false);
+  const [inTable, setInTable] = useState(false);
+  const [inQuote, setInQuote] = useState(false);
   const safeValue = useMemo(() => sanitizeRichTextHtml(value), [value]);
 
   useEffect(() => {
@@ -45,9 +48,112 @@ export function RichTextEditor({
     onChange({ html, text });
   };
 
-  const applyCommand = (command) => {
+  const currentTable = () => {
+    const anchor = window.getSelection()?.anchorNode;
+    const table = (anchor?.nodeType === 1 ? anchor : anchor?.parentElement)?.closest?.("table");
+    return table && editorRef.current?.contains(table) ? table : null;
+  };
+
+  const currentQuote = () => {
+    const anchor = window.getSelection()?.anchorNode;
+    const quote = (anchor?.nodeType === 1 ? anchor : anchor?.parentElement)?.closest?.("blockquote");
+    return quote && editorRef.current?.contains(quote) ? quote : null;
+  };
+
+  const updateToolbarSelection = () => {
+    setInTable(Boolean(currentTable()));
+    setInQuote(Boolean(currentQuote()));
+  };
+
+  const applyCommand = (command, value = null) => {
     editorRef.current?.focus();
-    exec(command);
+    exec(command, value);
+    emitChange();
+    updateToolbarSelection();
+  };
+
+  const toggleQuote = () => {
+    const quote = currentQuote();
+    if (!quote) {
+      applyCommand("formatBlock", "blockquote");
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    let paragraph = null;
+    Array.from(quote.childNodes).forEach((node) => {
+      if (node.nodeType === 1 && ["P", "DIV", "UL", "OL", "TABLE"].includes(node.tagName)) {
+        paragraph = null;
+        fragment.appendChild(node);
+      } else {
+        if (!paragraph) {
+          paragraph = document.createElement("p");
+          fragment.appendChild(paragraph);
+        }
+        paragraph.appendChild(node);
+      }
+    });
+    if (!fragment.childNodes.length) {
+      paragraph = document.createElement("p");
+      paragraph.appendChild(document.createElement("br"));
+      fragment.appendChild(paragraph);
+    }
+    const firstBlock = fragment.firstChild;
+    quote.replaceWith(fragment);
+    editorRef.current?.focus();
+    const selection = window.getSelection();
+    if (selection && !editorRef.current?.contains(selection.anchorNode)) {
+      const range = document.createRange();
+      range.selectNodeContents(firstBlock);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    setInQuote(false);
+    emitChange();
+  };
+
+  const insertTable = () => {
+    editorRef.current?.focus();
+    exec("insertHTML", "<table><tbody><tr><th>Concepto</th><th>Detalle</th></tr><tr><td> </td><td> </td></tr></tbody></table><p><br></p>");
+    emitChange();
+  };
+
+  const addTableRow = () => {
+    const table = currentTable();
+    if (!table) return;
+    const lastRow = table.rows[table.rows.length - 1];
+    const row = table.insertRow();
+    for (let index = 0; index < (lastRow?.cells.length || 2); index += 1) row.insertCell().textContent = " ";
+    emitChange();
+  };
+
+  const addTableColumn = () => {
+    const table = currentTable();
+    if (!table) return;
+    Array.from(table.rows).forEach((row, index) => {
+      const cell = document.createElement(index === 0 ? "th" : "td");
+      cell.textContent = " ";
+      row.appendChild(cell);
+    });
+    emitChange();
+  };
+
+  const removeTable = () => {
+    const table = currentTable();
+    if (!table || !window.confirm("¿Eliminar esta tabla y todo su contenido?")) return;
+    const paragraph = document.createElement("p");
+    paragraph.appendChild(document.createElement("br"));
+    table.after(paragraph);
+    table.remove();
+    editorRef.current?.focus();
+    const range = document.createRange();
+    range.setStart(paragraph, 0);
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    setInTable(false);
     emitChange();
   };
 
@@ -70,6 +176,12 @@ export function RichTextEditor({
         <ToolbarButton label="I" title="Cursiva" onClick={() => applyCommand("italic")} />
         <ToolbarButton label="U" title="Subrayado" onClick={() => applyCommand("underline")} />
         <ToolbarButton label="• Lista" title="Lista" onClick={() => applyCommand("insertUnorderedList")} />
+        <ToolbarButton label="1. Lista" title="Lista numerada" onClick={() => applyCommand("insertOrderedList")} />
+        <ToolbarButton label={inQuote ? "Quitar cita" : "Cita"} title={inQuote ? "Quitar formato de cita" : "Formato de cita"} onClick={toggleQuote} />
+        <ToolbarButton label="Tabla" title="Insertar tabla" onClick={insertTable} />
+        <ToolbarButton label="Fila +" title="Agregar fila a la tabla actual" onClick={addTableRow} disabled={!inTable} />
+        <ToolbarButton label="Col. +" title="Agregar columna a la tabla actual" onClick={addTableColumn} disabled={!inTable} />
+        <ToolbarButton label="Eliminar tabla" title="Eliminar la tabla actual y su contenido" onClick={removeTable} disabled={!inTable} />
         <ToolbarButton label="Izq" title="Alinear izquierda" onClick={() => applyCommand("justifyLeft")} />
         <ToolbarButton label="Centro" title="Centrar" onClick={() => applyCommand("justifyCenter")} />
         <ToolbarButton label="Der" title="Alinear derecha" onClick={() => applyCommand("justifyRight")} />
@@ -79,14 +191,18 @@ export function RichTextEditor({
         ref={editorRef}
         contentEditable
         suppressContentEditableWarning
-        className={`w-full px-3 py-2 text-sm focus:outline-none ${minHeightClass}`}
+        className={`rich-text-content w-full px-3 py-2 text-sm focus:outline-none ${minHeightClass}`}
         aria-label={placeholder || "Editor de texto enriquecido"}
-        onFocus={() => setFocused(true)}
+        onFocus={() => { setFocused(true); updateToolbarSelection(); }}
         onBlur={() => {
           setFocused(false);
+          setInTable(false);
+          setInQuote(false);
           emitChange();
         }}
-        onInput={emitChange}
+        onInput={() => { emitChange(); updateToolbarSelection(); }}
+        onMouseUp={updateToolbarSelection}
+        onKeyUp={updateToolbarSelection}
         onPaste={handlePaste}
       />
     </div>

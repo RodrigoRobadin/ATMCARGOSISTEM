@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import multer from 'multer';
 import generateWorkOrderPDF from '../services/serviceWorkOrderPdfkit.js';
 import { normalizeDoorPrefix, nextDoorNumber, formatDoorCode } from '../services/serviceDoorCodes.js';
+import { listFollowupPins, setFollowupPin } from '../services/followupPins.js';
 
 const router = Router();
 const computeQuote = computeQuoteNamed || computeQuoteDefault;
@@ -2167,7 +2168,12 @@ router.get('/cases/:id/followup-feed', requireAuth, requireAnyRole('admin', 'ser
         ORDER BY f.created_at DESC, f.id DESC`,
       [caseId]
     );
-    res.json({ items });
+    const pins = await listFollowupPins(pool, 'service_case', caseId);
+    res.json({ items: items.map((item) => ({
+      ...item,
+      pinned: pins.has(`followup:${item.id}`),
+      pinned_at: pins.get(`followup:${item.id}`) || null,
+    })).sort((a, b) => Number(b.pinned) - Number(a.pinned) || new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()) });
   } catch (error) {
     console.error('[service:followup-feed]', error);
     res.status(500).json({ error: 'No se pudo cargar el seguimiento' });
@@ -2222,6 +2228,24 @@ router.post('/cases/:id/followup-feed', requireAuth, requireAnyRole('admin', 'se
   } catch (error) {
     console.error('[service:create-followup]', error);
     res.status(500).json({ error: 'No se pudo guardar el seguimiento' });
+  }
+});
+
+router.patch('/cases/:id/followup-feed/:itemId/pin', requireAuth, requireAnyRole('admin', 'service'), async (req, res) => {
+  try {
+    const result = await setFollowupPin(pool, {
+      scopeType: 'service_case',
+      scopeId: Number(req.params.id),
+      sourceType: 'followup',
+      sourceId: Number(req.params.itemId),
+      pinned: req.body?.pinned,
+      userId: Number(req.user?.id) || null,
+    });
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    res.json(result);
+  } catch (error) {
+    console.error('[service:followup-feed:pin]', error);
+    res.status(500).json({ error: 'No se pudo actualizar el anclaje' });
   }
 });
 

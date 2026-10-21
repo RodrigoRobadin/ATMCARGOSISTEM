@@ -841,7 +841,7 @@ export default function ServiceModule() {
                       {...provided.droppableProps}
                       className="bg-white rounded-2xl shadow p-3 min-h-[200px]"
                     >
-                    <div className="mb-2">
+                    <div className="sticky top-[73px] z-20 -mx-3 -mt-3 mb-2 rounded-t-2xl border-b border-slate-100 bg-white px-3 pb-2 pt-3 shadow-sm dark:border-slate-800 dark:bg-slate-950">
                       <div className="font-medium flex items-center justify-between">
                         <span>{stage.name}</span>
                         <span className="text-xs bg-slate-100 rounded px-2 py-0.5">

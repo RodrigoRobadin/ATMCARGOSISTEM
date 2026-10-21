@@ -4,6 +4,7 @@ import db from '../services/db.js';
 
 import { requireAuth, requireRole } from '../middlewares/auth.js';
 import { logAudit, auditedRowMutation } from '../services/audit.js';
+import { listFollowupPins, setFollowupPin } from '../services/followupPins.js';
 
 const router = Router();
 const toNull = (v) => (v === '' || typeof v === 'undefined' ? null : v);
@@ -609,11 +610,14 @@ router.get('/:id/followup-feed', requireAuth, async (req, res) => {
       [id]
     );
 
+    const pins = await listFollowupPins(db, 'deal', Number(id));
     const feed = [
       ...activities.map((row) => ({
         id: `activity-${row.id}`,
         source_id: row.id,
         source_type: 'activity',
+        pinned: pins.has(`activity:${row.id}`),
+        pinned_at: pins.get(`activity:${row.id}`) || null,
         entry_type: row.type || 'activity',
         type: row.type,
         title: row.subject || (row.type === 'note' ? 'Nota' : 'Actividad'),
@@ -632,6 +636,8 @@ router.get('/:id/followup-feed', requireAuth, async (req, res) => {
         id: `task-${row.id}`,
         source_id: row.id,
         source_type: 'followup_task',
+        pinned: pins.has(`task:${row.id}`),
+        pinned_at: pins.get(`task:${row.id}`) || null,
         entry_type: 'task',
         type: 'task',
         title: row.title,
@@ -646,7 +652,7 @@ router.get('/:id/followup-feed', requireAuth, async (req, res) => {
         completed_at: row.completed_at || null,
       })),
     ]
-      .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
 
     res.json({
       deal: {
@@ -769,6 +775,24 @@ router.post('/:id/followup-feed', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('[operations:create-followup-feed]', e?.message || e);
     res.status(500).json({ error: 'No se pudo registrar el elemento de seguimiento' });
+  }
+});
+
+router.patch('/:id/followup-feed/:sourceType/:itemId/pin', requireAuth, async (req, res) => {
+  try {
+    const result = await setFollowupPin(db, {
+      scopeType: 'deal',
+      scopeId: Number(req.params.id),
+      sourceType: req.params.sourceType,
+      sourceId: Number(req.params.itemId),
+      pinned: req.body?.pinned,
+      userId: Number(req.user?.id) || null,
+    });
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    res.json(result);
+  } catch (error) {
+    console.error('[operations:followup-feed:pin]', error);
+    res.status(500).json({ error: 'No se pudo actualizar el anclaje' });
   }
 });
 

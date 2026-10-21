@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { API_BASE, api } from "../api";
 import { parseCompanyBankAccountRow } from "../utils/companyBankAccounts";
+import QuoteTemplateCard from "../components/QuoteTemplateCard.jsx";
 
 // === Grupos de parametros administrables ===
 const PARAM_GROUPS = [
@@ -37,7 +38,7 @@ const PARAM_GROUPS = [
   {
     title: "Presupuesto - Plantillas de condiciones",
     description:
-      "Plantillas completas para presupuesto industrial (contenido en JSON).",
+      "Edita las condiciones del presupuesto industrial con formato y tablas.",
     keys: ["quote_template"],
   },
   {
@@ -446,7 +447,15 @@ export default function AdminParams() {
                       </div>
                     )}
                     {group.visibleKeys.map((key) => (
-                      <ParamCard
+                      key === "quote_template" ? <QuoteTemplateCard
+                        key={key}
+                        rows={map[key] || []}
+                        onChangeRow={(idx, patch) => setKeyList(key, (list) => list.map((r, i) => i === idx ? { ...r, ...patch } : r))}
+                        onClickSave={(idx) => saveRow(key, idx)}
+                        onClickRemove={(idx) => removeRow(key, idx)}
+                        onAdd={(val) => addRow(key, val)}
+                        saving={saving}
+                      /> : <ParamCard
                         key={key}
                         label={key}
                         keyName={key}
