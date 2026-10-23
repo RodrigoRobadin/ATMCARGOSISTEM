@@ -295,7 +295,7 @@ router.get('/', requireAuth, async (req, res) => {
 
     const [deals] = await pool.query(
       `
-      SELECT d.id, d.reference, d.title, d.value, d.status, d.record_type, d.created_at,
+      SELECT d.id, d.reference, d.title, d.value, d.status, d.created_at,
              d.org_id, d.contact_id,
              d.stage_id, d.advisor_user_id, du.name AS advisor_name,
              s.name AS stage_name, s.probability, s.stuck_days,
