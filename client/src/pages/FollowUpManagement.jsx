@@ -82,7 +82,7 @@ function Kpi({ label, value, tone = 'default' }) {
   );
 }
 
-function CallForm({ call, orgs, contacts, deals, onClose, onSaved }) {
+export function CallForm({ call, orgs, contacts, deals, onClose, onSaved }) {
   const isEdit = Boolean(call?.id);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(() => ({

@@ -837,7 +837,7 @@ router.patch('/:id/followup-feed/:sourceType/:itemId/done', requireAuth, async (
     if (normalizedType === 'activity' || normalizedType === 'reminder') {
       const [[activity]] = await db.query(
         `
-        SELECT id, deal_id, done, type
+        SELECT id, deal_id, done, type, subject
         FROM activities
         WHERE id = ? AND deal_id = ?
         LIMIT 1
@@ -849,14 +849,21 @@ router.patch('/:id/followup-feed/:sourceType/:itemId/done', requireAuth, async (
         return res.status(404).json({ error: 'Actividad no encontrada' });
       }
 
-      await db.query(
+      const [updated] = await db.query(
         `
         UPDATE activities
         SET done = 1
-        WHERE id = ? AND deal_id = ?
+        WHERE id = ? AND deal_id = ? AND done = 0
         `,
         [numericItemId, numericDealId]
       );
+
+      if (updated.affectedRows) {
+        await logAudit({
+          req, action: 'complete', entity: 'deal', entityId: numericDealId,
+          description: `Completó actividad: ${activity.subject || activity.type || 'Sin título'}`,
+        });
+      }
 
       return res.json({
         ok: true,

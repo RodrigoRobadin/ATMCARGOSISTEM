@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { pool } from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
+import { logAudit } from '../services/audit.js';
 
 const router = Router();
 
@@ -289,8 +290,19 @@ router.patch('/:id', async (req, res) => {
     }
     if (!fields.length) return res.status(400).json({ error: 'Nada para actualizar' });
 
+    const [[before]] = Object.prototype.hasOwnProperty.call(body, 'done')
+      ? await pool.query('SELECT deal_id, type, subject, done FROM activities WHERE id = ?', [id])
+      : [[null]];
     params.push(id);
-    await pool.query(`UPDATE activities SET ${fields.join(', ')} WHERE id = ?`, params);
+    const [updated] = await pool.query(`UPDATE activities SET ${fields.join(', ')} WHERE id = ?`, params);
+    if (updated.affectedRows && before?.deal_id && body.done !== undefined && Number(before.done) !== Number(body.done)) {
+      await logAudit({
+        req,
+        action: Number(body.done) === 1 ? 'complete' : 'reopen',
+        entity: 'deal', entityId: before.deal_id,
+        description: `${Number(body.done) === 1 ? 'Completó' : 'Reabrió'} actividad: ${before.subject || before.type || 'Sin título'}`,
+      });
+    }
     res.json({ ok: true });
   } catch (err) {
     console.error('PATCH /activities/:id error', err);

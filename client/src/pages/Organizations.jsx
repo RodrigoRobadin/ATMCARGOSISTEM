@@ -440,10 +440,11 @@ export default function Organizations() {
 
 /* =====================  MODAL  ===================== */
 
-function NewOrganizationModal({
+export function NewOrganizationModal({
   onClose,
   onCreated,
   paramOpts /* owners, labelOptions */,
+  initialExecutiveId = null,
 }) {
   const [razonSocial, setRazonSocial] = useState('');
   const [ruc, setRuc] = useState('');
@@ -478,19 +479,34 @@ function NewOrganizationModal({
   const [hojaRuta, setHojaRuta] = useState('');
 
   // Ejecutivo de cuenta (opcional)
-  const [accountExecutiveId, setAccountExecutiveId] = useState(null);
+  const [accountExecutiveId, setAccountExecutiveId] = useState(initialExecutiveId);
+  const [loadedParamOpts, setLoadedParamOpts] = useState(null);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => {
     api.get('/cities').then(({ data }) => setCities(data || [])).catch(() => setCities([]));
   }, []);
+  useEffect(() => {
+    if (paramOpts) return;
+    api.get('/params', { params: { keys: 'org_tipo,org_rubro,org_operacion,tipo_operacion' } })
+      .then(({ data }) => {
+        const toArr = (values) => Array.isArray(values)
+          ? values.map((value) => typeof value === 'string' ? value : value?.value ?? value?.key ?? value?.code ?? '').filter(Boolean)
+          : [];
+        setLoadedParamOpts({
+          org_tipo: toArr(data?.org_tipo), org_rubro: toArr(data?.org_rubro),
+          org_operacion: toArr(data?.org_operacion), tipo_operacion: toArr(data?.tipo_operacion),
+        });
+      }).catch(() => setLoadedParamOpts(null));
+  }, [paramOpts]);
 
   // Parametría del modal desde props
-  const tipoOrgOptions = paramOpts?.org_tipo || [];
-  const rubroOptions = paramOpts?.org_rubro || ['Seguro'];
+  const options = paramOpts || loadedParamOpts;
+  const tipoOrgOptions = options?.org_tipo || [];
+  const rubroOptions = options?.org_rubro?.length ? options.org_rubro : ['Seguro'];
   const operacionOptions =
-    paramOpts?.org_operacion || paramOpts?.tipo_operacion || [];
+    options?.org_operacion || options?.tipo_operacion || [];
 
   const isFreightOrg =
     (tipoOrg || '').toLowerCase().includes('flete') ||
@@ -546,7 +562,7 @@ function NewOrganizationModal({
     setSaving(true);
     try {
       const execId = accountExecutiveId ? Number(accountExecutiveId) : null;
-      await api.post('/organizations', {
+      const { data: created } = await api.post('/organizations', {
         razon_social: razonSocial.trim(),
         name: razonSocial.trim(),
         ruc: ruc.trim(),
@@ -576,7 +592,7 @@ function NewOrganizationModal({
         assigned_user_id: execId,
         owner_user_id: execId,
       });
-      await onCreated?.();
+      await onCreated?.(created);
       onClose?.();
     } catch (e) {
       setError(
