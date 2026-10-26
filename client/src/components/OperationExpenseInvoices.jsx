@@ -263,8 +263,8 @@ export default function OperationExpenseInvoices({
         params: {
           op_type: operationType,
           cost_sheet_version_number: showExpenseControl ? costSheetVersionNumber || undefined : undefined,
-          quote_id: showExpenseControl ? quoteId || undefined : undefined,
-          quote_revision_id: showExpenseControl ? quoteRevisionId || undefined : undefined,
+          quote_id: showExpenseControl && operationType !== "service" ? quoteId || undefined : undefined,
+          quote_revision_id: showExpenseControl && operationType !== "service" ? quoteRevisionId || undefined : undefined,
           service_quote_addition_id: serviceQuoteAdditionId || undefined,
           exclude_service_additions:
             operationType === "service" && !serviceQuoteAdditionId ? 1 : undefined,
@@ -311,6 +311,7 @@ export default function OperationExpenseInvoices({
         cost_sheet_version_number: costSheetVersionNumber || undefined,
         quote_id: quoteId || undefined,
         quote_revision_id: quoteRevisionId || undefined,
+        exclude_service_additions: operationType === "service" && !serviceQuoteAdditionId ? 1 : undefined,
       };
       const { data } = await api.get(`/operations/${operationId}/expense-control`, { params });
       setExpenseControl(data || null);
@@ -335,7 +336,7 @@ export default function OperationExpenseInvoices({
     if (!showList || !showExpenseControl) return;
     loadExpenseControl();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showList, showExpenseControl, operationId, operationType, costSheetVersionNumber, quoteId, quoteRevisionId]);
+  }, [showList, showExpenseControl, operationId, operationType, costSheetVersionNumber, quoteId, quoteRevisionId, serviceQuoteAdditionId]);
 
   useEffect(() => {
     try {
@@ -1973,7 +1974,7 @@ function ExpenseControlPanel({ data, loading, manualExchangeRate, onManualExchan
   });
   const convertedComparableRows = conversionRows.filter((row) => row.convertedAmount != null);
   const convertedTotal = convertedComparableRows.reduce((sum, row) => sum + Number(row.convertedAmount || 0), 0);
-  const hasConvertedComparison = Boolean(budgetCurrency && budgetedPurchase > 0 && convertedComparableRows.length);
+  const hasConvertedComparison = Boolean(budgetCurrency && budgetedPurchase > 0 && expenseInvoices.length && convertedComparableRows.length === expenseInvoices.length);
   const convertedDifference = hasConvertedComparison
     ? Number((convertedTotal - budgetedPurchase).toFixed(2))
     : null;
@@ -2007,7 +2008,7 @@ function ExpenseControlPanel({ data, loading, manualExchangeRate, onManualExchan
       }
       return sum + converted;
     }, 0);
-    const comparable = budgetInCurrency != null && !hasMissingActualConversion;
+    const comparable = expenseInvoices.length > 0 && budgetInCurrency != null && !hasMissingActualConversion;
     const difference = comparable ? Number((actualInCurrency - budgetInCurrency).toFixed(2)) : null;
     return {
       currency_code: currency,
@@ -2019,6 +2020,7 @@ function ExpenseControlPanel({ data, loading, manualExchangeRate, onManualExchan
       full_conversion: comparable,
     };
   });
+  const hasComparableResult = hasConvertedComparison || displayComparisons.some((row) => row.full_conversion);
   const unconvertedCurrencies = Array.from(
     new Set(
       conversionRows
@@ -2048,8 +2050,8 @@ function ExpenseControlPanel({ data, loading, manualExchangeRate, onManualExchan
             Presupuesto: {budget?.revision_label || "Sin presupuesto detectado"}
           </div>
         </div>
-        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${hasOverBudget ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}>
-          {hasOverBudget ? "Sobrecosto" : "En margen"}
+        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${!hasComparableResult ? "bg-amber-100 text-amber-700" : hasOverBudget ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}>
+          {!hasComparableResult ? "Sin comparación" : hasOverBudget ? "Sobrecosto" : "En margen"}
         </span>
       </div>
 
@@ -2098,7 +2100,7 @@ function ExpenseControlPanel({ data, loading, manualExchangeRate, onManualExchan
             ["Venta", realProfit.budgeted_sell],
             ["Compra presup.", realProfit.budgeted_buy],
             ["Gasto real", realProfit.actual_buy],
-            ["Diferencia costo", Number(realProfit.actual_buy || 0) - Number(realProfit.budgeted_buy || 0)],
+            ["Diferencia costo", realProfit.actual_buy == null ? null : Number(realProfit.actual_buy) - Number(realProfit.budgeted_buy || 0)],
             ["Profit presup.", realProfit.budgeted_profit],
             ["Profit real", realProfit.real_profit],
           ].map(([label, value]) => (
@@ -2113,7 +2115,7 @@ function ExpenseControlPanel({ data, loading, manualExchangeRate, onManualExchan
                   ? "text-red-700"
                   : ""
               }`}>
-                {label === "Diferencia costo"
+                {value == null ? "Sin TC" : label === "Diferencia costo"
                   ? costDifferenceMoney(value, realProfit.currency_code)
                   : money(value, realProfit.currency_code)}
               </div>

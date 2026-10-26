@@ -1719,6 +1719,37 @@ async function fetchIndustrialBudget(operationId, quoteRevisionId, quoteId = nul
   return buildIndustrialBudgetFromComputed(asJson(row?.computed_json) || {}, row?.revision || row?.ref_code || 'Cotizacion actual');
 }
 
+async function fetchServiceBudget(serviceCaseId, quoteRevisionId, quoteId = null) {
+  const [[quote]] = await pool.query(
+    `SELECT id, ref_code, revision, computed_json
+       FROM service_quotes WHERE service_case_id = ? LIMIT 1`,
+    [serviceCaseId]
+  );
+  if (!quote) {
+    if (quoteId || quoteRevisionId) {
+      throw Object.assign(new Error('La cotización no pertenece a este servicio'), { statusCode: 404 });
+    }
+    return buildIndustrialBudgetFromComputed({}, 'Sin cotización');
+  }
+  if (quoteId && Number(quote.id) !== Number(quoteId)) {
+    throw Object.assign(new Error('La cotización no pertenece a este servicio'), { statusCode: 404 });
+  }
+  if (quoteRevisionId) {
+    const [[revision]] = await pool.query(
+      `SELECT id, name, computed_json FROM service_quote_revisions
+        WHERE id = ? AND quote_id = ? LIMIT 1`,
+      [quoteRevisionId, quote.id]
+    );
+    if (!revision) {
+      throw Object.assign(new Error('La revisión no pertenece a este servicio'), { statusCode: 404 });
+    }
+    return buildIndustrialBudgetFromComputed(asJson(revision.computed_json) || {}, revision.name);
+  }
+  return buildIndustrialBudgetFromComputed(
+    asJson(quote.computed_json) || {}, quote.revision || quote.ref_code || 'Cotización actual'
+  );
+}
+
 async function fetchCargoBudget(operationId, versionNumber) {
   let row = null;
   if (versionNumber) {
@@ -1773,6 +1804,17 @@ async function fetchOperationExportMeta(operationId, opType) {
     );
     return row || {};
   }
+  if (opType === 'service') {
+    const [[row]] = await pool.query(
+      `SELECT sc.id, sc.reference, COALESCE(o.razon_social, o.name, sc.title) AS client_name,
+              o.phone AS contact_phone
+         FROM service_cases sc
+         LEFT JOIN organizations o ON o.id = sc.org_id
+        WHERE sc.id = ? LIMIT 1`,
+      [operationId]
+    );
+    return row || {};
+  }
   return {};
 }
 
@@ -1790,13 +1832,19 @@ async function buildExpenseControlData(operationId, opType, query = {}) {
 
   const industrialQuoteId = Number(query.quote_id || 0) || null;
   const industrialRevisionId = Number(query.quote_revision_id || 0) || null;
-  const budget = industrialRevisionId || industrialQuoteId
-    ? await fetchIndustrialBudget(operationId, industrialRevisionId, industrialQuoteId)
-    : await fetchCargoBudget(operationId, query.cost_sheet_version_number);
+  const budget = normalizedOpType === 'service'
+    ? await fetchServiceBudget(operationId, industrialRevisionId, industrialQuoteId)
+    : industrialRevisionId || industrialQuoteId
+      ? await fetchIndustrialBudget(operationId, industrialRevisionId, industrialQuoteId)
+      : await fetchCargoBudget(operationId, query.cost_sheet_version_number);
+
+  const expenseScope = normalizedOpType === 'service'
+    ? { service_quote_addition_id: query.service_quote_addition_id, exclude_service_additions: 1 }
+    : query;
 
   const invoiceWhere = ['e.operation_id = ?', 'e.operation_type = ?', "COALESCE(e.status, '') <> 'anulado'"];
   const invoiceParams = [operationId, normalizedOpType];
-  appendExpenseRevisionScope(invoiceWhere, invoiceParams, query || {}, 'e');
+  appendExpenseRevisionScope(invoiceWhere, invoiceParams, expenseScope, 'e');
 
   const [invoiceRows] = await pool.query(
     `SELECT e.*,
@@ -1846,7 +1894,7 @@ async function buildExpenseControlData(operationId, opType, query = {}) {
 
   const detailWhere = ['e.operation_id = ?', 'e.operation_type = ?', "COALESCE(e.status, '') <> 'anulado'"];
   const detailParams = [operationId, normalizedOpType];
-  appendExpenseRevisionScope(detailWhere, detailParams, query || {}, 'e');
+  appendExpenseRevisionScope(detailWhere, detailParams, expenseScope, 'e');
 
   const [detailRows] = await pool.query(
     `SELECT e.id AS invoice_id, e.currency_code, e.amount_total, e.expense_rubro AS invoice_rubro,
@@ -1912,7 +1960,7 @@ async function buildExpenseControlData(operationId, opType, query = {}) {
   // pero se reflejan aquí para obtener el profit real completo.
   let commissionBudget = 0;
   let commissionActual = 0;
-  try {
+  if (normalizedOpType === 'deal') try {
     const commissionWhere = ["l.operation_id = ?", "l.status <> 'anulada'"];
     const commissionParams = [operationId];
     if (industrialRevisionId) {
@@ -1967,15 +2015,24 @@ async function buildExpenseControlData(operationId, opType, query = {}) {
     };
   });
 
-  const totalActualInBudget = invoices.reduce((sum, invoice) => {
-    const converted = convertAmount(
+  const convertedInvoiceAmounts = invoices.map((invoice) => ({
+    currency: normCurrency(invoice.currency_code),
+    amount: convertAmount(
       invoice.net_amount ?? invoice.amount_total,
       invoice.currency_code,
       budget.currency_code,
       exchangeRate
-    );
-    return converted == null ? sum : sum + converted;
-  }, 0) + commissionActual;
+    ),
+  }));
+  const missingCurrencies = Array.from(new Set(
+    convertedInvoiceAmounts.filter((item) => item.amount == null).map((item) => item.currency)
+  ));
+  const totalActualInBudget = missingCurrencies.length
+    ? null
+    : convertedInvoiceAmounts.reduce((sum, item) => sum + item.amount, commissionActual);
+  const realProfit = totalActualInBudget == null
+    ? null
+    : Number((Number(budget.budgeted_sell || 0) - totalActualInBudget).toFixed(2));
   const comparisons = Object.entries(actualByCurrency).map(([currency, actual]) => {
     const convertedBudget = convertAmount(budget.budgeted_purchase, budget.currency_code, currency, exchangeRate);
     const difference = convertedBudget == null ? null : Number((actual - convertedBudget).toFixed(2));
@@ -2001,10 +2058,11 @@ async function buildExpenseControlData(operationId, opType, query = {}) {
       currency_code: budget.currency_code,
       budgeted_sell: Number(budget.budgeted_sell || 0),
       budgeted_buy: Number(budget.budgeted_purchase || 0),
-      actual_buy: Number(totalActualInBudget.toFixed(2)),
+      actual_buy: totalActualInBudget == null ? null : Number(totalActualInBudget.toFixed(2)),
       budgeted_profit: Number(budget.budgeted_profit || 0),
-      real_profit: Number((Number(budget.budgeted_sell || 0) - totalActualInBudget).toFixed(2)),
-      profit_difference: Number(((Number(budget.budgeted_sell || 0) - totalActualInBudget) - Number(budget.budgeted_profit || 0)).toFixed(2)),
+      real_profit: realProfit,
+      profit_difference: realProfit == null ? null : Number((realProfit - Number(budget.budgeted_profit || 0)).toFixed(2)),
+      missing_currencies: missingCurrencies,
     },
   };
 }
@@ -2385,7 +2443,7 @@ router.get('/:id/expense-control', requireAuth, async (req, res) => {
     res.json(data);
   } catch (e) {
     console.error('[operation-expense] control error', e);
-    res.status(500).json({ error: 'Error loading expense control' });
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : 'Error loading expense control' });
   }
 });
 
@@ -2602,10 +2660,10 @@ router.get('/:id/expense-control/export-pdf', requireAuth, async (req, res) => {
     [
       ['Venta presupuestada', moneyText(s.budgeted_sell, s.currency_code)],
       ['Compra presupuestada', moneyText(s.budgeted_buy, s.currency_code)],
-      ['Compra real', moneyText(s.actual_buy, s.currency_code)],
-      ['Diferencia costo', costDiffText(s.actual_buy - s.budgeted_buy, s.currency_code)],
+      ['Compra real', s.actual_buy == null ? 'Sin TC' : moneyText(s.actual_buy, s.currency_code)],
+      ['Diferencia costo', s.actual_buy == null ? 'Sin TC' : costDiffText(s.actual_buy - s.budgeted_buy, s.currency_code)],
       ['Profit presupuestado', moneyText(s.budgeted_profit, s.currency_code)],
-      ['Profit real', moneyText(s.real_profit, s.currency_code)],
+      ['Profit real', s.real_profit == null ? 'Sin TC' : moneyText(s.real_profit, s.currency_code)],
     ].forEach(([label, value]) => doc.text(`${label}: ${value}`));
     doc.moveDown();
     doc.fontSize(11).text('Compra presupuestada vs real', { underline: true });

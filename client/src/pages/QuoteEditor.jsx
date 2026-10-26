@@ -2206,10 +2206,10 @@ export default function QuoteEditor({
       {/* ---------------- TAB: COSTOS FINALES ---------------- */}
       {activeTab === "costos-finales" && (
         <div className="space-y-3">
-          {dealId ? (
+          {(isService ? serviceCaseId : dealId) ? (
             <OperationExpenseInvoices
-              operationId={Number(dealId)}
-              operationType="deal"
+              operationId={Number(isService ? serviceCaseId : dealId)}
+              operationType={isService ? "service" : "deal"}
               showList
               showExpenseControl
               showInvoiceTable={false}
