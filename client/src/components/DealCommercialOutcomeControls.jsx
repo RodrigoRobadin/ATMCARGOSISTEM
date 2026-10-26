@@ -14,7 +14,7 @@ export const LOSS_REASONS = [
   { value: "otro", label: "Otro" },
 ];
 
-export function DealOutcomeContextMenu({ deal, position, onClose, onMarkNotClosed, onAssignActivity }) {
+export function DealOutcomeContextMenu({ deal, position, onClose, onMarkNotClosed, onAssignActivity, onChangeWorkCompletion, canChangeWorkCompletion }) {
   const ref = useRef(null);
 
   useEffect(() => {
@@ -34,7 +34,8 @@ export function DealOutcomeContextMenu({ deal, position, onClose, onMarkNotClose
 
   if (!deal || !position) return null;
   const left = Math.min(position.x, Math.max(12, window.innerWidth - 240));
-  const top = Math.min(position.y, Math.max(12, window.innerHeight - 130));
+  const top = Math.min(position.y, Math.max(12, window.innerHeight - 180));
+  const completed = Boolean(deal.work_completed_at);
 
   return (
     <div
@@ -43,7 +44,7 @@ export function DealOutcomeContextMenu({ deal, position, onClose, onMarkNotClose
       style={{ left, top }}
       role="menu"
     >
-      <button
+      {onAssignActivity && !completed && <button
         type="button"
         className="w-full rounded px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
         onClick={() => {
@@ -52,8 +53,19 @@ export function DealOutcomeContextMenu({ deal, position, onClose, onMarkNotClose
         }}
       >
         Asignar actividad
-      </button>
-      <button
+      </button>}
+      {canChangeWorkCompletion && <button
+        type="button"
+        role="menuitem"
+        className="w-full rounded px-3 py-2 text-left text-sm text-emerald-800 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-950/30"
+        onClick={() => {
+          onChangeWorkCompletion(deal);
+          onClose();
+        }}
+      >
+        {completed ? 'Reabrir trabajo' : 'Finalizar trabajo como aprobado'}
+      </button>}
+      {!completed && <button
         type="button"
         className="w-full rounded px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
         onClick={() => {
@@ -62,7 +74,7 @@ export function DealOutcomeContextMenu({ deal, position, onClose, onMarkNotClose
         }}
       >
         Marcar como no cerrada
-      </button>
+      </button>}
     </div>
   );
 }

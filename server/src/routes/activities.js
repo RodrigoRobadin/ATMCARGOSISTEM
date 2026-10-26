@@ -3,8 +3,10 @@ import { Router } from 'express';
 import { pool } from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
 import { logAudit } from '../services/audit.js';
+import { ensureWorkCompletionSchema } from '../services/workCompletion.js';
 
 const router = Router();
+router.use((req, res, next) => { ensureWorkCompletionSchema(pool).then(() => next(), next); });
 
 /** Utils pequeñas */
 const toNullIfEmpty = (v) => (v === '' || typeof v === 'undefined' ? null : v);
@@ -94,6 +96,7 @@ router.get('/mine', requireAuth, async (req, res) => {
     if (typeof done !== 'undefined') {
       where.push('a.done = ?');
       params.push(toDoneFlag(done));
+      if (!toDoneFlag(done)) where.push('(a.deal_id IS NULL OR (d.id IS NOT NULL AND d.work_completed_at IS NULL))');
     }
 
     const safeLimit = Math.min(Number(limit) || 5, 50);
@@ -104,6 +107,7 @@ router.get('/mine', requireAuth, async (req, res) => {
               a.org_id, a.person_id, a.deal_id, a.assigned_to, o.name AS org_name
        FROM activities a
        LEFT JOIN organizations o ON o.id = a.org_id
+       LEFT JOIN deals d ON d.id = a.deal_id
        ${whereSql}
        ORDER BY a.created_at DESC, a.id DESC
        LIMIT ?`,
@@ -141,6 +145,7 @@ router.get('/', async (req, res) => {
     if (typeof done !== 'undefined') {
       where.push('a.done = ?');
       params.push(toDoneFlag(done));
+      if (!toDoneFlag(done) && !deal_id) where.push('(a.deal_id IS NULL OR (d.id IS NOT NULL AND d.work_completed_at IS NULL))');
     }
     if (q) {
       where.push('(a.subject LIKE ? OR a.notes LIKE ?)');
@@ -191,21 +196,22 @@ router.get('/count', requireAuth, async (req, res) => {
     const userId = getUserId(req);
     if (!userId) return res.json({ total: 0 });
 
-    const where = ['created_by = ?'];
+    const where = ['a.created_by = ?'];
     const params = [userId];
 
     if (type) {
-      where.push('type = ?');
+      where.push('a.type = ?');
       params.push(type);
     }
     if (typeof done !== 'undefined') {
-      where.push('done = ?');
+      where.push('a.done = ?');
       params.push(toDoneFlag(done));
+      if (!toDoneFlag(done)) where.push('(a.deal_id IS NULL OR (d.id IS NOT NULL AND d.work_completed_at IS NULL))');
     }
 
     const whereSql = `WHERE ${where.join(' AND ')}`;
     const [[row]] = await pool.query(
-      `SELECT COUNT(*) AS total FROM activities ${whereSql}`,
+      `SELECT COUNT(*) AS total FROM activities a LEFT JOIN deals d ON d.id = a.deal_id ${whereSql}`,
       params
     );
     res.json({ total: Number(row?.total || 0) });
@@ -239,6 +245,13 @@ router.post('/', requireAuth, async (req, res) => {
       ? String(req.body.priority).toLowerCase()
       : 'medium';
     const assigned_to = toIntOrNull(req.body.assigned_to) || created_by;
+    if (deal_id && !done && type !== 'note') {
+      const [[deal]] = await pool.query('SELECT work_completed_at FROM deals WHERE id = ?', [deal_id]);
+      if (!deal) return res.status(404).json({ error: 'Operación no encontrada' });
+      if (deal.work_completed_at) {
+        return res.status(409).json({ error: 'Reabre el trabajo antes de agregar actividades pendientes' });
+      }
+    }
 
     const cols = ['type','subject','due_date','done','priority','org_id','person_id','deal_id','notes'];
     const vals = [ type,   subject,  due_date,  done,  priority,  org_id,  person_id,  deal_id,  notes ];

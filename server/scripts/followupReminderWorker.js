@@ -1,6 +1,7 @@
 import { pathToFileURL } from 'node:url';
 import { pool } from '../src/services/db.js';
 import { ensureFollowupManagementSchema } from '../src/services/followupManagementService.js';
+import { ensureWorkCompletionSchema } from '../src/services/workCompletion.js';
 
 const POLL_MS = Math.max(30000, Number(process.env.FOLLOWUP_REMINDER_POLL_MS || 60000));
 
@@ -85,17 +86,27 @@ async function processStage(task, device, stage) {
 
 export async function runFollowupReminderPass() {
   await ensureFollowupManagementSchema();
+  await ensureWorkCompletionSchema(pool);
   const now = paraguaySqlDate();
   const ahead = paraguaySqlDate(30);
   const [tasks] = await pool.query(
     `SELECT t.id, t.user_id, t.org_id, t.deal_id, t.call_id, t.title, t.due_at, o.name AS org_name
        FROM followup_tasks t
        LEFT JOIN organizations o ON o.id = t.org_id
+       LEFT JOIN deals d ON d.id = t.deal_id
       WHERE t.status='pending' AND t.due_at <= ?
+        AND (t.deal_id IS NULL OR (d.id IS NOT NULL AND d.work_completed_at IS NULL))
       ORDER BY t.due_at ASC LIMIT 500`,
     [ahead]
   );
   for (const task of tasks || []) {
+    const [[current]] = await pool.query(
+      `SELECT t.status, d.work_completed_at
+         FROM followup_tasks t LEFT JOIN deals d ON d.id = t.deal_id
+        WHERE t.id = ?`,
+      [task.id]
+    );
+    if (current?.status !== 'pending' || current?.work_completed_at) continue;
     const stage = String(task.due_at) <= now ? 'due' : 'before';
     const [devices] = await pool.query(
       `SELECT id, expo_push_token FROM user_push_devices WHERE user_id=? AND active=1`,

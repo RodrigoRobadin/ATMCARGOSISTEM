@@ -16,6 +16,7 @@ import OperationFollowupComposer from "../components/OperationFollowupComposer.j
 import AuditHistory from "../components/AuditHistory.jsx";
 import CommercialDates from "../components/op-details/CommercialDates.jsx";
 import OperationStageChange from "../components/OperationStageChange.jsx";
+import OperationWorkCompletion from "../components/OperationWorkCompletion.jsx";
 import OperationDocuments from "../components/OperationDocuments.jsx";
 import OperationHistory from "../components/OperationHistory.jsx";
 import FollowupPinControl from "../components/FollowupPinControl.jsx";
@@ -2822,6 +2823,7 @@ function providerHasFreightTag(p = {}) {
                   deal={deal}
                   onChanged={(stage) => setDeal((current) => current ? { ...current, ...stage } : current)}
                 />
+                <OperationWorkCompletion deal={deal} onChanged={setDeal} />
               </>
             ) : (
               <>
@@ -3376,12 +3378,12 @@ function providerHasFreightTag(p = {}) {
                           <div className="flex items-center justify-between gap-3 mb-3">
                             <h3 className="font-medium">Seguimiento de la operacion</h3>
                             <div className="flex items-center gap-2 text-xs text-slate-500">
-                              {followupDueStats.overdue > 0 ? (
+                              {!deal.work_completed_at && followupDueStats.overdue > 0 ? (
                                 <span className="px-2 py-1 rounded-full border bg-red-50 text-red-700 border-red-200">
                                   {followupDueStats.overdue} vencido(s)
                                 </span>
                               ) : null}
-                              {followupDueStats.soon > 0 ? (
+                              {!deal.work_completed_at && followupDueStats.soon > 0 ? (
                                 <span className="px-2 py-1 rounded-full border bg-amber-50 text-amber-700 border-amber-200">
                                   {followupDueStats.soon} por vencer
                                 </span>
@@ -3390,7 +3392,7 @@ function providerHasFreightTag(p = {}) {
                             </div>
                           </div>
 
-                          <OperationFollowupComposer
+                          {deal.work_completed_at ? <p className="mb-3 text-sm text-slate-600">Seguimiento archivado al finalizar el trabajo.</p> : <OperationFollowupComposer
                             deal={deal}
                             currentUser={user}
                             entries={notesList}
@@ -3413,7 +3415,7 @@ function providerHasFreightTag(p = {}) {
                             setMarkDone={setNoteMarkDone}
                             onSave={addNote}
                             saving={followupSaving}
-                          />
+                          />}
 
                           <div className="hidden">
                           <div className="grid md:grid-cols-2 gap-2 mb-2">

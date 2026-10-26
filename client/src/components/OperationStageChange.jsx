@@ -16,7 +16,8 @@ export default function OperationStageChange({ deal, onChanged }) {
   const isAdmin = String(user?.role || '').toLowerCase() === 'admin';
   const isAdvisor = Number(deal?.deal_advisor_user_id) > 0 &&
     Number(deal.deal_advisor_user_id) === Number(user?.id);
-  const canChange = isOperation && Boolean(deal?.pipeline_id) && (isAdmin || isAdvisor);
+  const isCompleted = Boolean(deal?.work_completed_at);
+  const canChange = isOperation && !isCompleted && Boolean(deal?.pipeline_id) && (isAdmin || isAdvisor);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -75,6 +76,8 @@ export default function OperationStageChange({ deal, onChanged }) {
 
   const unavailableReason = !isOperation
     ? 'Los prospectos se convierten desde el pipeline.'
+    : isCompleted
+      ? 'Reabre el trabajo antes de cambiar su etapa.'
     : !deal?.pipeline_id
       ? 'La operación no tiene un pipeline asignado.'
       : 'Solo el administrador o el ejecutivo asignado puede cambiar el estado.';

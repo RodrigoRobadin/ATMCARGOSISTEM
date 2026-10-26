@@ -8,6 +8,7 @@ import { useAuth } from "../auth.jsx";
 import { getOperationAttention } from "../utils/operationAttention.js";
 import PipelineListViews, { PipelineViewSwitch } from "../components/PipelineListViews.jsx";
 import { loadPipelineDeals } from "../utils/loadPipelineDeals.js";
+import { WorkCompletionDialog } from "../components/OperationWorkCompletion.jsx";
 import {
   DealOutcomeContextMenu,
   MarkDealNotClosedModal,
@@ -115,6 +116,7 @@ export default function Pipeline() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const view = ['table', 'forecast'].includes(searchParams.get('view')) ? searchParams.get('view') : 'funnel';
+  const completedOnly = searchParams.get('work') === 'completed';
   const { user } = useAuth();
   const isAdmin = String(user?.role || "").toLowerCase() === "admin";
   const [attentionNow, setAttentionNow] = useState(Date.now());
@@ -139,6 +141,7 @@ export default function Pipeline() {
   const [openModal, setOpenModal] = useState(false);
   const [outcomeMenu, setOutcomeMenu] = useState(null);
   const [dealToMarkNotClosed, setDealToMarkNotClosed] = useState(null);
+  const [dealToChangeWork, setDealToChangeWork] = useState(null);
 
   const [stageAliasMap, setStageAliasMap] = useState({});
   const [hiddenStageIds, setHiddenStageIds] = useState(new Set());
@@ -189,6 +192,7 @@ export default function Pipeline() {
         loadPipelineDeals(api, {
             pipeline_id: pid,
             commercial_outcome: "active",
+            work_state: completedOnly ? "completed" : "active",
             ...(isAdmin && selectedAdvisorUserId ? { deal_advisor_user_id: selectedAdvisorUserId } : {}),
         }),
       ]);
@@ -201,10 +205,10 @@ export default function Pipeline() {
   }, []);
 
   useEffect(() => {
-    if (!pipelineId || !isAdmin) return;
+    if (!pipelineId) return;
     refreshDeals(pipelineId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAdvisorUserId]);
+  }, [selectedAdvisorUserId, completedOnly]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setAttentionNow(Date.now()), 60_000);
@@ -267,7 +271,7 @@ export default function Pipeline() {
     const prospectStageIds = new Set(stages.filter((stage) => String(stage.name || '').trim().toLowerCase() === 'prospecto').map((stage) => stage.id));
     const term = search.trim().toLocaleLowerCase();
     for (const d of deals) {
-      if (attentionOnly && !getOperationAttention(d, attentionNow, prospectStageIds.has(d.stage_id))) continue;
+      if (attentionOnly && !completedOnly && !getOperationAttention(d, attentionNow, prospectStageIds.has(d.stage_id))) continue;
       if (selectedStageId && String(d.stage_id) !== selectedStageId) continue;
       if (term && ![d.reference, d.title, d.org_name, d.contact_name, d.deal_advisor_name]
         .filter(Boolean).join(' ').toLocaleLowerCase().includes(term)) continue;
@@ -275,7 +279,7 @@ export default function Pipeline() {
       g[d.stage_id].push(d);
     }
     return g;
-  }, [stages, deals, attentionOnly, attentionNow, search, selectedStageId]);
+  }, [stages, deals, attentionOnly, completedOnly, attentionNow, search, selectedStageId]);
 
   const displayedStages = useMemo(() => stages.filter((stage) => !selectedStageId || String(stage.id) === selectedStageId), [stages, selectedStageId]);
   const visibleDeals = useMemo(() => displayedStages.flatMap((stage) => grouped[stage.id] || []), [displayedStages, grouped]);
@@ -302,6 +306,7 @@ export default function Pipeline() {
   }
 
   async function onDragEnd(result) {
+    if (completedOnly) return;
     const { destination, source, draggableId } = result;
     if (!destination) return;
     const from = source.droppableId;
@@ -323,6 +328,7 @@ export default function Pipeline() {
     const data = await loadPipelineDeals(api, {
         pipeline_id: pid ?? pipelineId,
         commercial_outcome: "active",
+        work_state: completedOnly ? "completed" : "active",
         ...(isAdmin && selectedAdvisorUserId ? { deal_advisor_user_id: selectedAdvisorUserId } : {}),
     });
     setDeals(data || []);
@@ -340,6 +346,17 @@ export default function Pipeline() {
         <h2 className="text-lg font-semibold">Pipeline</h2>
         <div className="flex flex-wrap items-center gap-2">
           <PipelineViewSwitch value={view} onChange={changeView} />
+          <select aria-label="Estado del trabajo" value={completedOnly ? 'completed' : 'active'}
+            onChange={(event) => setSearchParams((previous) => {
+              const next = new URLSearchParams(previous);
+              if (event.target.value === 'completed') next.set('work', 'completed');
+              else next.delete('work');
+              return next;
+            })}
+            className="rounded border bg-white px-3 py-2 text-sm">
+            <option value="active">Trabajos activos</option>
+            <option value="completed">Finalizados</option>
+          </select>
           <input type="search" aria-label="Buscar operaciones" placeholder="Buscar operación o cliente" value={search}
             onChange={(event) => setSearch(event.target.value)} className="min-w-48 rounded border bg-white px-3 py-2 text-sm" />
           <select aria-label="Filtrar por etapa" value={selectedStageId} onChange={(event) => setSelectedStageId(event.target.value)}
@@ -347,10 +364,10 @@ export default function Pipeline() {
             <option value="">Todas las etapas</option>
             {stages.map((stage) => <option key={stage.id} value={stage.id}>{stageLabel(stage)}</option>)}
           </select>
-          <label className="flex items-center gap-2 px-2 text-sm whitespace-nowrap cursor-pointer">
+          {!completedOnly && <label className="flex items-center gap-2 px-2 text-sm whitespace-nowrap cursor-pointer">
             <input type="checkbox" checked={attentionOnly} onChange={(event) => setAttentionOnly(event.target.checked)} />
             Requieren atención
-          </label>
+          </label>}
           {isAdmin && (
             <select
               className="px-3 py-2 text-sm rounded-lg border bg-white dark:bg-slate-950 dark:border-slate-700"
@@ -408,7 +425,7 @@ export default function Pipeline() {
                       </span>
                     </div>
                     <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      {(grouped[stage.id]?.length || 0)} abiertos
+                      {(grouped[stage.id]?.length || 0)} {completedOnly ? 'finalizados' : 'abiertos'}
                     </div>
                   </div>
 
@@ -420,7 +437,7 @@ export default function Pipeline() {
 
                       let warnText = null;
                       let warnClass = "text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200";
-                      if (cotizDays != null) {
+                      if (!completedOnly && cotizDays != null) {
                         if (cotizDays > 10 && cotizDays <= 15) {
                           const left = 15 - cotizDays;
                           warnText = `Vence en ${left} d`;
@@ -431,10 +448,10 @@ export default function Pipeline() {
                         }
                       }
                       const hasOverBudget = String(deal.expense_control_status || "") === "over_budget";
-                      const attention = getOperationAttention(deal, attentionNow, String(stage.name || '').toLowerCase() === 'prospecto');
+                      const attention = completedOnly ? null : getOperationAttention(deal, attentionNow, String(stage.name || '').toLowerCase() === 'prospecto');
 
                       return (
-                        <Draggable draggableId={String(deal.id)} index={idx} key={deal.id}>
+                        <Draggable draggableId={String(deal.id)} index={idx} key={deal.id} isDragDisabled={completedOnly}>
                           {(provided) => (
                             <a
                               ref={provided.innerRef}
@@ -460,6 +477,7 @@ export default function Pipeline() {
                               <div className="text-sm font-semibold truncate">
                                 {deal.reference || deal.title}
                               </div>
+                              {completedOnly && <span className="text-xs font-medium text-emerald-700">Finalizada · Aprobada</span>}
                               <div className="text-xs text-slate-600 dark:text-slate-400 truncate">
                                 {deal.org_name || "—"} • {deal.contact_name || "—"}
                               </div>
@@ -495,7 +513,7 @@ export default function Pipeline() {
             </Droppable>
           ))}
         </div>
-      </DragDropContext> : <PipelineListViews view={view} deals={visibleDeals} stages={stages} stageLabel={stageLabel}
+      </DragDropContext> : <PipelineListViews view={view} deals={visibleDeals} stages={stages} stageLabel={stageLabel} completedOnly={completedOnly}
         quoteTotals={quoteTotals} onExpectedCloseSaved={(dealId, date) => setDeals((current) => current.map((deal) =>
           Number(deal.id) === Number(dealId) ? { ...deal, expected_close_date: date } : deal
         ))} />}
@@ -505,7 +523,16 @@ export default function Pipeline() {
         position={outcomeMenu?.position}
         onClose={() => setOutcomeMenu(null)}
         onMarkNotClosed={setDealToMarkNotClosed}
+        onChangeWorkCompletion={setDealToChangeWork}
+        canChangeWorkCompletion={Boolean(outcomeMenu?.deal && /^OP-\d+$/i.test(String(outcomeMenu.deal.reference || '')) &&
+          (isAdmin || Number(outcomeMenu.deal.deal_advisor_user_id || 0) === Number(user?.id || 0)))}
       />
+
+      {dealToChangeWork && <WorkCompletionDialog
+        deal={dealToChangeWork}
+        onClose={() => setDealToChangeWork(null)}
+        onChanged={() => refreshDeals()}
+      />}
 
       <MarkDealNotClosedModal
         deal={dealToMarkNotClosed}

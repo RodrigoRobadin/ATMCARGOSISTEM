@@ -2,9 +2,11 @@
 import { Router } from 'express';
 import { pool } from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
+import { ensureWorkCompletionSchema } from '../services/workCompletion.js';
 
 
 const router = Router();
+router.use((req, res, next) => { ensureWorkCompletionSchema(pool).then(() => next(), next); });
 
 /* =================== helpers comunes =================== */
 function canAdmin(req) {
@@ -415,6 +417,7 @@ router.get('/tasks', requireAuth, async (req, res) => {
       where += ' AND t.status = ?';
       params.push(String(status));
     }
+    if (status === 'pending') where += ' AND (t.deal_id IS NULL OR (d.id IS NOT NULL AND d.work_completed_at IS NULL))';
 
     // tareas atrasadas: due_at < NOW() y status pending
     if (String(overdue) === '1') {
@@ -432,6 +435,7 @@ router.get('/tasks', requireAuth, async (req, res) => {
       FROM followup_tasks t
       LEFT JOIN organizations o ON o.id = t.org_id
       LEFT JOIN contacts ct     ON ct.id = t.contact_id
+      LEFT JOIN deals d ON d.id = t.deal_id
       WHERE ${where}
       ORDER BY t.due_at ASC, t.id ASC
       LIMIT ? OFFSET ?
@@ -452,13 +456,14 @@ router.get('/tasks/count', requireAuth, async (req, res) => {
     const userId = pickUserFilter(req);
     const { status = 'pending' } = req.query;
     const params = [userId];
-    let where = 'user_id = ?';
+    let where = 't.user_id = ?';
     if (status) {
-      where += ' AND status = ?';
+      where += ' AND t.status = ?';
       params.push(String(status));
     }
+    if (status === 'pending') where += ' AND (t.deal_id IS NULL OR (d.id IS NOT NULL AND d.work_completed_at IS NULL))';
     const [[row]] = await pool.query(
-      `SELECT COUNT(*) AS total FROM followup_tasks WHERE ${where}`,
+      `SELECT COUNT(*) AS total FROM followup_tasks t LEFT JOIN deals d ON d.id = t.deal_id WHERE ${where}`,
       params
     );
     res.json({ total: Number(row?.total || 0) });
@@ -486,6 +491,13 @@ router.post('/tasks', requireAuth, async (req, res) => {
     }
     if (!due_at) {
       return res.status(400).json({ error: 'due_at es requerido' });
+    }
+    if (deal_id) {
+      const [[deal]] = await pool.query('SELECT work_completed_at FROM deals WHERE id = ?', [Number(deal_id)]);
+      if (!deal) return res.status(404).json({ error: 'Operación no encontrada' });
+      if (deal.work_completed_at) {
+        return res.status(409).json({ error: 'Reabre el trabajo antes de agregar tareas' });
+      }
     }
 
     const dueSql = due_at.length === 16 ? `${due_at}:00` : due_at;

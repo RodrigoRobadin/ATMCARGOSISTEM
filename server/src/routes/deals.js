@@ -9,8 +9,10 @@ import { isProtectedCommercialDateKey, paraguayDate, setDealCustomField } from '
 import multer from 'multer';
 import fs from 'fs';
 import path from 'path';
+import { ensureWorkCompletionSchema } from '../services/workCompletion.js';
 
 const router = Router();
+router.use((req, res, next) => { ensureWorkCompletionSchema(pool).then(() => next(), next); });
 
 function formatReference(n) {
   return `OP-${String(n).padStart(6, '0')}`;
@@ -430,6 +432,7 @@ router.get('/', requireAuth, async (req, res) => {
     stage_id,
     business_unit_id,
     status,
+    work_state,
     commercial_outcome,
     q,
     org_budget_status,
@@ -451,6 +454,8 @@ router.get('/', requireAuth, async (req, res) => {
   if (stage_id)         { where.push('d.stage_id = ?');            params.push(stage_id); }
   if (business_unit_id) { where.push('d.business_unit_id = ?');    params.push(business_unit_id); }
   if (status)           { where.push('d.status = ?');              params.push(status); }
+  if (work_state === 'active') where.push('d.work_completed_at IS NULL');
+  if (work_state === 'completed') where.push('d.work_completed_at IS NOT NULL');
   if (commercial_outcome) {
     where.push("COALESCE(NULLIF(LOWER(d.commercial_outcome), ''), 'active') = ?");
     params.push(String(commercial_outcome).trim().toLowerCase());
@@ -479,7 +484,7 @@ router.get('/', requireAuth, async (req, res) => {
 
   const [rows] = await pool.query(
     `SELECT
-       d.id, d.reference, d.title, d.value, d.status, d.commercial_outcome,
+       d.id, d.reference, d.title, d.value, d.status, d.work_completed_at, d.commercial_outcome,
        d.lost_at, d.lost_by_user_id, d.lost_reason_category, d.lost_reason_detail,
        d.last_active_stage_id, d.reopened_at, d.reopened_by_user_id,
        d.stage_id, d.pipeline_id, d.business_unit_id,
@@ -687,6 +692,11 @@ router.post('/:id/mark-not-closed', requireAuth, async (req, res) => {
       await conn.rollback();
       return res.status(409).json({ error: 'La operación ya está marcada como no cerrada' });
     }
+    const [[workState]] = await conn.query('SELECT work_completed_at FROM deals WHERE id = ?', [dealId]);
+    if (workState?.work_completed_at) {
+      await conn.rollback();
+      return res.status(409).json({ error: 'Reabre el trabajo antes de cambiar el resultado comercial' });
+    }
     if (await hasIssuedSalesInvoice(conn, dealId)) {
       await conn.rollback();
       return res.status(409).json({ error: 'No se puede marcar como no cerrada una operación con factura de venta emitida' });
@@ -786,6 +796,75 @@ router.post('/:id/reopen-commercial', requireAuth, async (req, res) => {
   }
 });
 
+router.post('/:id/work-completion', requireAuth, async (req, res) => {
+  const dealId = Number(req.params.id);
+  const eventType = String(req.body?.action || '').trim();
+  const note = String(req.body?.note || '').trim();
+  if (!Number.isInteger(dealId) || dealId <= 0 || !['complete', 'reopen'].includes(eventType)) {
+    return res.status(400).json({ error: 'Operación o acción inválida' });
+  }
+  if (note.length > 2000) return res.status(400).json({ error: 'La nota es demasiado larga' });
+
+  let conn;
+  let committed = false;
+  try {
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    const before = await auditSnapshot(conn, 'deal', dealId, true);
+    if (!before) return res.status(404).json({ error: 'Operación no encontrada' });
+    const isAdmin = String(req.user?.role || '').toLowerCase() === 'admin';
+    if (!isAdmin && Number(before.advisor_user_id || 0) !== Number(req.user?.id || 0)) {
+      return res.status(403).json({ error: 'Solo el ejecutivo asignado o un administrador puede finalizar esta operación' });
+    }
+    if (!/^OP-\d+$/i.test(String(before.reference || ''))) {
+      return res.status(400).json({ error: 'Solo se pueden finalizar operaciones' });
+    }
+    const isClosed = Boolean(before.work_completed_at);
+    if (eventType === 'complete' && isClosed) return res.status(409).json({ error: 'El trabajo ya está finalizado' });
+    if (eventType === 'reopen' && !isClosed) return res.status(409).json({ error: 'El trabajo ya está activo' });
+    if (eventType === 'complete' && String(before.commercial_outcome || 'active').toLowerCase() === 'lost') {
+      return res.status(409).json({ error: 'No se puede aprobar un trabajo marcado como venta no cerrada' });
+    }
+    const workCompletedAt = eventType === 'complete' ? new Date() : null;
+    await conn.query('UPDATE deals SET work_completed_at = ?, updated_at = NOW() WHERE id = ?', [workCompletedAt, dealId]);
+    await conn.query(
+      `INSERT INTO deal_work_completion_events (deal_id, event_type, note, actor_user_id)
+       VALUES (?, ?, ?, ?)`,
+      [dealId, eventType, note || null, req.user?.id || null]
+    );
+    if (eventType === 'complete') {
+      await conn.query(
+        "UPDATE followup_tasks SET status = 'canceled' WHERE deal_id = ? AND status = 'pending'",
+        [dealId]
+      );
+      await conn.query(
+        "UPDATE notifications SET is_active = 0 WHERE deal_id = ? AND type LIKE 'followup-%'",
+        [dealId]
+      );
+    }
+    await recordAuditChange(conn, {
+      req, action: eventType === 'complete' ? 'complete_work' : 'reopen_work',
+      entity: 'deal', entityId: dealId, before,
+      after: await auditSnapshot(conn, 'deal', dealId),
+      description: eventType === 'complete' ? 'Finalizó trabajo como aprobado' : 'Reabrió trabajo',
+      details: note ? { note } : null,
+    });
+    await conn.commit();
+    committed = true;
+    return res.json({ ok: true, work_completed_at: workCompletedAt });
+  } catch (error) {
+    console.error('POST /deals/:id/work-completion error:', error);
+    return res.status(500).json({ error: 'No se pudo actualizar la finalización del trabajo' });
+  } finally {
+    if (conn) {
+      if (!committed) {
+        try { await conn.rollback(); } catch { /* preserve the original error */ }
+      }
+      conn.release();
+    }
+  }
+});
+
 router.get('/:id/commercial-outcome-history', requireAuth, async (req, res) => {
   const dealId = Number(req.params.id || 0);
   const conn = await pool.getConnection();
@@ -816,7 +895,7 @@ router.get('/:id', async (req, res) => {
 
   const [[row]] = await pool.query(
     `SELECT 
-       d.id, d.reference, d.title, d.value, d.status, d.stage_id, d.pipeline_id, d.business_unit_id,
+       d.id, d.reference, d.title, d.value, d.status, d.work_completed_at, d.stage_id, d.pipeline_id, d.business_unit_id,
        d.contact_id, d.org_id, d.created_at,
        d.advisor_user_id          AS deal_advisor_user_id,
        du.name                    AS deal_advisor_name,
@@ -884,7 +963,14 @@ router.get('/:id', async (req, res) => {
     } : null,
   } : null;
 
-  res.json({ deal: row, organization, activities });
+  const [[workCompletion]] = await pool.query(
+    `SELECT e.event_type, e.note, e.created_at, u.name AS actor_name
+       FROM deal_work_completion_events e
+       LEFT JOIN users u ON u.id = e.actor_user_id
+      WHERE e.deal_id = ? ORDER BY e.id DESC LIMIT 1`,
+    [id]
+  );
+  res.json({ deal: { ...row, work_completion: workCompletion || null }, organization, activities });
 });
 
 router.get('/:id/custom-fields', async (req, res) => {
@@ -1658,6 +1744,10 @@ router.patch('/:id', requireAuth, async (req, res) => {
     if (!before) {
       await conn.rollback();
       return res.status(404).json({ error: 'Operación no encontrada' });
+    }
+    if (before.work_completed_at && stage_id !== undefined) {
+      await conn.rollback();
+      return res.status(409).json({ error: 'Reabre el trabajo antes de cambiar la etapa' });
     }
 
     if (stage_id !== undefined) {

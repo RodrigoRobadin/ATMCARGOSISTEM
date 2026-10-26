@@ -39,7 +39,7 @@ function dealLink(deal, stages) {
   return prospect && deal.org_id ? `/organizations/${deal.org_id}` : `/operations/${deal.id}`;
 }
 
-function ExpectedCloseCell({ deal, isProspect, onSaved }) {
+function ExpectedCloseCell({ deal, isProspect, onSaved, readOnly = false }) {
   const saved = String(deal.expected_close_date || '').slice(0, 10);
   const [draft, setDraft] = useState(saved);
   const [busy, setBusy] = useState(false);
@@ -65,6 +65,7 @@ function ExpectedCloseCell({ deal, isProspect, onSaved }) {
   }
 
   if (isProspect) return <span className="text-slate-400">—</span>;
+  if (readOnly) return <span>{dateLabel(saved)}</span>;
   return (
     <div className="flex min-w-44 flex-wrap items-center gap-1">
       <input type="date" aria-label={`Fecha estimada de cierre de ${deal.reference || deal.title}`} value={draft}
@@ -95,7 +96,7 @@ export function PipelineViewSwitch({ value, onChange }) {
   );
 }
 
-export default function PipelineListViews({ view, deals, stages, stageLabel, quoteTotals, onExpectedCloseSaved }) {
+export default function PipelineListViews({ view, deals, stages, stageLabel, quoteTotals, onExpectedCloseSaved, completedOnly = false }) {
   const [month, setMonth] = useState('');
   const [withoutDate, setWithoutDate] = useState(false);
 
@@ -144,11 +145,12 @@ export default function PipelineListViews({ view, deals, stages, stageLabel, quo
                       {deal.reference || deal.title || `Operación ${deal.id}`}
                     </a>
                     {deal.reference && deal.title && <div className="max-w-64 truncate text-xs text-slate-500" title={deal.title}>{deal.title}</div>}
+                    {completedOnly && <div className="text-xs font-medium text-emerald-700">Finalizada · Aprobada</div>}
                   </td>
                   <td className="px-3 py-2">{deal.org_name || '—'}</td>
                   <td className="px-3 py-2">{stageName(deal)}</td>
                   <td className="px-3 py-2">{deal.deal_advisor_name || '—'}</td>
-                  <td className="px-3 py-2"><ExpectedCloseCell deal={deal} isProspect={deal.record_type === 'prospect' || stageName(deal).trim().toLowerCase() === 'prospecto'} onSaved={onExpectedCloseSaved} /></td>
+                  <td className="px-3 py-2"><ExpectedCloseCell deal={deal} isProspect={deal.record_type === 'prospect' || stageName(deal).trim().toLowerCase() === 'prospecto'} onSaved={onExpectedCloseSaved} readOnly={completedOnly} /></td>
                   <td className="whitespace-nowrap px-3 py-2 font-medium text-emerald-800">{profitLabel(profitDetails(deal, quoteTotals))}</td>
                 </tr>
               ))}
