@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { pool } from '../services/db.js';
 import { requireAuth, requireRole } from '../middlewares/auth.js';
 import { ensureSupplierCreditNoteTables, recalculateSupplierDocument } from '../services/supplierCreditNotes.js';
+import { assertDirectPaymentAvailable, assertNoUnifiedOrderHistory } from '../services/unifiedPaymentOrders.js';
 
 const router = Router();
 
@@ -532,6 +533,8 @@ router.post('/:id/cancel', requireAuth, requireRole(['admin', 'finanzas']), asyn
             return res.status(400).json({ error: 'La factura ya está anulada' });
         }
 
+        await assertNoUnifiedOrderHistory('purchase-invoice', id);
+
         await pool.query(
             `UPDATE purchase_invoices 
        SET status = 'anulada', cancellation_reason = ?
@@ -547,7 +550,7 @@ router.post('/:id/cancel', requireAuth, requireRole(['admin', 'finanzas']), asyn
         res.json(updated);
     } catch (e) {
         console.error('[purchase-invoices] Error canceling:', e);
-        res.status(500).json({ error: 'Error al anular factura de compra' });
+        res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : 'Error al anular factura de compra' });
     }
 });
 
@@ -584,6 +587,7 @@ router.post('/:id/payments', requireAuth, requireRole(['admin', 'finanzas']), as
         if (paymentAmount > currentBalance) {
             return res.status(400).json({ error: 'El monto del pago no puede ser mayor al saldo pendiente' });
         }
+        await assertDirectPaymentAvailable('purchase-invoice', id, paymentAmount, currentBalance);
 
         // Registrar pago
         const [paymentResult] = await pool.query(
@@ -603,7 +607,7 @@ router.post('/:id/payments', requireAuth, requireRole(['admin', 'finanzas']), as
         res.json({ ...updated, payment_id: paymentResult.insertId });
     } catch (e) {
         console.error('[purchase-invoices] Error registering payment:', e);
-        res.status(500).json({ error: 'Error al registrar pago' });
+        res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : 'Error al registrar pago' });
     }
 });
 

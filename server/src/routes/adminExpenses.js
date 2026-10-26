@@ -7,6 +7,7 @@ import { pool } from '../services/db.js';
 import { requireAuth, requireAnyRole } from '../middlewares/auth.js';
 import { auditedRowMutation } from '../services/audit.js';
 import { ensureSupplierCreditNoteTables, recalculateSupplierDocument } from '../services/supplierCreditNotes.js';
+import { assertDirectPaymentAvailable, assertNoUnifiedReservation, assertNoUnifiedOrderHistory } from '../services/unifiedPaymentOrders.js';
 import ExcelJS from 'exceljs';
 
 const router = Router();
@@ -1418,6 +1419,7 @@ router.post('/:id/cancel', requireAuth, requireAnyRole('admin'), async (req, res
     if (String(expense.status || '').toLowerCase() === 'anulado') {
       return res.status(400).json({ error: 'El gasto ya esta anulado' });
     }
+    await assertNoUnifiedOrderHistory('admin-expense', id);
     const [[creditNote]] = await pool.query(
       `SELECT n.id
          FROM supplier_credit_note_applications a
@@ -1445,7 +1447,7 @@ router.post('/:id/cancel', requireAuth, requireAnyRole('admin'), async (req, res
     res.json(updated);
   } catch (e) {
     console.error('[admin-expenses] cancel error', e);
-    res.status(500).json({ error: 'Error canceling expense' });
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : 'Error canceling expense' });
   }
 });
 
@@ -1696,6 +1698,7 @@ router.post('/:id/payment-orders', requireAuth, requireAnyRole('admin', 'finanza
     if (String(expense.status || '').toLowerCase() === 'anulado') {
       return res.status(400).json({ error: 'No se puede solicitar una OP para un gasto anulado' });
     }
+    await assertNoUnifiedReservation('admin-expense', id);
     const [[activeOrder]] = await pool.query(`
       SELECT id, order_number, status
         FROM admin_expense_payment_orders
@@ -1748,7 +1751,7 @@ router.post('/:id/payment-orders', requireAuth, requireAnyRole('admin', 'finanza
     res.status(201).json(row);
   } catch (e) {
     console.error('[admin-expenses] payment order create error', e);
-    res.status(500).json({ error: 'No se pudo generar la orden de pago' });
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : 'No se pudo generar la orden de pago' });
   }
 });
 
@@ -1860,6 +1863,7 @@ router.post('/:id/payments', requireAuth, async (req, res) => {
     if (paymentAmount - balance > 0.009) {
       return res.status(400).json({ error: 'El pago no puede superar el saldo pendiente' });
     }
+    await assertDirectPaymentAvailable('admin-expense', id, paymentAmount, balance);
     const [[paymentOrder]] = await pool.query(`
       SELECT *
         FROM admin_expense_payment_orders
@@ -1951,7 +1955,7 @@ router.post('/:id/payments', requireAuth, async (req, res) => {
     res.status(201).json({ id: result.insertId, balance: Number(nextBalance.toFixed(2)) });
   } catch (e) {
     console.error('[admin-expenses] payment error', e);
-    res.status(500).json({ error: 'Error creating payment' });
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : 'Error creating payment' });
   }
 });
 

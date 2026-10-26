@@ -10,6 +10,7 @@ import generatePaymentOrderPDF from '../services/paymentOrderTemplatePdfkit.js';
 import { requireAuth, requireAnyRole } from '../middlewares/auth.js';
 import { auditedRowMutation } from '../services/audit.js';
 import { ensureSupplierCreditNoteTables, recalculateSupplierDocument } from '../services/supplierCreditNotes.js';
+import { assertDirectPaymentAvailable, assertNoUnifiedReservation, assertNoUnifiedOrderHistory } from '../services/unifiedPaymentOrders.js';
 
 const router = Router();
 
@@ -1108,6 +1109,7 @@ router.post('/:id/expense-invoices/:invoiceId/payments', requireAuth, async (req
     if (amt > netTotal - paid + 0.01) {
       return res.status(400).json({ error: 'El pago supera el saldo pendiente' });
     }
+    await assertDirectPaymentAvailable('operation-expense', invoiceId, amt, inv.balance);
 
     const [result] = await pool.query(
       `INSERT INTO operation_expense_payments
@@ -1134,7 +1136,7 @@ router.post('/:id/expense-invoices/:invoiceId/payments', requireAuth, async (req
     res.status(201).json({ id: result.insertId });
   } catch (e) {
     console.error('[operation-expense] payment create error', e);
-    res.status(500).json({ error: 'Error creating payment' });
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : 'Error creating payment' });
   }
 });
 
@@ -1171,6 +1173,8 @@ router.post('/:id/expense-invoices/:invoiceId/payment-orders', requireAuth, requ
       [invoiceId, id, opType]
     );
     if (!inv) return res.status(404).json({ error: 'Factura no encontrada' });
+
+    await assertNoUnifiedReservation('operation-expense', invoiceId);
 
     const existing = await findOrderForInvoice(invoiceId);
     if (existing) return res.status(400).json({ error: 'La orden de pago ya existe' });
@@ -1239,7 +1243,7 @@ router.post('/:id/expense-invoices/:invoiceId/payment-orders', requireAuth, requ
     res.status(201).json(created);
   } catch (e) {
     console.error('[operation-expense] create payment-order error', e);
-    res.status(500).json({ error: 'No se pudo crear la orden de pago' });
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : 'No se pudo crear la orden de pago' });
   }
 });
 
@@ -1270,6 +1274,7 @@ router.post('/:id/expense-invoices/payment-orders', requireAuth, requireAnyRole(
 
     const existingOrders = new Map();
     for (const inv of invRows) {
+      await assertNoUnifiedReservation('operation-expense', inv.id);
       if (String(inv.condition_type || '').toUpperCase() !== 'CREDITO') {
         return res.status(400).json({ error: 'Solo facturas a crédito' });
       }
@@ -1393,7 +1398,7 @@ router.post('/:id/expense-invoices/payment-orders', requireAuth, requireAnyRole(
     res.status(201).json(created);
   } catch (e) {
     console.error('[operation-expense] create batch payment order error', e);
-    res.status(500).json({ error: 'No se pudo crear la orden de pago' });
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : 'No se pudo crear la orden de pago' });
   }
 });
 router.get('/:id/payment-orders/:orderId/pdf', requireAuth, async (req, res) => {
@@ -2633,6 +2638,7 @@ router.delete('/:id/expense-invoices/:invoiceId', requireAuth, async (req, res) 
       [invoiceId, id, opType]
     );
     if (!inv?.id) return res.status(404).json({ error: 'Not found' });
+    await assertNoUnifiedOrderHistory('operation-expense', invoiceId);
     const [[pay]] = await conn.query(
       `SELECT COUNT(*) AS total FROM operation_expense_payments WHERE invoice_id = ? AND status <> 'anulado'`,
       [invoiceId]

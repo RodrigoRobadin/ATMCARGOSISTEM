@@ -8,6 +8,7 @@ import {
 } from '../../utils/companyBankAccounts';
 import AccountsPayableVendorDrawer from './AccountsPayableVendorDrawer.jsx';
 import SupplierCreditNotesModal from '../../components/SupplierCreditNotesModal.jsx';
+import UnifiedPaymentOrders from './UnifiedPaymentOrders.jsx';
 
 const PAYMENT_METHODS = ['Transferencia', 'Efectivo', 'Cheque', 'Tarjeta', 'Otro'];
 
@@ -202,12 +203,13 @@ function canGeneratePaymentOrder(row) {
     row?.source_type === 'operation-expense' &&
     String(row?.condition_type || '').toUpperCase() === 'CREDITO' &&
     Number(row?.balance || 0) > 0.009 &&
-    !row?.payment_order_id
+    !row?.payment_order_id && !row?.unified_order_id
   );
 }
 
 function canRegisterPayment(row) {
   if (Number(row?.balance || 0) <= 0.009) return false;
+  if (row?.unified_order_id) return false;
   if (row?.payable_status === 'bloqueado') return false;
   if (row?.source_type === 'operation-expense') {
     const condition = String(row?.condition_type || '').toUpperCase();
@@ -275,6 +277,10 @@ export default function AccountsPayable() {
     overdue: false,
   });
   const [selectedVendor, setSelectedVendor] = useState(null);
+  const [unifiedOrdersOpen, setUnifiedOrdersOpen] = useState(false);
+  const [initialUnifiedOrderId, setInitialUnifiedOrderId] = useState(null);
+  const [initialUnifiedSupplierId, setInitialUnifiedSupplierId] = useState(null);
+  const [initialUnifiedDocumentKeys, setInitialUnifiedDocumentKeys] = useState([]);
   const [actionsMenu, setActionsMenu] = useState(null);
   const [paymentRow, setPaymentRow] = useState(null);
   const [paymentForm, setPaymentForm] = useState({
@@ -288,14 +294,6 @@ export default function AccountsPayable() {
     reconciled_at: '',
     reconciliation_notes: '',
     notes: '',
-  });
-  const [orderRow, setOrderRow] = useState(null);
-  const [orderForm, setOrderForm] = useState({
-    payment_method: '',
-    payment_date: '',
-    amount: '',
-    description: '',
-    observations: '',
   });
   const [scheduleRow, setScheduleRow] = useState(null);
   const [scheduleForm, setScheduleForm] = useState({
@@ -340,6 +338,7 @@ export default function AccountsPayable() {
       supplier_key: row.supplier_key,
       currency_code: row.currency_code,
       supplier_name: row.supplier_name,
+      supplier_id: row.supplier_id,
       reference: row.operation_reference || '',
       movement_kind: movementKind,
     });
@@ -542,14 +541,10 @@ export default function AccountsPayable() {
 
   function openGenerateOrder(row) {
     setActionsMenu(null);
-    setOrderRow(row);
-    setOrderForm({
-      payment_method: '',
-      payment_date: row?.due_date ? String(row.due_date).slice(0, 10) : '',
-      amount: String(Number(row?.balance || 0)),
-      description: row?.document_number ? `Factura ${row.document_number}` : '',
-      observations: '',
-    });
+    setInitialUnifiedOrderId(null);
+    setInitialUnifiedSupplierId(row?.supplier_id || null);
+    setInitialUnifiedDocumentKeys([`${row.source_type}:${row.invoice_id || row.expense_id}`]);
+    setUnifiedOrdersOpen(true);
   }
 
   function openSchedulePayment(row) {
@@ -693,30 +688,6 @@ export default function AccountsPayable() {
     }
   }
 
-  async function savePaymentOrder() {
-    if (!orderRow?.operation_id || !orderRow?.invoice_id) return;
-    const amount = Number(orderForm.amount || 0);
-    if (!amount || amount <= 0) return alert('Monto invalido');
-    try {
-      await api.post(
-        `/operations/${orderRow.operation_id}/expense-invoices/${orderRow.invoice_id}/payment-orders`,
-        {
-          payment_method: orderForm.payment_method || null,
-          payment_date: orderForm.payment_date || null,
-          observations: orderForm.observations || null,
-          amount,
-          description: orderForm.description || null,
-        },
-        { params: { operation_type: orderRow.operation_type || 'deal' } }
-      );
-      setOrderRow(null);
-      await reloadAll();
-    } catch (error) {
-      console.error('accounts payable create payment order error', error);
-      alert(error?.response?.data?.error || 'No se pudo generar la orden de pago.');
-    }
-  }
-
   async function saveSchedulePayment() {
     if (!scheduleRow) return;
     const sourceId = scheduleRow.invoice_id || scheduleRow.expense_id;
@@ -805,6 +776,20 @@ export default function AccountsPayable() {
   }
 
   useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('new_order') !== '1') return;
+    const supplierId = Number(url.searchParams.get('supplier_id'));
+    setInitialUnifiedOrderId(null);
+    setInitialUnifiedSupplierId(Number.isSafeInteger(supplierId) && supplierId > 0 ? supplierId : null);
+    setInitialUnifiedDocumentKeys(url.searchParams.getAll('document').filter((key) => /^(operation-expense|purchase-invoice|admin-expense):[1-9]\d*$/.test(key)));
+    setUnifiedOrdersOpen(true);
+    url.searchParams.delete('new_order');
+    url.searchParams.delete('supplier_id');
+    url.searchParams.delete('document');
+    window.history.replaceState(window.history.state, '', url);
+  }, []);
+
+  useEffect(() => {
     reloadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestParams]);
@@ -850,6 +835,9 @@ export default function AccountsPayable() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <button type="button" onClick={() => { setInitialUnifiedOrderId(null); setInitialUnifiedSupplierId(null); setInitialUnifiedDocumentKeys([]); setUnifiedOrdersOpen(true); }} className="px-3 py-2 text-sm rounded border border-blue-600 bg-blue-600 text-white hover:bg-blue-700">
+            Órdenes de pago
+          </button>
           <button type="button" onClick={exportSummaryPdf} className="px-3 py-2 text-sm rounded-lg border hover:bg-slate-50">
             Exportar PDF
           </button>
@@ -861,6 +849,8 @@ export default function AccountsPayable() {
           </button>
         </div>
       </div>
+
+      {unifiedOrdersOpen && <UnifiedPaymentOrders initialOrderId={initialUnifiedOrderId} initialSupplierId={initialUnifiedSupplierId} initialDocumentKeys={initialUnifiedDocumentKeys} onClose={() => setUnifiedOrdersOpen(false)} onChanged={reloadAll} companyAccounts={companyAccounts} />}
 
       <div className="bg-white rounded-2xl border p-4 space-y-3">
         <div className="flex flex-wrap gap-2">
@@ -1025,7 +1015,11 @@ export default function AccountsPayable() {
                         ) : null}
                       </td>
                       <td className="px-4 py-3">
-                        {row.payment_order_number ? (
+                        {row.unified_order_id ? (
+                          <button type="button" className="text-blue-600 hover:underline" onClick={() => { setInitialUnifiedOrderId(row.unified_order_id); setInitialUnifiedSupplierId(null); setInitialUnifiedDocumentKeys([]); setUnifiedOrdersOpen(true); }}>
+                            {row.unified_order_number}
+                          </button>
+                        ) : row.payment_order_number ? (
                           <button type="button" className="text-blue-600 hover:underline" onClick={() => openPaymentOrderPdf(row)}>
                             {row.payment_order_number}
                           </button>
@@ -1109,7 +1103,7 @@ export default function AccountsPayable() {
                             )}
                             {canGeneratePaymentOrder(row) && (
                               <button className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-blue-50 text-blue-700" onClick={() => openGenerateOrder(row)}>
-                                Generar OP
+                                Incluir en orden de pago
                               </button>
                             )}
                             {row.payment_order_id && (
@@ -1132,7 +1126,7 @@ export default function AccountsPayable() {
                               </button>
                             ) : (
                               <div className="px-3 py-2 text-xs text-slate-500">
-                                {row.payable_status === 'sin_op' ? 'Primero generar OP.' : row.payable_status === 'op_pendiente' ? 'OP pendiente de aprobacion.' : 'No disponible.'}
+                                {row.unified_order_id ? 'Pago desde la orden unificada.' : row.payable_status === 'sin_op' ? 'Primero generar OP.' : row.payable_status === 'op_pendiente' ? 'OP pendiente de aprobacion.' : 'No disponible.'}
                               </div>
                             )}
                             <button className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-slate-50" onClick={() => { setActionsMenu(null); openVendorDrawer(row, 'factura'); }}>
@@ -1671,34 +1665,6 @@ export default function AccountsPayable() {
         </div>
       )}
 
-      {orderRow && (
-        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-4 shadow-xl">
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="font-semibold">Generar orden de pago</h3>
-              <button className="text-sm underline" onClick={() => setOrderRow(null)}>Cerrar</button>
-            </div>
-            <div className="mb-3 text-xs text-slate-500">
-              {orderRow.document_number || '-'} - Saldo {fmtMoney(orderRow.balance, orderRow.currency_code)}
-            </div>
-            <div className="grid grid-cols-1 gap-3">
-              <select className="border rounded px-3 py-2" value={orderForm.payment_method} onChange={(e) => setOrderForm((f) => ({ ...f, payment_method: e.target.value }))}>
-                <option value="">Forma de pago</option>
-                {PAYMENT_METHODS.map((item) => <option key={item} value={item}>{item}</option>)}
-              </select>
-              <input type="date" className="border rounded px-3 py-2" value={orderForm.payment_date} onChange={(e) => setOrderForm((f) => ({ ...f, payment_date: e.target.value }))} />
-              <input type="number" min="0" step="0.01" className="border rounded px-3 py-2" placeholder="Monto" value={orderForm.amount} onChange={(e) => setOrderForm((f) => ({ ...f, amount: e.target.value }))} />
-              <input className="border rounded px-3 py-2" placeholder="Descripcion" value={orderForm.description} onChange={(e) => setOrderForm((f) => ({ ...f, description: e.target.value }))} />
-              <textarea className="border rounded px-3 py-2 min-h-[84px]" placeholder="Observaciones" value={orderForm.observations} onChange={(e) => setOrderForm((f) => ({ ...f, observations: e.target.value }))} />
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button className="rounded border px-4 py-2 text-sm" onClick={() => setOrderRow(null)}>Cancelar</button>
-              <button className="rounded bg-black px-4 py-2 text-sm text-white" onClick={savePaymentOrder}>Generar</button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <AccountsPayableVendorDrawer
         open={Boolean(selectedVendor)}
         supplierKey={selectedVendor?.supplier_key}
@@ -1706,6 +1672,15 @@ export default function AccountsPayable() {
         initialReference={selectedVendor?.reference || ''}
         initialMovementKind={selectedVendor?.movement_kind || 'all'}
         onDataChanged={reloadAll}
+        onCreatePaymentOrder={(row) => {
+          setInitialUnifiedOrderId(null);
+          setInitialUnifiedSupplierId(selectedVendor?.supplier_id || null);
+          const sourceType = row?.source_type || (row?.module_key === 'admin-purchases' ? 'purchase-invoice' : row?.module_key === 'admin-expenses' ? 'admin-expense' : 'operation-expense');
+          const sourceId = row?.invoice_id || row?.expense_id;
+          setInitialUnifiedDocumentKeys(sourceId ? [`${sourceType}:${sourceId}`] : []);
+          setSelectedVendor(null);
+          setUnifiedOrdersOpen(true);
+        }}
         onClose={() => setSelectedVendor(null)}
       />
       <SupplierCreditNotesModal

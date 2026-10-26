@@ -34,6 +34,7 @@ import AdminFinance from './pages/AdminFinance.jsx';
 import ConfirmedSalesReport from './pages/ConfirmedSalesReport.jsx';
 import OperationalPurchases from './pages/admin/OperationalPurchases.jsx';
 import PaymentOrders from './pages/admin/PaymentOrders.jsx';
+import BankReconciliation from './pages/admin/BankReconciliation.jsx';
 import AccountsPayable from './pages/admin/AccountsPayable.jsx';
 
 // ?? NUEVO: Workspace de Administración (Ops)
@@ -316,6 +317,11 @@ function Layout({ children }) {
                         label="Ordenes de pago"
                       />
                       <SideLink
+                        to="/admin-ops/bank-reconciliation"
+                        icon={sidebarIcons.account}
+                        label="Conciliación bancaria"
+                      />
+                      <SideLink
                         to="/admin-ops/accounts-payable"
                         icon={sidebarIcons.account}
                         label="Ctas a pagar proveedores"
@@ -532,6 +538,14 @@ export default function App() {
                   element={
                     <RequireRole allow={['admin', 'finanzas']}>
                       <PaymentOrders />
+                    </RequireRole>
+                  }
+                />
+                <Route
+                  path="/admin-ops/bank-reconciliation"
+                  element={
+                    <RequireRole allow={['admin', 'finanzas']}>
+                      <BankReconciliation />
                     </RequireRole>
                   }
                 />

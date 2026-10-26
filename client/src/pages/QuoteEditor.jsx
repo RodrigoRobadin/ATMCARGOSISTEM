@@ -6,6 +6,7 @@ import { useAuth } from "../auth.jsx";
 import { RichTextDialogField } from "../components/RichTextEditor.jsx";
 import OperationExpenseInvoices from "../components/OperationExpenseInvoices.jsx";
 import CommissionPanel from "../components/CommissionPanel.jsx";
+import { formatLocaleNumber, parseLocaleNumber } from "../utils/localeNumber.js";
 
 function quoteRevisionSelectionStorageKey({ dealId = null, serviceCaseId = null } = {}) {
   if (Number.isFinite(Number(serviceCaseId)) && Number(serviceCaseId) > 0) {
@@ -111,24 +112,6 @@ function fmt2(v) {
   return x.toFixed(2);
 }
 
-function formatLocaleNumber(value, decimals = 2) {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return "";
-  return num.toLocaleString("es-ES", {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  });
-}
-
-function parseLocaleNumber(raw) {
-  if (raw == null) return 0;
-  const s = String(raw).trim();
-  if (!s) return 0;
-  const normalized = s.replace(/\./g, "").replace(",", ".");
-  const num = Number(normalized);
-  return Number.isFinite(num) ? num : 0;
-}
-
 function stableStringify(value) {
   const normalize = (input) => {
     if (Array.isArray(input)) return input.map(normalize);
@@ -165,10 +148,10 @@ function NumericInput({ value, onChange, decimals = 2, className = "", placehold
       {...rest}
       onFocus={() => {
         setEditing(true);
-        setText(value === null || value === undefined ? "" : String(value));
+        setText(value === null || value === undefined ? "" : formatLocaleNumber(value, decimals));
       }}
       onBlur={(e) => {
-        const num = parseLocaleNumber(e.target.value);
+        const num = parseLocaleNumber(e.target.value, decimals);
         setEditing(false);
         onChange(num);
         setText(formatLocaleNumber(num, decimals));
@@ -176,7 +159,7 @@ function NumericInput({ value, onChange, decimals = 2, className = "", placehold
       onChange={(e) => {
         const raw = e.target.value;
         setText(raw);
-        onChange(parseLocaleNumber(raw));
+        onChange(parseLocaleNumber(raw, decimals));
       }}
     />
   );
@@ -262,6 +245,7 @@ export default function QuoteEditor({
 
     org_branch_id: null,
     operation_currency: "USD",
+    include_customs: !isService,
     exchange_rate_atm_gs_per_usd: 1,
     exchange_rate_customs_gs_per_usd: 0,
     exchange_rate_customs_internal_gs_per_usd: 7000,

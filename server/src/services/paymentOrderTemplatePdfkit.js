@@ -17,6 +17,10 @@ export async function generatePaymentOrderPDF(data, outputStream) {
     observations,
     operation_reference,
     invoices,
+    document_label = 'FACT N°',
+    documents_label = 'FACTURAS',
+    payment_date_label = 'FECHA DE PAGO',
+    payment_method_label = 'FORMA DE PAGO',
   } = data || {};
   const invoiceList = Array.isArray(invoices) ? invoices : [];
   const firstInvoice = invoiceList[0];
@@ -49,9 +53,9 @@ export async function generatePaymentOrderPDF(data, outputStream) {
   const rows = [
     ['REF N°', order_number || '-'],
     ['PROVEEDOR', supplier_name || '-'],
-    ['FORMA DE PAGO', payment_method || '-'],
-    ['FECHA DE PAGO', payment_date || '-'],
-    ['FACT N°', factNumber],
+    [payment_method_label, payment_method || '-'],
+    [payment_date_label, payment_date || '-'],
+    [document_label, factNumber],
     ['MONTO', `${currency_code || 'PYG'} ${amountFromInvoices.toLocaleString('es-ES')}`],
     ['CONDICION DE COMPRA', condition_type || '-'],
     ['SERVICIO CONTRATADO', description || '-'],
@@ -84,22 +88,27 @@ export async function generatePaymentOrderPDF(data, outputStream) {
   if (invoiceList.length) {
     const tableX = 32;
     let ty = y + 12;
-    doc.fillColor(black).fontSize(9).font('Helvetica-Bold').text('FACTURAS', tableX, ty);
-    ty += 14;
     const colWidths = [200, 120, pageW - 64 - 200 - 120];
     const headerH = 18;
-    doc
-      .rect(tableX, ty, colWidths[0] + colWidths[1] + colWidths[2], headerH)
-      .strokeColor(muted)
-      .lineWidth(0.6)
-      .stroke();
-    doc.fillColor(black).fontSize(8).font('Helvetica-Bold').text('FACTURA', tableX + 6, ty + 5, { width: colWidths[0] - 12 });
-    doc.fillColor(black).fontSize(8).font('Helvetica-Bold').text('FECHA', tableX + colWidths[0] + 6, ty + 5, { width: colWidths[1] - 12 });
-    doc.fillColor(black).fontSize(8).font('Helvetica-Bold').text('MONTO', tableX + colWidths[0] + colWidths[1] + 6, ty + 5, { width: colWidths[2] - 12 });
-    ty += headerH;
+    const drawTableHeader = () => {
+      doc.fillColor(black).fontSize(9).font('Helvetica-Bold').text(documents_label, tableX, ty);
+      ty += 14;
+      doc.rect(tableX, ty, colWidths[0] + colWidths[1] + colWidths[2], headerH)
+        .strokeColor(muted).lineWidth(0.6).stroke();
+      doc.fillColor(black).fontSize(8).font('Helvetica-Bold').text(documents_label === 'FACTURAS' ? 'FACTURA' : 'DOCUMENTO', tableX + 6, ty + 5, { width: colWidths[0] - 12 });
+      doc.fillColor(black).fontSize(8).font('Helvetica-Bold').text('FECHA', tableX + colWidths[0] + 6, ty + 5, { width: colWidths[1] - 12 });
+      doc.fillColor(black).fontSize(8).font('Helvetica-Bold').text('MONTO', tableX + colWidths[0] + colWidths[1] + 6, ty + 5, { width: colWidths[2] - 12 });
+      ty += headerH;
+    };
+    drawTableHeader();
 
     invoiceList.forEach((it) => {
       const rowH = 16;
+      if (ty + rowH > pageH - 40) {
+        doc.addPage();
+        ty = 32;
+        drawTableHeader();
+      }
       doc
         .rect(tableX, ty, colWidths[0] + colWidths[1] + colWidths[2], rowH)
         .strokeColor(muted)

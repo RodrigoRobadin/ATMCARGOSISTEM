@@ -7,6 +7,9 @@ import PDFDocument from 'pdfkit';
 import { pool } from '../services/db.js';
 import { requireAuth, requireAnyRole } from '../middlewares/auth.js';
 import { ensureSupplierCreditNoteTables } from '../services/supplierCreditNotes.js';
+import unifiedPaymentOrdersRouter from './unifiedPaymentOrders.js';
+import { ensureBankReconciliationSchema } from './bankReconciliation.js';
+import { ensureUnifiedPaymentOrderSchema } from '../services/unifiedPaymentOrders.js';
 
 const router = Router();
 
@@ -691,8 +694,9 @@ async function fetchAccountsPayableVendorDetail(supplierKey, currencyCode) {
   };
 }
 
-async function fetchAccountsPayableSummary(query = {}) {
+export async function fetchAccountsPayableSummary(query = {}) {
   await ensureSupplierCreditNoteTables();
+  await ensureUnifiedPaymentOrderSchema();
   const {
     supplier_q,
     currency_code,
@@ -864,6 +868,9 @@ async function fetchAccountsPayableSummary(query = {}) {
             INNER JOIN operation_expense_payment_orders po ON po.id = poi.order_id
             WHERE poi.invoice_id = e.id
               AND COALESCE(po.status, '') <> 'anulada'
+          ) OR EXISTS (
+            SELECT 1 FROM ap_payment_order_items ui JOIN ap_payment_orders uo ON uo.id = ui.order_id
+            WHERE ui.source_type = 'operation-expense' AND ui.source_id = e.id AND uo.status <> 'anulada'
           ) THEN 1
           ELSE 0
         END AS has_payment_order,
@@ -933,7 +940,10 @@ async function fetchAccountsPayableSummary(query = {}) {
         NULL AS operation_id,
         CAST(NULL AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS operation_type,
         CAST(NULL AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS operation_reference,
-        0 AS has_payment_order,
+        CASE WHEN EXISTS (
+          SELECT 1 FROM ap_payment_order_items ui JOIN ap_payment_orders uo ON uo.id = ui.order_id
+          WHERE ui.source_type = 'purchase-invoice' AND ui.source_id = pi.id AND uo.status <> 'anulada'
+        ) THEN 1 ELSE 0 END AS has_payment_order,
         CAST(_utf8mb4'admin-purchases' COLLATE utf8mb4_unicode_ci AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS module_key,
         CAST(_utf8mb4'Compras administrativas' COLLATE utf8mb4_unicode_ci AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS module_name
         ,CAST(_utf8mb4'purchase-invoice' COLLATE utf8mb4_unicode_ci AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS source_type
@@ -1024,7 +1034,10 @@ async function fetchAccountsPayableSummary(query = {}) {
         NULL AS operation_id,
         CAST(NULL AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS operation_type,
         CAST(NULL AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS operation_reference,
-        0 AS has_payment_order,
+        CASE WHEN EXISTS (
+          SELECT 1 FROM ap_payment_order_items ui JOIN ap_payment_orders uo ON uo.id = ui.order_id
+          WHERE ui.source_type = 'admin-expense' AND ui.source_id = e.id AND uo.status <> 'anulada'
+        ) THEN 1 ELSE 0 END AS has_payment_order,
         CAST(_utf8mb4'admin-expenses' COLLATE utf8mb4_unicode_ci AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS module_key,
         CAST(_utf8mb4'Gastos administrativos' COLLATE utf8mb4_unicode_ci AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS module_name
         ,CAST(_utf8mb4'admin-expense' COLLATE utf8mb4_unicode_ci AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci AS source_type
@@ -1313,6 +1326,10 @@ function normalizePayableStatus(row) {
 
   if (balance <= 0.009) return 'pagado';
   if (paid > 0) return 'pago_parcial';
+  if (row?.unified_order_id) {
+    if (row.unified_order_status === 'pendiente') return 'op_pendiente';
+    if (row.unified_order_status === 'aprobada') return 'listo_pago';
+  }
   if (isCredit && !dueStart) return 'bloqueado';
   if (!row?.supplier_ruc && !row?.supplier_id) return 'bloqueado';
   if (!row?.document_number) return 'bloqueado';
@@ -1560,8 +1577,9 @@ function buildDocumentDashboard(rows = []) {
   return dashboard;
 }
 
-async function fetchAccountsPayableDocuments(query = {}) {
+export async function fetchAccountsPayableDocuments(query = {}) {
   await ensureSupplierCreditNoteTables();
+  await ensureUnifiedPaymentOrderSchema();
   const {
     supplier_q,
     currency_code,
@@ -1800,8 +1818,19 @@ async function fetchAccountsPayableDocuments(query = {}) {
     params
   );
 
+  const [unifiedRows] = await pool.query(`SELECT i.source_type, i.source_id, o.id, o.order_number, o.status
+    FROM ap_payment_order_items i JOIN ap_payment_orders o ON o.id = i.order_id
+    WHERE o.status <> 'anulada' ORDER BY o.id DESC`);
+  const unifiedByDocument = new Map();
+  unifiedRows.forEach((order) => {
+    const key = `${order.source_type}:${order.source_id}`;
+    if (!unifiedByDocument.has(key)) unifiedByDocument.set(key, order);
+  });
   let normalized = (rows || []).map((row) => ({
     ...row,
+    unified_order_id: unifiedByDocument.get(`${row.source_type}:${row.invoice_id || row.expense_id}`)?.id || null,
+    unified_order_number: unifiedByDocument.get(`${row.source_type}:${row.invoice_id || row.expense_id}`)?.order_number || null,
+    unified_order_status: unifiedByDocument.get(`${row.source_type}:${row.invoice_id || row.expense_id}`)?.status || null,
     total_amount: Number(row.total_amount || 0),
     credited_amount: Number(row.credited_amount || 0),
     net_amount: Number(row.net_amount ?? row.total_amount ?? 0),
@@ -2462,6 +2491,12 @@ router.patch(
       if (!AP_META_SOURCE_TYPES.has(sourceType) || !paymentId) {
         return res.status(400).json({ error: 'Pago invalido' });
       }
+      await ensureBankReconciliationSchema();
+      const [[bankMatch]] = await pool.query(`SELECT k.movement_id FROM bank_payment_matches k
+        JOIN ap_payment_order_allocations a ON a.payment_id = k.payment_id
+        JOIN ap_payment_order_items i ON i.id = a.item_id
+        WHERE i.source_type = ? AND a.source_payment_id = ? LIMIT 1`, [sourceType, paymentId]);
+      if (bankMatch) return res.status(409).json({ error: 'Este pago está vinculado a un extracto. Quite la conciliación desde Conciliación bancaria' });
       const reconciled = req.body?.reconciled === false || req.body?.reconciled === 0 || req.body?.reconciled === '0'
         ? 0
         : 1;
@@ -2799,6 +2834,8 @@ router.get(
     }
   }
 );
+
+router.use('/unified-payment-orders', unifiedPaymentOrdersRouter(fetchAccountsPayableDocuments, ensureAccountsPayableMetaTable));
 
 export default router;
 

@@ -657,7 +657,7 @@ async function nextServiceReference(conn = pool) {
 }
 
 function normalizeInputs(body = {}) {
-  return body?.inputs || body || {};
+  return { include_customs: false, ...(body?.inputs || body || {}) };
 }
 
 async function syncServiceCaseBranch(serviceCaseId, orgBranchId, req) {
@@ -770,7 +770,7 @@ function safeCompute(inputs) {
         compute_error: 'computeQuote no disponible.',
       };
     }
-    const computed = computeQuote(inputs);
+    const computed = computeQuote({ include_customs: false, ...inputs });
     return { computed, compute_error: null };
   } catch (e) {
     return {

@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import SupplierCreditNotesModal from "./SupplierCreditNotesModal.jsx";
+import { unifiedPaymentOrderUrl } from "../utils/paymentOrderNavigation.js";
 import {
   companyBankAccountLabel,
   companyBankAccountValue,
@@ -178,7 +179,6 @@ export default function OperationExpenseInvoices({
   const [exportingExcel, setExportingExcel] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [companyAccounts, setCompanyAccounts] = useState([]);
-  const [paymentOrderInvoice, setPaymentOrderInvoice] = useState(null);
   const [paymentInvoice, setPaymentInvoice] = useState(null);
   const [paymentsInvoice, setPaymentsInvoice] = useState(null);
   const [creditNoteInvoice, setCreditNoteInvoice] = useState(null);
@@ -1614,7 +1614,8 @@ export default function OperationExpenseInvoices({
               className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-50 disabled:text-slate-400 disabled:hover:bg-white"
               onClick={() => {
                 setActionsMenu(null);
-                setPaymentOrderInvoice(actionsMenu.invoice);
+                const invoice = actionsMenu.invoice;
+                window.open(unifiedPaymentOrderUrl({ supplierId: invoice.supplier_id, documentIds: [invoice.id] }), '_blank', 'noopener,noreferrer');
               }}
               disabled={!canRequestOrder(actionsMenu.invoice)}
             >
@@ -1665,18 +1666,6 @@ export default function OperationExpenseInvoices({
             </button>
           </div>
         </>
-      )}
-      {paymentOrderInvoice && (
-        <PaymentOrderRequestModal
-          invoice={paymentOrderInvoice}
-          operationId={operationId}
-          operationType={operationType}
-          onClose={() => setPaymentOrderInvoice(null)}
-          onSuccess={async () => {
-            setPaymentOrderInvoice(null);
-            await loadInvoices();
-          }}
-        />
       )}
       {paymentInvoice && (
         <OperationExpensePaymentModal
@@ -1749,72 +1738,6 @@ function supplierBankAccountLabel(row) {
     .filter(Boolean)
     .join(" - ");
   return [main.join(" - "), holder].filter(Boolean).join(" | ");
-}
-
-function PaymentOrderRequestModal({ invoice, operationId, operationType, onClose, onSuccess }) {
-  const balance = Number(invoice?.balance ?? invoice?.amount_total ?? 0) || 0;
-  const [form, setForm] = useState({
-    payment_method: "Transferencia",
-    payment_date: invoice?.due_date ? String(invoice.due_date).slice(0, 10) : today(),
-    amount: String(balance || ""),
-    observations: "",
-  });
-  const [saving, setSaving] = useState(false);
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    const amount = Number(form.amount || 0);
-    if (!amount || amount <= 0) return alert("Monto invalido.");
-    if (amount > balance + 0.01) return alert("El monto no puede superar el saldo.");
-    setSaving(true);
-    try {
-      await api.post(
-        `/operations/${operationId}/expense-invoices/${invoice.id}/payment-orders`,
-        {
-          payment_method: form.payment_method || null,
-          payment_date: form.payment_date || null,
-          amount,
-          observations: form.observations || null,
-        },
-        { params: { operation_type: operationType } }
-      );
-      alert("Orden de pago solicitada correctamente.");
-      onSuccess?.();
-    } catch (e) {
-      console.error("Error requesting payment order", e);
-      alert(e?.response?.data?.error || "No se pudo solicitar la orden de pago.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-2xl bg-white p-4 shadow-xl">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="font-semibold">Solicitar orden de pago</h3>
-          <button className="text-sm underline" onClick={onClose} type="button">Cerrar</button>
-        </div>
-        <div className="mb-3 rounded-lg bg-slate-50 p-3 text-sm">
-          <div className="font-medium">{invoice?.supplier_org_name || invoice?.supplier_name || "Proveedor"}</div>
-          <div className="text-slate-600">{invoice?.receipt_type || "Factura"} {invoice?.receipt_number || ""}</div>
-          <div className="mt-1">Saldo: <b>{money(balance, invoice?.currency_code)}</b></div>
-        </div>
-        <form className="space-y-3" onSubmit={handleSubmit}>
-          <select className="w-full border rounded px-3 py-2" value={form.payment_method} onChange={(e) => setForm((f) => ({ ...f, payment_method: e.target.value }))}>
-            {PAYMENT_METHODS.map((method) => <option key={method} value={method}>{method}</option>)}
-          </select>
-          <input type="date" className="w-full border rounded px-3 py-2" value={form.payment_date} onChange={(e) => setForm((f) => ({ ...f, payment_date: e.target.value }))} />
-          <input type="number" min="0" step="0.01" className="w-full border rounded px-3 py-2" value={form.amount} onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} placeholder="Monto" />
-          <textarea className="w-full border rounded px-3 py-2 min-h-[84px]" value={form.observations} onChange={(e) => setForm((f) => ({ ...f, observations: e.target.value }))} placeholder="Observaciones" />
-          <div className="flex justify-end gap-2">
-            <button type="button" className="rounded border px-4 py-2 text-sm" onClick={onClose} disabled={saving}>Cancelar</button>
-            <button type="submit" className="rounded bg-black px-4 py-2 text-sm text-white disabled:opacity-60" disabled={saving}>{saving ? "Guardando..." : "Solicitar"}</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
 }
 
 function OperationExpensePaymentModal({ invoice, operationId, operationType, companyAccounts, onClose, onSuccess }) {

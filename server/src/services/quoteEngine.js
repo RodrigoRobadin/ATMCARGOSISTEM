@@ -151,7 +151,14 @@ export function computeQuote(inputs = {}) {
     const qty = Number(r.qty || 0);
     return toUsdOp(r.door_value_usd) * (Number.isFinite(qty) ? qty : 0);
   }));
-  const hasDoors = total_door_usd > 0;
+  const doorWeights = itemsArr.map((r) => Math.max(0, toUsdOp(r.door_value_usd)) * Math.max(0, Number(r.qty) || 0));
+  const manualSaleWeights = itemsArr.map((r) => String(r.sale_mode || '').toLowerCase() === 'manual'
+    ? Math.max(0, toUsdOp(r.sale_price)) * Math.max(0, Number(r.qty) || 0) : 0);
+  const describedQtyWeights = itemsArr.map((r) => String(r.description || '').trim() ? Math.max(0, Number(r.qty) || 0) : 0);
+  const qtyWeights = itemsArr.map((r) => Math.max(0, Number(r.qty) || 0));
+  const allocationWeights = [doorWeights, manualSaleWeights, describedQtyWeights, qtyWeights]
+    .find((weights) => sumNum(weights) > 0) || [];
+  const totalAllocationWeight = sumNum(allocationWeights);
 
   const total_flete_usd = toUsdOp(freight_international_total_usd);
   const total_seguro_usd = toUsdOp(insurance_sale_total_usd);
@@ -164,7 +171,7 @@ export function computeQuote(inputs = {}) {
     const saleMode = (it.sale_mode || "auto").toString();
     const saleUnitPriceInput = toUsdOp(it.sale_price ?? 0);
     const salePriceInput = saleUnitPriceInput * safeQty;
-    const participation = hasDoors ? doorVal / total_door_usd : 0;
+    const participation = totalAllocationWeight > 0 ? allocationWeights[idx] / totalAllocationWeight : 0;
     const flete_i = total_flete_usd * participation;
     const seguro_i = total_seguro_usd * participation;
     const valor_imp_i = doorVal + flete_i + seguro_i; // CIF
@@ -258,7 +265,7 @@ export function computeQuote(inputs = {}) {
   // IVA S/Honorarios = (Honorarios + GastosTramite) * rIVASHonor
   const ivaSHonor = (honorarios + gastosTramite) * rIVASHonor;
 
-  const customsLinesOut = [
+  const customsLinesOut = (include_customs ? [
     { name: "Derecho Aduanero", usd: derecho },
     { name: "Servicio de Valoración", usd: servVal },
     { name: "Arancel Consular", usd: arancel },
@@ -277,7 +284,7 @@ export function computeQuote(inputs = {}) {
     { name: "Gastos de Trámite Despacho", usd: gastosTramite },
     { name: "Honorarios Profesionales", usd: honorarios },
     { name: "I.V.A. S/ Honorarios", usd: ivaSHonor, base_iva_honor_usd: round2(honorarios + gastosTramite) },
-  ].map((l) => {
+  ] : []).map((l) => {
     const usdBig = toBig(l.usd || 0);
     const gsBig = mul(usdBig, toBig(tcAduana || 0));
     return {

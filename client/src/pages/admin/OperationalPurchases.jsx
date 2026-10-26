@@ -2,6 +2,7 @@
 import { Link } from "react-router-dom";
 import { api } from "../../api";
 import OperationExpenseInvoices from "../../components/OperationExpenseInvoices.jsx";
+import { unifiedPaymentOrderUrl } from "../../utils/paymentOrderNavigation.js";
 import {
   companyBankAccountLabel,
   companyBankAccountValue,
@@ -163,23 +164,8 @@ export default function OperationalPurchases() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailInvoice, setDetailInvoice] = useState(null);
 
-  const [orderModalOpen, setOrderModalOpen] = useState(false);
-  const [orderInvoice, setOrderInvoice] = useState(null);
-  const [orderForm, setOrderForm] = useState({
-    payment_method: "",
-    payment_date: "",
-    observations: "",
-    amount: "",
-    description: "",
-  });
   const [orderPdfOpen, setOrderPdfOpen] = useState(false);
   const [orderPdfUrl, setOrderPdfUrl] = useState("");
-  const [batchOrderOpen, setBatchOrderOpen] = useState(false);
-  const [batchOrderForm, setBatchOrderForm] = useState({
-    payment_method: "",
-    payment_date: "",
-    observations: "",
-  });
 
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [createSearch, setCreateSearch] = useState("");
@@ -442,17 +428,7 @@ export default function OperationalPurchases() {
   }
 
   function openOrder(inv) {
-    setOrderInvoice(inv);
-    const curr = inv?.currency_code || "PYG";
-    const rawAmount = inv?.balance || inv?.amount_total || "";
-    setOrderForm({
-      payment_method: "",
-      payment_date: inv?.due_date || "",
-      observations: "",
-      amount: formatMoney(rawAmount, curr),
-      description: inv?.operation_title || "",
-    });
-    setOrderModalOpen(true);
+    window.location.assign(unifiedPaymentOrderUrl({ supplierId: inv?.supplier_id, documentIds: [inv?.id] }));
   }
 
   function openDetail(inv) {
@@ -462,8 +438,7 @@ export default function OperationalPurchases() {
 
   function isRowSelectable(row) {
     const isCredito = String(row.condition_type || "").toUpperCase() === "CREDITO";
-    const poStatus = String(row.payment_order_status || "").toLowerCase();
-    return isCredito && poStatus !== "pagada";
+    return isCredito && Number(row.balance || 0) > 0.009 && !row.payment_order_id && !row.unified_order_id;
   }
 
   function paymentGateLabel(row) {
@@ -517,64 +492,9 @@ export default function OperationalPurchases() {
   function createOrdersForSelected() {
     const list = rows.filter((r) => selectedIds.has(r.id) && isRowSelectable(r));
     if (!list.length) return alert("No hay facturas seleccionadas.");
-    setBatchOrderForm({
-      payment_method: "",
-      payment_date: list[0]?.due_date || "",
-      observations: "",
-    });
-    setBatchOrderOpen(true);
-  }
-
-  async function confirmBatchOrders() {
-    const list = rows.filter((r) => selectedIds.has(r.id) && isRowSelectable(r));
-    if (!list.length) return alert("No hay facturas seleccionadas.");
-    const opId = list[0].operation_id;
-    const opType = list[0].operation_type || "deal";
-    const sameOp = list.every(
-      (r) => r.operation_id === opId && (r.operation_type || "deal") === opType
-    );
-    if (!sameOp) return alert("Las facturas deben ser de la misma operacion.");
-    try {
-      const invoice_ids = list.map((r) => r.id);
-      await api.post(
-        `/operations/${opId}/expense-invoices/payment-orders`,
-        {
-          invoice_ids,
-          payment_method: batchOrderForm.payment_method || null,
-          payment_date: batchOrderForm.payment_date || null,
-          observations: batchOrderForm.observations || null,
-        },
-        { params: { operation_type: opType } }
-      );
-      setBatchOrderOpen(false);
-      await load();
-    } catch (e) {
-      console.error("Error creating batch orders", e);
-      alert(e?.response?.data?.error || "No se pudieron crear algunas ordenes.");
-    }
-  }
-
-  async function saveOrder() {
-    if (!orderInvoice?.operation_id || !orderInvoice?.id) return;
-    try {
-      await api.post(
-        `/operations/${orderInvoice.operation_id}/expense-invoices/${orderInvoice.id}/payment-orders`,
-        {
-          payment_method: orderForm.payment_method || null,
-          payment_date: orderForm.payment_date || null,
-          observations: orderForm.observations || null,
-          amount: parseMoneyValue(orderForm.amount, orderInvoice?.currency_code),
-          description: orderForm.description || null,
-        },
-        { params: { operation_type: orderInvoice.operation_type || "deal" } }
-      );
-      setOrderModalOpen(false);
-      setOrderInvoice(null);
-      await load();
-    } catch (e) {
-      console.error("Error creating payment order", e);
-      alert(e?.response?.data?.error || "No se pudo crear la orden de pago.");
-    }
+    const suppliers = new Set(list.map((row) => Number(row.supplier_id)).filter((id) => id > 0));
+    if (suppliers.size > 1) return alert('Seleccione facturas de un mismo proveedor para crear la orden.');
+    window.location.assign(unifiedPaymentOrderUrl({ supplierId: [...suppliers][0], documentIds: list.map((row) => row.id) }));
   }
 
   async function searchOperations() {
@@ -829,7 +749,7 @@ export default function OperationalPurchases() {
           {selectedIds.size > 0 && (
             <>
               <button className="px-3 py-2 text-sm rounded border" onClick={createOrdersForSelected}>
-                Generar ordenes de pago (seleccionadas)
+                Crear orden con seleccionadas
               </button>
               <div className="text-sm text-slate-600 flex items-center">
                 Seleccionadas: <span className="ml-1 font-semibold">{selectedIds.size}</span>
@@ -1219,114 +1139,6 @@ export default function OperationalPurchases() {
                   )}
                 </tbody>
               </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {orderModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold">Generar orden de pago</h3>
-              <button className="text-sm underline" onClick={() => setOrderModalOpen(false)}>Cerrar</button>
-            </div>
-            <div className="text-xs text-slate-500 mb-3">
-              {orderInvoice?.supplier_display || "Proveedor"} · {orderInvoice?.receipt_number || "Comprobante"}
-            </div>
-            <div className="grid grid-cols-1 gap-3">
-              <select className="border rounded px-2 py-1" value={orderForm.payment_method}
-                onChange={(e) => setOrderForm((f) => ({ ...f, payment_method: e.target.value }))}>
-                <option value="">Forma de pago</option>
-                {PAYMENT_METHODS.map((m) => (<option key={m} value={m}>{m}</option>))}
-              </select>
-              <div>
-                <div className="text-xs text-slate-500 mb-1">Fecha de pago</div>
-                <input type="date" className="border rounded px-2 py-1 w-full" value={orderForm.payment_date}
-                  onChange={(e) => setOrderForm((f) => ({ ...f, payment_date: e.target.value }))} />
-              </div>
-              <input
-                className="border rounded px-2 py-1 w-full"
-                placeholder="Monto"
-                value={orderForm.amount}
-                onChange={(e) =>
-                  setOrderForm((f) => ({
-                    ...f,
-                    amount: formatInputMoney(e.target.value, orderInvoice?.currency_code),
-                  }))
-                }
-              />
-              <input
-                className="border rounded px-2 py-1"
-                placeholder="Servicio contratado"
-                value={orderForm.description}
-                onChange={(e) => setOrderForm((f) => ({ ...f, description: e.target.value }))}
-              />
-              <textarea className="border rounded px-2 py-1 min-h-[80px]" placeholder="Observaciones" value={orderForm.observations}
-                onChange={(e) => setOrderForm((f) => ({ ...f, observations: e.target.value }))} />
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button className="px-4 py-2 text-sm rounded border" onClick={() => setOrderModalOpen(false)}>Cancelar</button>
-              <button className="px-4 py-2 text-sm rounded bg-black text-white" onClick={saveOrder}>Generar</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {batchOrderOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold">Generar ordenes de pago</h3>
-              <button className="text-sm underline" onClick={() => setBatchOrderOpen(false)}>
-                Cerrar
-              </button>
-            </div>
-            <div className="grid grid-cols-1 gap-3">
-              <select
-                className="border rounded px-2 py-1"
-                value={batchOrderForm.payment_method}
-                onChange={(e) =>
-                  setBatchOrderForm((f) => ({ ...f, payment_method: e.target.value }))
-                }
-              >
-                <option value="">Metodo</option>
-                {PAYMENT_METHODS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="date"
-                className="border rounded px-2 py-1"
-                value={batchOrderForm.payment_date}
-                onChange={(e) =>
-                  setBatchOrderForm((f) => ({ ...f, payment_date: e.target.value }))
-                }
-              />
-              <textarea
-                className="border rounded px-2 py-1 min-h-[80px]"
-                placeholder="Observaciones"
-                value={batchOrderForm.observations}
-                onChange={(e) =>
-                  setBatchOrderForm((f) => ({ ...f, observations: e.target.value }))
-                }
-              />
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                className="px-4 py-2 text-sm rounded border"
-                onClick={() => setBatchOrderOpen(false)}
-              >
-                Cancelar
-              </button>
-              <button
-                className="px-4 py-2 text-sm rounded bg-black text-white"
-                onClick={confirmBatchOrders}
-              >
-                Generar
-              </button>
             </div>
           </div>
         </div>

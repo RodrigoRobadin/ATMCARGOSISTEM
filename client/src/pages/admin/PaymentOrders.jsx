@@ -1,5 +1,6 @@
 ﻿import React, { useEffect, useState } from "react";
 import { api } from "../../api";
+import { Link } from "react-router-dom";
 import {
   companyBankAccountLabel,
   companyBankAccountValue,
@@ -579,9 +580,12 @@ export default function PaymentOrders() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Ordenes de pago</h1>
-          <p className="text-slate-500 text-sm">Autorizacion, seguimiento y descarga de ordenes de pago operativas.</p>
+          <p className="text-slate-500 text-sm">Órdenes operativas anteriores. Las nuevas órdenes de varios documentos se gestionan en Cuentas a pagar.</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Link to="/admin-ops/accounts-payable" className="px-3 py-2 text-sm rounded border border-blue-600 bg-blue-600 text-white">
+            Nueva orden unificada
+          </Link>
           <button
             className="px-3 py-2 text-sm rounded border bg-white"
             onClick={() => {

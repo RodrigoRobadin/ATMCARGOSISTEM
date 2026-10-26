@@ -129,6 +129,7 @@ export default function AccountsPayableVendorDrawer({
   initialReference = '',
   initialMovementKind = 'all',
   onDataChanged,
+  onCreatePaymentOrder,
   onClose,
 }) {
   const [loading, setLoading] = useState(false);
@@ -149,15 +150,6 @@ export default function AccountsPayableVendorDrawer({
     account: '',
     reference_number: '',
     notes: '',
-  });
-  const [orderModalOpen, setOrderModalOpen] = useState(false);
-  const [orderRow, setOrderRow] = useState(null);
-  const [orderForm, setOrderForm] = useState({
-    payment_method: '',
-    payment_date: '',
-    amount: '',
-    description: '',
-    observations: '',
   });
   const [companyAccounts, setCompanyAccounts] = useState([]);
   const [supplierOrg, setSupplierOrg] = useState(null);
@@ -468,44 +460,6 @@ export default function AccountsPayableVendorDrawer({
     }
   };
 
-  const openGenerateOrder = (row) => {
-    setOrderRow(row);
-    setOrderForm({
-      payment_method: '',
-      payment_date: row?.due_date ? String(row.due_date).slice(0, 10) : '',
-      amount: String(Number(row?.document_balance || 0)),
-      description: row?.description || '',
-      observations: '',
-    });
-    setOrderModalOpen(true);
-  };
-
-  const savePaymentOrder = async () => {
-    if (!orderRow?.operation_id || !orderRow?.invoice_id) return;
-    const amount = Number(orderForm.amount || 0);
-    if (!amount || amount <= 0) return alert('Monto invalido');
-    try {
-      await api.post(
-        `/operations/${orderRow.operation_id}/expense-invoices/${orderRow.invoice_id}/payment-orders`,
-        {
-          payment_method: orderForm.payment_method || null,
-          payment_date: orderForm.payment_date || null,
-          observations: orderForm.observations || null,
-          amount,
-          description: orderForm.description || null,
-        },
-        { params: { operation_type: orderRow.operation_type || 'deal' } }
-      );
-      setOrderModalOpen(false);
-      setOrderRow(null);
-      await loadDetail();
-      await onDataChanged?.();
-    } catch (error) {
-      console.error('accounts payable create payment order error', error);
-      alert(error?.response?.data?.error || 'No se pudo generar la orden de pago.');
-    }
-  };
-
   return (
     <div className="fixed inset-0 z-[120]">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
@@ -714,9 +668,9 @@ export default function AccountsPayableVendorDrawer({
                               <button
                                 type="button"
                                 className="px-2.5 py-1.5 text-xs rounded-lg border text-blue-700 hover:bg-blue-50"
-                                onClick={() => openGenerateOrder(row)}
+                                onClick={() => onCreatePaymentOrder?.(row)}
                               >
-                                Generar OP
+                                Incluir en orden de pago
                               </button>
                             )}
                             {row.payment_order_id && (
@@ -820,33 +774,6 @@ export default function AccountsPayableVendorDrawer({
           </div>
         )}
 
-        {orderModalOpen && (
-          <div className="absolute inset-0 z-[130] flex items-center justify-center bg-black/40 p-4">
-            <div className="w-full max-w-lg rounded-2xl bg-white p-4 shadow-xl">
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="font-semibold">Generar orden de pago</h3>
-                <button className="text-sm underline" onClick={() => setOrderModalOpen(false)}>Cerrar</button>
-              </div>
-              <div className="mb-3 text-xs text-slate-500">
-                {orderRow?.document_number || '-'} · Saldo {fmtMoney(orderRow?.document_balance, supplier.currency_code || currencyCode)}
-              </div>
-              <div className="grid grid-cols-1 gap-3">
-                <select className="border rounded px-3 py-2" value={orderForm.payment_method} onChange={(e) => setOrderForm((f) => ({ ...f, payment_method: e.target.value }))}>
-                  <option value="">Forma de pago</option>
-                  {PAYMENT_METHODS.map((item) => <option key={item} value={item}>{item}</option>)}
-                </select>
-                <input type="date" className="border rounded px-3 py-2" value={orderForm.payment_date} onChange={(e) => setOrderForm((f) => ({ ...f, payment_date: e.target.value }))} />
-                <input type="number" min="0" step="0.01" className="border rounded px-3 py-2" placeholder="Monto" value={orderForm.amount} onChange={(e) => setOrderForm((f) => ({ ...f, amount: e.target.value }))} />
-                <input className="border rounded px-3 py-2" placeholder="Descripcion" value={orderForm.description} onChange={(e) => setOrderForm((f) => ({ ...f, description: e.target.value }))} />
-                <textarea className="border rounded px-3 py-2 min-h-[84px]" placeholder="Observaciones" value={orderForm.observations} onChange={(e) => setOrderForm((f) => ({ ...f, observations: e.target.value }))} />
-              </div>
-              <div className="mt-4 flex justify-end gap-2">
-                <button className="rounded border px-4 py-2 text-sm" onClick={() => setOrderModalOpen(false)}>Cancelar</button>
-                <button className="rounded bg-black px-4 py-2 text-sm text-white" onClick={savePaymentOrder}>Generar</button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
