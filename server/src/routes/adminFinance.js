@@ -491,7 +491,7 @@ function pushSalesInvoice(map, row, amount, kind, expectedDate, budget) {
   else target.receivable += saleAmount;
   if (budget.source_status !== 'ok') target.warnings.push('Sin revision/costo presupuestado completo');
   target.documents.push({
-    source_type: kind === 'actual' ? 'receipt' : (row._source_type || 'invoice'),
+    source_type: kind === 'actual' ? (row.source_type || 'receipt') : (row._source_type || 'invoice'),
     source_id: row._source_id ?? row.source_id ?? row.id,
     label: row.receipt_number || row.invoice_number || `Factura #${row.id}`,
     kind,
@@ -801,15 +801,21 @@ async function loadIndustrialInstallmentProjection(invoiceRows = []) {
     planIds
   );
   const [receipts] = await pool.query(
-    `SELECT id, invoice_id, amount FROM receipts WHERE invoice_id IN (${placeholders}) AND status <> 'anulado' ORDER BY issue_date, id`,
+    `SELECT r.id, COALESCE(ra.invoice_id, r.invoice_id) AS invoice_id,
+            COALESCE(ra.amount_applied, r.amount) AS amount
+       FROM receipts r LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+      WHERE COALESCE(ra.invoice_id, r.invoice_id) IN (${placeholders}) AND r.status <> 'anulado'
+      ORDER BY r.issue_date, r.id`,
     invoiceIds
   );
   let manualRows = [];
   if (await tableExists('industrial_receipt_installment_allocations')) {
     [manualRows] = await pool.query(
-      `SELECT a.* FROM industrial_receipt_installment_allocations a
+      `SELECT a.*, cp.invoice_id FROM industrial_receipt_installment_allocations a
         JOIN receipts r ON r.id=a.receipt_id
-       WHERE r.invoice_id IN (${placeholders}) AND r.status <> 'anulado'`,
+        JOIN industrial_collection_installments ci ON ci.id = a.installment_id
+        JOIN industrial_collection_plans cp ON cp.id = ci.plan_id
+       WHERE cp.invoice_id IN (${placeholders}) AND r.status <> 'anulado'`,
       invoiceIds
     );
   }
@@ -837,7 +843,8 @@ async function loadIndustrialInstallmentProjection(invoiceRows = []) {
       creditReduction = rounded(creditReduction - reduction);
     }
     for (const receipt of (receipts || []).filter((row) => Number(row.invoice_id) === Number(invoice.id))) {
-      const manual = manualByReceipt.get(Number(receipt.id));
+      const manual = (manualByReceipt.get(Number(receipt.id)) || [])
+        .filter((row) => Number(row.invoice_id) === Number(invoice.id));
       if (manual?.length) {
         for (const allocation of manual) {
           const target = installments.find((item) => Number(item.id) === Number(allocation.installment_id));
@@ -894,11 +901,13 @@ async function buildCashFlowData(query = {}) {
 
   const [receiptRows] = await pool.query(
     `
-    SELECT r.id AS source_id, r.receipt_number, COALESCE(r.issue_date, DATE(r.created_at)) AS date,
+    SELECT CASE WHEN rac.application_count > 1 THEN 'receipt_application' ELSE 'receipt' END AS source_type,
+           CASE WHEN rac.application_count > 1 THEN ra.id ELSE r.id END AS source_id,
+           r.receipt_number, COALESCE(r.issue_date, DATE(r.created_at)) AS date,
            i.id, i.invoice_number, i.issue_date, i.due_date, i.payment_terms, i.payment_condition,
            i.percentage, i.exchange_rate,
            COALESCE(r.currency_code, i.currency_code, 'PYG') AS currency_code,
-           r.net_amount AS amount,
+           COALESCE(ra.net_amount, r.net_amount * COALESCE(ra.amount_applied, r.amount) / NULLIF(r.amount, 0)) AS amount,
            GREATEST(0, COALESCE(i.total_amount,0) - COALESCE(i.credited_total,0)) AS total_amount,
            o.name AS organization_name,
            COALESCE(d.reference, sc.reference) AS operation_reference,
@@ -916,7 +925,10 @@ async function buildCashFlowData(query = {}) {
            inv_items.description AS invoice_items_description,
            op_sup.primary_supplier_name
       FROM receipts r
-      JOIN invoices i ON i.id = r.invoice_id
+      LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+      LEFT JOIN (SELECT receipt_id, COUNT(*) AS application_count FROM receipt_applications GROUP BY receipt_id) rac
+        ON rac.receipt_id = r.id
+      JOIN invoices i ON i.id = COALESCE(ra.invoice_id, r.invoice_id)
       LEFT JOIN organizations o ON o.id = i.organization_id
       LEFT JOIN deals d ON d.id = i.deal_id
       LEFT JOIN service_cases sc ON sc.id = i.service_case_id
@@ -949,7 +961,7 @@ async function buildCashFlowData(query = {}) {
   );
   for (const row of receiptRows || []) {
     docs.push({
-      source_type: 'receipt',
+      source_type: row.source_type,
       source_id: row.source_id,
       direction: 'in',
       kind: 'actual',
@@ -1014,10 +1026,11 @@ async function buildCashFlowData(query = {}) {
       ) op_sup ON op_sup.operation_id = COALESCE(i.deal_id, i.service_case_id)
               AND op_sup.operation_type = CASE WHEN i.service_case_id IS NOT NULL THEN 'service' ELSE 'deal' END
       LEFT JOIN (
-        SELECT invoice_id, SUM(amount) AS paid_amount
-          FROM receipts
-         WHERE status <> 'anulado'
-         GROUP BY invoice_id
+        SELECT COALESCE(ra.invoice_id, r.invoice_id) AS invoice_id,
+               SUM(COALESCE(ra.amount_applied, r.amount)) AS paid_amount
+          FROM receipts r LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+         WHERE r.status <> 'anulado'
+         GROUP BY COALESCE(ra.invoice_id, r.invoice_id)
       ) rc ON rc.invoice_id = i.id
      WHERE i.status NOT IN ('anulada','borrador')
        AND GREATEST(0, COALESCE(i.total_amount,0) - COALESCE(i.credited_total,0) - COALESCE(rc.paid_amount, i.paid_amount, 0)) > 0.009
@@ -1256,7 +1269,7 @@ async function buildCashFlowData(query = {}) {
     visibleSourceKeys.has(sourceKey(row._source_type || 'invoice', row._source_id ?? row.id, 'in'))
   );
   const visibleReceiptRows = (receiptRows || []).filter((row) =>
-    visibleSourceKeys.has(sourceKey('receipt', row.source_id, 'in'))
+    visibleSourceKeys.has(sourceKey(row.source_type, row.source_id, 'in'))
   );
   const visibleOutgoingDocs = visibleDocs.filter((doc) => doc.direction === 'out' && doc.operation_reference);
 
@@ -1368,9 +1381,10 @@ async function buildFinanceData(query) {
 
     const [[paidRow]] = await pool.query(
       `
-      SELECT COALESCE(SUM(r.net_amount),0) AS paid
+      SELECT COALESCE(SUM(COALESCE(ra.net_amount, r.net_amount * COALESCE(ra.amount_applied, r.amount) / NULLIF(r.amount, 0))),0) AS paid
       FROM receipts r
-      JOIN invoices i ON i.id = r.invoice_id
+      LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+      JOIN invoices i ON i.id = COALESCE(ra.invoice_id, r.invoice_id)
       LEFT JOIN deals d ON d.id = i.deal_id
       WHERE r.status <> 'anulado'
       AND COALESCE(r.issue_date, DATE(r.created_at)) BETWEEN ? AND ?
@@ -1382,9 +1396,10 @@ async function buildFinanceData(query) {
 
     const [[paidPrevRow]] = await pool.query(
       `
-      SELECT COALESCE(SUM(r.net_amount),0) AS paid
+      SELECT COALESCE(SUM(COALESCE(ra.net_amount, r.net_amount * COALESCE(ra.amount_applied, r.amount) / NULLIF(r.amount, 0))),0) AS paid
       FROM receipts r
-      JOIN invoices i ON i.id = r.invoice_id
+      LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+      JOIN invoices i ON i.id = COALESCE(ra.invoice_id, r.invoice_id)
       LEFT JOIN deals d ON d.id = i.deal_id
       WHERE r.status <> 'anulado'
       AND COALESCE(r.issue_date, DATE(r.created_at)) BETWEEN ? AND ?
@@ -1488,9 +1503,10 @@ async function buildFinanceData(query) {
     const [paidSeries] = await pool.query(
       `
     SELECT DATE_FORMAT(COALESCE(r.issue_date, DATE(r.created_at)), '%Y-%m') AS ym,
-           COALESCE(SUM(r.net_amount),0) AS total
+           COALESCE(SUM(COALESCE(ra.net_amount, r.net_amount * COALESCE(ra.amount_applied, r.amount) / NULLIF(r.amount, 0))),0) AS total
     FROM receipts r
-    JOIN invoices i ON i.id = r.invoice_id
+    LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+    JOIN invoices i ON i.id = COALESCE(ra.invoice_id, r.invoice_id)
     LEFT JOIN deals d ON d.id = i.deal_id
     WHERE r.status <> 'anulado'
       AND COALESCE(r.issue_date, DATE(r.created_at)) BETWEEN ? AND ?
@@ -1545,10 +1561,12 @@ async function buildFinanceData(query) {
 
     const [paidItems] = await pool.query(
       `
-    SELECT r.id, r.receipt_number, COALESCE(r.issue_date, DATE(r.created_at)) AS issue_date, r.net_amount,
+    SELECT r.id, r.receipt_number, COALESCE(r.issue_date, DATE(r.created_at)) AS issue_date,
+           COALESCE(ra.net_amount, r.net_amount * COALESCE(ra.amount_applied, r.amount) / NULLIF(r.amount, 0)) AS net_amount,
            i.invoice_number, o.name AS organization_name
     FROM receipts r
-    JOIN invoices i ON i.id = r.invoice_id
+    LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+    JOIN invoices i ON i.id = COALESCE(ra.invoice_id, r.invoice_id)
     LEFT JOIN organizations o ON o.id = i.organization_id
     LEFT JOIN deals d ON d.id = i.deal_id
     WHERE r.status <> 'anulado'

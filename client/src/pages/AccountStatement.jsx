@@ -1,5 +1,6 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import api from '../api';
+import CustomerBatchReceiptModal from '../components/CustomerBatchReceiptModal.jsx';
 
 const STATUS_TABS = [
   { value: 'por_cobrar', label: 'Por cobrar' },
@@ -105,6 +106,10 @@ export default function AccountStatement() {
   });
   const [selectedClientKey, setSelectedClientKey] = useState('');
   const [clientDrawerOpen, setClientDrawerOpen] = useState(false);
+  const [selectedReceiptIds, setSelectedReceiptIds] = useState([]);
+  const [receiptModalOpen, setReceiptModalOpen] = useState(false);
+  const [createdReceipt, setCreatedReceipt] = useState(null);
+  const [reloadVersion, setReloadVersion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [htmlPreview, setHtmlPreview] = useState('');
@@ -165,7 +170,7 @@ export default function AccountStatement() {
     return () => {
       alive = false;
     };
-  }, [filters]);
+  }, [filters, reloadVersion]);
 
   const selectedClient = useMemo(
     () => data.clients.find((client) => client.customer_key === selectedClientKey) || null,
@@ -230,6 +235,22 @@ export default function AccountStatement() {
     if (!selectedClientKey) return data.documents;
     return data.documents.filter((row) => row.customer_key === selectedClientKey);
   }, [data.documents, selectedClientKey]);
+  const receiptInvoices = data.documents.filter((row) => selectedReceiptIds.includes(Number(row.id)));
+  const receiptSelection = receiptInvoices[0];
+
+  function toggleReceiptInvoice(row) {
+    setSelectedReceiptIds((old) => old.includes(Number(row.id))
+      ? old.filter((id) => id !== Number(row.id)) : [...old, Number(row.id)]);
+  }
+
+  async function openReceiptPdf(id) {
+    try {
+      const { data: pdf } = await api.get(`/invoices/receipts/${id}/pdf`, { responseType: 'blob' });
+      const url = URL.createObjectURL(pdf);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (err) { setError(err?.response?.data?.error || 'No se pudo abrir el recibo.'); }
+  }
 
   const visibleMovements = useMemo(() => {
     if (!selectedClientKey) return data.movements;
@@ -264,6 +285,7 @@ export default function AccountStatement() {
 
   function setFilter(name, value) {
     setFilters((prev) => ({ ...prev, [name]: value }));
+    setSelectedReceiptIds([]);
     setSelectedClientKey('');
     setClientDrawerOpen(false);
   }
@@ -280,16 +302,19 @@ export default function AccountStatement() {
       due_to: '',
     });
     setSelectedClientKey('');
+    setSelectedReceiptIds([]);
     setClientDrawerOpen(false);
   }
 
   function openClientDrawer(client) {
     setSelectedClientKey(client.customer_key);
+    setSelectedReceiptIds([]);
     setClientDrawerOpen(true);
   }
 
   function selectClient(client) {
     setSelectedClientKey(client.customer_key);
+    setSelectedReceiptIds([]);
   }
 
   function handleClientDoubleClick(client) {
@@ -708,11 +733,14 @@ export default function AccountStatement() {
                 <div className="text-sm font-semibold">Documentos</div>
                 <div className="text-xs text-slate-500">{visibleDocuments.length} facturas</div>
               </div>
+              <button type="button" disabled={!receiptInvoices.length} onClick={() => setReceiptModalOpen(true)} className="rounded bg-emerald-700 px-3 py-2 text-sm text-white disabled:opacity-50">Crear recibo ({receiptInvoices.length})</button>
             </div>
+            {createdReceipt && <div role="status" className="flex flex-wrap items-center gap-3 border-b bg-emerald-50 px-3 py-2 text-sm text-emerald-900"><span>Recibo {createdReceipt.receipt_number || `#${createdReceipt.id}`} registrado.</span><button type="button" className="underline" onClick={() => openReceiptPdf(createdReceipt.id)}>Ver PDF</button></div>}
             <div className="overflow-auto">
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-50 text-xs text-slate-600">
                   <tr>
+                    <th className="px-3 py-2 text-left">Sel.</th>
                     <th className="px-3 py-2 text-left">Factura</th>
                     <th className="px-3 py-2 text-left">Cliente</th>
                     <th className="px-3 py-2 text-left">Operacion</th>
@@ -728,12 +756,13 @@ export default function AccountStatement() {
                 </thead>
                 <tbody>
                   {loading ? (
-                    <tr><td colSpan={11} className="px-3 py-4 text-center text-slate-500">Cargando...</td></tr>
+                    <tr><td colSpan={12} className="px-3 py-4 text-center text-slate-500">Cargando...</td></tr>
                   ) : visibleDocuments.length === 0 ? (
-                    <tr><td colSpan={11} className="px-3 py-4 text-center text-slate-500">Sin documentos.</td></tr>
+                    <tr><td colSpan={12} className="px-3 py-4 text-center text-slate-500">Sin documentos.</td></tr>
                   ) : (
                     visibleDocuments.map((row) => (
                       <tr key={row.id} className="border-t">
+                        <td className="px-3 py-2"><input type="checkbox" aria-label={`Seleccionar factura ${row.invoice_number}`} checked={selectedReceiptIds.includes(Number(row.id))} disabled={Number(row.balance) <= 0.009 || !['emitida', 'pago_parcial'].includes(String(row.status).toLowerCase()) || Boolean(receiptSelection && (receiptSelection.customer_key !== row.customer_key || receiptSelection.currency_code !== row.currency_code))} onChange={() => toggleReceiptInvoice(row)} /></td>
                         <td className="px-3 py-2">
                           <a className="font-medium text-blue-600 hover:underline" href={`/invoices/${row.id}`} target="_blank" rel="noreferrer">
                             {row.invoice_number || row.id}
@@ -821,6 +850,13 @@ export default function AccountStatement() {
           </div>
         </div>
       </div>
+
+      {receiptModalOpen && receiptInvoices.length > 0 && <CustomerBatchReceiptModal invoices={receiptInvoices} onClose={() => setReceiptModalOpen(false)} onSaved={(receipt) => {
+        setReceiptModalOpen(false);
+        setSelectedReceiptIds([]);
+        setCreatedReceipt(receipt);
+        setReloadVersion((value) => value + 1);
+      }} />}
 
       {clientDrawerOpen && selectedClient && (
         <div className="fixed inset-0 z-50 flex justify-end bg-black/30">

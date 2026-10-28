@@ -405,7 +405,7 @@ export default function InvoiceDetail() {
 </td>
                 <td className="px-4 py-2 capitalize">{p.payment_method}</td>
                 <td className="px-4 py-2">{p.reference_number || '—'}</td>
-                <td className="px-4 py-2 font-medium">{money(p.net_amount ?? p.amount)}</td>
+                <td className="px-4 py-2 font-medium">{money(p.applied_net_amount ?? p.net_amount ?? p.amount)}</td>
                 <td className="px-4 py-2">{p.issued_by_name || '—'}</td>
               </tr>
             ))}

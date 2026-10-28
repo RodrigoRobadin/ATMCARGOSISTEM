@@ -1272,10 +1272,12 @@ router.get('/sheet', requireAuth, requireAnyRole('admin', 'service', 'finanzas')
 
     const invoiceIds = invRows.map((r) => r.invoice_id);
     const [receiptRows] = await pool.query(
-      `SELECT invoice_id, COALESCE(SUM(amount),0) AS paid, MAX(currency_code) AS currency_code
-         FROM receipts
-        WHERE status = 'emitido' AND invoice_id IN (${invoiceIds.map(() => '?').join(',')})
-        GROUP BY invoice_id`,
+      `SELECT COALESCE(ra.invoice_id, r.invoice_id) AS invoice_id,
+              COALESCE(SUM(COALESCE(ra.amount_applied, r.amount)),0) AS paid,
+              MAX(r.currency_code) AS currency_code
+         FROM receipts r LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+        WHERE r.status = 'emitido' AND COALESCE(ra.invoice_id, r.invoice_id) IN (${invoiceIds.map(() => '?').join(',')})
+        GROUP BY COALESCE(ra.invoice_id, r.invoice_id)`,
       invoiceIds
     );
     const receiptsByInv = new Map((receiptRows || []).map((r) => [Number(r.invoice_id), r]));

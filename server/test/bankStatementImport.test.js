@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import ExcelJS from 'exceljs';
-import { assertBankPaymentMatch, normalizeStatement, parseBankAmount, parseBankDate, readStatement } from '../src/services/bankStatementImport.js';
+import { assertBankPaymentMatch, normalizeStatement, parseBankAmount, parseBankDate, readStatement, validateOpeningBalance } from '../src/services/bankStatementImport.js';
+
+test('opening balance requires a real date and at most two decimal places', () => {
+  assert.doesNotThrow(() => validateOpeningBalance('2026-10-27', '1200.50'));
+  assert.doesNotThrow(() => validateOpeningBalance('2026-10-27', '-25.00'));
+  assert.throws(() => validateOpeningBalance('2026-02-30', '100'));
+  assert.throws(() => validateOpeningBalance('2026-10-27', '12.345'));
+});
 
 test('reads semicolon CSV and normalizes bank movements', async () => {
   const file = Buffer.from('Fecha;Concepto;Referencia;Debito;Credito\n22/10/2026;Pago proveedor;TR-15;1.234.567,89;\n23/10/2026;Cobro cliente;CO-1;;2.500,00\n');

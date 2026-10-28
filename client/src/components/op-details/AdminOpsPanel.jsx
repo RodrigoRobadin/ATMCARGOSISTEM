@@ -538,7 +538,7 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
                       <td className="px-4 py-3">{fmtDate(receipt.issue_date)}</td>
                       <td className="px-4 py-3 capitalize">{receipt.payment_method || "-"}</td>
                       <td className="px-4 py-3">{receipt.reference_number || "-"}</td>
-                      <td className="px-4 py-3">{fmtMoney(receipt.net_amount ?? receipt.amount, receipt.currency_code || receipt.invoice_currency_code)}</td>
+                      <td className="px-4 py-3">{fmtMoney(receipt.applied_net_amount ?? receipt.net_amount ?? receipt.amount, receipt.currency_code || receipt.invoice_currency_code)}</td>
                       <td className="px-4 py-3">
                         <button className="px-2.5 py-1.5 text-xs rounded-lg border" onClick={() => openReceiptPdf(receipt)} type="button">
                           Ver recibo

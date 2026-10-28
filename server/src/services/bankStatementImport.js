@@ -4,6 +4,14 @@ import ExcelJS from 'exceljs';
 
 const fail = (message) => { throw Object.assign(new Error(message), { statusCode: 400 }); };
 
+export function validateOpeningBalance(balanceDate, amount) {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(balanceDate) ? new Date(`${balanceDate}T00:00:00Z`) : null;
+  if (!date || Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== balanceDate) {
+    fail('Seleccione una fecha de saldo inicial válida');
+  }
+  if (!/^-?\d{1,13}(?:\.\d{1,2})?$/.test(amount)) fail('Ingrese un saldo válido con hasta dos decimales');
+}
+
 export async function readStatement(buffer, filename) {
   const workbook = new ExcelJS.Workbook();
   const lower = String(filename || '').toLowerCase();

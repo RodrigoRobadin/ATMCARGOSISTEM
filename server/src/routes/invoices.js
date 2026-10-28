@@ -6,8 +6,10 @@ import PDFDocument from 'pdfkit';
 import generateInvoicePDF from '../services/invoiceTemplatePdfkit.js';
 import generateReceiptPDF from '../services/receiptTemplatePdfkit.js';
 import { getBrandLogoPath } from '../services/brandingAssets.js';
+import { normalizeReceiptAllocations, sameReceiptCustomer } from '../services/receiptAllocations.js';
 
 const router = Router();
+let receiptApplicationAmountsPromise;
 
 // Ensures (best-effort) for credit tables/columns on startup
 ensureCreditNoteTables().catch((err) => console.error('init credit tables', err?.message));
@@ -1243,11 +1245,25 @@ async function ensureReceiptTables() {
       receipt_id INT NOT NULL,
       invoice_id INT NOT NULL,
       amount_applied DECIMAL(15,2) NOT NULL DEFAULT 0,
+      retention_amount DECIMAL(15,2) NULL,
+      net_amount DECIMAL(15,2) NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (receipt_id) REFERENCES receipts(id) ON DELETE CASCADE,
       FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+  if (!receiptApplicationAmountsPromise) receiptApplicationAmountsPromise = (async () => {
+    const [columns] = await pool.query(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'receipt_applications'
+        AND COLUMN_NAME IN ('retention_amount', 'net_amount')`);
+    const existing = new Set(columns.map((row) => row.COLUMN_NAME));
+    for (const column of ['retention_amount', 'net_amount']) {
+      if (existing.has(column)) continue;
+      try { await pool.query(`ALTER TABLE receipt_applications ADD COLUMN ${column} DECIMAL(15,2) NULL`); }
+      catch (error) { if (error?.code !== 'ER_DUP_FIELDNAME') throw error; }
+    }
+  })().catch((error) => { receiptApplicationAmountsPromise = null; throw error; });
+  await receiptApplicationAmountsPromise;
 }
 
 async function ensureParamValuesTable() {
@@ -1855,9 +1871,9 @@ async function recomputeInvoicePayments(invoiceId) {
   const [[inv]] = await pool.query('SELECT id, net_total_amount FROM invoices WHERE id = ?', [invoiceId]);
   if (!inv) return;
   const [[agg]] = await pool.query(
-    `SELECT COALESCE(SUM(amount),0) AS paid
-       FROM receipts
-      WHERE invoice_id = ? AND status = 'emitido'`,
+    `SELECT COALESCE(SUM(COALESCE(ra.amount_applied, r.amount)),0) AS paid
+       FROM receipts r LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+      WHERE COALESCE(ra.invoice_id, r.invoice_id) = ? AND r.status = 'emitido'`,
     [invoiceId]
   );
   const paid = parseFloat(agg.paid || 0);
@@ -2381,10 +2397,12 @@ async function fetchCustomerStatementInvoices(query = {}) {
            GROUP BY invoice_id
         ) it ON it.invoice_id = i.id
         LEFT JOIN (
-          SELECT invoice_id, SUM(amount) AS paid_amount, MAX(issue_date) AS last_payment_date
-            FROM receipts
-           WHERE status = 'emitido'
-           GROUP BY invoice_id
+          SELECT COALESCE(ra.invoice_id, r.invoice_id) AS invoice_id,
+                 SUM(COALESCE(ra.amount_applied, r.amount)) AS paid_amount,
+                 MAX(r.issue_date) AS last_payment_date
+            FROM receipts r LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+           WHERE r.status = 'emitido'
+           GROUP BY COALESCE(ra.invoice_id, r.invoice_id)
         ) rc ON rc.invoice_id = i.id
         LEFT JOIN (
           SELECT invoice_id, SUM(total_amount) AS credited_total
@@ -2417,11 +2435,13 @@ async function fetchCustomerStatementMovements(invoiceIds = []) {
   if (!invoiceIds.length) return { receipts: [], creditNotes: [] };
   const placeholders = invoiceIds.map(() => '?').join(',');
   const [receipts] = await pool.query(`
-    SELECT r.id, r.receipt_number, r.invoice_id, r.issue_date, r.currency_code,
+    SELECT r.id, r.receipt_number, COALESCE(ra.invoice_id, r.invoice_id) AS invoice_id,
+           r.issue_date, r.currency_code,
            r.payment_method, r.bank_account, r.reference_number,
-           r.amount, r.retention_amount, r.net_amount, r.status
-      FROM receipts r
-     WHERE r.status = 'emitido' AND r.invoice_id IN (${placeholders})
+           COALESCE(ra.amount_applied, r.amount) AS amount,
+           r.retention_amount, r.net_amount, r.status
+      FROM receipts r LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+     WHERE r.status = 'emitido' AND COALESCE(ra.invoice_id, r.invoice_id) IN (${placeholders})
      ORDER BY r.issue_date ASC, r.id ASC
   `, invoiceIds);
   const [creditNotes] = await pool.query(`
@@ -2480,11 +2500,25 @@ router.get('/customer-statement', requireAuth, async (req, res) => {
       if (!doc) continue;
       movementRows.push({ id: `credit-note:${note.id}`, source_type: 'credit_note', source_id: note.id, invoice_id: note.invoice_id, date: note.issue_date, document_number: note.credit_note_number, reference: doc.invoice_number, description: note.reason || 'Nota de credito', customer_key: doc.customer_key, customer_name: doc.customer_name, customer_ruc: doc.customer_ruc, currency_code: doc.currency_code, debit: 0, credit: Number(note.total_amount || 0) });
     }
+    const receiptMovements = new Map();
     for (const receipt of receipts) {
       const doc = docById.get(Number(receipt.invoice_id));
       if (!doc) continue;
-      movementRows.push({ id: `receipt:${receipt.id}`, source_type: 'receipt', source_id: receipt.id, invoice_id: receipt.invoice_id, date: receipt.issue_date, document_number: receipt.receipt_number, reference: doc.invoice_number, description: receipt.payment_method || 'Recibo', customer_key: doc.customer_key, customer_name: doc.customer_name, customer_ruc: doc.customer_ruc, currency_code: normalizeStatementCurrency(receipt.currency_code || doc.currency_code), debit: 0, credit: Number(receipt.amount || 0) });
+      const key = `${receipt.id}:${doc.customer_key}:${doc.currency_code}`;
+      const existing = receiptMovements.get(key);
+      if (existing) {
+        existing.credit = Number((existing.credit + Number(receipt.amount || 0)).toFixed(2));
+        existing.reference += `, ${doc.invoice_number}`;
+      } else {
+        receiptMovements.set(key, { id: `receipt:${key}`, source_type: 'receipt', source_id: receipt.id,
+          invoice_id: receipt.invoice_id, date: receipt.issue_date, document_number: receipt.receipt_number,
+          reference: doc.invoice_number, description: receipt.payment_method || 'Recibo',
+          customer_key: doc.customer_key, customer_name: doc.customer_name, customer_ruc: doc.customer_ruc,
+          currency_code: normalizeStatementCurrency(receipt.currency_code || doc.currency_code),
+          debit: 0, credit: Number(receipt.amount || 0) });
+      }
     }
+    movementRows.push(...receiptMovements.values());
 
     movementRows.sort((a, b) => {
       const client = String(a.customer_name || '').localeCompare(String(b.customer_name || ''));
@@ -3711,20 +3745,167 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
 });
 
 // POST /api/invoices/:id/receipts - Registrar recibo/pago
+router.post('/receipts/batch', requireAuth, async (req, res) => {
+  let conn;
+  let numberLock = false;
+  try {
+    await ensureReceiptTables();
+    await ensureInvoiceCreditColumns();
+    await pool.query(`CREATE TABLE IF NOT EXISTS receipt_batch_requests (
+      request_id CHAR(36) PRIMARY KEY, receipt_id INT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+    const allocations = normalizeReceiptAllocations(req.body?.applications);
+    const requestId = String(req.body?.request_id || '');
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId)) {
+      throw Object.assign(new Error('Solicitud de recibo inválida'), { statusCode: 400 });
+    }
+    const issueDate = String(req.body?.payment_date || '');
+    const parsedDate = new Date(`${issueDate}T12:00:00Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(issueDate) || Number.isNaN(parsedDate.getTime()) ||
+        parsedDate.toISOString().slice(0, 10) !== issueDate) {
+      throw Object.assign(new Error('Fecha de cobro inválida'), { statusCode: 400 });
+    }
+    const method = String(req.body?.payment_method || '').toLowerCase();
+    if (!['transferencia', 'efectivo', 'cheque', 'tarjeta', 'otro'].includes(method)) {
+      throw Object.assign(new Error('Método de cobro inválido'), { statusCode: 400 });
+    }
+    const account = String(req.body?.bank_account || '').trim();
+    const reference = String(req.body?.reference_number || '').trim();
+    const retentionPct = Number(req.body?.retention_pct || 0);
+    if (!Number.isFinite(retentionPct) || retentionPct < 0 || retentionPct > 100 ||
+        account.length > 32 || reference.length > 128) {
+      throw Object.assign(new Error('Datos de cobro inválidos'), { statusCode: 400 });
+    }
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    await conn.query('INSERT INTO receipt_batch_requests (request_id) VALUES (?)', [requestId]);
+    const ids = allocations.map((item) => item.invoice_id);
+    const [invoices] = await conn.query(
+      `SELECT * FROM invoices WHERE id IN (${ids.map(() => '?').join(',')}) ORDER BY id FOR UPDATE`, ids
+    );
+    if (invoices.length !== ids.length || !sameReceiptCustomer(invoices)) {
+      throw Object.assign(new Error('Las facturas deben pertenecer al mismo cliente'), { statusCode: 400 });
+    }
+    const currency = String(invoices[0].currency_code || 'USD').toUpperCase();
+    if (invoices.some((invoice) => String(invoice.currency_code || 'USD').toUpperCase() !== currency)) {
+      throw Object.assign(new Error('Las facturas deben tener la misma moneda'), { statusCode: 400 });
+    }
+    if (method !== 'efectivo') {
+      const [accounts] = await conn.query("SELECT value FROM param_values WHERE `key` = 'company_bank_account' AND active = 1");
+      const valid = accounts.some((row) => {
+        try {
+          const item = JSON.parse(row.value);
+          return String(item.currency_code || item.currency || 'PYG').toUpperCase() === currency &&
+            [item.alias, item.account_number].filter(Boolean).includes(account);
+        } catch { return false; }
+      });
+      if (!valid) throw Object.assign(new Error('Seleccione una cuenta bancaria activa de la misma moneda'), { statusCode: 400 });
+    }
+    let grossCents = 0;
+    let retentionCents = 0;
+    const nextPayments = [];
+    for (const allocation of allocations) {
+      const invoice = invoices.find((row) => Number(row.id) === allocation.invoice_id);
+      if (!canManageInvoice(req.user, invoice) || !['emitida', 'pago_parcial'].includes(invoice.status)) {
+        throw Object.assign(new Error(`La factura ${invoice.invoice_number} no está disponible para cobrar`), { statusCode: 409 });
+      }
+      if (invoice.fiscal_mode === 'electronic') {
+        const [[fiscal]] = await conn.query(`SELECT status FROM fiscal_documents
+          WHERE document_type = 'invoice' AND local_id = ? ORDER BY id DESC LIMIT 1`, [invoice.id]);
+        if (fiscal?.status !== 'approved') {
+          throw Object.assign(new Error(`La factura ${invoice.invoice_number} espera aprobación fiscal`), { statusCode: 409 });
+        }
+      }
+      const [[paidRow]] = await conn.query(`SELECT COALESCE(SUM(COALESCE(ra.amount_applied, r.amount)),0) AS paid
+        FROM receipts r LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+        WHERE COALESCE(ra.invoice_id, r.invoice_id) = ? AND r.status = 'emitido'`, [invoice.id]);
+      const paidCents = Math.round(Number(paidRow.paid || 0) * 100);
+      const total = Number(invoice.total_amount || 0) || Number(invoice.subtotal || 0) + Number(invoice.tax_amount || 0);
+      const netTotalCents = Math.round((Number(invoice.net_total_amount || 0) > 0
+        ? Number(invoice.net_total_amount) : total - Number(invoice.credited_total || 0)) * 100);
+      if (allocation.cents > netTotalCents - paidCents) {
+        throw Object.assign(new Error(`El importe supera el saldo de ${invoice.invoice_number}`), { statusCode: 409 });
+      }
+      const [items] = await conn.query('SELECT subtotal, tax_rate FROM invoice_items WHERE invoice_id = ?', [invoice.id]);
+      const totals = calculateTotals(items);
+      const tax = Number(totals.tax_amount || 0) || Number(invoice.tax_amount || 0);
+      const invoiceTotal = Number(totals.total_amount || 0) || total;
+      const ratio = invoiceTotal > 0 ? Math.min(1, tax / invoiceTotal) : 0;
+      allocation.retentionCents = Math.round(allocation.cents * ratio * retentionPct / 100);
+      retentionCents += allocation.retentionCents;
+      grossCents += allocation.cents;
+      nextPayments.push({ invoice, paidCents: paidCents + allocation.cents, netTotalCents });
+    }
+    if (grossCents <= retentionCents) {
+      throw Object.assign(new Error('El cobro neto debe ser mayor que cero'), { statusCode: 400 });
+    }
+    const [[lock]] = await conn.query("SELECT GET_LOCK('crm_receipt_number', 10) AS acquired");
+    if (lock.acquired !== 1) throw Object.assign(new Error('No se pudo reservar el número del recibo'), { statusCode: 503 });
+    numberLock = true;
+    const primary = invoices[0];
+    const { receiptNumber, point, establishment } = await generateReceiptNumber(primary.point_of_issue, primary.establishment);
+    const [inserted] = await conn.query(`INSERT INTO receipts
+      (receipt_number, invoice_id, issue_date, status, currency_code, payment_method, bank_account,
+       reference_number, amount, retention_pct, retention_amount, net_amount, point_of_issue,
+       establishment, created_by, issued_by)
+      VALUES (?, ?, ?, 'emitido', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [receiptNumber, primary.id, issueDate, currency, method, method === 'efectivo' ? null : account,
+      reference || null, (grossCents / 100).toFixed(2), retentionPct,
+      (retentionCents / 100).toFixed(2), ((grossCents - retentionCents) / 100).toFixed(2),
+      point, establishment, req.user.id, req.user.id]);
+    for (const allocation of allocations) {
+      await conn.query(`INSERT INTO receipt_applications
+        (receipt_id, invoice_id, amount_applied, retention_amount, net_amount)
+        VALUES (?, ?, ?, ?, ?)`, [inserted.insertId, allocation.invoice_id, allocation.amount,
+        (allocation.retentionCents / 100).toFixed(2),
+        ((allocation.cents - allocation.retentionCents) / 100).toFixed(2)]);
+    }
+    for (const { invoice, paidCents, netTotalCents } of nextPayments) {
+      const balanceCents = Math.max(0, netTotalCents - paidCents);
+      await conn.query(`UPDATE invoices SET paid_amount = ?, net_balance = ?, status = ? WHERE id = ?`,
+        [(paidCents / 100).toFixed(2), (balanceCents / 100).toFixed(2),
+          balanceCents === 0 ? 'pagada' : 'pago_parcial', invoice.id]);
+    }
+    await conn.query('UPDATE receipt_batch_requests SET receipt_id = ? WHERE request_id = ?', [inserted.insertId, requestId]);
+    await conn.commit();
+    for (const invoiceId of ids) {
+      try { await syncContainerBillingCycleFromInvoice(invoiceId); }
+      catch (syncError) { console.error('[receipts] container cycle sync', invoiceId, syncError); }
+    }
+    res.status(201).json({ id: inserted.insertId, receipt_number: receiptNumber, invoice_count: ids.length });
+  } catch (error) {
+    if (conn) await conn.rollback();
+    if (error.code === 'ER_DUP_ENTRY' && conn) {
+      const [[prior]] = await conn.query('SELECT receipt_id FROM receipt_batch_requests WHERE request_id = ?', [req.body?.request_id]);
+      if (prior?.receipt_id) return res.json({ id: prior.receipt_id, repeated: true });
+    }
+    console.error('[receipts] batch', error);
+    res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : 'No se pudo registrar el recibo' });
+  } finally {
+    if (numberLock) {
+      try { await conn.query("SELECT RELEASE_LOCK('crm_receipt_number')"); }
+      catch (unlockError) { console.error('[receipts] number lock release', unlockError); }
+    }
+    conn?.release();
+  }
+});
+
 router.post('/:id/receipts', requireAuth, async (req, res) => {
   const conn = await pool.getConnection();
+  let numberLock = false;
   try {
     const { id } = req.params;
     const { amount, payment_method, payment_date, currency, bank_account, reference_number, retention_pct } = req.body;
     await ensureReceiptTables();
     await ensureInvoiceCreditColumns();
-    const [[invoice]] = await conn.query('SELECT * FROM invoices WHERE id = ?', [id]);
+    await conn.beginTransaction();
+    const [[invoice]] = await conn.query('SELECT * FROM invoices WHERE id = ? FOR UPDATE', [id]);
     if (!invoice) {
-      conn.release();
+      await conn.rollback();
       return res.status(404).json({ error: 'Factura no encontrada' });
     }
     if (!canManageInvoice(req.user, invoice)) {
-      conn.release();
+      await conn.rollback();
       return res.status(403).json({ error: 'Sin permiso' });
     }
 
@@ -3741,7 +3922,9 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
       ? Number(invoice.net_total_amount || 0)
       : Math.max(0, baseTotal - creditedInv);
     const [[paidRow]] = await conn.query(
-      "SELECT COALESCE(SUM(amount),0) AS paid FROM receipts WHERE invoice_id = ? AND status <> 'anulado'",
+      `SELECT COALESCE(SUM(COALESCE(ra.amount_applied, r.amount)),0) AS paid
+         FROM receipts r LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+        WHERE COALESCE(ra.invoice_id, r.invoice_id) = ? AND r.status <> 'anulado'`,
       [id]
     );
     const paidInv = Number(paidRow?.paid || 0);
@@ -3763,15 +3946,20 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
     const netAmt = roundReceiptMoney(Math.max(0, amt - retAmt));
 
     if (amt <= 0 || netAmt <= 0 || !Number.isFinite(retPct) || retPct < 0 || retPct > 100) {
-      conn.release();
+      await conn.rollback();
       return res.status(400).json({ error: 'Monto inválido' });
     }
     if (amt - effBalance > 0.01) {
-      conn.release();
+      await conn.rollback();
       return res.status(400).json({ error: 'Monto excede saldo' });
     }
 
-    await conn.beginTransaction();
+    const [[lock]] = await conn.query("SELECT GET_LOCK('crm_receipt_number', 10) AS acquired");
+    if (lock.acquired !== 1) {
+      await conn.rollback();
+      return res.status(503).json({ error: 'No se pudo reservar el número del recibo' });
+    }
+    numberLock = true;
     const { receiptNumber, point, establishment } = await generateReceiptNumber(
       invoice.point_of_issue,
       invoice.establishment
@@ -3800,8 +3988,10 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
       ]
     );
     await conn.query(
-      `INSERT INTO receipt_applications (receipt_id, invoice_id, amount_applied) VALUES (?, ?, ?)`,
-      [ins.insertId, invoice.id, amt]
+      `INSERT INTO receipt_applications
+        (receipt_id, invoice_id, amount_applied, retention_amount, net_amount)
+        VALUES (?, ?, ?, ?, ?)`,
+      [ins.insertId, invoice.id, amt, retAmt, netAmt]
     );
 
     await conn.commit();
@@ -3814,6 +4004,7 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
     console.error('[receipts] Error creating', e);
     res.status(500).json({ error: 'Error al registrar recibo' });
   } finally {
+    if (numberLock) await conn.query("SELECT RELEASE_LOCK('crm_receipt_number')");
     conn.release();
   }
 });
@@ -4036,10 +4227,13 @@ router.get('/:id', requireAuth, async (req, res) => {
     );
 
     const [receipts] = await pool.query(
-      `SELECT r.*, u.name as issued_by_name
+      `SELECT r.*, COALESCE(ra.amount_applied, r.amount) AS applied_amount,
+              COALESCE(ra.net_amount, ROUND(r.net_amount * COALESCE(ra.amount_applied, r.amount) / NULLIF(r.amount, 0), 2)) AS applied_net_amount,
+              u.name as issued_by_name
          FROM receipts r
+         LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
          LEFT JOIN users u ON u.id = r.issued_by
-        WHERE r.invoice_id = ? AND r.status = 'emitido'
+        WHERE COALESCE(ra.invoice_id, r.invoice_id) = ? AND r.status = 'emitido'
         ORDER BY r.issue_date DESC, r.id DESC`,
       [id]
     );
@@ -4248,10 +4442,10 @@ router.post('/credit-notes', requireAuth, async (req, res) => {
     }
     const [[receiptRow]] = await pool.query(
       `SELECT COUNT(*) AS cnt
-         FROM receipts
-        WHERE invoice_id = ?
-          AND status = 'emitido'
-          AND COALESCE(net_amount, amount, 0) > 0`,
+         FROM receipts r LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+        WHERE COALESCE(ra.invoice_id, r.invoice_id) = ?
+          AND r.status = 'emitido'
+          AND COALESCE(ra.amount_applied, r.amount, 0) > 0`,
       [invoice_id]
     );
     if (Number(receiptRow?.cnt || 0) > 0) {

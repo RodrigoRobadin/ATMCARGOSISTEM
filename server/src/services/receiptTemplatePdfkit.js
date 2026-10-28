@@ -258,6 +258,21 @@ function drawInvoicesTable(doc, data, y) {
       18,
       ...cells.map((cell) => doc.heightOfString(String(cell.value), { width: cell.width - 6 }) + 8)
     );
+    if (rowY + rowHeight + 95 > PAGE_H - M) {
+      doc.addPage();
+      rowY = M + 25;
+      doc.save().fillColor(COLORS.navy).rect(tableX, rowY, tableW, 18).fill().restore();
+      doc.font('Helvetica-Bold').fontSize(7.2).fillColor('white');
+      doc.text('NUMERO', colX.num + 3, rowY + 5, { width: colW.num - 6, align: 'center' });
+      doc.text('EMISION', colX.date + 3, rowY + 5, { width: colW.date - 6, align: 'center' });
+      doc.text('REF. OPERACION', colX.ref + 3, rowY + 5, { width: colW.ref - 6, align: 'center' });
+      doc.text('MONEDA', colX.curr + 3, rowY + 5, { width: colW.curr - 6, align: 'center' });
+      doc.text('MONTO', colX.amount + 3, rowY + 5, { width: colW.amount - 6, align: 'right' });
+      doc.text('TIPO DE PAGO', colX.type + 3, rowY + 5, { width: colW.type - 6, align: 'center' });
+      doc.text('PAGO', colX.paid + 3, rowY + 5, { width: colW.paid - 6, align: 'right' });
+      rowY += 22;
+    }
+    doc.font('Helvetica').fontSize(7.6).fillColor(COLORS.gray);
     cells.forEach((cell) => {
       doc.text(String(cell.value), cell.x + 3, rowY + 4, {
         width: cell.width - 6,
@@ -330,6 +345,10 @@ export async function generateReceiptPDF(data, outputStream) {
         currency: data.currency || 'GS',
       }, y + 6);
 
+      if (y + 80 > PAGE_H - M) {
+        doc.addPage();
+        y = M + 15;
+      }
       drawPaymentsFooter(doc, { issuedByName: data.issuedByName || '' }, y + 8);
 
       doc.end();

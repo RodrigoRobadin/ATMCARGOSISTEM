@@ -54,11 +54,13 @@ async function getInvoiceRows(conn, dealId) {
        FROM invoices i
        LEFT JOIN quote_revisions qr ON qr.id = i.quote_revision_id
        LEFT JOIN (
-         SELECT invoice_id, SUM(amount) AS debt_paid, SUM(net_amount) AS cash_received,
-                SUM(retention_amount) AS retention_total
-           FROM receipts
-          WHERE status <> 'anulado'
-          GROUP BY invoice_id
+         SELECT COALESCE(ra.invoice_id, r.invoice_id) AS invoice_id,
+                SUM(COALESCE(ra.amount_applied, r.amount)) AS debt_paid,
+                SUM(COALESCE(ra.net_amount, r.net_amount * COALESCE(ra.amount_applied, r.amount) / NULLIF(r.amount, 0))) AS cash_received,
+                SUM(COALESCE(ra.retention_amount, r.retention_amount * COALESCE(ra.amount_applied, r.amount) / NULLIF(r.amount, 0))) AS retention_total
+           FROM receipts r LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+          WHERE r.status <> 'anulado'
+          GROUP BY COALESCE(ra.invoice_id, r.invoice_id)
        ) rp ON rp.invoice_id = i.id
       WHERE i.deal_id = ?
         AND i.status NOT IN ('borrador','anulada')
@@ -157,11 +159,19 @@ async function buildPayload(conn, dealId) {
       const pp = planIds.map(() => '?').join(',');
       [items] = await conn.query(`SELECT * FROM industrial_collection_installments WHERE plan_id IN (${pp}) ORDER BY plan_id, sequence_no`, planIds);
     }
-    [receipts] = await conn.query(`SELECT id, invoice_id, receipt_number, issue_date, amount, net_amount, retention_amount FROM receipts WHERE invoice_id IN (${placeholders}) AND status <> 'anulado' ORDER BY issue_date, id`, invoiceIds);
+    [receipts] = await conn.query(`SELECT r.id, COALESCE(ra.invoice_id, r.invoice_id) AS invoice_id,
+      r.receipt_number, r.issue_date, COALESCE(ra.amount_applied, r.amount) AS amount,
+      COALESCE(ra.net_amount, r.net_amount * COALESCE(ra.amount_applied, r.amount) / NULLIF(r.amount, 0)) AS net_amount,
+      COALESCE(ra.retention_amount, r.retention_amount * COALESCE(ra.amount_applied, r.amount) / NULLIF(r.amount, 0)) AS retention_amount
+      FROM receipts r LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+      WHERE COALESCE(ra.invoice_id, r.invoice_id) IN (${placeholders}) AND r.status <> 'anulado'
+      ORDER BY r.issue_date, r.id`, invoiceIds);
     [manualRows] = await conn.query(
-      `SELECT a.* FROM industrial_receipt_installment_allocations a
+      `SELECT a.*, cp.invoice_id FROM industrial_receipt_installment_allocations a
         JOIN receipts r ON r.id = a.receipt_id
-       WHERE r.invoice_id IN (${placeholders}) AND r.status <> 'anulado'`,
+        JOIN industrial_collection_installments ci ON ci.id = a.installment_id
+        JOIN industrial_collection_plans cp ON cp.id = ci.plan_id
+       WHERE cp.invoice_id IN (${placeholders}) AND r.status <> 'anulado'`,
       invoiceIds
     );
   }
@@ -173,7 +183,8 @@ async function buildPayload(conn, dealId) {
     const planItems = items.filter((item) => Number(item.plan_id) === Number(plan.id));
     const effective = effectiveInstallments(planItems, num(plan.baseline_total), num(invoice.net_total), currency);
     const invoiceReceipts = receipts.filter((row) => Number(row.invoice_id) === Number(invoice.id));
-    const allocations = allocateReceipts({ installments: effective, receipts: invoiceReceipts, manualRows, currency });
+    const allocations = allocateReceipts({ installments: effective, receipts: invoiceReceipts,
+      manualRows: manualRows.filter((row) => Number(row.invoice_id) === Number(invoice.id)), currency });
     const enriched = effective.map((item) => {
       const paid = allocations.get(Number(item.id)) || { debt_paid: 0, cash_received: 0, retention: 0, receipts: [] };
       const value = {
@@ -324,14 +335,19 @@ router.put('/invoices/:invoiceId/receipt-allocation', requireAuth, requireAnyRol
     const invoiceId = Number(req.params.invoiceId);
     const receiptId = Number(req.body?.receipt_id);
     const allocations = Array.isArray(req.body?.allocations) ? req.body.allocations : [];
-    const [[receipt]] = await conn.query(`SELECT * FROM receipts WHERE id=? AND invoice_id=? AND status <> 'anulado'`, [receiptId, invoiceId]);
+    const [[receipt]] = await conn.query(`SELECT r.*, COALESCE(ra.amount_applied, r.amount) AS applied_amount
+      FROM receipts r LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+      WHERE r.id=? AND COALESCE(ra.invoice_id, r.invoice_id)=? AND r.status <> 'anulado'`, [receiptId, invoiceId]);
     if (!receipt) return res.status(404).json({ error: 'Recibo no encontrado' });
     const [validItems] = await conn.query(`SELECT ci.id FROM industrial_collection_installments ci JOIN industrial_collection_plans cp ON cp.id=ci.plan_id WHERE cp.invoice_id=?`, [invoiceId]);
+    if (!validItems.length) return res.status(400).json({ error: 'La factura no tiene cuotas para distribuir' });
     const validIds = new Set(validItems.map((row) => Number(row.id)));
     const normalized = allocations.map((item) => ({ installment_id: Number(item.installment_id), amount: num(item.amount) })).filter((item) => validIds.has(item.installment_id) && item.amount > 0);
-    if (Math.abs(normalized.reduce((sum, item) => sum + item.amount, 0) - num(receipt.amount)) > 0.009) return res.status(400).json({ error: 'La distribucion debe cubrir el total aplicado del recibo' });
+    if (Math.abs(normalized.reduce((sum, item) => sum + item.amount, 0) - num(receipt.applied_amount)) > 0.009) return res.status(400).json({ error: 'La distribucion debe cubrir el total aplicado del recibo' });
     await conn.beginTransaction();
-    await conn.query(`DELETE FROM industrial_receipt_installment_allocations WHERE receipt_id=?`, [receiptId]);
+    await conn.query(`DELETE FROM industrial_receipt_installment_allocations
+      WHERE receipt_id=? AND installment_id IN (${validItems.map(() => '?').join(',')})`,
+    [receiptId, ...validItems.map((item) => item.id)]);
     for (const item of normalized) await conn.query(`INSERT INTO industrial_receipt_installment_allocations (receipt_id, installment_id, amount_applied, created_by) VALUES (?,?,?,?)`, [receiptId, item.installment_id, item.amount, req.user.id]);
     await conn.commit();
     await logAudit({ req, action: 'update', entity: 'industrial_receipt_allocation', entityId: receiptId, description: `Redistribucion del recibo ${receipt.receipt_number}`, meta: { invoice_id: invoiceId, allocations: normalized } });

@@ -35,10 +35,9 @@ async function recomputeInvoicePaymentsLocal(invoiceId, conn = pool) {
   if (!invoice) return null;
 
   const [[paidRow]] = await conn.query(
-    `SELECT COALESCE(SUM(amount), 0) AS paid
-       FROM receipts
-      WHERE invoice_id = ?
-        AND status = 'emitido'`,
+    `SELECT COALESCE(SUM(COALESCE(ra.amount_applied, r.amount)), 0) AS paid
+       FROM receipts r LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+      WHERE COALESCE(ra.invoice_id, r.invoice_id) = ? AND r.status = 'emitido'`,
     [invoiceId]
   );
 
@@ -123,11 +122,14 @@ router.get('/receipts', requireAuth, requireAnyRole('admin', 'finanzas'), async 
         r.receipt_number LIKE ?
         OR r.reference_number LIKE ?
         OR i.invoice_number LIKE ?
+        OR EXISTS (SELECT 1 FROM receipt_applications ra_search
+          JOIN invoices i_search ON i_search.id = ra_search.invoice_id
+          WHERE ra_search.receipt_id = r.id AND i_search.invoice_number LIKE ?)
         OR COALESCE(d.reference, sc.reference) LIKE ?
         OR o.name LIKE ?
         OR o.ruc LIKE ?
       )`);
-      params.push(like, like, like, like, like, like);
+      params.push(like, like, like, like, like, like, like);
     }
 
     const [rows] = await pool.query(
@@ -156,7 +158,22 @@ router.get('/receipts', requireAuth, requireAnyRole('admin', 'finanzas'), async 
       params
     );
 
-    res.json(rows || []);
+    const receiptIds = rows.map((row) => row.id);
+    let applications = [];
+    if (receiptIds.length) {
+      [applications] = await pool.query(`SELECT ra.receipt_id, ra.invoice_id, ra.amount_applied,
+        i.invoice_number FROM receipt_applications ra
+        JOIN invoices i ON i.id = ra.invoice_id
+        WHERE ra.receipt_id IN (${receiptIds.map(() => '?').join(',')}) ORDER BY ra.id`, receiptIds);
+    }
+    const byReceipt = new Map();
+    for (const application of applications) {
+      if (!byReceipt.has(application.receipt_id)) byReceipt.set(application.receipt_id, []);
+      byReceipt.get(application.receipt_id).push(application);
+    }
+    res.json(rows.map((row) => ({ ...row, applications: byReceipt.get(row.id) || [{
+      invoice_id: row.invoice_id, invoice_number: row.invoice_number, amount_applied: row.amount,
+    }] })));
   } catch (error) {
     console.error('[receipts-admin] list error', error);
     res.status(500).json({ error: 'Error al listar recibos' });
@@ -204,7 +221,10 @@ router.post('/receipts/:id/cancel', requireAuth, requireRole('admin'), async (re
       [req.user?.id || null, reason, id]
     );
 
-    await recomputeInvoicePaymentsLocal(receipt.invoice_id, conn);
+    const [applications] = await conn.query(`SELECT DISTINCT invoice_id FROM receipt_applications
+      WHERE receipt_id = ?`, [id]);
+    const invoiceIds = applications.length ? applications.map((row) => row.invoice_id) : [receipt.invoice_id];
+    for (const invoiceId of invoiceIds) await recomputeInvoicePaymentsLocal(invoiceId, conn);
 
     await conn.commit();
 

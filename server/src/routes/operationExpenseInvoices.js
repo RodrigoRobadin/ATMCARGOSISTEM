@@ -2132,10 +2132,11 @@ async function buildOperationFinancialStatement(operationId, opType, query = {})
     FROM invoices i
     LEFT JOIN organizations o ON o.id = i.organization_id
     LEFT JOIN (
-      SELECT invoice_id, SUM(amount) AS paid_amount
-      FROM receipts
-      WHERE status <> 'anulado'
-      GROUP BY invoice_id
+      SELECT COALESCE(ra.invoice_id, r.invoice_id) AS invoice_id,
+             SUM(COALESCE(ra.amount_applied, r.amount)) AS paid_amount
+      FROM receipts r LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+      WHERE r.status <> 'anulado'
+      GROUP BY COALESCE(ra.invoice_id, r.invoice_id)
     ) rc ON rc.invoice_id = i.id
     LEFT JOIN (
       SELECT invoice_id, SUM(total_amount) AS credited_total
@@ -2174,10 +2175,14 @@ async function buildOperationFinancialStatement(operationId, opType, query = {})
     const placeholders = invoiceIds.map(() => '?').join(',');
     const [receiptRows] = await pool.query(
       `
-      SELECT r.*, i.invoice_number
+      SELECT r.*, COALESCE(ra.invoice_id, r.invoice_id) AS applied_invoice_id,
+             COALESCE(ra.amount_applied, r.amount) AS applied_amount,
+             COALESCE(ra.net_amount, ROUND(r.net_amount * COALESCE(ra.amount_applied, r.amount) / NULLIF(r.amount, 0), 2)) AS applied_net_amount,
+             i.invoice_number
       FROM receipts r
-      LEFT JOIN invoices i ON i.id = r.invoice_id
-      WHERE r.status <> 'anulado' AND r.invoice_id IN (${placeholders})
+      LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+      LEFT JOIN invoices i ON i.id = COALESCE(ra.invoice_id, r.invoice_id)
+      WHERE r.status <> 'anulado' AND COALESCE(ra.invoice_id, r.invoice_id) IN (${placeholders})
       ORDER BY r.issue_date DESC, r.id DESC
       `,
       invoiceIds
@@ -2185,11 +2190,15 @@ async function buildOperationFinancialStatement(operationId, opType, query = {})
     receipts = receiptRows;
     const [canceledReceiptRows] = await pool.query(
       `
-      SELECT r.*, i.invoice_number, u.name AS cancelled_by_name
+      SELECT r.*, COALESCE(ra.invoice_id, r.invoice_id) AS applied_invoice_id,
+             COALESCE(ra.amount_applied, r.amount) AS applied_amount,
+             COALESCE(ra.net_amount, ROUND(r.net_amount * COALESCE(ra.amount_applied, r.amount) / NULLIF(r.amount, 0), 2)) AS applied_net_amount,
+             i.invoice_number, u.name AS cancelled_by_name
       FROM receipts r
-      LEFT JOIN invoices i ON i.id = r.invoice_id
+      LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+      LEFT JOIN invoices i ON i.id = COALESCE(ra.invoice_id, r.invoice_id)
       LEFT JOIN users u ON u.id = r.cancelled_by
-      WHERE r.status = 'anulado' AND r.invoice_id IN (${placeholders})
+      WHERE r.status = 'anulado' AND COALESCE(ra.invoice_id, r.invoice_id) IN (${placeholders})
       ORDER BY COALESCE(r.cancelled_at, r.updated_at, r.issue_date) DESC, r.id DESC
       `,
       invoiceIds
@@ -2337,7 +2346,7 @@ async function buildOperationFinancialStatement(operationId, opType, query = {})
       third_party: row.invoice_number || 'Factura',
       currency_code: normCurrency(row.currency_code || 'USD'),
       debit: 0,
-      credit: Number(row.amount || 0),
+      credit: Number(row.applied_amount ?? row.amount ?? 0),
       source_id: row.id,
       source_type: 'receipt',
     })),
@@ -2351,7 +2360,7 @@ async function buildOperationFinancialStatement(operationId, opType, query = {})
         ? `Motivo: ${row.cancel_reason}`
         : 'Recibo anulado',
       currency_code: normCurrency(row.currency_code || 'USD'),
-      debit: Number(row.amount || 0),
+      debit: Number(row.applied_amount ?? row.amount ?? 0),
       credit: 0,
       source_id: row.id,
       source_type: 'receipt',

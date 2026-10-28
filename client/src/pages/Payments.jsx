@@ -435,7 +435,9 @@ export default function Payments() {
                       <div className="text-xs text-slate-500">{row.organization_ruc || row.customer_doc || ""}</div>
                     </td>
                     <td className="px-3 py-2">
-                      {row.invoice_number ? (
+                      {(row.applications?.length || 0) > 1 ? (
+                        <span title={row.applications.map((item) => item.invoice_number).join(', ')}>{row.applications.length} facturas</span>
+                      ) : row.invoice_number ? (
                         <a className="text-blue-600 hover:underline" href={`/invoices/${row.invoice_id}`}>
                           {row.invoice_number}
                         </a>
@@ -519,7 +521,7 @@ export default function Payments() {
                 <div className="font-semibold mb-2">Cliente y documento</div>
                 <DetailLine label="Cliente" value={selectedReceipt.organization_name} />
                 <DetailLine label="RUC / Doc." value={selectedReceipt.organization_ruc || selectedReceipt.customer_doc} />
-                <DetailLine label="Factura" value={selectedReceipt.invoice_number} />
+                {(selectedReceipt.applications || []).map((item) => <div key={item.invoice_id} className="flex justify-between gap-3 py-1"><a className="text-blue-600 hover:underline" href={`/invoices/${item.invoice_id}`}>{item.invoice_number}</a><strong>{fmtMoney(item.amount_applied, selectedCurrency)}</strong></div>)}
                 <DetailLine label="Operacion" value={selectedReceipt.deal_reference} />
                 <DetailLine label="Estado" value={selectedStatus === "anulado" ? "Anulado" : "Emitido"} tone={selectedStatus === "anulado" ? "text-red-700" : "text-emerald-700"} />
               </div>
