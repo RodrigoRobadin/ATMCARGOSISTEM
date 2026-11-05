@@ -442,6 +442,9 @@ async function sendCancellation(type, req, res, document, eventId, reason) {
 
 async function cancel(type, req, res) {
   if (!canSend(req)) return res.status(403).json({ error: 'Sin permiso para cancelar documentos electrónicos' });
+  if (factpyMode() === 'production' && process.env.FACTPY_PRODUCTION_CANCELLATION_ENABLED !== '1') {
+    return res.status(503).json({ error: 'La cancelación fiscal en Producción todavía no está habilitada; utilizá una nota de crédito.' });
+  }
   const reason = String(req.body?.reason || '').trim();
   if (!reason || reason.length > 255) return res.status(400).json({ error: 'Ingresá un motivo de hasta 255 caracteres' });
   const document = await cancellationDocument(type, req.params.id);

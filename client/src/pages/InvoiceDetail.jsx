@@ -132,7 +132,11 @@ export default function InvoiceDetail() {
         const { data } = await api.get(`/invoices/${invoice.id}/fiscal-validation`);
         if (!data.valid) return alert((data.errors || []).join('\n'));
       }
-      if (!confirm(invoice.fiscal_mode === 'electronic' ? '¿Enviar esta factura electrónica al ambiente de prueba?' : `¿Emitir la factura ${invoice.invoice_number}?`)) return;
+      if (!confirm(invoice.fiscal_mode === 'electronic'
+        ? fiscalState?.environment === 'production'
+          ? '¿Enviar esta factura electrónica REAL a FactPy Producción? Esta acción reserva un número fiscal.'
+          : '¿Enviar esta factura electrónica al ambiente de prueba?'
+        : `¿Emitir la factura ${invoice.invoice_number}?`)) return;
       await api.post(`/invoices/${invoice.id}/issue`, invoice.fiscal_mode === 'electronic' ? { mock_scenario: mockScenario } : {});
       if (invoice.fiscal_mode === 'electronic') setFiscalVersion((value) => value + 1);
       await loadInvoice();
@@ -936,7 +940,9 @@ function CreditNoteViewModal({ creditNoteId, onClose, onRefresh }) {
         const validation = await api.get(`/invoices/credit-notes/${creditNoteId}/fiscal-validation`);
         if (!validation.data.valid) return alert((validation.data.errors || []).join('\n'));
       }
-      if (!confirm(`¿Emitir la nota de crédito ${data.credit_note_number}?`)) return;
+      if (!confirm(data.fiscal_mode === 'electronic' && fiscalState?.environment === 'production'
+        ? '¿Enviar esta nota de crédito REAL a FactPy Producción? Esta acción reserva un número fiscal.'
+        : `¿Emitir la nota de crédito ${data.credit_note_number}?`)) return;
       await api.post(`/invoices/credit-notes/${creditNoteId}/issue`, data.fiscal_mode === 'electronic' ? { mock_scenario: mockScenario } : {});
       if (data.fiscal_mode === 'electronic') setFiscalVersion((value) => value + 1);
       await loadDetail();

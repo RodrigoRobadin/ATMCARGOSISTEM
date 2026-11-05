@@ -266,16 +266,33 @@ test('manual retry permits uncertain and selected configuration failures in Test
   assert.equal(canRetryTestDocument({ status: 'approved' }), false);
 });
 
-test('production never enables mock or FactPy Test', () => {
-  const previous = { mode: process.env.FACTPY_MODE, env: process.env.NODE_ENV };
+test('production requires an explicit enable flag and complete fiscal configuration', () => {
+  const keys = ['FACTPY_MODE', 'NODE_ENV', 'FACTPY_PRODUCTION_ENABLED', 'FACTPY_RECORD_ID', 'FACTPY_ESTABLISHMENT'];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   try {
     process.env.FACTPY_MODE = 'test';
     process.env.NODE_ENV = 'production';
     assert.equal(factpyMode(), null);
+    assert.throws(() => createFactpyClient('test'), /deshabilitado/);
+    process.env.FACTPY_MODE = 'production';
+    delete process.env.FACTPY_PRODUCTION_ENABLED;
+    assert.equal(factpyMode(), null);
+    process.env.FACTPY_PRODUCTION_ENABLED = '1';
+    delete process.env.FACTPY_RECORD_ID;
+    assert.equal(factpyMode(), null);
+    process.env.FACTPY_RECORD_ID = 'production-record';
+    delete process.env.FACTPY_ESTABLISHMENT;
+    assert.equal(factpyMode(), null);
+    process.env.FACTPY_ESTABLISHMENT = '001';
+    assert.equal(factpyMode(), 'production');
+    assert.ok(createFactpyClient('production'));
+    process.env.NODE_ENV = 'development';
+    assert.equal(factpyMode(), null);
+    assert.throws(() => createFactpyClient('production'), /deshabilitado/);
   } finally {
-    if (previous.mode === undefined) delete process.env.FACTPY_MODE;
-    else process.env.FACTPY_MODE = previous.mode;
-    if (previous.env === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = previous.env;
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
   }
 });

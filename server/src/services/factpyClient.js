@@ -5,6 +5,13 @@ const MOCK_SCENARIOS = new Set(['approved', 'rejected', 'delayed', 'network_erro
 
 export function factpyMode() {
   const mode = String(process.env.FACTPY_MODE || '').toLowerCase();
+  if (mode === 'production') {
+    return process.env.NODE_ENV === 'production' &&
+      process.env.FACTPY_PRODUCTION_ENABLED === '1' &&
+      Boolean(process.env.FACTPY_RECORD_ID) &&
+      /^\d{3}$/.test(String(process.env.FACTPY_ESTABLISHMENT || ''))
+      ? mode : null;
+  }
   return process.env.NODE_ENV === 'production' || !ALLOWED_MODES.has(mode) ? null : mode;
 }
 
@@ -182,7 +189,10 @@ async function postFactpy(path, fields) {
 }
 
 export function createFactpyClient(mode = factpyMode()) {
-  if (!mode) throw new Error('FactPy está deshabilitado en este entorno');
+  if (!mode || (process.env.NODE_ENV === 'production' && mode !== 'production') ||
+      (mode === 'production' && factpyMode() !== 'production')) {
+    throw new Error('FactPy está deshabilitado en este entorno');
+  }
   const recordID = process.env.FACTPY_RECORD_ID;
   if (mode === 'test' && !recordID) throw new Error('Falta FACTPY_RECORD_ID');
   return {
