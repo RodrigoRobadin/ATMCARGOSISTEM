@@ -67,7 +67,6 @@ export default function CustomerReceiptModal({ invoice, onClose, onSuccess }) {
   const [form, setForm] = useState({
     payment_date: new Date().toISOString().slice(0, 10),
     amount: totals.balance.toFixed(2),
-    currency: invoice?.currency_code || invoice?.currency || "USD",
     payment_method: "transferencia",
     bank_account: "gs",
     reference_number: "",
@@ -78,7 +77,7 @@ export default function CustomerReceiptModal({ invoice, onClose, onSuccess }) {
   const [confirmStep, setConfirmStep] = useState(false);
   const [companyAccounts, setCompanyAccounts] = useState([]);
 
-  const currency = String(form.currency || invoice?.currency_code || "USD").toUpperCase();
+  const currency = String(invoice?.currency_code || invoice?.currency || "USD").toUpperCase();
   const grossAmount = Number(form.amount || 0) || 0;
   const retentionPct = Number(form.retention_pct || 0) || 0;
   const { proportionalTax, retentionAmount } = calculateRetention(invoice, grossAmount, retentionPct, currency);
@@ -199,16 +198,7 @@ export default function CustomerReceiptModal({ invoice, onClose, onSuccess }) {
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Moneda</label>
-            <select
-              className="w-full border rounded-lg px-3 py-2"
-              value={currency}
-              onChange={(event) => patchForm({ currency: event.target.value })}
-            >
-              <option value="USD">USD</option>
-              <option value="PYG">PYG</option>
-              <option value="EUR">EUR</option>
-              <option value="BRL">BRL</option>
-            </select>
+            <input readOnly className="w-full border rounded-lg px-3 py-2 bg-slate-50" value={currency} />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Total aplicado a la factura</label>

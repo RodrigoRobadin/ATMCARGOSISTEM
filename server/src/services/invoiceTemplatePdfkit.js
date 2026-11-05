@@ -195,14 +195,15 @@ function drawHeader(doc, data, y) {
   labelVal('FIN DE VIGENCIA:', data.timbradoEnd);
 
   ry += 8;
-  doc
-    .font('Helvetica-Bold')
-    .fontSize(12)
-    .fillColor(COLORS.gray)
-    .text(data.headerTitle || 'FACTURA NUMERO', rightX, ry, {
-      width: colRightW,
-      align: 'center',
-    });
+  const title = data.headerTitle || 'FACTURA NUMERO';
+  doc.font('Helvetica-Bold').fillColor(COLORS.gray);
+  let titleSize = 11;
+  while (titleSize > 8 && doc.fontSize(titleSize).widthOfString(title) > colRightW) titleSize -= 0.5;
+  doc.fontSize(titleSize).text(title, rightX, ry, {
+    width: colRightW,
+    align: 'center',
+    lineBreak: false,
+  });
   ry += 16;
   doc
     .fontSize(14)
@@ -402,7 +403,7 @@ function drawFooter(doc, data, yStart = 800) {
     .fontSize(7)
     .text(
       data.footer?.legal ||
-        'Esta factura ha sido generada electrónicamente y cumple con los requisitos vigentes.',
+        'Documento generado por el sistema del emisor.',
       M,
       y,
       { width: W }

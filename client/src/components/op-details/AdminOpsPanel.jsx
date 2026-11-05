@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../../api";
 import InvoiceCreateModal from "../InvoiceCreateModal.jsx";
 import CustomerReceiptModal from "../CustomerReceiptModal.jsx";
+import RemissionsPanel from "./RemissionsPanel.jsx";
 
 function fmtDate(value) {
   if (!value) return "?";
@@ -22,21 +23,34 @@ function fmtMoney(amount, currencyCode) {
   })}`;
 }
 
-function SummaryCard({ label, value, tone = "slate" }) {
-  const toneMap = {
-    slate: "bg-slate-50 text-slate-700",
-    blue: "bg-blue-50 text-blue-700",
-    emerald: "bg-emerald-50 text-emerald-700",
-    amber: "bg-amber-50 text-amber-700",
-  };
-  return (
-    <div className="border rounded-xl p-4 bg-white">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className={`mt-2 inline-flex rounded-lg px-3 py-1.5 text-sm font-semibold ${toneMap[tone] || toneMap.slate}`}>
-        {value}
-      </div>
-    </div>
-  );
+function moneyByCurrency(rows, amountFor) {
+  return rows.reduce((totals, row) => {
+    const amount = Number(amountFor(row));
+    if (!Number.isFinite(amount)) return totals;
+    const currency = String(row.currency_code || "PYG").toUpperCase();
+    totals[currency] = (totals[currency] || 0) + amount;
+    return totals;
+  }, {});
+}
+
+function displayTotals(totals) {
+  const entries = Object.entries(totals).filter(([, amount]) => Math.abs(amount) > 0.001);
+  return entries.length ? entries.map(([currency, amount]) => fmtMoney(amount, currency)).join(" · ") : "Sin importes";
+}
+
+const fiscalLabels = {
+  draft: "Pendiente de envío",
+  sending: "Enviando",
+  processing: "Procesando",
+  review: "Requiere revisión",
+  approved: "Aprobada",
+  rejected: "Rechazada",
+  cancelled: "Cancelada",
+};
+
+function fiscalStatus(doc) {
+  if (doc.fiscal_mode !== "electronic") return null;
+  return fiscalLabels[doc.fiscal_status] || "Pendiente de envío";
 }
 
 export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAdditionId, deal, costSheetVersionNumber, quoteRevisionId, onDocsRefresh }) {
@@ -44,7 +58,6 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
   const [receiptDocs, setReceiptDocs] = useState([]);
   const [billableItems, setBillableItems] = useState([]);
   const [selectedItems, setSelectedItems] = useState([]);
-  const [lockStatus, setLockStatus] = useState({ locked: false, count: 0 });
   const [loading, setLoading] = useState(true);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [issuingDocId, setIssuingDocId] = useState(null);
@@ -68,9 +81,8 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
             quote_revision_id: quoteRevisionId || undefined,
           }
         : { service_case_id: serviceCaseId, quote_revision_id: quoteRevisionId || undefined };
-      const [docsRes, lockRes, itemsRes] = await Promise.all([
+      const [docsRes, itemsRes] = await Promise.all([
         api.get("/invoices/operation-docs", { params }),
-        api.get("/invoices/lock-status", { params }),
         api.get("/invoices/billable-items", { params }),
       ]);
       const nextDocs = Array.isArray(docsRes?.data) ? docsRes.data : [];
@@ -107,7 +119,6 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
       const nextItems = Array.isArray(itemsRes?.data) ? itemsRes.data : [];
       setDocs(enrichedDocs);
       setReceiptDocs(nextReceipts);
-      setLockStatus(lockRes?.data || { locked: false, count: 0 });
       setBillableItems(nextItems);
       setSelectedItems((prev) =>
         prev.filter((key) => nextItems.some((item) => item.pending && item.source_item_key === key))
@@ -118,7 +129,6 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
       setReceiptDocs([]);
       setBillableItems([]);
       setSelectedItems([]);
-      setLockStatus({ locked: false, count: 0 });
     } finally {
       setLoading(false);
     }
@@ -130,16 +140,27 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
   }, [dealId, serviceCaseId, serviceQuoteAdditionId, costSheetVersionNumber, quoteRevisionId]);
 
   const invoiceDocs = useMemo(() => docs.filter((doc) => doc.kind === "invoice"), [docs]);
-  const creditNoteDocs = useMemo(() => docs.filter((doc) => doc.kind === "credit_note"), [docs]);
-  const totals = useMemo(() => {
-    return invoiceDocs.reduce((acc, doc) => {
-      const curr = String(doc.currency_code || "PYG").toUpperCase();
-      const amount = Number(doc.total_amount || 0);
-      acc[curr] = (acc[curr] || 0) + (Number.isFinite(amount) ? amount : 0);
-      return acc;
-    }, {});
-  }, [invoiceDocs]);
+  const validInvoices = useMemo(() => invoiceDocs.filter((doc) => {
+    const status = String(doc.status || "").toLowerCase();
+    return !["borrador", "anulada"].includes(status) &&
+      (doc.fiscal_mode !== "electronic" || doc.fiscal_status === "approved");
+  }), [invoiceDocs]);
+  const invoicedTotals = useMemo(
+    () => moneyByCurrency(validInvoices, (doc) => doc.net_total_amount ?? doc.total_amount),
+    [validInvoices]
+  );
+  const balanceTotals = useMemo(
+    () => moneyByCurrency(validInvoices, (doc) => doc.net_balance ?? doc.balance ?? doc.total_amount),
+    [validInvoices]
+  );
   const pendingItems = useMemo(() => billableItems.filter((item) => item.pending), [billableItems]);
+  const pendingTotals = useMemo(
+    () => moneyByCurrency(
+      pendingItems.map((item) => ({ ...item, currency_code: item.currency_code || deal?.operation_currency || "USD" })),
+      (item) => Number(item.total || 0) * Number(item.remaining_percentage ?? 100) / 100
+    ),
+    [pendingItems, deal?.operation_currency]
+  );
   const selectedPendingItems = useMemo(
     () => pendingItems.filter((item) => selectedItems.includes(item.source_item_key)),
     [pendingItems, selectedItems]
@@ -215,13 +236,13 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
   async function issueInvoice(doc) {
     if (!doc || doc.kind !== "invoice" || String(doc.status || "").toLowerCase() !== "borrador") return;
     const label = doc.number || `#${doc.id}`;
-    if (!confirm(`Emitir la factura ${label}? Esta accion confirma fiscalmente el documento.`)) return;
+    if (!confirm(doc.fiscal_mode === 'electronic' ? `¿Enviar ${label} a FactPy de prueba?` : `Emitir la factura ${label}? Esta accion confirma fiscalmente el documento.`)) return;
     setIssuingDocId(doc.id);
     try {
       await api.post(`/invoices/${doc.id}/issue`);
       await loadAdminData();
       if (typeof onDocsRefresh === "function") onDocsRefresh();
-      alert("Factura emitida correctamente.");
+      alert(doc.fiscal_mode === 'electronic' ? 'Envío iniciado. Consultá el estado fiscal en el detalle.' : 'Factura emitida correctamente.');
     } catch (error) {
       console.error("Error issuing invoice", error);
       alert(error?.response?.data?.error || "No se pudo emitir la factura.");
@@ -233,13 +254,13 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
   async function issueCreditNote(doc) {
     if (!doc || doc.kind !== "credit_note" || String(doc.status || "").toLowerCase() !== "borrador") return;
     const label = doc.number || `#${doc.id}`;
-    if (!confirm(`Emitir la nota de credito ${label}? Esta accion confirma fiscalmente el documento.`)) return;
+    if (!confirm(doc.fiscal_mode === 'electronic' ? `¿Enviar ${label} a FactPy de prueba?` : `Emitir la nota de credito ${label}? Esta accion confirma fiscalmente el documento.`)) return;
     setIssuingDocId(`credit-${doc.id}`);
     try {
       await api.post(`/invoices/credit-notes/${doc.id}/issue`);
       await loadAdminData();
       if (typeof onDocsRefresh === "function") onDocsRefresh();
-      alert("Nota de credito emitida correctamente.");
+      alert(doc.fiscal_mode === 'electronic' ? 'Envío iniciado. Consultá el estado fiscal en el detalle.' : 'Nota de crédito emitida correctamente.');
     } catch (error) {
       console.error("Error issuing credit note", error);
       alert(error?.response?.data?.error || "No se pudo emitir la nota de credito.");
@@ -265,22 +286,24 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
 
   function isInvoiceCreditEligible(doc) {
     const status = String(doc?.status || "").toLowerCase();
-    return doc?.kind === "invoice" && !["borrador", "anulada"].includes(status);
+    return doc?.kind === "invoice" && !["borrador", "anulada"].includes(status) &&
+      (doc.fiscal_mode !== "electronic" || doc.fiscal_status === "approved");
   }
 
   function isInvoicePaymentEligible(doc) {
     const status = String(doc?.status || "").toLowerCase();
-    return doc?.kind === "invoice" && !["borrador", "anulada", "pagada"].includes(status);
+    return doc?.kind === "invoice" && !["borrador", "anulada", "pagada"].includes(status) &&
+      (doc.fiscal_mode !== "electronic" || doc.fiscal_status === "approved");
   }
 
   return (
     <>
-      <div className="bg-white rounded-2xl shadow p-4 space-y-4">
-        <div className="flex items-start justify-between gap-3 flex-wrap">
+      <div className="bg-white rounded-lg border border-slate-200 p-4 md:p-6 space-y-6">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h3 className="font-semibold">Administraci?n</h3>
+            <h3 className="text-lg font-semibold text-slate-900">Facturación{deal?.reference ? ` · ${deal.reference}` : ""}</h3>
             <p className="text-sm text-slate-500 mt-1">
-              Gesti?n fiscal y seguimiento administrativo de la operaci?n.
+              {[deal?.org_name, deal?.business_unit_name || deal?.business_unit_key].filter(Boolean).join(" · ") || "Documentos de la operación"}
             </p>
             {dealId && costSheetVersionNumber ? (
               <p className="text-xs text-blue-700 mt-1">
@@ -300,75 +323,62 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <button
-              className="px-3 py-2 text-sm rounded-lg border disabled:opacity-50"
-              onClick={toggleAllPending}
-              disabled={!pendingItems.length}
-              type="button"
-            >
-              {selectedPendingItems.length === pendingItems.length && pendingItems.length
-                ? "Quitar selecci?n"
-                : "Seleccionar pendientes"}
-            </button>
-            <button
-              className="px-3 py-2 text-sm rounded-lg bg-black text-white disabled:bg-slate-300"
+              className="px-3 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:bg-slate-300"
               onClick={openInvoiceModal}
               disabled={!selectedPendingItems.length}
               type="button"
             >
-              Facturar selecci?n
+              + Nueva factura{selectedPendingItems.length ? ` (${selectedPendingItems.length})` : ""}
             </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-          <SummaryCard label="Facturas activas" value={lockStatus.count || 0} tone={lockStatus.count ? "emerald" : "slate"} />
-          <SummaryCard label="Facturas emitidas" value={invoiceDocs.length} tone="blue" />
-          <SummaryCard label="Notas de cr?dito" value={creditNoteDocs.length} tone={creditNoteDocs.length ? "amber" : "slate"} />
-          <SummaryCard
-            label="Total facturado"
-            value={Object.keys(totals).length ? Object.entries(totals).map(([currency, amount]) => fmtMoney(amount, currency)).join(" ? ") : "Sin documentos"}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-          <div className="border rounded-xl p-4">
-            <div className="text-xs text-slate-500">Referencia</div>
-            <div className="mt-1 font-medium">{deal?.reference || "?"}</div>
+        <div className="grid grid-cols-1 gap-4 border-y border-slate-200 py-4 sm:grid-cols-3 sm:gap-0" aria-label="Resumen de facturación">
+          <div className="sm:pr-5 sm:border-r border-slate-200">
+            <div className="text-xs text-slate-500">Disponible para facturar</div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">{displayTotals(pendingTotals)}</div>
+            <div className="text-xs text-slate-500">{pendingItems.length} ítem(s) pendiente(s)</div>
           </div>
-          <div className="border rounded-xl p-4">
-            <div className="text-xs text-slate-500">Cliente</div>
-            <div className="mt-1 font-medium">{deal?.org_name || "?"}</div>
+          <div className="sm:px-5 sm:border-r border-slate-200">
+            <div className="text-xs text-slate-500">Facturado vigente</div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">{displayTotals(invoicedTotals)}</div>
+            <div className="text-xs text-slate-500">Excluye borradores y anuladas</div>
           </div>
-          <div className="border rounded-xl p-4">
-            <div className="text-xs text-slate-500">Etapa actual</div>
-            <div className="mt-1 font-medium">{deal?.stage_name || deal?.stage?.name || deal?.status_ops || "?"}</div>
+          <div className="sm:pl-5">
+            <div className="text-xs text-slate-500">Saldo por cobrar</div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">{displayTotals(balanceTotals)}</div>
+            <div className="text-xs text-slate-500">{validInvoices.length} factura(s) vigente(s)</div>
           </div>
         </div>
 
-        <div className="border rounded-xl overflow-hidden">
-          <div className="px-4 py-3 bg-slate-50 border-b font-medium flex items-center justify-between gap-3">
-            <span>?tems pendientes de facturar</span>
-            <span className="text-xs text-slate-500">
-              {selectedPendingItems.length ? `${selectedPendingItems.length} seleccionado(s)` : `${pendingItems.length} pendiente(s)`}
-            </span>
+        <section>
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <h4 className="font-semibold text-slate-900">Ítems de la operación</h4>
+              <p className="text-xs text-slate-500 mt-1">Seleccioná los ítems pendientes para crear una factura.</p>
+            </div>
+            <button type="button" onClick={toggleAllPending} disabled={!pendingItems.length} className="text-xs text-blue-700 hover:underline disabled:text-slate-400">
+              {pendingItems.length && selectedPendingItems.length === pendingItems.length ? "Quitar selección" : "Seleccionar pendientes"}
+            </button>
           </div>
           {loading ? (
-            <div className="p-4 text-sm text-slate-500">Cargando ?tems?</div>
+            <div className="py-4 text-sm text-slate-500">Cargando ítems...</div>
           ) : billableItems.length === 0 ? (
-            <div className="p-4 text-sm text-slate-500">Esta operaci?n no tiene ?tems facturables detectados en el presupuesto.</div>
+            <div className="py-4 text-sm text-slate-500">Esta operación no tiene ítems facturables en el presupuesto.</div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto rounded border border-slate-200">
               <table className="min-w-full text-sm">
-                <thead className="bg-white">
+                <thead className="bg-slate-50">
                   <tr className="border-b">
                     <th className="px-4 py-3">
                       <input
                         type="checkbox"
+                        aria-label="Seleccionar todos los ítems pendientes"
                         checked={pendingItems.length > 0 && selectedPendingItems.length === pendingItems.length}
                         onChange={toggleAllPending}
                       />
                     </th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">?tem</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Ítem</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Cant.</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Monto</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Estado</th>
@@ -381,6 +391,7 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
                       <td className="px-4 py-3">
                         <input
                           type="checkbox"
+                          aria-label={`Seleccionar ${item.description}`}
                           checked={selectedItems.includes(item.source_item_key)}
                           disabled={!item.pending}
                           onChange={() => toggleItem(item.source_item_key)}
@@ -388,18 +399,18 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
                       </td>
                       <td className="px-4 py-3">
                         <div className="font-medium">{item.description}</div>
-                        <div className="text-xs text-slate-500">?tem #{Number(item.item_order || 0) + 1}</div>
+                        <div className="text-xs text-slate-500">Ítem #{Number(item.item_order || 0) + 1}</div>
                       </td>
                       <td className="px-4 py-3">{item.quantity}</td>
                       <td className="px-4 py-3">{fmtMoney(item.total, deal?.operation_currency || item.currency_code || "USD")}</td>
                       <td className="px-4 py-3">
-                        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs ${item.pending ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>
+                        <span className={`inline-flex rounded px-2 py-1 text-xs ${item.pending ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>
                           {item.pending
                             ? `Pendiente ${Number(item.remaining_percentage ?? 100).toFixed(0)}%`
                             : "Facturado"}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-xs text-slate-600">{item.invoice_number || "?"}</td>
+                      <td className="px-4 py-3 text-xs text-slate-600">{item.invoice_number || "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -407,30 +418,30 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
             </div>
           )}
           {selectedPendingItems.length > 0 && (
-            <div className="px-4 py-3 bg-slate-50 border-t text-sm text-slate-700">
-              Total selecci?n: {Object.keys(selectedPendingTotal).length ? Object.entries(selectedPendingTotal).map(([currency, amount]) => fmtMoney(amount, currency)).join(" ? ") : "?"}
+            <div className="pt-3 text-sm text-slate-700">
+              Seleccionado: {displayTotals(selectedPendingTotal)}
               {selectedPendingTotalAmount <= 0 && (
                 <span className="ml-2 text-xs font-medium text-red-600">
-                  No se puede facturar una selecci?n con total cero.
+                  No se puede facturar una selección con total cero.
                 </span>
               )}
             </div>
           )}
-        </div>
+        </section>
 
-        <div className="border rounded-xl overflow-hidden">
-          <div className="px-4 py-3 bg-slate-50 border-b font-medium">Documentos fiscales</div>
+        <section>
+          <div className="mb-3"><h4 className="font-semibold text-slate-900">Documentos fiscales</h4><p className="text-xs text-slate-500 mt-1">Borradores y anuladas no se incluyen en el facturado vigente.</p></div>
           {loading ? (
-            <div className="p-4 text-sm text-slate-500">Cargando documentos?</div>
+            <div className="py-4 text-sm text-slate-500">Cargando documentos...</div>
           ) : docs.length === 0 ? (
-            <div className="p-4 text-sm text-slate-500">Esta operaci?n todav?a no tiene facturas ni notas de cr?dito.</div>
+            <div className="py-4 text-sm text-slate-500">Esta operación todavía no tiene facturas ni notas de crédito.</div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto rounded border border-slate-200">
               <table className="min-w-full text-sm">
-                <thead className="bg-white">
+                <thead className="bg-slate-50">
                   <tr className="border-b">
                     <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Tipo</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">N?mero</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Número</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Fecha</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Estado</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Monto</th>
@@ -441,13 +452,14 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
                 <tbody>
                   {docs.map((doc) => (
                     <tr key={`${doc.kind}-${doc.id}`} className="border-b last:border-b-0">
-                      <td className="px-4 py-3">{doc.kind === "credit_note" ? "Nota de cr?dito" : "Factura"}</td>
+                      <td className="px-4 py-3">{doc.kind === "credit_note" ? "Nota de crédito" : "Factura"}</td>
                       <td className="px-4 py-3 font-medium">{doc.number || `#${doc.id}`}</td>
                       <td className="px-4 py-3">{fmtDate(doc.issue_date || doc.created_at)}</td>
                       <td className="px-4 py-3">
-                        <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">{doc.status || "?"}</span>
+                        <span className="inline-flex rounded bg-slate-100 px-2 py-1 text-xs text-slate-700">{doc.status || "—"}</span>
+                        {fiscalStatus(doc) && <div className="mt-1 text-xs text-sky-700">Fiscal: {fiscalStatus(doc)}</div>}
                       </td>
-                      <td className="px-4 py-3">{doc.kind === "invoice" ? fmtMoney(doc.total_amount, doc.currency_code) : Number(doc.total_amount || 0).toLocaleString("es-PY")}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">{fmtMoney(doc.total_amount, doc.currency_code || invoiceDocs.find((invoice) => invoice.id === doc.invoice_id)?.currency_code)}</td>
                       <td className="px-4 py-3">
                         {doc.kind === "invoice"
                           ? fmtMoney(doc.net_balance ?? doc.balance ?? doc.total_amount, doc.currency_code)
@@ -455,24 +467,24 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2 flex-wrap">
-                          {doc.kind === "invoice" && String(doc.status || "").toLowerCase() === "borrador" && (
+                          {doc.kind === "invoice" && String(doc.status || "").toLowerCase() === "borrador" && (!doc.fiscal_status || doc.fiscal_mode !== 'electronic') && (
                             <button
                               className="px-2.5 py-1.5 text-xs rounded-lg bg-blue-600 text-white disabled:bg-slate-300"
                               onClick={() => issueInvoice(doc)}
                               type="button"
                               disabled={issuingDocId === doc.id}
                             >
-                              {issuingDocId === doc.id ? "Emitiendo..." : "Emitir"}
+                              {issuingDocId === doc.id ? "Enviando..." : doc.fiscal_mode === 'electronic' ? 'Enviar' : 'Emitir'}
                             </button>
                           )}
-                          {doc.kind === "credit_note" && String(doc.status || "").toLowerCase() === "borrador" && (
+                          {doc.kind === "credit_note" && String(doc.status || "").toLowerCase() === "borrador" && (!doc.fiscal_status || doc.fiscal_mode !== 'electronic') && (
                             <button
                               className="px-2.5 py-1.5 text-xs rounded-lg bg-amber-600 text-white disabled:bg-slate-300"
                               onClick={() => issueCreditNote(doc)}
                               type="button"
                               disabled={issuingDocId === `credit-${doc.id}`}
                             >
-                              {issuingDocId === `credit-${doc.id}` ? "Emitiendo..." : "Emitir"}
+                              {issuingDocId === `credit-${doc.id}` ? "Enviando..." : doc.fiscal_mode === 'electronic' ? 'Enviar' : 'Emitir'}
                             </button>
                           )}
                           {isInvoicePaymentEligible(doc) && (
@@ -495,9 +507,9 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
                               {loadingActionDocId === `credit-${doc.id}` ? "Cargando..." : "Nota de credito"}
                             </button>
                           )}
-                          <button className="px-2.5 py-1.5 text-xs rounded-lg border" onClick={() => openDocPdf(doc)} type="button">
+                          {doc.fiscal_mode === 'electronic' ? <a className="px-2.5 py-1.5 text-xs rounded-lg border" href={`/invoices/${doc.kind === 'invoice' ? doc.id : doc.invoice_id}`}>Ver estado fiscal</a> : <button className="px-2.5 py-1.5 text-xs rounded-lg border" onClick={() => openDocPdf(doc)} type="button">
                             Ver PDF
-                          </button>
+                          </button>}
                         </div>
                       </td>
                     </tr>
@@ -506,16 +518,18 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
               </table>
             </div>
           )}
-        </div>
+        </section>
 
-        <div className="border rounded-xl overflow-hidden">
-          <div className="px-4 py-3 bg-slate-50 border-b font-medium">Pagos / recibos</div>
+        <RemissionsPanel dealId={dealId} serviceCaseId={serviceCaseId} invoices={invoiceDocs} operationItems={billableItems} />
+
+        <section>
+          <h4 className="mb-3 font-semibold text-slate-900">Pagos y recibos</h4>
           {loading ? (
-            <div className="p-4 text-sm text-slate-500">Cargando pagos...</div>
+            <div className="py-4 text-sm text-slate-500">Cargando pagos...</div>
           ) : receiptDocs.length === 0 ? (
-            <div className="p-4 text-sm text-slate-500">Todavia no hay pagos registrados para estas facturas.</div>
+            <div className="py-4 text-sm text-slate-500">Todavía no hay pagos registrados para estas facturas.</div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto rounded border border-slate-200">
               <table className="min-w-full text-sm">
                 <thead className="bg-white">
                   <tr className="border-b">
@@ -550,7 +564,7 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
               </table>
             </div>
           )}
-        </div>
+        </section>
       </div>
 
       {showInvoiceModal && (

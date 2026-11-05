@@ -42,7 +42,10 @@ import routeStopsRouter from './routes/routeStops.js';
 
 // ⭐️ NUEVO: Facturación
 import invoicesRouter from './routes/invoices.js';
+import electronicInvoicingRouter from './routes/electronicInvoicing.js';
+import remissionsRouter from './routes/remissions.js';
 import receiptsAdminRouter from './routes/receiptsAdmin.js';
+import factpyReceiptsRouter from './routes/factpyReceipts.js';
 
 // ⭐️ NUEVO: Órdenes de Compra y Facturas de Compra
 import purchaseOrdersRouter from './routes/purchaseOrders.js';
@@ -244,6 +247,9 @@ app.use('/api/routes', routeStopsRouter);
 
 // ⭐️ NUEVO: Facturación
 app.use('/api/invoices', receiptsAdminRouter);
+app.use('/api/invoices', factpyReceiptsRouter);
+app.use('/api/invoices', electronicInvoicingRouter);
+app.use('/api/remissions', remissionsRouter);
 app.use('/api/invoices', invoicesRouter);
 
 // ⭐️ NUEVO: Órdenes de Compra y Facturas de Compra

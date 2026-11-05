@@ -5,6 +5,7 @@ import multer from 'multer';
 import { pool } from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
 import { auditedRowMutation } from '../services/audit.js';
+import { factpyMode } from '../services/factpyClient.js';
 import generateContainerContractPDF from '../services/containerContractTemplatePdfkit.js';
 
 const router = Router();
@@ -718,6 +719,7 @@ async function getBillingSeeds(contractId) {
       WHERE deal_id = ?
         AND container_billing_cycle_id IS NULL
         AND status <> 'anulada'
+        ${factpyMode() ? "AND (fiscal_mode <> 'electronic' OR status IN ('emitida','pago_parcial','pagada'))" : ''}
       ORDER BY issue_date ASC, id ASC
       LIMIT 1
     `,

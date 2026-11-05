@@ -156,11 +156,14 @@ function drawHeader(doc, data, y) {
   doc.fontSize(6.8).text(data.issuerActivities || '', centerX, cy, { width: centerW, align: 'center' });
 
   const rightX = header.x + header.w - rightW - 8;
-  doc.font('Helvetica-Bold').fontSize(10).fillColor(COLORS.gray).text('RECIBO NUMERO', rightX, header.y + 30, {
+  const title = data.headerTitle || 'RECIBO NUMERO';
+  doc.font('Helvetica-Bold').fontSize(8.5).fillColor(COLORS.gray);
+  const titleHeight = doc.heightOfString(title, { width: rightW, align: 'center' });
+  doc.text(title, rightX, header.y + 28, {
     width: rightW,
     align: 'center',
   });
-  doc.font('Helvetica-Bold').fontSize(12).text(data.receiptNumber || '', rightX, header.y + 50, {
+  doc.font('Helvetica-Bold').fontSize(12).text(data.receiptNumber || '', rightX, header.y + 28 + titleHeight + 5, {
     width: rightW,
     align: 'center',
   });
@@ -322,6 +325,7 @@ export async function generateReceiptPDF(data, outputStream) {
         issuerCity: data.issuer?.city || 'ASUNCION - PARAGUAY',
         issuerActivities: data.issuer?.activities || '',
         receiptNumber: data.receiptNumber || '',
+        headerTitle: data.headerTitle || '',
       }, M);
 
       let y = M + 120 + 18;

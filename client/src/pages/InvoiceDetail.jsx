@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { api } from '../api';
 import CustomerReceiptModal from '../components/CustomerReceiptModal.jsx';
+import FiscalStatusPanel from '../components/FiscalStatusPanel.jsx';
 
 function formatApiError(err, fallback) {
   const data = err?.response?.data;
@@ -91,6 +92,9 @@ export default function InvoiceDetail() {
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [viewingCredit, setViewingCredit] = useState(null);
   const [creditNotes, setCreditNotes] = useState([]);
+  const [fiscalState, setFiscalState] = useState(null);
+  const [fiscalVersion, setFiscalVersion] = useState(0);
+  const [mockScenario, setMockScenario] = useState('approved');
 
   useEffect(() => {
     loadInvoice();
@@ -123,11 +127,16 @@ export default function InvoiceDetail() {
 
   async function handleIssue() {
     if (!invoice) return;
-    if (!confirm(`¿Emitir la factura ${invoice.invoice_number}?`)) return;
     try {
-      await api.post(`/invoices/${invoice.id}/issue`);
+      if (invoice.fiscal_mode === 'electronic') {
+        const { data } = await api.get(`/invoices/${invoice.id}/fiscal-validation`);
+        if (!data.valid) return alert((data.errors || []).join('\n'));
+      }
+      if (!confirm(invoice.fiscal_mode === 'electronic' ? '¿Enviar esta factura electrónica al ambiente de prueba?' : `¿Emitir la factura ${invoice.invoice_number}?`)) return;
+      await api.post(`/invoices/${invoice.id}/issue`, invoice.fiscal_mode === 'electronic' ? { mock_scenario: mockScenario } : {});
+      if (invoice.fiscal_mode === 'electronic') setFiscalVersion((value) => value + 1);
       await loadInvoice();
-      alert('Factura emitida');
+      alert(invoice.fiscal_mode === 'electronic' ? 'Envío iniciado. Consultá el estado fiscal antes de cobrar.' : 'Factura emitida');
     } catch (e) {
       console.error('Error issuing invoice', e);
       alert(formatApiError(e, 'No se pudo emitir'));
@@ -139,9 +148,13 @@ export default function InvoiceDetail() {
     const reason = prompt('Motivo de anulación:');
     if (!reason) return;
     try {
-      await api.post(`/invoices/${invoice.id}/cancel`, { reason });
+      const { data } = await api.post(`/invoices/${invoice.id}/cancel`, { reason });
+      if (invoice.fiscal_mode === 'electronic') setFiscalVersion((value) => value + 1);
       await loadInvoice();
-      alert('Factura anulada');
+      alert(invoice.fiscal_mode !== 'electronic' ? 'Factura anulada' : data.status === 'approved'
+        ? 'Factura cancelada por FactPy y actualizada en el CRM.'
+        : data.status === 'rejected' ? `FactPy rechazó la cancelación: ${data.message || 'Sin motivo informado'}`
+        : `No se confirmó el resultado de FactPy: ${data.message || 'resultado incierto'}. Revisá el evento antes de volver a intentar.`);
     } catch (e) {
       console.error('Error canceling invoice', e);
       alert(e.response?.data?.error || 'No se pudo anular');
@@ -200,6 +213,8 @@ export default function InvoiceDetail() {
   if (loading) return <div className="p-6">Cargando factura...</div>;
   if (!invoice) return <div className="p-6">No se encontró la factura</div>;
 
+  const status = statusStyles[invoice.status] || statusStyles.borrador;
+
   const isCreditCanceled =
     invoice.status === 'anulada' &&
     (invoice.canceled_by_credit_note_id ||
@@ -226,23 +241,32 @@ export default function InvoiceDetail() {
               {status.label}
             </span>
             <span className="text-sm text-slate-500">
-              Emitida: {fmtDate(invoice.issue_date)} | Vence: {fmtDate(invoice.due_date)}
+              {invoice.status === 'borrador' ? 'Borrador' : `Emitida: ${fmtDate(invoice.issue_date)}`} | Vence: {fmtDate(invoice.due_date)}
             </span>
           </div>
         </div>
 
         <div className="flex flex-wrap gap-2">
-          {invoice.status === 'borrador' && (
+          {invoice.status === 'borrador' && (invoice.fiscal_mode !== 'electronic' || fiscalState?.status === 'draft') && (
             <>
+              {invoice.fiscal_mode === 'electronic' && fiscalState?.environment === 'mock' &&
+                <select aria-label="Escenario de prueba" title="Escenario de prueba" className="btn border border-slate-300" value={mockScenario}
+                  onChange={(event) => setMockScenario(event.target.value)}>
+                  <option value="approved">Aprobación</option>
+                  <option value="rejected">Rechazo</option>
+                  <option value="delayed">Demora</option>
+                  <option value="uncertain">Respuesta incierta</option>
+                  <option value="network_error">Error de red</option>
+                </select>}
               <button onClick={handleIssue} className="btn bg-blue-600 text-white hover:bg-blue-700">
-                Emitir
+                {invoice.fiscal_mode === 'electronic' ? 'Enviar a FactPy' : 'Emitir'}
               </button>
-              <button
+              {invoice.fiscal_mode !== 'electronic' && <button
                 onClick={handleDelete}
                 className="btn bg-red-600 text-white hover:bg-red-700"
               >
                 Eliminar
-              </button>
+              </button>}
             </>
           )}
           {(invoice.status === 'emitida' || invoice.status === 'pago_parcial' || invoice.status === 'pagada') && (
@@ -253,7 +277,7 @@ export default function InvoiceDetail() {
               >
                 Registrar pago
               </button>
-              <button onClick={handleCancel} className="btn border border-slate-300">
+              <button onClick={handleCancel} disabled={invoice.fiscal_mode === 'electronic' && Boolean(fiscalState?.cancellation)} className="btn border border-slate-300 disabled:opacity-50">
                 Anular
               </button>
               <button
@@ -272,14 +296,17 @@ export default function InvoiceDetail() {
               </button>
             </>
           )}
-          <button
+          {invoice.fiscal_mode !== 'electronic' && <button
             onClick={handlePdf}
             className="btn bg-amber-600 text-white hover:bg-amber-700"
           >
             Descargar PDF
-          </button>
+          </button>}
         </div>
       </div>
+
+      {invoice.fiscal_mode === 'electronic' &&
+        <FiscalStatusPanel key={fiscalVersion} type="invoice" id={invoice.id} onState={setFiscalState} onRefresh={loadInvoice} />}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="bg-white border rounded-lg p-4 space-y-1">
@@ -754,20 +781,12 @@ function CreditNoteModal({ invoice, availableCredit, onClose, onSuccess }) {
       item_order: it.item_order ?? idx,
     };
   });
-  const totals = creditItems.reduce(
-    (acc, it) => {
-      acc.subtotal += it.subtotal;
-      acc.tax += (it.subtotal * (Number(it.tax_rate || 0))) / 100;
-      return acc;
-    },
-    { subtotal: 0, tax: 0 }
-  );
-  totals.total = totals.subtotal + totals.tax;
+  const creditTotal = creditItems.reduce((sum, item) => sum + item.subtotal, 0);
 
   async function handleSubmit(e) {
     e.preventDefault();
     if (!invoice) return;
-    if (totals.total <= 0) {
+    if (creditTotal <= 0) {
       alert('El Monto neto debe ser mayor a cero');
       return;
     }
@@ -829,7 +848,7 @@ function CreditNoteModal({ invoice, availableCredit, onClose, onSuccess }) {
               disabled={form.mode !== 'percentage'}
             />
             <p className="text-xs text-slate-500 mt-1">
-              Se prorratea sobre los ítems de la factura. Valor estimado: {money(totals.total)}.
+              Se prorratea sobre los ítems de la factura. Valor estimado: {money(creditTotal)}.
             </p>
           </div>
 
@@ -885,6 +904,9 @@ function CreditNoteViewModal({ creditNoteId, onClose, onRefresh }) {
   const [issuing, setIssuing] = useState(false);
   const [canceling, setCanceling] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [fiscalState, setFiscalState] = useState(null);
+  const [fiscalVersion, setFiscalVersion] = useState(0);
+  const [mockScenario, setMockScenario] = useState('approved');
   const money = (v) => fmtMoney(v, data?.invoice?.currency_code || 'USD');
 
   useEffect(() => {
@@ -908,13 +930,18 @@ function CreditNoteViewModal({ creditNoteId, onClose, onRefresh }) {
 
   async function handleIssue() {
     if (!data) return;
-    if (!confirm(`¿Emitir la nota de crédito ${data.credit_note_number}?`)) return;
     setIssuing(true);
     try {
-      await api.post(`/invoices/credit-notes/${creditNoteId}/issue`);
+      if (data.fiscal_mode === 'electronic') {
+        const validation = await api.get(`/invoices/credit-notes/${creditNoteId}/fiscal-validation`);
+        if (!validation.data.valid) return alert((validation.data.errors || []).join('\n'));
+      }
+      if (!confirm(`¿Emitir la nota de crédito ${data.credit_note_number}?`)) return;
+      await api.post(`/invoices/credit-notes/${creditNoteId}/issue`, data.fiscal_mode === 'electronic' ? { mock_scenario: mockScenario } : {});
+      if (data.fiscal_mode === 'electronic') setFiscalVersion((value) => value + 1);
       await loadDetail();
       onRefresh?.();
-      alert('Nota de crédito emitida');
+      alert(data.fiscal_mode === 'electronic' ? 'Envío iniciado. Consultá el estado fiscal.' : 'Nota de crédito emitida');
     } catch (e) {
       console.error('Error issuing credit note', e);
       alert(e.response?.data?.error || 'No se pudo emitir la nota de crédito');
@@ -925,13 +952,19 @@ function CreditNoteViewModal({ creditNoteId, onClose, onRefresh }) {
 
   async function handleCancel() {
     if (!data) return;
+    const reason = data.fiscal_mode === 'electronic' ? prompt('Motivo de cancelación fiscal:') : '';
+    if (data.fiscal_mode === 'electronic' && !reason) return;
     if (!confirm(`¿Anular la nota de crédito ${data.credit_note_number}?`)) return;
     setCanceling(true);
     try {
-      await api.post(`/invoices/credit-notes/${creditNoteId}/cancel`);
+      const { data: cancelResult } = await api.post(`/invoices/credit-notes/${creditNoteId}/cancel`, { reason });
+      if (data.fiscal_mode === 'electronic') setFiscalVersion((value) => value + 1);
       await loadDetail();
       onRefresh?.();
-      alert('Nota de crédito anulada');
+      alert(data.fiscal_mode !== 'electronic' ? 'Nota de crédito anulada' : cancelResult.status === 'approved'
+        ? 'Nota de crédito cancelada por FactPy y actualizada en el CRM.'
+        : cancelResult.status === 'rejected' ? `FactPy rechazó la cancelación: ${cancelResult.message || 'Sin motivo informado'}`
+        : `No se confirmó el resultado de FactPy: ${cancelResult.message || 'resultado incierto'}. Revisá el evento antes de volver a intentar.`);
     } catch (e) {
       console.error('Error canceling credit note', e);
       alert(e.response?.data?.error || 'No se pudo anular la nota de crédito');
@@ -986,34 +1019,48 @@ function CreditNoteViewModal({ creditNoteId, onClose, onRefresh }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {data.status === 'borrador' && (
+            {data.status === 'borrador' && (data.fiscal_mode !== 'electronic' || fiscalState?.status === 'draft') && (
+              <>
+              {data.fiscal_mode === 'electronic' && fiscalState?.environment === 'mock' &&
+                <select aria-label="Escenario de prueba" className="px-2 py-1 border rounded text-sm" value={mockScenario}
+                  onChange={(event) => setMockScenario(event.target.value)}>
+                  <option value="approved">Aprobación</option>
+                  <option value="rejected">Rechazo</option>
+                  <option value="delayed">Demora</option>
+                  <option value="uncertain">Respuesta incierta</option>
+                  <option value="network_error">Error de red</option>
+                </select>}
               <button
                 onClick={handleIssue}
                 className="px-3 py-1 rounded bg-amber-600 text-white text-sm hover:bg-amber-700 disabled:opacity-50"
                 disabled={issuing}
               >
-                {issuing ? 'Emitiendo…' : 'Emitir'}
+                {issuing ? 'Enviando…' : data.fiscal_mode === 'electronic' ? 'Enviar a FactPy' : 'Emitir'}
               </button>
+              </>
             )}
-            {data.status !== 'anulada' && (
+            {data.status !== 'anulada' && (data.fiscal_mode !== 'electronic' || data.status === 'emitida') && (
               <button
                 onClick={handleCancel}
                 className="px-3 py-1 rounded border border-slate-300 text-sm hover:bg-slate-50 disabled:opacity-50"
-                disabled={canceling}
+                disabled={canceling || Boolean(fiscalState?.cancellation)}
               >
                 {canceling ? 'Anulando…' : 'Anular'}
               </button>
             )}
-            <button
+            {data.fiscal_mode !== 'electronic' && <button
               onClick={handleDownload}
               className="px-3 py-1 rounded bg-orange-600 text-white text-sm hover:bg-orange-700 disabled:opacity-50"
               disabled={downloading}
             >
               {downloading ? 'Descargando…' : 'PDF'}
-            </button>
+            </button>}
             <button onClick={onClose} className="text-2xl leading-none">×</button>
           </div>
         </div>
+
+        {data.fiscal_mode === 'electronic' &&
+          <div className="mb-4"><FiscalStatusPanel key={fiscalVersion} type="credit_note" id={creditNoteId} onState={setFiscalState} onRefresh={() => { loadDetail(); onRefresh?.(); }} /></div>}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           <div className="bg-slate-50 rounded p-3 text-sm">

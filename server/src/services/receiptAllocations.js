@@ -26,3 +26,13 @@ export function sameReceiptCustomer(invoices) {
     String(invoice.customer_doc || '').trim().toUpperCase() === doc &&
     String(invoice.customer_doc_type || '').trim().toUpperCase() === type);
 }
+
+export function invoiceCollectionError(invoice, fiscalStatus) {
+  if (!['emitida', 'pago_parcial'].includes(String(invoice?.status || '').toLowerCase())) {
+    return 'La factura no está disponible para cobrar';
+  }
+  if (invoice?.fiscal_mode === 'electronic' && fiscalStatus !== 'approved') {
+    return 'La factura electrónica espera aprobación fiscal';
+  }
+  return null;
+}

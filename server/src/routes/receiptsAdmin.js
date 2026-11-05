@@ -1,6 +1,8 @@
 import express from 'express';
 import { pool } from '../services/db.js';
 import { requireAnyRole, requireAuth, requireRole } from '../middlewares/auth.js';
+import { factpyMode } from '../services/factpyClient.js';
+import { ensureFactpyReceiptSchema, markStaleFactpyReceipts } from './factpyReceipts.js';
 
 const router = express.Router();
 
@@ -78,6 +80,10 @@ async function recomputeInvoicePaymentsLocal(invoiceId, conn = pool) {
 router.get('/receipts', requireAuth, requireAnyRole('admin', 'finanzas'), async (req, res) => {
   try {
     await ensureReceiptAdminColumns();
+    if (factpyMode()) {
+      await ensureFactpyReceiptSchema();
+      await markStaleFactpyReceipts();
+    }
 
     const {
       search = '',
@@ -145,6 +151,7 @@ router.get('/receipts', requireAuth, requireAnyRole('admin', 'finanzas'), async 
               creator.name AS created_by_name,
               issuer.name AS issued_by_name,
               canceller.name AS cancelled_by_name
+              ${factpyMode() ? ', fs.status AS factpy_status, fs.document_number AS factpy_number' : ''}
          FROM receipts r
          LEFT JOIN invoices i ON i.id = r.invoice_id
          LEFT JOIN deals d ON d.id = i.deal_id
@@ -153,6 +160,7 @@ router.get('/receipts', requireAuth, requireAnyRole('admin', 'finanzas'), async 
          LEFT JOIN users creator ON creator.id = r.created_by
          LEFT JOIN users issuer ON issuer.id = r.issued_by
          LEFT JOIN users canceller ON canceller.id = r.cancelled_by
+         ${factpyMode() ? 'LEFT JOIN receipt_factpy_submissions fs ON fs.receipt_id = r.id' : ''}
         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
         ORDER BY COALESCE(r.issue_date, DATE(r.created_at)) DESC, r.id DESC`,
       params
@@ -184,6 +192,7 @@ router.post('/receipts/:id/cancel', requireAuth, requireRole('admin'), async (re
   const conn = await pool.getConnection();
   try {
     await ensureReceiptAdminColumns(conn);
+    if (factpyMode()) await ensureFactpyReceiptSchema();
     const { id } = req.params;
     const reason = normalizeText(req.body?.reason);
 
@@ -209,6 +218,14 @@ router.post('/receipts/:id/cancel', requireAuth, requireRole('admin'), async (re
     if (String(receipt.status || '').toLowerCase() === 'anulado') {
       await conn.rollback();
       return res.status(400).json({ error: 'El recibo ya esta anulado' });
+    }
+
+    if (factpyMode()) {
+      const [[submission]] = await conn.query('SELECT status FROM receipt_factpy_submissions WHERE receipt_id = ?', [id]);
+      if (submission && submission.status !== 'rejected') {
+        await conn.rollback();
+        return res.status(409).json({ error: 'El recibo ya fue enviado a FactPy. Revisá su estado antes de anularlo localmente.' });
+      }
     }
 
     await conn.query(

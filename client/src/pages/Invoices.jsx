@@ -75,10 +75,10 @@ export default function Invoices() {
   }
 
   async function handleIssue(invoice) {
-    if (!confirm(`¿Emitir la factura ${invoice.invoice_number}?`)) return;
+    if (!confirm(invoice.fiscal_mode === 'electronic' ? '¿Enviar esta factura electrónica al ambiente de prueba?' : `¿Emitir la factura ${invoice.invoice_number}?`)) return;
     try {
       await api.post(`/invoices/${invoice.id}/issue`);
-      alert('Factura emitida correctamente');
+      alert(invoice.fiscal_mode === 'electronic' ? 'Envío iniciado. Consultá su estado en el detalle.' : 'Factura emitida correctamente');
       loadInvoices();
     } catch (e) {
       console.error('Error issuing invoice:', e);
@@ -116,7 +116,7 @@ export default function Invoices() {
   }
 
   return (
-    <div className="p-6">
+    <div className="atm-admin-ops atm-admin-ops-invoices min-w-0 p-6">
       {/* Header */}
       <div className="mb-6 flex items-center justify-between">
         <div>
@@ -190,8 +190,8 @@ export default function Invoices() {
       ) : invoices.length === 0 ? (
         <div className="text-center py-8 text-slate-500">No se encontraron facturas</div>
       ) : (
-        <div className="bg-white border rounded-lg overflow-x-auto">
-          <table className="w-full table-fixed text-sm">
+        <div className="min-w-0 overflow-x-auto rounded-lg border bg-white">
+          <table className="w-full min-w-[1200px] table-fixed text-sm">
             <thead className="bg-slate-50 border-b">
               <tr>
                 <th className="w-40 px-2 py-2 text-left text-xs font-medium text-slate-700 uppercase">Numero factura</th>
@@ -246,17 +246,18 @@ export default function Invoices() {
                     <span className={`px-2 py-1 rounded text-xs font-medium ${statusStyles[invoice.status] || statusStyles.borrador}`}>
                       {statusLabels[invoice.status] || invoice.status}
                     </span>
+                    {invoice.fiscal_mode === 'electronic' && <div className="text-xs text-sky-700 mt-1">Fiscal: {invoice.fiscal_status || 'pendiente de envío'}</div>}
                   </td>
                   <td className="px-2 py-2">
                     <div className="flex items-center justify-center gap-1 flex-wrap">
-                      {invoice.status === 'borrador' && (
+                      {invoice.status === 'borrador' && (!invoice.fiscal_status || invoice.fiscal_mode !== 'electronic') && (
                         <>
                           <button onClick={() => handleIssue(invoice)} className="text-[11px] px-1.5 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">
-                            Emitir
+                            {invoice.fiscal_mode === 'electronic' ? 'Enviar' : 'Emitir'}
                           </button>
-                          <button onClick={() => handleDelete(invoice)} className="text-[11px] px-1.5 py-1 bg-red-600 text-white rounded hover:bg-red-700">
+                          {invoice.fiscal_mode !== 'electronic' && <button onClick={() => handleDelete(invoice)} className="text-[11px] px-1.5 py-1 bg-red-600 text-white rounded hover:bg-red-700">
                             Eliminar
-                          </button>
+                          </button>}
                         </>
                       )}
                       {(invoice.status === 'emitida' || invoice.status === 'pago_parcial') && (
@@ -267,9 +268,9 @@ export default function Invoices() {
                       <Link to={`/invoices/${invoice.id}`} className="text-[11px] px-1.5 py-1 bg-slate-600 text-white rounded hover:bg-slate-700">
                         Ver
                       </Link>
-                      <button onClick={() => handlePdf(invoice.id)} className="text-[11px] px-1.5 py-1 bg-amber-600 text-white rounded hover:bg-amber-700">
+                      {invoice.fiscal_mode !== 'electronic' && <button onClick={() => handlePdf(invoice.id)} className="text-[11px] px-1.5 py-1 bg-amber-600 text-white rounded hover:bg-amber-700">
                         PDF
-                      </button>
+                      </button>}
                     </div>
                   </td>
                 </tr>

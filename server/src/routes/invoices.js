@@ -6,7 +6,12 @@ import PDFDocument from 'pdfkit';
 import generateInvoicePDF from '../services/invoiceTemplatePdfkit.js';
 import generateReceiptPDF from '../services/receiptTemplatePdfkit.js';
 import { getBrandLogoPath } from '../services/brandingAssets.js';
-import { normalizeReceiptAllocations, sameReceiptCustomer } from '../services/receiptAllocations.js';
+import { randomUUID } from 'node:crypto';
+import { factpyMode } from '../services/factpyClient.js';
+import { electronicPointFor } from '../services/electronicExpedition.js';
+import { invoiceCollectionError, normalizeReceiptAllocations, sameReceiptCustomer } from '../services/receiptAllocations.js';
+import { receiptExpeditionForInvoices, nextReceiptNumber } from '../services/receiptExpedition.js';
+import { invoiceKind, invoicePdfTitle, receiptPdfTitle, sameInvoiceKind } from '../services/documentPdfLabels.js';
 
 const router = Router();
 let receiptApplicationAmountsPromise;
@@ -754,6 +759,7 @@ async function fetchContainerInitialInvoiceCoverage(contractId, dealId, conn) {
       WHERE deal_id = ?
         AND container_billing_cycle_id IS NULL
         AND status <> 'anulada'
+        ${factpyMode() ? "AND (fiscal_mode <> 'electronic' OR status IN ('emitida','pago_parcial','pagada'))" : ''}
       ORDER BY issue_date ASC, id ASC
       LIMIT 1
     `,
@@ -1304,6 +1310,10 @@ async function creditAvailability(invoiceId, { excludeNoteId = null } = {}) {
       JOIN credit_notes cn ON cn.id = cni.credit_note_id
      WHERE cn.invoice_id = ?
        AND cn.status <> 'anulada'
+       ${factpyMode() ? `AND NOT EXISTS (
+         SELECT 1 FROM fiscal_documents fd
+          WHERE fd.document_type = 'credit_note' AND fd.local_id = cn.id AND fd.status = 'rejected'
+       )` : ''}
        ${noteFilter}
     `,
     params
@@ -1394,7 +1404,7 @@ async function ensureCreditNoteTables() {
   );
 }
 
-async function generateReceiptNumber(forcePoint, forceEst) {
+async function generateReceiptNumber(forceEstablishment, forcePoint, fiscalMode = 'legacy') {
   await ensureReceiptTables();
   const defaultExp = '001-004';
   let expRaw = defaultExp;
@@ -1407,31 +1417,38 @@ async function generateReceiptNumber(forcePoint, forceEst) {
   } catch (_) {
     expRaw = defaultExp;
   }
-  let { point, establishment } = parseExpedition(expRaw, {
+  const parsed = parseExpedition(expRaw, {
     point: defaultExp.split('-')[0] || '001',
     establishment: defaultExp.split('-')[1] || '004',
   });
-
-  if (forcePoint && String(forcePoint).trim()) point = String(forcePoint).padStart(3, '0');
-  if (forceEst && String(forceEst).trim()) establishment = String(forceEst).padStart(3, '0');
-
-  const lastSeq =
-    (await fetchLastSeq(point, establishment, pool, 'receipt_number', 'receipts')) || 0;
-
-  let next = lastSeq + 1;
-  try {
-    const paramVal =
-      parseInt((await getParamValue('receipt_next_number', pool))?.value || 'NaN', 10);
-    if (Number.isFinite(paramVal)) next = Math.max(next, paramVal);
-  } catch (_) {
-    next = lastSeq + 1;
+  const establishment = String(forceEstablishment || parsed.point).padStart(3, '0');
+  const point = String(forcePoint || parsed.establishment).padStart(3, '0');
+  const prefix = `${establishment}-${point}-`;
+  const [[fiscalColumn]] = await pool.query(`SELECT 1 AS present FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'invoices' AND COLUMN_NAME = 'fiscal_mode' LIMIT 1`);
+  if (fiscalMode === 'electronic' && !fiscalColumn) {
+    throw Object.assign(new Error('Falta configurar el modo fiscal de las facturas'), { statusCode: 409 });
   }
-  if (!Number.isFinite(next) || next < lastSeq + 1) next = lastSeq + 1;
-
-  const receiptNumber = `${point}-${establishment}-${String(next).padStart(7, '0')}`;
-  try {
-    await upsertParam('receipt_next_number', String(next + 1), pool);
-  } catch (_) {}
+  const kindFilter = fiscalColumn
+    ? fiscalMode === 'electronic' ? "AND i.fiscal_mode = 'electronic'" : "AND COALESCE(i.fiscal_mode, 'legacy') <> 'electronic'"
+    : '';
+  const [[last]] = await pool.query(`SELECT COALESCE(MAX(CAST(SUBSTRING_INDEX(r.receipt_number, '-', -1) AS UNSIGNED)), 0) AS last_number
+    FROM receipts r ${fiscalColumn ? 'JOIN invoices i ON i.id = r.invoice_id' : ''}
+    WHERE r.receipt_number LIKE ? ${kindFilter}`, [`${prefix}%`]);
+  let lastNumber = Number(last.last_number || 0);
+  if (fiscalMode !== 'electronic') {
+    try {
+      const configuredNext = Number.parseInt((await getParamValue('receipt_next_number', pool))?.value || '', 10);
+      if (Number.isSafeInteger(configuredNext) && configuredNext > 0) {
+        lastNumber = Math.max(lastNumber, configuredNext - 1);
+      }
+    } catch (_) {}
+  }
+  const receiptNumber = nextReceiptNumber(establishment, point, lastNumber);
+  if (fiscalMode !== 'electronic') {
+    try { await upsertParam('receipt_next_number', String(lastNumber + 2), pool); }
+    catch (_) {}
+  }
   return { receiptNumber, point, establishment };
 }
 
@@ -1609,18 +1626,28 @@ function splitTaxFromGross(gross = 0, rate = 0) {
 }
 
 async function fetchLastSeq(point, establishment, conn = pool, numberField = 'invoice_number', table = 'invoices') {
+  const query = (withFiscalMode) => conn.query(
+    `SELECT ${numberField}
+       FROM ${table}
+      WHERE point_of_issue = ? AND establishment = ?
+        ${withFiscalMode ? "AND fiscal_mode <> 'electronic'" : ''}
+      ORDER BY id DESC LIMIT 1`,
+    [point, establishment]
+  );
   try {
-    const [[row]] = await conn.query(
-      `SELECT ${numberField} 
-       FROM ${table} 
-       WHERE point_of_issue = ? AND establishment = ?
-       ORDER BY id DESC LIMIT 1`,
-      [point, establishment]
-    );
+    let rows;
+    try {
+      [rows] = await query(true);
+    } catch (error) {
+      if (error.code !== 'ER_BAD_FIELD_ERROR') throw error;
+      [rows] = await query(false);
+    }
+    const row = rows[0];
     const val = row?.[numberField];
     if (!val) return null;
     return extractSeqFromNumber(val);
-  } catch (_) {
+  } catch (error) {
+    console.error('[invoices] No se pudo leer la numeración:', error);
     return null;
   }
 }
@@ -1952,7 +1979,7 @@ async function recomputeInvoiceCredits(invoiceId) {
   const [[agg]] = await pool.query(
     `SELECT COALESCE(SUM(total_amount),0) AS credited
      FROM credit_notes
-     WHERE invoice_id = ? AND status != 'anulada'`,
+     WHERE invoice_id = ? AND status = 'emitida'`,
     [invoiceId]
   );
   const credited = parseFloat(agg.credited || 0);
@@ -2374,6 +2401,7 @@ async function fetchCustomerStatementInvoices(query = {}) {
   const buildQuery = (withService) => {
     let sql = `
       SELECT i.id, i.invoice_number, i.issue_date, i.due_date, i.created_at, i.status,
+             ${factpyMode() ? 'i.fiscal_mode,' : "'legacy' AS fiscal_mode,"}
              i.payment_condition, i.organization_id, i.customer_doc, i.customer_doc_type,
              i.customer_email, i.customer_address, NULL AS customer_name, i.deal_id, i.service_case_id,
              i.container_billing_cycle_id, i.total_amount, i.subtotal, i.tax_amount,
@@ -2407,10 +2435,11 @@ async function fetchCustomerStatementInvoices(query = {}) {
         LEFT JOIN (
           SELECT invoice_id, SUM(total_amount) AS credited_total
             FROM credit_notes
-           WHERE status <> 'anulada'
+           WHERE status = 'emitida'
            GROUP BY invoice_id
         ) cn ON cn.invoice_id = i.id
        WHERE 1=1
+         ${factpyMode() ? "AND (i.fiscal_mode <> 'electronic' OR i.status IN ('emitida','pago_parcial','pagada'))" : ''}
     `;
     if (query.from_date) { sql += ' AND i.issue_date >= ?'; params.push(query.from_date); }
     if (query.to_date) { sql += ' AND i.issue_date <= ?'; params.push(query.to_date); }
@@ -2448,7 +2477,7 @@ async function fetchCustomerStatementMovements(invoiceIds = []) {
     SELECT cn.id, cn.credit_note_number, cn.invoice_id, cn.issue_date,
            cn.total_amount, cn.status, cn.reason
       FROM credit_notes cn
-     WHERE cn.status <> 'anulada' AND cn.invoice_id IN (${placeholders})
+     WHERE cn.status = 'emitida' AND cn.invoice_id IN (${placeholders})
      ORDER BY cn.issue_date ASC, cn.id ASC
   `, invoiceIds);
   return { receipts, creditNotes };
@@ -2744,6 +2773,7 @@ router.get('/', requireAuth, async (req, res) => {
       let q = `
         SELECT 
           i.*,
+          ${factpyMode() ? 'fd.status AS fiscal_status,' : 'NULL AS fiscal_status,'}
           o.name as organization_name,
           COALESCE(d.title, ${withService ? 'sqa.name, sc.reference' : "''"}) as deal_title,
           COALESCE(d.reference, ${withService ? 'JSON_UNQUOTE(JSON_EXTRACT(sqa.inputs_json, \'$.ref_code\')), sc.reference' : "''"}) as deal_reference,
@@ -2778,6 +2808,7 @@ router.get('/', requireAuth, async (req, res) => {
             1
           ) AS exchange_rate
         FROM invoices i
+        ${factpyMode() ? "LEFT JOIN fiscal_documents fd ON fd.document_type = 'invoice' AND fd.local_id = i.id" : ''}
         LEFT JOIN organizations o ON o.id = i.organization_id
         LEFT JOIN deals d ON d.id = i.deal_id
         LEFT JOIN service_quote_additions sqa ON sqa.id = i.service_quote_addition_id
@@ -2851,11 +2882,13 @@ router.get('/operation-docs', requireAuth, async (req, res) => {
       : 'service_case_id = ? AND service_quote_addition_id IS NULL';
     const invoiceScopeId = dealId || serviceQuoteAdditionId || serviceCaseId;
     const [invRows] = await pool.query(
-      `SELECT id, invoice_number, issue_date, created_at, status, total_amount, currency_code, percentage,
+      `SELECT i.id, i.invoice_number, i.issue_date, i.created_at, i.status, i.total_amount, i.currency_code, i.percentage,
+              ${factpyMode() ? 'i.fiscal_mode, fd.status AS fiscal_status,' : "'legacy' AS fiscal_mode, NULL AS fiscal_status,"}
               cost_sheet_version_number, quote_revision_id, service_quote_addition_id
-         FROM invoices
+         FROM invoices i
+         ${factpyMode() ? "LEFT JOIN fiscal_documents fd ON fd.document_type = 'invoice' AND fd.local_id = i.id" : ''}
         WHERE ${invoiceWhere}
-        ORDER BY issue_date ASC, created_at ASC, id ASC`,
+        ORDER BY i.issue_date ASC, i.created_at ASC, i.id ASC`,
       [invoiceScopeId]
     );
 
@@ -2867,9 +2900,11 @@ router.get('/operation-docs', requireAuth, async (req, res) => {
         ? 'i.service_quote_addition_id = ?'
         : 'i.service_case_id = ? AND i.service_quote_addition_id IS NULL';
       const [rows] = await pool.query(
-        `SELECT cn.id, cn.credit_note_number, cn.issue_date, cn.created_at, cn.status, cn.total_amount, cn.invoice_id
+        `SELECT cn.id, cn.credit_note_number, cn.issue_date, cn.created_at, cn.status, cn.total_amount, cn.invoice_id,
+                ${factpyMode() ? 'cn.fiscal_mode, fd.status AS fiscal_status' : "'legacy' AS fiscal_mode, NULL AS fiscal_status"}
            FROM credit_notes cn
            JOIN invoices i ON i.id = cn.invoice_id
+           ${factpyMode() ? "LEFT JOIN fiscal_documents fd ON fd.document_type = 'credit_note' AND fd.local_id = cn.id" : ''}
           WHERE ${creditNoteWhere}
           ORDER BY cn.issue_date ASC, cn.created_at ASC, cn.id ASC`,
         [invoiceScopeId]
@@ -2884,6 +2919,7 @@ router.get('/operation-docs', requireAuth, async (req, res) => {
       ...(invRows || []).map((r) => ({
         kind: 'invoice', id: r.id, number: r.invoice_number, issue_date: r.issue_date,
         created_at: r.created_at, status: r.status, total_amount: r.total_amount,
+        fiscal_mode: r.fiscal_mode, fiscal_status: r.fiscal_status,
         currency_code: r.currency_code, percentage: r.percentage,
         cost_sheet_version_number: r.cost_sheet_version_number || null,
         quote_revision_id: r.quote_revision_id || null,
@@ -2892,6 +2928,7 @@ router.get('/operation-docs', requireAuth, async (req, res) => {
       ...(cnRows || []).map((r) => ({
         kind: 'credit_note', id: r.id, number: r.credit_note_number,
         issue_date: r.issue_date, created_at: r.created_at, status: r.status,
+        fiscal_mode: r.fiscal_mode, fiscal_status: r.fiscal_status,
         total_amount: r.total_amount, currency_code: null, invoice_id: r.invoice_id,
       })),
     ];
@@ -2973,7 +3010,20 @@ router.post('/', requireAuth, async (req, res) => {
       selected_quote_items,
       cost_sheet_version_number,
       quote_revision_id,
+      fiscal_mode,
+      fiscal_transaction_type,
+      fiscal_payment_method,
     } = req.body || {};
+    const electronic = fiscal_mode === 'electronic';
+    if (electronic && !factpyMode()) {
+      return res.status(403).json({ error: 'FactPy solo está disponible en el entorno local de pruebas' });
+    }
+    if (electronic && ![1, 2, 3].includes(Number(fiscal_transaction_type))) {
+      return res.status(400).json({ error: 'Seleccioná el tipo de transacción fiscal' });
+    }
+    if (electronic && payment_condition === 'contado' && !Number(fiscal_payment_method)) {
+      return res.status(400).json({ error: 'Seleccioná el método de pago fiscal' });
+    }
 
     const costSheetVersionNumber = Number(cost_sheet_version_number || req.body?.cost_sheet_version || 0) || null;
     const quoteRevisionId = Number(quote_revision_id || req.body?.revision_id || 0) || null;
@@ -3110,8 +3160,8 @@ router.post('/', requireAuth, async (req, res) => {
       }
       buKey = 'atm-industrial';
     }
-    const numberingDefaults = await peekInvoiceDefaults({ buKey }, conn);
-    const fiscalValidation = validateInvoiceFiscalConfig(numberingDefaults, new Date());
+    const numberingDefaults = electronic ? null : await peekInvoiceDefaults({ buKey }, conn);
+    const fiscalValidation = electronic ? { ok: true } : validateInvoiceFiscalConfig(numberingDefaults, new Date());
     if (!fiscalValidation.ok) {
       await conn.rollback();
       return res.status(400).json({
@@ -3120,12 +3170,19 @@ router.post('/', requireAuth, async (req, res) => {
       });
     }
 
-    const { invoice_number, point_of_issue: poi, establishment: est } = await nextInvoiceNumber(
-      buKey,
-      conn
-    );
+    const { invoice_number, point_of_issue: poi, establishment: est } = electronic
+      ? {
+          invoice_number: `E-DRAFT-${randomUUID()}`,
+          point_of_issue: electronicPointFor({
+            dealId: deal?.id, serviceCaseId: serviceCase?.id,
+            containerBillingCycleId: container_billing_cycle_id,
+            businessUnitKey: buKey,
+          }),
+          establishment: process.env.FACTPY_ESTABLISHMENT || '001',
+        }
+      : await nextInvoiceNumber(buKey, conn);
 
-    const issueDate = new Date();
+    const issueDate = electronic ? null : new Date();
     const dueDate = due_date
       ? new Date(due_date)
       : containerBilling?.due_date
@@ -3372,9 +3429,11 @@ router.post('/', requireAuth, async (req, res) => {
     const net_balance = Number((total_amount - credited_total).toFixed(2));
     const effectiveInvoiceBaseAmount = hasSelectedQuoteItems ? total_amount : baseAmount;
 
+    const fiscalColumns = electronic ? 'fiscal_mode, fiscal_transaction_type, fiscal_payment_method, ' : '';
+    const fiscalPlaceholders = electronic ? '?, ?, ?, ' : '';
     const [result] = await conn.query(
   `INSERT INTO invoices (
-    deal_id, service_case_id, service_quote_addition_id, container_billing_cycle_id, container_contract_id, organization_id, invoice_number, issue_date, due_date, payment_terms, notes,
+    ${fiscalColumns}deal_id, service_case_id, service_quote_addition_id, container_billing_cycle_id, container_contract_id, organization_id, invoice_number, issue_date, due_date, payment_terms, notes,
     payment_condition, timbrado_number, timbrado_start_date, timbrado_expires_at,
     point_of_issue, establishment, customer_doc_type, customer_doc, customer_email, customer_address,
     currency_code, exchange_rate, sales_rep, purchase_order_ref,
@@ -3383,7 +3442,7 @@ router.post('/', requireAuth, async (req, res) => {
     credited_total, net_total_amount, net_balance,
     status, created_by, cost_sheet_version_number, quote_revision_id
   ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    ${fiscalPlaceholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?,
@@ -3391,6 +3450,7 @@ router.post('/', requireAuth, async (req, res) => {
     ?, ?, ?, ?
   )`,
   [
+    ...(electronic ? ['electronic', Number(fiscal_transaction_type), fiscal_payment_method ? Number(fiscal_payment_method) : null] : []),
     deal ? deal.id : null,
     serviceCase ? serviceCase.id : null,
     service_quote_addition_id ? Number(service_quote_addition_id) : null,
@@ -3406,8 +3466,8 @@ router.post('/', requireAuth, async (req, res) => {
     timbrado_number || null,
     timbrado_start_date || null,
     timbrado_expires_at || null,
-    point_of_issue || poi,
-    establishment || est,
+    electronic ? poi : point_of_issue || poi,
+    electronic ? est : establishment || est,
     customer_doc_type || 'RUC',
     customer_doc || null,
     customer_email || null,
@@ -3457,7 +3517,7 @@ router.post('/', requireAuth, async (req, res) => {
       );
     }
 
-    if (containerBilling && container_billing_cycle_id) {
+    if (!electronic && containerBilling && container_billing_cycle_id) {
       await conn.query(
         `
           UPDATE container_billing_cycles
@@ -3644,11 +3704,14 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
     );
     if (!receipt) return res.status(404).json({ error: 'Recibo no encontrado' });
 
+    const pdfReceiptNumber = receipt.receipt_number;
+
     const { invoice, error } = await loadInvoiceWithPerms(req, receipt.invoice_id);
     if (error) return res.status(error.code).json({ error: error.msg });
 
     const [apps] = await pool.query(
       `SELECT ra.amount_applied, i.invoice_number, i.issue_date, i.currency_code,
+              ${factpyMode() ? 'i.fiscal_mode' : "'legacy' AS fiscal_mode"},
               COALESCE(d.reference, sc.reference) AS operation_reference
          FROM receipt_applications ra
          LEFT JOIN invoices i ON i.id = ra.invoice_id
@@ -3667,8 +3730,6 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
       'TRANSPORTE ACUATICO - TRANSPORTE TERRESTRE LOCAL DE CARGA - TRANSPORTE AEREO DE CARGA - ' +
       'COMERCIO AL POR MENOR DE OTROS PRODUCTOS EN COMERCIOS NO ESPECIALIZADOS.';
 
-    const fiscalForPdf = await resolveInvoiceFiscalForPdf(invoice);
-
     const issuer = {
       name: process.env.INVOICE_ISSUER_NAME || 'ATM CARGO S.R.L.',
       ruc: resolveInvoiceIssuerRuc(),
@@ -3681,7 +3742,7 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
-      `inline; filename="receipt-${receipt.receipt_number || id}.pdf"`
+      `inline; filename="receipt-${pdfReceiptNumber || id}.pdf"`
     );
 
     const issueDate = receipt.issue_date ? new Date(receipt.issue_date) : new Date();
@@ -3724,7 +3785,8 @@ router.get('/receipts/:id/pdf', requireAuth, async (req, res) => {
         city: issuer.city,
         activities: issuerActivities,
       },
-      receiptNumber: receipt.receipt_number || '',
+      receiptNumber: pdfReceiptNumber || '',
+      headerTitle: receiptPdfTitle((apps && apps.length ? apps : [invoice]).map((row) => row.fiscal_mode)),
       issuePlaceDate,
       amount,
       grossAmount,
@@ -3786,9 +3848,13 @@ router.post('/receipts/batch', requireAuth, async (req, res) => {
     if (invoices.length !== ids.length || !sameReceiptCustomer(invoices)) {
       throw Object.assign(new Error('Las facturas deben pertenecer al mismo cliente'), { statusCode: 400 });
     }
+    const receiptExpedition = receiptExpeditionForInvoices(invoices);
     const currency = String(invoices[0].currency_code || 'USD').toUpperCase();
     if (invoices.some((invoice) => String(invoice.currency_code || 'USD').toUpperCase() !== currency)) {
       throw Object.assign(new Error('Las facturas deben tener la misma moneda'), { statusCode: 400 });
+    }
+    if (!sameInvoiceKind(invoices.map((invoice) => invoice.fiscal_mode))) {
+      throw Object.assign(new Error('Registrá por separado los recibos de facturas autoimpresas y electrónicas'), { statusCode: 400 });
     }
     if (method !== 'efectivo') {
       const [accounts] = await conn.query("SELECT value FROM param_values WHERE `key` = 'company_bank_account' AND active = 1");
@@ -3806,15 +3872,18 @@ router.post('/receipts/batch', requireAuth, async (req, res) => {
     const nextPayments = [];
     for (const allocation of allocations) {
       const invoice = invoices.find((row) => Number(row.id) === allocation.invoice_id);
-      if (!canManageInvoice(req.user, invoice) || !['emitida', 'pago_parcial'].includes(invoice.status)) {
+      if (!canManageInvoice(req.user, invoice)) {
         throw Object.assign(new Error(`La factura ${invoice.invoice_number} no está disponible para cobrar`), { statusCode: 409 });
       }
+      let fiscalStatus = null;
       if (invoice.fiscal_mode === 'electronic') {
         const [[fiscal]] = await conn.query(`SELECT status FROM fiscal_documents
           WHERE document_type = 'invoice' AND local_id = ? ORDER BY id DESC LIMIT 1`, [invoice.id]);
-        if (fiscal?.status !== 'approved') {
-          throw Object.assign(new Error(`La factura ${invoice.invoice_number} espera aprobación fiscal`), { statusCode: 409 });
-        }
+        fiscalStatus = fiscal?.status;
+      }
+      const collectionError = invoiceCollectionError(invoice, fiscalStatus);
+      if (collectionError) {
+        throw Object.assign(new Error(`${collectionError}: ${invoice.invoice_number}`), { statusCode: 409 });
       }
       const [[paidRow]] = await conn.query(`SELECT COALESCE(SUM(COALESCE(ra.amount_applied, r.amount)),0) AS paid
         FROM receipts r LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
@@ -3843,7 +3912,8 @@ router.post('/receipts/batch', requireAuth, async (req, res) => {
     if (lock.acquired !== 1) throw Object.assign(new Error('No se pudo reservar el número del recibo'), { statusCode: 503 });
     numberLock = true;
     const primary = invoices[0];
-    const { receiptNumber, point, establishment } = await generateReceiptNumber(primary.point_of_issue, primary.establishment);
+    const { receiptNumber, point, establishment } = await generateReceiptNumber(
+      receiptExpedition.establishment, receiptExpedition.point, primary.fiscal_mode);
     const [inserted] = await conn.query(`INSERT INTO receipts
       (receipt_number, invoice_id, issue_date, status, currency_code, payment_method, bank_account,
        reference_number, amount, retention_pct, retention_amount, net_amount, point_of_issue,
@@ -3908,6 +3978,17 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
       await conn.rollback();
       return res.status(403).json({ error: 'Sin permiso' });
     }
+    let fiscalStatus = null;
+    if (invoice.fiscal_mode === 'electronic') {
+      const [[fiscal]] = await conn.query(`SELECT status FROM fiscal_documents
+        WHERE document_type = 'invoice' AND local_id = ? ORDER BY id DESC LIMIT 1`, [invoice.id]);
+      fiscalStatus = fiscal?.status;
+    }
+    const collectionError = invoiceCollectionError(invoice, fiscalStatus);
+    if (collectionError) {
+      await conn.rollback();
+      return res.status(409).json({ error: `${collectionError}: ${invoice.invoice_number}` });
+    }
 
     // Recalcular saldo pendiente por si net_balance/balance están en 0
     const [invItems] = await conn.query("SELECT subtotal, tax_rate FROM invoice_items WHERE invoice_id = ?", [id]);
@@ -3933,6 +4014,11 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
     const amt = parseFloat(amount || 0);
     const retPct = parseFloat(retention_pct || 0);
     const receiptCurrency = String(currency || invoice.currency_code || invoice.currency || 'USD').toUpperCase();
+    const invoiceCurrency = String(invoice.currency_code || invoice.currency || 'USD').toUpperCase();
+    if (receiptCurrency.replace('GS', 'PYG') !== invoiceCurrency.replace('GS', 'PYG')) {
+      await conn.rollback();
+      return res.status(400).json({ error: 'La moneda del recibo debe coincidir con la factura' });
+    }
     const calculatedTax = Math.max(0, Number(totalsCalc.tax_amount || 0));
     const storedTax = Math.max(0, Number(invoice.tax_amount || 0));
     const invoiceTax = calculatedTax > 0 ? calculatedTax : storedTax;
@@ -3960,10 +4046,9 @@ router.post('/:id/receipts', requireAuth, async (req, res) => {
       return res.status(503).json({ error: 'No se pudo reservar el número del recibo' });
     }
     numberLock = true;
+    const receiptExpedition = receiptExpeditionForInvoices([invoice]);
     const { receiptNumber, point, establishment } = await generateReceiptNumber(
-      invoice.point_of_issue,
-      invoice.establishment
-    );
+      receiptExpedition.establishment, receiptExpedition.point, invoice.fiscal_mode);
     const issueDate = payment_date || new Date().toISOString().slice(0, 10);
     const [ins] = await conn.query(
       `INSERT INTO receipts 
@@ -4100,6 +4185,7 @@ router.get('/credit-notes', requireAuth, requireRole(['admin', 'finanzas']), asy
         cn.issue_date,
         cn.created_at,
         cn.status,
+        ${factpyMode() ? 'cn.fiscal_mode, fd.status AS fiscal_status,' : "'legacy' AS fiscal_mode, NULL AS fiscal_status,"}
         cn.reason,
         cn.subtotal,
         cn.tax_amount,
@@ -4121,6 +4207,7 @@ router.get('/credit-notes', requireAuth, requireRole(['admin', 'finanzas']), asy
         created_user.name AS created_by_name,
         issued_user.name AS issued_by_name
       FROM credit_notes cn
+      ${factpyMode() ? "LEFT JOIN fiscal_documents fd ON fd.document_type = 'credit_note' AND fd.local_id = cn.id" : ''}
       JOIN invoices i ON i.id = cn.invoice_id
       LEFT JOIN organizations o ON o.id = i.organization_id
       LEFT JOIN deals d ON d.id = i.deal_id
@@ -4206,7 +4293,6 @@ router.get('/:id', requireAuth, async (req, res) => {
     if (!canViewInvoicePdf(req.user, invoice)) {
       return res.status(403).json({ error: 'No tienes permiso para ver esta factura' });
     }
-
     if ((!invoice.currency_code || !invoice.exchange_rate) && invoice.service_quote_addition_id) {
       try {
         const [[addRow]] = await pool.query(
@@ -4272,6 +4358,9 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
     if (!canViewInvoicePdf(req.user, invoice)) {
       return res.status(403).json({ error: 'No tienes permiso para ver esta factura' });
     }
+    if (invoiceKind(invoice.fiscal_mode) === 'electronic') {
+      return res.status(409).json({ error: 'La factura electrónica se entrega mediante el KuDE aprobado de FactPy.' });
+    }
 
     if ((!invoice.currency_code || !invoice.exchange_rate) && invoice.service_quote_addition_id) {
       try {
@@ -4330,6 +4419,7 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
         timbrado_end: issuer.timbrado_end,
       },
       invoiceNumber: invoice.invoice_number || '',
+      headerTitle: invoicePdfTitle(invoice.fiscal_mode, invoice.status),
       fechaEmision: formatDate(issueDate),
       hora: formatParaguayTime(new Date()),
       client: {
@@ -4437,6 +4527,10 @@ router.post('/credit-notes', requireAuth, async (req, res) => {
 
     const { invoice, error } = await loadInvoiceWithPerms(req, invoice_id);
     if (error) return res.status(error.code).json({ error: error.msg });
+    const electronic = invoice.fiscal_mode === 'electronic';
+    if (electronic && (!factpyMode() || !['admin', 'finanzas'].includes(String(req.user?.role || '').toLowerCase()))) {
+      return res.status(403).json({ error: 'Las notas electrónicas solo están disponibles para admin y finanzas en pruebas locales' });
+    }
     if (['borrador', 'anulada'].includes(invoice.status)) {
       return res.status(400).json({ error: 'Solo se puede crear nota de crédito sobre facturas emitidas' });
     }
@@ -4525,16 +4619,27 @@ router.post('/credit-notes', requireAuth, async (req, res) => {
     }
 
     const creditContext = await resolveCreditNoteContext(invoice);
-    const { creditNoteNumber, point, establishment } = await generateCreditNoteNumber(
-      invoice.point_of_issue,
-      invoice.establishment,
-      creditContext
-    );
+    const [[sourceUnit]] = electronic && invoice.deal_id
+      ? await pool.query(`SELECT bu.key_slug AS business_unit_key
+          FROM deals d LEFT JOIN business_units bu ON bu.id = d.business_unit_id WHERE d.id = ?`, [invoice.deal_id])
+      : [[null]];
+    const { creditNoteNumber, point, establishment } = electronic
+      ? {
+          creditNoteNumber: `NC-DRAFT-${randomUUID()}`,
+          point: electronicPointFor({
+            dealId: invoice.deal_id, serviceCaseId: invoice.service_case_id,
+            containerBillingCycleId: invoice.container_billing_cycle_id,
+            businessUnitKey: sourceUnit?.business_unit_key,
+          }),
+          establishment: process.env.FACTPY_ESTABLISHMENT || '001',
+        }
+      : await generateCreditNoteNumber(invoice.point_of_issue, invoice.establishment, creditContext);
     const [result] = await pool.query(
       `INSERT INTO credit_notes 
-       (credit_note_number, invoice_id, issue_date, status, reason, subtotal, tax_amount, total_amount, balance, created_by, point_of_issue, establishment, credit_type, mode, apply_mode, observations)
-       VALUES (?, ?, NULL, 'borrador', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (${electronic ? 'fiscal_mode, ' : ''}credit_note_number, invoice_id, issue_date, status, reason, subtotal, tax_amount, total_amount, balance, created_by, point_of_issue, establishment, credit_type, mode, apply_mode, observations)
+       VALUES (${electronic ? '?, ' : ''}?, ?, NULL, 'borrador', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
+        ...(electronic ? ['electronic'] : []),
         creditNoteNumber,
         invoice_id,
         reason || null,

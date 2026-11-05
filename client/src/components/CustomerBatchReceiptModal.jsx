@@ -19,6 +19,7 @@ export default function CustomerBatchReceiptModal({ invoices, onClose, onSaved }
   const requestId = useRef(crypto.randomUUID());
   const options = useMemo(() => filterCompanyBankAccounts(accounts, currency), [accounts, currency]);
   const total = invoices.reduce((sum, row) => sum + Math.round(Number(amounts[row.id] || 0) * 100), 0) / 100;
+  const points = new Set(invoices.map((row) => String(row.invoice_number || '').split('-').slice(0, 2).join('-')));
 
   useEffect(() => {
     let active = true;
@@ -36,6 +37,10 @@ export default function CustomerBatchReceiptModal({ invoices, onClose, onSaved }
   async function submit(event) {
     event.preventDefault();
     setError('');
+    if (points.size !== 1) {
+      setError('Las facturas pertenecen a distintos puntos de expedición. Registrá un recibo por punto.');
+      return;
+    }
     const applications = invoices.map((row) => ({ invoice_id: row.id, amount: Number(amounts[row.id] || 0) }));
     if (applications.some((item) => !(item.amount > 0)) ||
         applications.some((item) => item.amount > Number(invoices.find((row) => row.id === item.invoice_id)?.balance || 0) + 0.001)) {
@@ -60,7 +65,7 @@ export default function CustomerBatchReceiptModal({ invoices, onClose, onSaved }
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3" role="presentation">
     <form onSubmit={submit} role="dialog" aria-modal="true" aria-label="Nuevo recibo" className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white shadow-xl">
       <header className="flex items-center justify-between border-b px-5 py-4">
-        <div><h2 className="text-lg font-semibold">Nuevo recibo</h2><p className="text-sm text-slate-600">{invoices[0]?.customer_name} · {currency}</p></div>
+        <div><h2 className="text-lg font-semibold">Nuevo recibo</h2><p className="text-sm text-slate-600">{invoices[0]?.customer_name} · {currency} · {points.size === 1 ? `Punto ${invoices[0]?.invoice_number?.split('-')[1] || '-'}` : 'Varios puntos'}</p></div>
         <button type="button" onClick={onClose} disabled={saving} aria-label="Cerrar" className="rounded border px-2 py-1">×</button>
       </header>
       <div className="min-h-0 overflow-y-auto p-5">
@@ -73,6 +78,7 @@ export default function CustomerBatchReceiptModal({ invoices, onClose, onSaved }
           </tr>)}</tbody>
         </table></div>
         <div className="mt-3 text-right font-semibold">Total del recibo: {money(total, currency)}</div>
+        {points.size !== 1 && <p role="alert" className="mt-3 border-l-4 border-amber-500 bg-amber-50 p-3 text-sm text-amber-800">Seleccionaste facturas de distintos puntos. Registrá un recibo por cada punto.</p>}
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
           <label className="text-sm">Fecha de cobro<input type="date" required value={form.payment_date} onChange={(e) => setForm((old) => ({ ...old, payment_date: e.target.value }))} className="mt-1 block w-full rounded border px-3 py-2" /></label>
           <label className="text-sm">Método de pago<select value={form.payment_method} onChange={(e) => setForm((old) => ({ ...old, payment_method: e.target.value }))} className="mt-1 block w-full rounded border px-3 py-2"><option value="transferencia">Transferencia</option><option value="cheque">Cheque</option><option value="tarjeta">Tarjeta</option><option value="efectivo">Efectivo</option><option value="otro">Otro</option></select></label>
@@ -82,7 +88,7 @@ export default function CustomerBatchReceiptModal({ invoices, onClose, onSaved }
         </div>
         {error && <p role="alert" className="mt-4 border-l-4 border-red-500 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
       </div>
-      <footer className="flex justify-end gap-2 border-t px-5 py-4"><button type="button" onClick={onClose} disabled={saving} className="rounded border px-4 py-2">Cancelar</button><button disabled={saving || !(total > 0)} className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50">{saving ? 'Registrando...' : 'Registrar recibo'}</button></footer>
+      <footer className="flex justify-end gap-2 border-t px-5 py-4"><button type="button" onClick={onClose} disabled={saving} className="rounded border px-4 py-2">Cancelar</button><button disabled={saving || !(total > 0) || points.size !== 1} className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50">{saving ? 'Registrando...' : 'Registrar recibo'}</button></footer>
     </form>
   </div>;
 }

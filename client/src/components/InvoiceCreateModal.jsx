@@ -36,6 +36,9 @@ export default function InvoiceCreateModal({
     payment_terms: '30 dias',
     notes: '',
     payment_condition: 'credito',
+    fiscal_mode: 'legacy',
+    fiscal_transaction_type: '',
+    fiscal_payment_method: '',
     timbrado_number: '',
     timbrado_start_date: '',
     timbrado_expires_at: '',
@@ -54,6 +57,13 @@ export default function InvoiceCreateModal({
     percentage: '100',
   });
   const [saving, setSaving] = useState(false);
+  const [step, setStep] = useState(1);
+  const [fiscalConfig, setFiscalConfig] = useState({ enabled: false, environment: null });
+  useEffect(() => {
+    api.get('/invoices/electronic-config')
+      .then(({ data }) => setFiscalConfig(data))
+      .catch(() => {});
+  }, []);
   const [executives, setExecutives] = useState([]);
   const [ocDocs, setOcDocs] = useState([]);
   const [dealOrg, setDealOrg] = useState(null);
@@ -821,8 +831,52 @@ export default function InvoiceCreateModal({
     }
   }
 
+  function advanceStep() {
+    if (step === 1) {
+      if (!form.deal_id && !form.service_case_id && !form.service_quote_addition_id && !form.container_billing_cycle_id) {
+        alert('Seleccioná una operación, servicio o mensualidad.');
+        return;
+      }
+      if (form.fiscal_mode === 'electronic' && (!fiscalConfig.enabled || !form.fiscal_transaction_type)) {
+        alert('Seleccioná el tipo de transacción fiscal.');
+        return;
+      }
+    }
+    if (step === 2) {
+      if (form.fiscal_mode === 'electronic' && !isCreditPayment && !form.fiscal_payment_method) {
+        alert('Seleccioná la forma de pago fiscal.');
+        return;
+      }
+      if (isCreditPayment && form.fiscal_mode === 'electronic' && !String(form.payment_terms || '').trim()) {
+        alert('Ingresá el plazo de crédito.');
+        return;
+      }
+      if (requiresExchangeRate && Number(form.exchange_rate || 0) <= 1) {
+        alert('Cargá un tipo de cambio válido mayor a 1.');
+        return;
+      }
+    }
+    setStep((current) => Math.min(current + 1, 3));
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
+    if (step < 3) {
+      advanceStep();
+      return;
+    }
+    if (form.fiscal_mode === 'electronic' && !fiscalConfig.enabled) {
+      alert('La facturación electrónica de prueba no está habilitada.');
+      return;
+    }
+    if (form.fiscal_mode === 'electronic' && !form.fiscal_transaction_type) {
+      alert('Seleccioná el tipo de transacción fiscal.');
+      return;
+    }
+    if (form.fiscal_mode === 'electronic' && !isCreditPayment && !form.fiscal_payment_method) {
+      alert('Seleccioná la forma de pago fiscal.');
+      return;
+    }
     if (!form.deal_id && !form.service_case_id && !form.service_quote_addition_id && !form.container_billing_cycle_id) {
       alert('Ingresa el ID de la operación, del servicio o una mensualidad container');
       return;
@@ -885,11 +939,11 @@ export default function InvoiceCreateModal({
   }
 
   const InvoicePreviewPanel = () => (
-    <aside className="w-full max-w-5xl xl:w-[430px] xl:max-w-[430px] xl:sticky xl:top-6 max-h-[90vh] overflow-y-auto rounded-lg border bg-white p-4 shadow-xl">
+    <aside className="w-full xl:sticky xl:top-6 xl:self-start xl:border-l xl:border-slate-200 xl:pl-6">
       <div className="flex items-start justify-between gap-3 mb-3">
         <div>
-          <h4 className="text-sm font-semibold text-slate-900">Vista previa de factura</h4>
-          <p className="text-xs text-slate-500">Items, impuestos y montos antes de crear.</p>
+          <h4 className="text-sm font-semibold text-slate-900">Resumen del borrador</h4>
+          <p className="text-xs text-slate-500">Ítems, impuestos y total.</p>
         </div>
         {invoicePreview.loading && <span className="text-xs text-slate-500">Cargando...</span>}
       </div>
@@ -900,13 +954,13 @@ export default function InvoiceCreateModal({
         </div>
       ) : invoicePreview.items.length === 0 ? (
         <div className="rounded border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
-          Selecciona una operacion, servicio o items para ver la vista previa.
+          Seleccioná una operación, servicio o ítems para ver los importes.
         </div>
       ) : (
         <>
-          <div className="overflow-auto rounded border bg-white">
+          <div className="overflow-x-auto border-y border-slate-200">
             <table className="min-w-full text-xs">
-              <thead className="bg-slate-800 text-white">
+              <thead className="bg-slate-50 text-slate-600">
                 <tr>
                   <th className="px-2 py-2 text-center">Cant.</th>
                   <th className="px-2 py-2 text-left">Descripcion</th>
@@ -942,7 +996,7 @@ export default function InvoiceCreateModal({
           </div>
 
           {invoicePreview.totals && (
-            <div className="mt-3 rounded border bg-slate-50 p-3 text-sm">
+            <div className="mt-3 text-sm">
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                 <span className="text-slate-600">Exentas</span>
                 <span className="text-right font-medium">{formatMoney(invoicePreview.totals.exempt, form.currency_code)}</span>
@@ -967,14 +1021,59 @@ export default function InvoiceCreateModal({
     </aside>
   );
   return (
-    <div className="fixed inset-0 bg-black/30 z-50 overflow-y-auto">
-      <div className="flex min-h-full w-full flex-col xl:flex-row items-start justify-center gap-4 p-4 md:p-6">
-      <div className="bg-white rounded-lg p-6 w-full max-w-5xl shadow-xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold">Nueva factura</h3>
-          <button onClick={onClose} className="text-2xl leading-none">×</button>
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-100" role="dialog" aria-modal="true" aria-label="Nueva factura">
+      <div className="mx-auto min-h-full w-full max-w-[1440px] bg-slate-100 px-4 py-6 md:px-8">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-5">
+          <div>
+            <p className="text-xs text-slate-500 mb-2">Facturación / Nueva factura</p>
+            <h3 className="text-2xl font-semibold text-slate-900">Nueva factura</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              {containerSourceLabel || (form.deal_id ? `Operación #${form.deal_id}` : form.service_case_id ? `Servicio #${form.service_case_id}` : "Seleccioná el origen")}
+              {form.fiscal_mode === 'electronic' && <span className="ml-2 rounded bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">Ambiente de prueba</span>}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} disabled={saving} className="rounded border border-slate-300 bg-white px-3 py-2 text-sm disabled:opacity-50">Salir sin guardar</button>
         </div>
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <nav aria-label="Pasos de la factura" className="flex flex-wrap gap-4 border-b border-slate-200 py-4 text-sm">
+          {["Documento", "Importes y pago", "Revisar borrador"].map((label, index) => (
+            <button key={label} type="button" onClick={() => index + 1 < step && setStep(index + 1)}
+              disabled={index + 1 > step || saving} aria-current={step === index + 1 ? "step" : undefined}
+              className={`flex items-center gap-2 rounded px-1 py-1 ${step === index + 1 ? "font-semibold text-blue-700" : index + 1 < step ? "text-emerald-700" : "text-slate-400"}`}>
+              <span className={`grid h-6 w-6 place-items-center rounded-full text-xs ${step === index + 1 ? "bg-blue-600 text-white" : index + 1 < step ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-500"}`}>
+                {index + 1 < step ? "✓" : index + 1}
+              </span>{label}
+            </button>
+          ))}
+        </nav>
+        <div className="grid grid-cols-1 gap-8 py-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <form onSubmit={handleSubmit} className="min-w-0 space-y-5">
+          {step === 1 && <div className="space-y-5">
+          <h4 className="text-base font-semibold text-slate-900">Documento y origen</h4>
+          {fiscalConfig.enabled && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 rounded border border-sky-200 bg-sky-50 p-3">
+              <label className="text-sm font-medium">Tipo de factura
+                <select className="mt-1 w-full border rounded px-3 py-2" value={form.fiscal_mode}
+                  onChange={(e) => setForm((current) => ({ ...current, fiscal_mode: e.target.value }))}>
+                  <option value="legacy">Autoimpresa</option>
+                  <option value="electronic">Electrónica de prueba</option>
+                </select>
+              </label>
+              {form.fiscal_mode === 'electronic' && (
+                <>
+                  <label className="text-sm font-medium">Tipo de transacción fiscal
+                    <select required className="mt-1 w-full border rounded px-3 py-2" value={form.fiscal_transaction_type}
+                      onChange={(e) => setForm((current) => ({ ...current, fiscal_transaction_type: e.target.value }))}>
+                      <option value="">Seleccionar</option>
+                      <option value="1">Venta de mercaderías</option>
+                      <option value="2">Prestación de servicios</option>
+                      <option value="3">Mixto</option>
+                    </select>
+                  </label>
+                  <p className="md:col-span-3 text-xs text-sky-900">Ambiente {fiscalConfig.environment}. El borrador no consume número fiscal; se reserva al enviarlo. Solo la aprobación permite cobrar.</p>
+                </>
+              )}
+            </div>
+          )}
           {isContainerBilling && (
             <div className="rounded-lg border bg-slate-50 px-4 py-3 text-sm">
               <div className="font-medium text-slate-800">Origen de facturación</div>
@@ -1077,6 +1176,9 @@ export default function InvoiceCreateModal({
             )}
           </div>
 
+          </div>}
+          {step === 2 && <div className="space-y-5">
+          <h4 className="text-base font-semibold text-slate-900">Importes y condiciones</h4>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
               <label className="block text-sm font-medium mb-1">Condicion de pago</label>
@@ -1125,6 +1227,19 @@ export default function InvoiceCreateModal({
               </>
             )}
           </div>
+          {form.fiscal_mode === 'electronic' && !isCreditPayment && (
+            <label className="block text-sm font-medium">Forma de pago fiscal
+              <select required className="mt-1 w-full border rounded px-3 py-2" value={form.fiscal_payment_method}
+                onChange={(e) => setForm((current) => ({ ...current, fiscal_payment_method: e.target.value }))}>
+                <option value="">Seleccionar</option>
+                <option value="1">Efectivo</option>
+                <option value="2">Cheque</option>
+                <option value="3">Tarjeta de crédito</option>
+                <option value="4">Tarjeta de débito</option>
+                <option value="5">Transferencia</option>
+              </select>
+            </label>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
@@ -1199,7 +1314,7 @@ export default function InvoiceCreateModal({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {form.fiscal_mode !== 'electronic' && <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
               <label className="block text-sm font-medium mb-1">Timbrado</label>
               <input
@@ -1228,9 +1343,10 @@ export default function InvoiceCreateModal({
                 readOnly
               />
             </div>
-          </div>
+          </div>}
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            {form.fiscal_mode !== 'electronic' && <>
             <div>
               <label className="block text-sm font-medium mb-1">Punto de expedicion</label>
               <input
@@ -1257,6 +1373,7 @@ export default function InvoiceCreateModal({
                 {suggestedNumber || '-'}
               </div>
             </div>
+            </>}
             <div>
               <label className="block text-sm font-medium mb-1">Moneda</label>
               <select
@@ -1400,28 +1517,47 @@ export default function InvoiceCreateModal({
               placeholder="Notas adicionales..."
             />
           </div>
+          </div>}
+          {step === 3 && <div className="space-y-5">
+            <h4 className="text-base font-semibold text-slate-900">Revisar borrador</h4>
+            <div className="grid gap-x-8 gap-y-4 border-y border-slate-200 py-5 text-sm sm:grid-cols-2">
+              <div><span className="block text-slate-500">Tipo</span><strong>{form.fiscal_mode === 'electronic' ? 'Electrónica de prueba' : 'Autoimpresa'}</strong></div>
+              <div><span className="block text-slate-500">Origen</span><strong>{containerSourceLabel || (form.deal_id ? `Operación #${form.deal_id}` : form.service_case_id ? `Servicio #${form.service_case_id}` : 'Sin origen')}</strong></div>
+              <div><span className="block text-slate-500">Condición de pago</span><strong>{isCreditPayment ? `Crédito · ${form.payment_terms || 'Sin plazo'}` : 'Contado'}</strong></div>
+              <div><span className="block text-slate-500">Vencimiento</span><strong>{form.due_date || 'No aplica'}</strong></div>
+              <div><span className="block text-slate-500">Documento cliente</span><strong>{form.customer_doc_type} {form.customer_doc || 'Sin documento'}</strong></div>
+              <div><span className="block text-slate-500">Total previsto</span><strong>{invoicePreview.totals ? formatMoney(invoicePreview.totals.gross, form.currency_code) : 'Pendiente de cálculo'}</strong></div>
+            </div>
+            <p className="border-l-2 border-blue-500 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+              {form.fiscal_mode === 'electronic'
+                ? 'Se creará un borrador de prueba. No tendrá número fiscal ni estará emitido hasta enviarlo y confirmar la aprobación.'
+                : `Se creará una factura autoimpresa con el número ${suggestedNumber || 'pendiente'}.`}
+            </p>
+            {invoicePreview.error && <p className="text-sm text-red-700">{invoicePreview.error}</p>}
+          </div>}
 
-          <div className="flex gap-2 pt-2">
+          <div className="sticky bottom-0 flex flex-wrap justify-end gap-2 border-t border-slate-200 bg-slate-100 py-4">
             <button
               type="button"
-              onClick={onClose}
-              className="flex-1 px-4 py-2 border rounded-lg hover:bg-slate-50"
+              onClick={step === 1 ? onClose : () => setStep((current) => current - 1)}
+              className="rounded border border-slate-300 bg-white px-5 py-2 text-sm hover:bg-slate-50"
               disabled={saving}
             >
-              Cancelar
+              {step === 1 ? 'Cancelar' : 'Volver'}
             </button>
-            <button
-              type="submit"
-              className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-              disabled={saving}
-            >
-              {saving ? 'Creando...' : 'Crear factura'}
-            </button>
+            {step < 3 ? (
+              <button type="button" onClick={advanceStep} className="rounded bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700">Continuar</button>
+            ) : (
+              <button type="submit" className="rounded bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                disabled={saving || invoicePreview.loading || Boolean(invoicePreview.error)}>
+                {saving ? 'Creando...' : form.fiscal_mode === 'electronic' ? 'Crear borrador' : 'Crear factura'}
+              </button>
+            )}
           </div>
         </form>
+        <InvoicePreviewPanel />
       </div>
-      <InvoicePreviewPanel />
+      </div>
     </div>
-  </div>
   );
 }

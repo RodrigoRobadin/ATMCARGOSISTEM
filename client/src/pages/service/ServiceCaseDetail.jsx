@@ -66,6 +66,7 @@ function OperationDocViewer({ doc }) {
 
   useEffect(() => {
     if (!doc) return;
+    if (doc.fiscal_mode === 'electronic') return;
     let active = true;
     let objectUrl = "";
     setLoading(true);
@@ -95,9 +96,13 @@ function OperationDocViewer({ doc }) {
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [doc?.id, doc?.kind]);
+  }, [doc?.id, doc?.kind, doc?.fiscal_mode]);
 
   if (!doc) return null;
+  if (doc.fiscal_mode === 'electronic') return <div className="bg-white rounded border p-4 text-sm">
+    Documento electrónico: {doc.fiscal_status || 'pendiente de envío'}.{' '}
+    <a className="text-blue-700 underline" href={`/invoices/${doc.kind === 'credit_note' ? doc.invoice_id : doc.id}`}>Ver estado fiscal</a>
+  </div>;
 
   return (
     <div className="bg-white border rounded-lg p-3">

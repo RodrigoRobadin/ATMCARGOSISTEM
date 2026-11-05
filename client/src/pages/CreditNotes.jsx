@@ -96,7 +96,7 @@ export default function CreditNotes() {
   }
 
   async function issueNote(note) {
-    if (!confirm(`Emitir la nota de credito ${note.credit_note_number}?`)) return;
+    if (!confirm(note.fiscal_mode === 'electronic' ? '¿Enviar esta nota electrónica al ambiente de prueba?' : `Emitir la nota de credito ${note.credit_note_number}?`)) return;
     setBusyId(note.id);
     try {
       await api.post(`/invoices/credit-notes/${note.id}/issue`);
@@ -109,10 +109,12 @@ export default function CreditNotes() {
   }
 
   async function cancelNote(note) {
+    const reason = note.fiscal_mode === 'electronic' ? prompt('Motivo de cancelación fiscal:') : '';
+    if (note.fiscal_mode === 'electronic' && !reason) return;
     if (!confirm(`Anular la nota de credito ${note.credit_note_number}?`)) return;
     setBusyId(note.id);
     try {
-      await api.post(`/invoices/credit-notes/${note.id}/cancel`);
+      await api.post(`/invoices/credit-notes/${note.id}/cancel`, { reason });
       await loadRows();
     } catch (error) {
       alert(error.response?.data?.error || 'No se pudo anular la nota de credito');
@@ -122,7 +124,7 @@ export default function CreditNotes() {
   }
 
   return (
-    <div className="p-6">
+    <div className="atm-admin-ops atm-admin-ops-credit-notes min-w-0 p-6">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-800 dark:text-white">
           Notas de credito
@@ -267,6 +269,7 @@ export default function CreditNotes() {
                       >
                         {statusLabels[note.status] || note.status}
                       </span>
+                      {note.fiscal_mode === 'electronic' && <div className="mt-1 text-xs text-sky-700">Fiscal: {note.fiscal_status || 'pendiente de envío'}</div>}
                     </td>
                     <td className="px-2 py-2">
                       <div className="flex flex-wrap justify-center gap-1">
@@ -276,25 +279,25 @@ export default function CreditNotes() {
                         >
                           Ver
                         </Link>
-                        <button
+                        {note.fiscal_mode !== 'electronic' && <button
                           type="button"
                           onClick={() => openPdf(note)}
                           disabled={busy}
                           className="rounded bg-amber-600 px-2 py-1 text-xs text-white hover:bg-amber-700 disabled:opacity-50"
                         >
                           PDF
-                        </button>
-                        {note.status === 'borrador' && (
+                        </button>}
+                        {note.status === 'borrador' && (!note.fiscal_status || note.fiscal_mode !== 'electronic') && (
                           <button
                             type="button"
                             onClick={() => issueNote(note)}
                             disabled={busy}
                             className="rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
                           >
-                            Emitir
+                            {note.fiscal_mode === 'electronic' ? 'Enviar' : 'Emitir'}
                           </button>
                         )}
-                        {note.status !== 'anulada' && (
+                        {note.status !== 'anulada' && (note.fiscal_mode !== 'electronic' || note.fiscal_status === 'approved') && (
                           <button
                             type="button"
                             onClick={() => cancelNote(note)}
