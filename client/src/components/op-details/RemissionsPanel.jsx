@@ -365,6 +365,7 @@ function DeliveryModal({ row, onClose, onSaved }) {
 
 export default function RemissionsPanel({ dealId, serviceCaseId, invoices = [], operationItems = [] }) {
   const [enabled, setEnabled] = useState(false);
+  const [environment, setEnvironment] = useState(null);
   const [rows, setRows] = useState([]);
   const [creating, setCreating] = useState(false);
   const [delivering, setDelivering] = useState(null);
@@ -379,12 +380,15 @@ export default function RemissionsPanel({ dealId, serviceCaseId, invoices = [], 
   useEffect(() => {
     api.get('/invoices/electronic-config').then(({ data }) => {
       setEnabled(Boolean(data.enabled));
+      setEnvironment(data.environment);
       if (data.enabled) reload().catch(() => setError('No se pudieron cargar las remisiones'));
     }).catch(() => {});
   }, [dealId, serviceCaseId]);
 
   async function action(row, verb) {
-    if (verb === 'issue' && !window.confirm(`¿Enviar la remisión #${row.id} a FactPy de prueba? Se reservará un número fiscal.`)) return;
+    if (verb === 'issue' && !window.confirm(environment === 'production'
+      ? `¿Enviar la remisión REAL #${row.id} a FactPy Producción? Se reservará un número fiscal.`
+      : `¿Enviar la remisión #${row.id} a FactPy de prueba? Se reservará un número fiscal.`)) return;
     if (verb === 'retry' && !window.confirm(`Se consultará primero si ${row.receipt_id} existe en FactPy Test. Solo si no existe, se reenviará el mismo documento ${row.document_number}. ¿Continuar?`)) return;
     setBusyId(row.id); setError('');
     try { await api.post(`/remissions/${row.id}/${verb}`, verb === 'retry' ? { confirm_same_document: true } : undefined); await reload(); }

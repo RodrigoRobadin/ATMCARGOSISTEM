@@ -344,7 +344,7 @@ async function refresh(type, req, res) {
     if (state.notFound && current.cdc) {
       state = {
         state: 'review',
-        message: 'FactPy devolvió un CDC al enviar, pero no encuentra el receiptid al consultar. Verificá el CDC en FactPy Test; no se reenviará.',
+        message: `FactPy devolvió un CDC al enviar, pero no encuentra el receiptid al consultar. Verificá el CDC en FactPy ${document.environment === 'production' ? 'Producción' : 'Test'}; no se reenviará.`,
       };
     }
     await conn.query(

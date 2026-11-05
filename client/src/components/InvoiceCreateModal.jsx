@@ -866,7 +866,7 @@ export default function InvoiceCreateModal({
       return;
     }
     if (form.fiscal_mode === 'electronic' && !fiscalConfig.enabled) {
-      alert('La facturación electrónica de prueba no está habilitada.');
+      alert('La facturación electrónica no está habilitada.');
       return;
     }
     if (form.fiscal_mode === 'electronic' && !form.fiscal_transaction_type) {
@@ -1029,7 +1029,7 @@ export default function InvoiceCreateModal({
             <h3 className="text-2xl font-semibold text-slate-900">Nueva factura</h3>
             <p className="mt-1 text-sm text-slate-500">
               {containerSourceLabel || (form.deal_id ? `Operación #${form.deal_id}` : form.service_case_id ? `Servicio #${form.service_case_id}` : "Seleccioná el origen")}
-              {form.fiscal_mode === 'electronic' && <span className="ml-2 rounded bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">Ambiente de prueba</span>}
+              {form.fiscal_mode === 'electronic' && <span className="ml-2 rounded bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">{fiscalConfig.environment === 'production' ? 'Producción: documento real' : 'Ambiente de prueba'}</span>}
             </p>
           </div>
           <button type="button" onClick={onClose} disabled={saving} className="rounded border border-slate-300 bg-white px-3 py-2 text-sm disabled:opacity-50">Salir sin guardar</button>
@@ -1055,7 +1055,7 @@ export default function InvoiceCreateModal({
                 <select className="mt-1 w-full border rounded px-3 py-2" value={form.fiscal_mode}
                   onChange={(e) => setForm((current) => ({ ...current, fiscal_mode: e.target.value }))}>
                   <option value="legacy">Autoimpresa</option>
-                  <option value="electronic">Electrónica de prueba</option>
+                  <option value="electronic">{fiscalConfig.environment === 'production' ? 'Electrónica' : 'Electrónica de prueba'}</option>
                 </select>
               </label>
               {form.fiscal_mode === 'electronic' && (
@@ -1521,7 +1521,7 @@ export default function InvoiceCreateModal({
           {step === 3 && <div className="space-y-5">
             <h4 className="text-base font-semibold text-slate-900">Revisar borrador</h4>
             <div className="grid gap-x-8 gap-y-4 border-y border-slate-200 py-5 text-sm sm:grid-cols-2">
-              <div><span className="block text-slate-500">Tipo</span><strong>{form.fiscal_mode === 'electronic' ? 'Electrónica de prueba' : 'Autoimpresa'}</strong></div>
+              <div><span className="block text-slate-500">Tipo</span><strong>{form.fiscal_mode === 'electronic' ? (fiscalConfig.environment === 'production' ? 'Electrónica real' : 'Electrónica de prueba') : 'Autoimpresa'}</strong></div>
               <div><span className="block text-slate-500">Origen</span><strong>{containerSourceLabel || (form.deal_id ? `Operación #${form.deal_id}` : form.service_case_id ? `Servicio #${form.service_case_id}` : 'Sin origen')}</strong></div>
               <div><span className="block text-slate-500">Condición de pago</span><strong>{isCreditPayment ? `Crédito · ${form.payment_terms || 'Sin plazo'}` : 'Contado'}</strong></div>
               <div><span className="block text-slate-500">Vencimiento</span><strong>{form.due_date || 'No aplica'}</strong></div>
@@ -1530,7 +1530,9 @@ export default function InvoiceCreateModal({
             </div>
             <p className="border-l-2 border-blue-500 bg-blue-50 px-4 py-3 text-sm text-blue-900">
               {form.fiscal_mode === 'electronic'
-                ? 'Se creará un borrador de prueba. No tendrá número fiscal ni estará emitido hasta enviarlo y confirmar la aprobación.'
+                ? fiscalConfig.environment === 'production'
+                  ? 'Se creará un borrador real. Al enviarlo a FactPy Producción se reservará un número fiscal; solo la aprobación permitirá cobrar.'
+                  : 'Se creará un borrador de prueba. No tendrá número fiscal ni estará emitido hasta enviarlo y confirmar la aprobación.'
                 : `Se creará una factura autoimpresa con el número ${suggestedNumber || 'pendiente'}.`}
             </p>
             {invoicePreview.error && <p className="text-sm text-red-700">{invoicePreview.error}</p>}

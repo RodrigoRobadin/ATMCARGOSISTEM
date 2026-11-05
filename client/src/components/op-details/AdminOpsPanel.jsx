@@ -233,10 +233,29 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
     }
   }
 
+  async function confirmFiscalIssue(doc, label, kind) {
+    if (doc.fiscal_mode !== 'electronic') {
+      return window.confirm(`¿Emitir ${kind} ${label}? Esta acción confirma fiscalmente el documento.`);
+    }
+    try {
+      const { data } = await api.get('/invoices/electronic-config');
+      if (!data.enabled) {
+        alert('FactPy no está habilitado.');
+        return false;
+      }
+      return window.confirm(data.environment === 'production'
+        ? `¿Enviar ${kind} ${label} REAL a FactPy Producción? Se reservará un número fiscal.`
+        : `¿Enviar ${kind} ${label} a FactPy de prueba?`);
+    } catch {
+      alert('No se pudo verificar el ambiente fiscal.');
+      return false;
+    }
+  }
+
   async function issueInvoice(doc) {
     if (!doc || doc.kind !== "invoice" || String(doc.status || "").toLowerCase() !== "borrador") return;
     const label = doc.number || `#${doc.id}`;
-    if (!confirm(doc.fiscal_mode === 'electronic' ? `¿Enviar ${label} a FactPy de prueba?` : `Emitir la factura ${label}? Esta accion confirma fiscalmente el documento.`)) return;
+    if (!(await confirmFiscalIssue(doc, label, 'factura'))) return;
     setIssuingDocId(doc.id);
     try {
       await api.post(`/invoices/${doc.id}/issue`);
@@ -254,7 +273,7 @@ export default function AdminOpsPanel({ dealId, serviceCaseId, serviceQuoteAddit
   async function issueCreditNote(doc) {
     if (!doc || doc.kind !== "credit_note" || String(doc.status || "").toLowerCase() !== "borrador") return;
     const label = doc.number || `#${doc.id}`;
-    if (!confirm(doc.fiscal_mode === 'electronic' ? `¿Enviar ${label} a FactPy de prueba?` : `Emitir la nota de credito ${label}? Esta accion confirma fiscalmente el documento.`)) return;
+    if (!(await confirmFiscalIssue(doc, label, 'nota de crédito'))) return;
     setIssuingDocId(`credit-${doc.id}`);
     try {
       await api.post(`/invoices/credit-notes/${doc.id}/issue`);

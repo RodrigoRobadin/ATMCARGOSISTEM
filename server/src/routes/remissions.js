@@ -91,7 +91,7 @@ function publicRow(row) {
 async function reserveNumber(conn, environment, point) {
   const establishment = String(process.env.FACTPY_ESTABLISHMENT || '').padStart(3, '0');
   if (!/^\d{3}$/.test(establishment) || !/^\d{3}$/.test(point)) {
-    throw Object.assign(new Error('Configurá establecimiento y punto de FactPy Test'), { statusCode: 400 });
+    throw Object.assign(new Error('Configurá establecimiento y punto de FactPy'), { statusCode: 400 });
   }
   const start = Number(process.env[`FACTPY_REMISSION_SEQUENCE_START_${point}`] || 1);
   if (!Number.isInteger(start) || start < 1 || start > 9999999) {

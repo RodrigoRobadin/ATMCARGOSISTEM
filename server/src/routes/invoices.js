@@ -3016,7 +3016,10 @@ router.post('/', requireAuth, async (req, res) => {
     } = req.body || {};
     const electronic = fiscal_mode === 'electronic';
     if (electronic && !factpyMode()) {
-      return res.status(403).json({ error: 'FactPy solo está disponible en el entorno local de pruebas' });
+      return res.status(403).json({ error: 'FactPy no está habilitado en este entorno' });
+    }
+    if (electronic && !['admin', 'finanzas'].includes(String(req.user?.role || '').toLowerCase())) {
+      return res.status(403).json({ error: 'Solo admin y finanzas pueden crear facturas electrónicas' });
     }
     if (electronic && ![1, 2, 3].includes(Number(fiscal_transaction_type))) {
       return res.status(400).json({ error: 'Seleccioná el tipo de transacción fiscal' });
@@ -4529,7 +4532,7 @@ router.post('/credit-notes', requireAuth, async (req, res) => {
     if (error) return res.status(error.code).json({ error: error.msg });
     const electronic = invoice.fiscal_mode === 'electronic';
     if (electronic && (!factpyMode() || !['admin', 'finanzas'].includes(String(req.user?.role || '').toLowerCase()))) {
-      return res.status(403).json({ error: 'Las notas electrónicas solo están disponibles para admin y finanzas en pruebas locales' });
+      return res.status(403).json({ error: 'Las notas electrónicas solo están disponibles para admin y finanzas cuando FactPy está habilitado' });
     }
     if (['borrador', 'anulada'].includes(invoice.status)) {
       return res.status(400).json({ error: 'Solo se puede crear nota de crédito sobre facturas emitidas' });

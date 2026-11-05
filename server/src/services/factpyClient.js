@@ -89,7 +89,7 @@ function commonPayload({ invoice, organization, number, receiptId, securityCode 
   const currency = String(invoice.currency_code || '').toUpperCase().replace('GS', 'PYG');
   const exchange = Number(invoice.exchange_rate);
   if (!ruc || !name) fail('Completá el RUC y la razón social del cliente');
-  if (!['PYG', 'USD'].includes(currency)) fail('Solo se admiten PYG y USD en esta prueba');
+  if (!['PYG', 'USD'].includes(currency)) fail('Solo se admiten PYG y USD');
   if (currency !== 'PYG' && (!Number.isFinite(exchange) || exchange <= 0)) {
     fail('Falta el tipo de cambio de la factura');
   }
@@ -195,6 +195,7 @@ export function createFactpyClient(mode = factpyMode()) {
   }
   const recordID = process.env.FACTPY_RECORD_ID;
   if (mode === 'test' && !recordID) throw new Error('Falta FACTPY_RECORD_ID');
+  const environmentLabel = mode === 'production' ? 'Producción' : 'Test';
   return {
     async send(payload, scenario) {
       if (mode === 'mock') {
@@ -231,9 +232,9 @@ export function createFactpyClient(mode = factpyMode()) {
       if (!Array.isArray(rows)) {
         const error = String(rows?.error || '');
         const message = /recordid.*datajson/i.test(error)
-          ? 'FactPy no recibió recordID y datajson; reiniciá el backend con la configuración Test correcta'
+          ? `FactPy no recibió recordID y datajson; revisá la configuración ${environmentLabel}`
           : /recordid/i.test(error)
-            ? 'FactPy rechazó la configuración de empresa Test'
+            ? `FactPy rechazó la configuración de empresa ${environmentLabel}`
             : 'FactPy devolvió una respuesta inesperada al consultar el estado';
         return { state: 'review', message };
       }
