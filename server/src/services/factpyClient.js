@@ -25,6 +25,15 @@ export function canRetryTestDocument(row) {
     (row?.status === 'rejected' && /^(?:ERROR - Falta certificado de firma|ERROR - No existe el recordID|JSON inválido: Syntax error)/i.test(String(row.error_message || '')));
 }
 
+export function canRetryProductionDuplicate(row, permittedReceiptId) {
+  return row?.environment === 'production' &&
+    row?.receipt_id === permittedReceiptId &&
+    row?.status === 'rejected' &&
+    Number(row?.attempt_count) === 1 &&
+    !row?.cdc && !row?.kude_url && !row?.xml_url &&
+    /documento electr[oó]nico duplicado/i.test(String(row.error_message || ''));
+}
+
 export function cancellationResult(response) {
   if (response?.status === true) return 'approved';
   if (response?.status === false) return 'rejected';

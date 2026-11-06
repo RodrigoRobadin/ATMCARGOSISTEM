@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildInvoicePayload, buildCreditNotePayload, createFactpyClient, factpyMode, canRetryTestDocument, cancellationResult, canRetryTestCancellation } from '../src/services/factpyClient.js';
+import { buildInvoicePayload, buildCreditNotePayload, createFactpyClient, factpyMode, canRetryTestDocument, canRetryProductionDuplicate, cancellationResult, canRetryTestCancellation } from '../src/services/factpyClient.js';
 
 test('cancellation requires an explicit boolean result from FactPy', () => {
   assert.equal(cancellationResult({ status: true, code: 'Evento registrado correctamente' }), 'approved');
@@ -264,6 +264,17 @@ test('manual retry permits uncertain and selected configuration failures in Test
   assert.equal(canRetryTestDocument({ status: 'review', kude_url: 'https://api.factpy.com/kude/example' }), false);
   assert.equal(canRetryTestDocument({ status: 'rejected', error_message: 'XML rechazado por SIFEN' }), false);
   assert.equal(canRetryTestDocument({ status: 'approved' }), false);
+});
+
+test('production retry is limited to the explicitly permitted duplicate receipt without fiscal artifacts', () => {
+  const row = { environment: 'production', receipt_id: 'atm-production-invoice-117',
+    status: 'rejected', attempt_count: 1, error_message: 'ERROR - Documento electrónico duplicado..' };
+  assert.equal(canRetryProductionDuplicate(row, row.receipt_id), true);
+  assert.equal(canRetryProductionDuplicate(row, 'atm-production-invoice-118'), false);
+  assert.equal(canRetryProductionDuplicate({ ...row, status: 'approved' }, row.receipt_id), false);
+  assert.equal(canRetryProductionDuplicate({ ...row, attempt_count: 2 }, row.receipt_id), false);
+  assert.equal(canRetryProductionDuplicate({ ...row, cdc: '1'.repeat(44) }, row.receipt_id), false);
+  assert.equal(canRetryProductionDuplicate({ ...row, error_message: 'XML rechazado' }, row.receipt_id), false);
 });
 
 test('production requires an explicit enable flag and complete fiscal configuration', () => {

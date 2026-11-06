@@ -56,6 +56,15 @@ export default function FiscalStatusPanel({ type = 'invoice', id, onRefresh, onS
           }}>
           Reintentar mismo envío
         </button>}
+      {state?.production_retry_available &&
+        <button type="button" className="btn border border-amber-500" disabled={busy}
+          onClick={() => {
+            if (window.confirm(`Confirmo con FactPy que ${state.document_number} no existe en Producción. Se consultará su estado y se reenviará el mismo número y recibo ${state.receipt_id}. ¿Continuar?`)) {
+              refresh('fiscal-retry', { confirm_same_document: true, confirm_factpy_absent: true });
+            }
+          }}>
+          Reintentar mismo envío
+        </button>}
     </div>
     {state?.environment && <div>Ambiente: {state.environment}</div>}
     {state?.receipt_id && <div>Recibo de envío: {state.receipt_id}</div>}

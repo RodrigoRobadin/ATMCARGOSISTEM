@@ -5,7 +5,7 @@ import { requireAuth } from '../middlewares/auth.js';
 import { electronicPointFor } from '../services/electronicExpedition.js';
 import {
   buildInvoicePayload, buildCreditNotePayload, createFactpyClient, factpyMode, mockScenario, fiscalDateTime,
-  canRetryTestDocument, cancellationResult, canRetryTestCancellation,
+  canRetryTestDocument, canRetryProductionDuplicate, cancellationResult, canRetryTestCancellation,
 } from '../services/factpyClient.js';
 
 const router = Router();
@@ -259,13 +259,20 @@ async function deliver(type, prepared, environment) {
 async function retry(type, req, res) {
   if (!canSend(req)) return res.status(403).json({ error: 'Sin permiso para reintentar el envío' });
   const environment = factpyMode();
-  if (environment !== 'test') return res.status(409).json({ error: 'El reintento manual solo está habilitado en FactPy Test' });
+  const productionReceiptId = process.env.FACTPY_PRODUCTION_RETRY_RECEIPT_ID || '';
+  if (environment !== 'test' && environment !== 'production') {
+    return res.status(409).json({ error: 'El reintento fiscal no está habilitado' });
+  }
   if (req.body?.confirm_same_document !== true) {
     return res.status(400).json({ error: 'Confirmá expresamente el reenvío del mismo documento fiscal' });
   }
   const document = await fiscalRow(type, req.params.id);
-  if (!document || document.environment !== environment || !canRetryTestDocument(document)) {
-    return res.status(409).json({ error: 'Solo se puede reintentar un envío incierto o rechazado por configuración en FactPy Test' });
+  const eligible = environment === 'test'
+    ? canRetryTestDocument(document)
+    : canRetryProductionDuplicate(document, productionReceiptId);
+  if (!document || document.environment !== environment || !eligible ||
+      (environment === 'production' && (type !== 'invoice' || req.body?.confirm_factpy_absent !== true))) {
+    return res.status(409).json({ error: 'Este documento no está autorizado para reintento fiscal' });
   }
   let checked;
   try {
@@ -273,7 +280,9 @@ async function retry(type, req, res) {
   } catch (error) {
     return fiscalError(error, res);
   }
-  if (!checked.notFound) {
+  const previouslyRejectedDuplicate = environment === 'production' && checked.state === 'rejected' &&
+    /documento electr[oó]nico duplicado/i.test(String(checked.message || ''));
+  if (!checked.notFound && !previouslyRejectedDuplicate) {
     return res.status(409).json({ error: `${checked.message || 'FactPy no confirmó que el documento esté ausente'}. No se reenviará.` });
   }
 
@@ -283,7 +292,10 @@ async function retry(type, req, res) {
     await conn.beginTransaction();
     const [[current]] = await conn.query('SELECT * FROM fiscal_documents WHERE id = ? FOR UPDATE', [document.id]);
     const [[local]] = await conn.query(`SELECT status FROM ${tables[type]} WHERE id = ? FOR UPDATE`, [document.local_id]);
-    if (!canRetryTestDocument(current) || local?.status !== 'borrador') {
+    const stillEligible = environment === 'test'
+      ? canRetryTestDocument(current)
+      : canRetryProductionDuplicate(current, productionReceiptId);
+    if (!stillEligible || local?.status !== 'borrador') {
       throw Object.assign(new Error('El documento cambió de estado; consultá nuevamente'), { statusCode: 409 });
     }
     const payload = JSON.parse(current.request_json || 'null');
@@ -564,7 +576,10 @@ for (const [prefix, type] of [['', 'invoice'], ['/credit-notes', 'credit_note']]
       const [[event]] = row ? await pool.query(
         "SELECT status, message FROM fiscal_events WHERE fiscal_document_id = ? AND event_type = 'cancel'", [row.id]
       ) : [[]];
-      return res.json({ ...publicState(row, factpyMode()), cancellation: event || null });
+      const retryAvailable = type === 'invoice' && factpyMode() === 'production' &&
+        canRetryProductionDuplicate(row, process.env.FACTPY_PRODUCTION_RETRY_RECEIPT_ID || '');
+      return res.json({ ...publicState(row, factpyMode()), cancellation: event || null,
+        production_retry_available: retryAvailable });
     } catch (error) { return fiscalError(error, res); }
   });
   router.post(`${prefix}/:id/fiscal-status/refresh`, requireAuth, async (req, res) => {
