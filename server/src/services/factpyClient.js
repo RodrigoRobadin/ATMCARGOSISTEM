@@ -215,7 +215,7 @@ export function createFactpyClient(mode = factpyMode()) {
         datajson: JSON.stringify(payload), recordID,
       });
     },
-    async check(receiptId, scenario, checks = 0) {
+    async check(receiptId, scenario, checks = 0, { acceptUnsupportedDocumentedFormat = false } = {}) {
       if (mode === 'mock') {
         if (scenario === 'network_error') return { state: 'review', message: 'No encontrado (simulado)' };
         if (scenario === 'rejected') return { state: 'rejected', message: 'Documento rechazado (simulado)' };
@@ -233,10 +233,12 @@ export function createFactpyClient(mode = factpyMode()) {
         const documentedRows = await postFactpy(statusPath, {
           receiptid: JSON.stringify({ receiptid: [receiptId] }), recordID,
         });
-        if (!Array.isArray(documentedRows)) {
+        if (Array.isArray(documentedRows)) {
+          rows = documentedRows;
+        } else if (!acceptUnsupportedDocumentedFormat ||
+            !/recordid.*datajson/i.test(String(documentedRows?.error || ''))) {
           return { state: 'review', message: 'FactPy no confirmó el estado al consultar con el formato documentado' };
         }
-        rows = documentedRows;
       }
       if (!Array.isArray(rows)) {
         const error = String(rows?.error || '');

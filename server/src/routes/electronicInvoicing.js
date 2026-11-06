@@ -276,7 +276,9 @@ async function retry(type, req, res) {
   }
   let checked;
   try {
-    checked = await createFactpyClient(environment).check(document.receipt_id);
+    checked = await createFactpyClient(environment).check(document.receipt_id, undefined, 0, {
+      acceptUnsupportedDocumentedFormat: environment === 'production',
+    });
   } catch (error) {
     return fiscalError(error, res);
   }

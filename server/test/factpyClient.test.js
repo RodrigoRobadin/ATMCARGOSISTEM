@@ -238,6 +238,45 @@ test('a missing receipt is checked with FactPy documented status field before re
   }
 });
 
+test('one-time production check accepts datajson not-found only when alternate format is explicitly unsupported', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousRecordId = process.env.FACTPY_RECORD_ID;
+  const previousMode = process.env.FACTPY_MODE;
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousEnabled = process.env.FACTPY_PRODUCTION_ENABLED;
+  const previousEstablishment = process.env.FACTPY_ESTABLISHMENT;
+  try {
+    process.env.FACTPY_RECORD_ID = 'production-record';
+    process.env.FACTPY_MODE = 'production';
+    process.env.NODE_ENV = 'production';
+    process.env.FACTPY_PRODUCTION_ENABLED = '1';
+    process.env.FACTPY_ESTABLISHMENT = '001';
+    let calls = 0;
+    globalThis.fetch = async (_url, options) => {
+      calls += 1;
+      if (calls % 2 === 1) {
+        assert.ok(options.body.get('datajson'));
+        return Response.json([{ receiptid: 'atm-production-invoice-117', estado: 'No encontrado' }]);
+      }
+      assert.ok(options.body.get('receiptid'));
+      return Response.json({ error: 'El parámetro recordID y datajson son obligatorios.' });
+    };
+    const client = createFactpyClient('production');
+    assert.equal((await client.check('atm-production-invoice-117')).notFound, undefined);
+    assert.equal((await client.check('atm-production-invoice-117', undefined, 0,
+      { acceptUnsupportedDocumentedFormat: true })).notFound, true);
+    assert.equal(calls, 4);
+  } finally {
+    globalThis.fetch = previousFetch;
+    for (const [key, value] of Object.entries({ FACTPY_RECORD_ID: previousRecordId, FACTPY_MODE: previousMode,
+      NODE_ENV: previousNodeEnv, FACTPY_PRODUCTION_ENABLED: previousEnabled,
+      FACTPY_ESTABLISHMENT: previousEstablishment })) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('FactPy Test exposes an invalid status request without allowing a resend', async () => {
   const previousFetch = globalThis.fetch;
   const previousRecordId = process.env.FACTPY_RECORD_ID;
