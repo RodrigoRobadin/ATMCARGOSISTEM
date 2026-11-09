@@ -34,6 +34,12 @@ export function canRetryProductionDuplicate(row, permittedReceiptId) {
     /documento electr[oó]nico duplicado/i.test(String(row.error_message || ''));
 }
 
+export function canDiscardRejectedInvoice(invoice, fiscal) {
+  return invoice?.fiscal_mode === 'electronic' && invoice?.status === 'borrador' &&
+    !invoice?.issue_date && fiscal?.document_type === 'invoice' &&
+    Number(fiscal?.local_id) === Number(invoice?.id) && fiscal?.status === 'rejected';
+}
+
 export function cancellationResult(response) {
   if (response?.status === true) return 'approved';
   if (response?.status === false) return 'rejected';

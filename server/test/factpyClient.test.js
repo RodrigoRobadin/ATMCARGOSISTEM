@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildInvoicePayload, buildCreditNotePayload, createFactpyClient, factpyMode, canRetryTestDocument, canRetryProductionDuplicate, cancellationResult, canRetryTestCancellation } from '../src/services/factpyClient.js';
+import { buildInvoicePayload, buildCreditNotePayload, createFactpyClient, factpyMode, canRetryTestDocument, canRetryProductionDuplicate, canDiscardRejectedInvoice, cancellationResult, canRetryTestCancellation } from '../src/services/factpyClient.js';
 
 test('cancellation requires an explicit boolean result from FactPy', () => {
   assert.equal(cancellationResult({ status: true, code: 'Evento registrado correctamente' }), 'approved');
@@ -314,6 +314,16 @@ test('production retry is limited to the explicitly permitted duplicate receipt 
   assert.equal(canRetryProductionDuplicate({ ...row, attempt_count: 2 }, row.receipt_id), false);
   assert.equal(canRetryProductionDuplicate({ ...row, cdc: '1'.repeat(44) }, row.receipt_id), false);
   assert.equal(canRetryProductionDuplicate({ ...row, error_message: 'XML rechazado' }, row.receipt_id), false);
+});
+
+test('only an unissued electronic invoice with a definitive fiscal rejection can be discarded', () => {
+  const invoice = { id: 117, fiscal_mode: 'electronic', status: 'borrador', issue_date: null };
+  const fiscal = { document_type: 'invoice', local_id: 117, status: 'rejected', cdc: '1'.repeat(44) };
+  assert.equal(canDiscardRejectedInvoice(invoice, fiscal), true);
+  assert.equal(canDiscardRejectedInvoice({ ...invoice, status: 'emitida' }, fiscal), false);
+  assert.equal(canDiscardRejectedInvoice({ ...invoice, issue_date: '2026-11-06' }, fiscal), false);
+  assert.equal(canDiscardRejectedInvoice(invoice, { ...fiscal, status: 'processing' }), false);
+  assert.equal(canDiscardRejectedInvoice(invoice, { ...fiscal, local_id: 118 }), false);
 });
 
 test('production requires an explicit enable flag and complete fiscal configuration', () => {

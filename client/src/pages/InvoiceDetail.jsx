@@ -178,6 +178,17 @@ export default function InvoiceDetail() {
     }
   }
 
+  async function handleDiscardRejected() {
+    if (!invoice || !confirm('¿Descartar este borrador rechazado? No se enviará ninguna cancelación fiscal. El historial del rechazo se conservará y los ítems podrán facturarse de nuevo.')) return;
+    try {
+      await api.post(`/invoices/${invoice.id}/discard-rejected`, { confirm_rejected_document: true });
+      await loadInvoice();
+      setFiscalVersion((value) => value + 1);
+    } catch (e) {
+      alert(e.response?.data?.error || 'No se pudo descartar el borrador rechazado');
+    }
+  }
+
   async function handlePdf() {
     if (!invoice) return;
     try {
@@ -232,6 +243,11 @@ export default function InvoiceDetail() {
           {invoice.canceled_by_credit_note_id ? ` (NC ID: ${invoice.canceled_by_credit_note_id})` : ''}
         </div>
       )}
+      {invoice.status === 'anulada' && fiscalState?.status === 'rejected' && (
+        <div className="p-3 border border-amber-300 bg-amber-50 text-amber-800 rounded">
+          Borrador descartado tras rechazo fiscal. No se emitió comprobante; el intento permanece en el historial.
+        </div>
+      )}
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="text-sm text-slate-500">
@@ -272,6 +288,11 @@ export default function InvoiceDetail() {
                 Eliminar
               </button>}
             </>
+          )}
+          {invoice.status === 'borrador' && invoice.fiscal_mode === 'electronic' && fiscalState?.status === 'rejected' && (
+            <button onClick={handleDiscardRejected} className="btn border border-amber-500 text-amber-800">
+              Descartar borrador rechazado
+            </button>
           )}
           {(invoice.status === 'emitida' || invoice.status === 'pago_parcial' || invoice.status === 'pagada') && (
             <>

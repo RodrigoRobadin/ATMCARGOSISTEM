@@ -5,7 +5,8 @@ import { requireAuth } from '../middlewares/auth.js';
 import { electronicPointFor } from '../services/electronicExpedition.js';
 import {
   buildInvoicePayload, buildCreditNotePayload, createFactpyClient, factpyMode, mockScenario, fiscalDateTime,
-  canRetryTestDocument, canRetryProductionDuplicate, cancellationResult, canRetryTestCancellation,
+  canRetryTestDocument, canRetryProductionDuplicate, canDiscardRejectedInvoice,
+  cancellationResult, canRetryTestCancellation,
 } from '../services/factpyClient.js';
 
 const router = Router();
@@ -557,6 +558,44 @@ async function refreshCancellation(type, req, res) {
 
 router.get('/electronic-config', requireAuth, (_req, res) => {
   res.json({ enabled: Boolean(factpyMode()), environment: factpyMode() });
+});
+
+router.post('/:id/discard-rejected', requireAuth, async (req, res) => {
+  if (!canSend(req)) return res.status(403).json({ error: 'Solo admin y finanzas pueden descartar facturas electrónicas' });
+  if (req.body?.confirm_rejected_document !== true) {
+    return res.status(400).json({ error: 'Confirmá el descarte del borrador rechazado' });
+  }
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[invoice]] = await conn.query('SELECT * FROM invoices WHERE id = ? FOR UPDATE', [req.params.id]);
+    if (!invoice) throw Object.assign(new Error('Factura no encontrada'), { statusCode: 404 });
+    const [[fiscal]] = await conn.query(
+      "SELECT * FROM fiscal_documents WHERE document_type = 'invoice' AND local_id = ? FOR UPDATE", [invoice.id]
+    );
+    if (!canDiscardRejectedInvoice(invoice, fiscal)) {
+      throw Object.assign(new Error('Solo se puede descartar un borrador electrónico con rechazo fiscal definitivo'), { statusCode: 409 });
+    }
+    if (invoice.container_billing_cycle_id) {
+      throw Object.assign(new Error('La refacturación de mensualidades Container requiere revisión específica'), { statusCode: 409 });
+    }
+    const [[receipts]] = await conn.query(`SELECT COUNT(*) AS count FROM receipts r
+      LEFT JOIN receipt_applications ra ON ra.receipt_id = r.id
+      WHERE COALESCE(ra.invoice_id, r.invoice_id) = ? AND r.status = 'emitido'`, [invoice.id]);
+    const [[notes]] = await conn.query("SELECT COUNT(*) AS count FROM credit_notes WHERE invoice_id = ? AND status <> 'anulada'", [invoice.id]);
+    if (Number(receipts.count) || Number(notes.count)) {
+      throw Object.assign(new Error('La factura tiene cobros o notas vinculadas'), { statusCode: 409 });
+    }
+    await conn.query(`UPDATE invoices SET status = 'anulada', balance = 0, net_balance = 0,
+      cancellation_reason = 'Borrador descartado tras rechazo fiscal' WHERE id = ?`, [invoice.id]);
+    await conn.commit();
+    return res.json({ ok: true, status: 'anulada', fiscal_status: 'rejected' });
+  } catch (error) {
+    await conn.rollback().catch(() => {});
+    return fiscalError(error, res);
+  } finally {
+    conn.release();
+  }
 });
 
 for (const [prefix, type] of [['', 'invoice'], ['/credit-notes', 'credit_note']]) {

@@ -3564,6 +3564,9 @@ router.delete('/:id', requireAuth, async (req, res) => {
       conn.release();
       return res.status(403).json({ error: 'No tienes permiso para eliminar esta factura' });
     }
+    if (invoice.fiscal_mode === 'electronic') {
+      return res.status(409).json({ error: 'Usá el descarte de borrador rechazado o la cancelación fiscal según su estado' });
+    }
     if (invoice.status === 'anulada') {
       conn.release();
       return res.status(400).json({ error: 'La factura ya está anulada' });
