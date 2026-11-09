@@ -1,0 +1,48 @@
+.atm-assistant-dashboard { color: var(--atm-ink); min-width: 0; }
+.atm-assistant-page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding: 4px 0 20px; }
+.atm-assistant-eyebrow { display: inline-flex; align-items: center; gap: 7px; color: var(--atm-forest); font-size: 12px; font-weight: 700; }
+.atm-assistant-page-head h1 { margin: 5px 0 0; font-size: 29px; line-height: 1.2; font-weight: 700; }
+.atm-assistant-page-head p { color: var(--atm-muted); font-size: 13px; margin: 3px 0 0; }
+.atm-assistant-icon-button, .atm-assistant-report-actions button { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--atm-border); border-radius: 6px; background: #fff; color: #364640; }
+.atm-assistant-icon-button:hover, .atm-assistant-report-actions button:hover:not(:disabled) { background: #f2f5ef; }
+.atm-assistant-report-actions button:disabled { opacity: .4; cursor: not-allowed; }
+.atm-assistant-toolbar { display: flex; align-items: end; justify-content: space-between; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid var(--atm-border); }
+.atm-assistant-toolbar label, .atm-assistant-report-actions label { display: flex; flex-direction: column; gap: 5px; color: var(--atm-muted); font-size: 11px; font-weight: 600; }
+.atm-assistant-toolbar select, .atm-assistant-report-actions select { height: 36px; min-width: 190px; max-width: 100%; padding: 0 10px; border: 1px solid var(--atm-border); border-radius: 6px; background: #fff; color: var(--atm-ink); font-size: 13px; }
+.atm-assistant-report-actions select { min-width: 72px; }
+.atm-assistant-asof { font-size: 11px; color: var(--atm-muted); padding-bottom: 7px; }
+.atm-assistant-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-bottom: 1px solid var(--atm-border); margin-bottom: 22px; }
+.atm-assistant-metrics > div { display: flex; flex-direction: column; min-width: 0; padding: 18px 16px 19px 0; }
+.atm-assistant-metrics > div + div { border-left: 1px solid var(--atm-border); padding-left: 16px; }
+.atm-assistant-metrics span { color: var(--atm-muted); font-size: 11px; }
+.atm-assistant-metrics strong { font-size: 25px; font-weight: 700; line-height: 1.45; }
+.atm-assistant-metrics small { color: var(--atm-muted); font-size: 11px; overflow-wrap: anywhere; }
+.atm-assistant-columns { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(330px, .85fr); gap: 20px; align-items: stretch; }
+.atm-assistant-reports { min-width: 0; }
+.atm-assistant-section-head { display: flex; align-items: baseline; justify-content: space-between; padding-bottom: 11px; }
+.atm-assistant-section-head h2 { font-size: 17px; font-weight: 700; }
+.atm-assistant-section-head p { font-size: 12px; color: var(--atm-muted); margin: 2px 0 0; }
+.atm-assistant-report-tabs { display: flex; gap: 15px; overflow-x: auto; border-bottom: 1px solid var(--atm-border); }
+.atm-assistant-report-tabs button { flex: 0 0 auto; padding: 10px 2px 9px; border-bottom: 2px solid transparent; color: var(--atm-muted); font-size: 12px; white-space: nowrap; }
+.atm-assistant-report-tabs button[aria-selected="true"] { color: var(--atm-forest); border-bottom-color: var(--atm-forest); font-weight: 700; }
+.atm-assistant-report-head { display: flex; align-items: end; justify-content: space-between; gap: 12px; padding: 17px 0 11px; }
+.atm-assistant-report-head h3 { font-size: 14px; font-weight: 700; }
+.atm-assistant-report-head p { color: var(--atm-muted); font-size: 11px; margin: 3px 0 0; }
+.atm-assistant-report-actions { display: flex; align-items: end; gap: 7px; flex: 0 0 auto; }
+.atm-assistant-table-wrap { width: 100%; max-height: 590px; overflow: auto; border: 1px solid var(--atm-border); border-radius: 6px; background: #fff; }
+.atm-assistant-table-wrap table { width: 100%; min-width: 600px; border-collapse: collapse; font-size: 12px; }
+.atm-assistant-table-wrap th { position: sticky; top: 0; z-index: 1; background: #edf2ec; color: #32423c; font-size: 10px; font-weight: 700; text-align: left; text-transform: uppercase; padding: 11px 12px; white-space: nowrap; }
+.atm-assistant-table-wrap td { border-top: 1px solid #ecede9; padding: 10px 12px; color: #34433e; vertical-align: top; overflow-wrap: anywhere; }
+.atm-assistant-table-wrap tr:hover td { background: #f7f9f6; }
+.atm-assistant-table-wrap td a { color: var(--atm-forest-hover); font-weight: 700; text-decoration: none; }
+.atm-assistant-table-wrap td a:hover { text-decoration: underline; }
+.atm-assistant-empty { padding: 30px 16px; color: var(--atm-muted); text-align: center; font-size: 12px; }
+.atm-assistant-limit { margin: 9px 0; color: var(--atm-muted); font-size: 11px; }
+.atm-assistant-chat { min-width: 0; height: min(750px, calc(100vh - 150px)); min-height: 560px; }
+.atm-assistant-chat .atm-assistant-embedded { border-radius: 6px; border-color: var(--atm-border); }
+.atm-assistant-chat .atm-assistant-embedded .bg-blue-600 { background: var(--atm-forest); }
+.atm-assistant-chat .atm-assistant-embedded .rounded-2xl { border-radius: 7px; }
+.atm-assistant-error { margin: 10px 0; padding: 10px 12px; border: 1px solid #e9aaa5; border-radius: 6px; background: #fff2f0; color: #8b2e2e; font-size: 12px; }
+@media (max-width: 1200px) { .atm-assistant-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .atm-assistant-metrics > div:nth-child(4) { border-left: 0; padding-left: 0; } .atm-assistant-columns { grid-template-columns: minmax(0, 1fr); } .atm-assistant-chat { height: 700px; } }
+@media (max-width: 680px) { .atm-assistant-page-head h1 { font-size: 25px; } .atm-assistant-toolbar { align-items: flex-start; flex-direction: column; } .atm-assistant-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .atm-assistant-metrics > div { padding: 12px 8px 12px 0; } .atm-assistant-metrics > div + div { padding-left: 0; border-left: 0; } .atm-assistant-metrics > div:nth-child(even) { padding-left: 12px; border-left: 1px solid var(--atm-border); } .atm-assistant-report-head { align-items: flex-start; flex-direction: column; } .atm-assistant-chat { height: 640px; } }
+@media print { .atm-sidebar, .atm-topbar, .atm-assistant-chat, .atm-assistant-icon-button, .atm-assistant-report-tabs, .atm-assistant-report-actions { display: none !important; } .atm-assistant-columns { display: block; } .atm-assistant-table-wrap { max-height: none; overflow: visible; } .atm-assistant-table-wrap table { min-width: 0; } }

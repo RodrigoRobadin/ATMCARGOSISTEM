@@ -4,6 +4,8 @@ import { pool } from '../services/db.js';
 import { requireAuth } from '../middlewares/auth.js';
 import { logAudit } from '../services/audit.js';
 import { getAssistantConfig } from '../services/assistantConfig.js';
+import { detectDailyRoutineIntent, detectFollowupActionIntent, isGeneralCrmQuery } from '../services/assistantIntent.js';
+import { loadAssistantDailyBrief } from '../services/assistantDailyBrief.js';
 
 const router = Router();
 
@@ -457,25 +459,11 @@ function detectOperationIntent(message) {
   return null;
 }
 
-function detectFollowupActionIntent(message) {
-  const text = cleanText(message, 260).toLowerCase();
-  if (!text) return null;
-
-  const wantsCreate = /(crea|crear|creame|créame|agrega|agregar|anota|anotar|recorda|recordame|recordar|genera|genera una|carga|cargar)/i.test(text);
-  if (!wantsCreate) return null;
-
-  if (/(tarea|seguimiento pendiente)/i.test(text)) return 'task';
-  if (/(recordatorio|recordame|recordar)/i.test(text)) return 'reminder';
-  if (/(nota|anota|comentario)/i.test(text)) return 'note';
-  if (/(actividad|registrar actividad)/i.test(text)) return 'activity';
-  return 'activity';
-}
-
 function detectSystemQueryIntent(message) {
   const text = cleanText(message, 260).toLowerCase();
   if (!text) return false;
   if (/\[contexto adjunto\]/i.test(text)) return true;
-  return /(operacion|operación|cliente|contacto|servicio|mantenimiento|caso|seguimiento|cotizacion|cotización|presupuesto|factura|estado|resumen|buscar|buscame|mostrame|mu[eé]strame|cu[aá]nt[oa]s?)/i.test(text);
+  return /(operacion|operación|cliente|contacto|servicio|mantenimiento|caso|seguimiento|cotizacion|cotización|presupuesto|factura|estado|resumen|buscar|buscame|mostrame|mu[eé]strame|cu[aá]nt[oa]s?|abiert[ao]s?|pendientes)/i.test(text);
 }
 
 function detectAssistantMode({ message, followupActionIntent, normalizedMessageRef, crmEntityType, operationIntent, contextItems }) {
@@ -1046,8 +1034,8 @@ async function searchCrmEntities(args, context = {}) {
   };
 }
 
-async function getOpenOperationsSummary(args) {
-  const limit = clampInt(args?.limit, 10, 1, 20);
+async function getOpenOperationsSummary(args, maxLimit = 20) {
+  const limit = clampInt(args?.limit, 10, 1, maxLimit);
   const params = [];
   const buWhere = buildBusinessUnitWhere(args?.business_unit_slug, params);
 
@@ -1104,8 +1092,8 @@ async function getOpenOperationsSummary(args) {
   };
 }
 
-async function listOperationsWithoutQuote(args) {
-  const limit = clampInt(args?.limit, 10, 1, 20);
+async function listOperationsWithoutQuote(args, maxLimit = 20) {
+  const limit = clampInt(args?.limit, 10, 1, maxLimit);
   const params = [];
   const buWhere = buildBusinessUnitWhere(args?.business_unit_slug, params);
 
@@ -1156,8 +1144,8 @@ async function listOperationsWithoutQuote(args) {
   };
 }
 
-async function listOperationsWithQuoteDelay(args) {
-  const limit = clampInt(args?.limit, 10, 1, 20);
+async function listOperationsWithQuoteDelay(args, maxLimit = 20) {
+  const limit = clampInt(args?.limit, 10, 1, maxLimit);
   const minDelayDays = clampInt(args?.min_delay_days, 15, 1, 365);
   const params = [];
   const buWhere = buildBusinessUnitWhere(args?.business_unit_slug, params);
@@ -1953,8 +1941,8 @@ async function getContactSummary(args) {
   };
 }
 
-async function getServiceCasesSummary(args) {
-  const limit = clampInt(args?.limit, 10, 1, 20);
+async function getServiceCasesSummary(args, maxLimit = 20) {
+  const limit = clampInt(args?.limit, 10, 1, maxLimit);
 
   const [[summary]] = await pool.query(
     `
@@ -1989,8 +1977,8 @@ async function getServiceCasesSummary(args) {
   return { summary, items };
 }
 
-async function getFollowupSummary(args) {
-  const limit = clampInt(args?.limit, 10, 1, 20);
+async function getFollowupSummary(args, maxLimit = 20) {
+  const limit = clampInt(args?.limit, 10, 1, maxLimit);
 
   const [[summary]] = await pool.query(
     `
@@ -2356,16 +2344,16 @@ function collectAssistantLinksFromContextItems(contextItems, map, access) {
 
 const TOOL_HANDLERS = {
   search_crm_entities: searchCrmEntities,
-  get_open_operations_summary: getOpenOperationsSummary,
+  get_open_operations_summary: (args) => getOpenOperationsSummary(args),
   search_operations_advanced: searchOperationsAdvanced,
   get_operation_summary: getOperationSummary,
-  list_operations_without_quote: listOperationsWithoutQuote,
-  list_operations_with_quote_delay: listOperationsWithQuoteDelay,
+  list_operations_without_quote: (args) => listOperationsWithoutQuote(args),
+  list_operations_with_quote_delay: (args) => listOperationsWithQuoteDelay(args),
   get_organization_summary: getOrganizationSummary,
   get_contact_summary: getContactSummary,
-  get_service_cases_summary: getServiceCasesSummary,
+  get_service_cases_summary: (args) => getServiceCasesSummary(args),
   get_service_case_summary: getServiceCaseSummary,
-  get_followup_summary: getFollowupSummary,
+  get_followup_summary: (args) => getFollowupSummary(args),
   prepare_operation_followup_action: prepareOperationFollowupAction,
 };
 
@@ -2581,6 +2569,63 @@ function toOpenAIInput(history, message, contextInstruction = '') {
   return items;
 }
 
+const DASHBOARD_REPORTS = {
+  open_operations: (args, maxLimit) => getOpenOperationsSummary(args, maxLimit),
+  without_quote: (args, maxLimit) => listOperationsWithoutQuote(args, maxLimit),
+  quote_delay: (args, maxLimit) => listOperationsWithQuoteDelay(args, maxLimit),
+  followup: (args, maxLimit) => getFollowupSummary(args, maxLimit),
+  service: (args, maxLimit) => getServiceCasesSummary(args, maxLimit),
+};
+
+router.get('/dashboard', requireAuth, async (req, res) => {
+  try {
+    const access = getAssistantAccess(req);
+    const businessUnitSlug = cleanText(req.query.business_unit_slug, 80);
+    const args = { business_unit_slug: businessUnitSlug, min_delay_days: 15, limit: 5 };
+    const [operations, withoutQuote, delayed, followup, service, [businessUnits]] = await Promise.all([
+      getOpenOperationsSummary(args),
+      listOperationsWithoutQuote(args),
+      listOperationsWithQuoteDelay(args),
+      access.canViewFollowup ? getFollowupSummary({ limit: 5 }) : Promise.resolve(null),
+      access.canViewService ? getServiceCasesSummary({ limit: 5 }) : Promise.resolve(null),
+      pool.query('SELECT key_slug, name FROM business_units ORDER BY name'),
+    ]);
+    res.json({
+      generated_at: new Date().toISOString(),
+      business_units: businessUnits,
+      operations,
+      without_quote: withoutQuote,
+      quote_delay: delayed,
+      followup,
+      service,
+    });
+  } catch (error) {
+    console.error('[assistant] dashboard error:', error);
+    res.status(500).json({ message: 'No se pudo cargar el panel del asistente.' });
+  }
+});
+
+router.get('/reports/:kind', requireAuth, async (req, res) => {
+  const kind = String(req.params.kind || '');
+  const access = getAssistantAccess(req);
+  if (!Object.hasOwn(DASHBOARD_REPORTS, kind)) return res.status(404).json({ message: 'Informe no encontrado.' });
+  if ((kind === 'service' && !access.canViewService) || (kind === 'followup' && !access.canViewFollowup)) {
+    return res.status(403).json({ message: 'No tenes permiso para este informe.' });
+  }
+  try {
+    const args = {
+      business_unit_slug: cleanText(req.query.business_unit_slug, 80),
+      min_delay_days: clampInt(req.query.min_delay_days, 15, 1, 365),
+      limit: clampInt(req.query.limit, 200, 1, 500),
+    };
+    const data = await DASHBOARD_REPORTS[kind](args, 500);
+    res.json({ kind, generated_at: new Date().toISOString(), limit: args.limit, data });
+  } catch (error) {
+    console.error('[assistant] report error:', error);
+    res.status(500).json({ message: 'No se pudo generar el informe.' });
+  }
+});
+
 router.get('/status', requireAuth, async (_req, res) => {
   const assistantConfig = getAssistantConfig();
   const access = getAssistantAccess(_req);
@@ -2729,19 +2774,33 @@ router.post('/respond', requireAuth, async (req, res) => {
     contextItems,
   });
   const tools = getToolDefinitionsForMode(assistantMode, access);
+  const dailyRoutine = detectDailyRoutineIntent(message);
   const linkMap = new Map();
   let pendingAction = null;
-  const contextInstruction = buildContextInstructionText(contextItems);
+  const generalQuery = isGeneralCrmQuery(message);
+  const contextInstruction = generalQuery ? '' : buildContextInstructionText(contextItems);
 
   try {
     incrementAssistantInFlight(rateLimit.key);
-    collectAssistantLinksFromContextItems(contextItems, linkMap, access);
+    if (dailyRoutine) {
+      const brief = await loadAssistantDailyBrief(pool, { mode: dailyRoutine, userId: req.user?.id });
+      await logAudit({
+        req, action: 'assistant_query', entity: 'assistant', description: 'Resumen diario del asistente IA',
+        meta: { mode: dailyRoutine, role: access.role, day: brief.day },
+      });
+      return res.json({
+        ok: true, mode: 'system_query', answer: brief.answer, response_kind: 'daily_brief',
+        tools_used: ['daily_brief'], links: brief.links, generated_at: brief.generated_at,
+        pending_action: null,
+      });
+    }
+    if (!generalQuery) collectAssistantLinksFromContextItems(contextItems, linkMap, access);
     let hintedOperationResult = null;
     const operationContext = contextItems.find((item) => item.type === 'operation' && item.id);
     const organizationContext = contextItems.find((item) => item.type === 'organization' && item.id);
     const contactContext = contextItems.find((item) => item.type === 'contact' && item.id);
     const serviceCaseContext = contextItems.find((item) => item.type === 'service_case' && item.id);
-    if (!normalizedMessageRef && operationContext && access.canViewOperations) {
+    if (!generalQuery && !normalizedMessageRef && operationContext && access.canViewOperations) {
       hintedOperationResult = await getOperationSummary({ operation_id: operationContext.id });
       collectAssistantLinksFromToolOutput('get_operation_summary', hintedOperationResult, linkMap, access);
       if (hintedOperationResult?.operation?.id) {
@@ -2800,7 +2859,7 @@ router.post('/respond', requireAuth, async (req, res) => {
     let hintedOrganizationResult = null;
     let hintedContactResult = null;
     let hintedServiceCaseResult = null;
-    if (!normalizedMessageRef && !crmEntityLookup && organizationContext && access.canViewOrganizations) {
+    if (!generalQuery && !normalizedMessageRef && !crmEntityLookup && organizationContext && access.canViewOrganizations) {
       hintedOrganizationResult = await getOrganizationSummary({ organization_id: organizationContext.id });
       collectAssistantLinksFromToolOutput('get_organization_summary', hintedOrganizationResult, linkMap, access);
       if (hintedOrganizationResult?.organization?.id) toolNamesUsed.push('get_organization_summary:context');
@@ -2842,7 +2901,7 @@ router.post('/respond', requireAuth, async (req, res) => {
         });
       }
     }
-    if (!normalizedMessageRef && !crmEntityLookup && contactContext && access.canViewContacts) {
+    if (!generalQuery && !normalizedMessageRef && !crmEntityLookup && contactContext && access.canViewContacts) {
       hintedContactResult = await getContactSummary({ contact_id: contactContext.id });
       collectAssistantLinksFromToolOutput('get_contact_summary', hintedContactResult, linkMap, access);
       if (hintedContactResult?.contact?.id) toolNamesUsed.push('get_contact_summary:context');
@@ -2884,7 +2943,7 @@ router.post('/respond', requireAuth, async (req, res) => {
         });
       }
     }
-    if (!normalizedMessageRef && !crmEntityLookup && serviceCaseContext && access.canViewService) {
+    if (!generalQuery && !normalizedMessageRef && !crmEntityLookup && serviceCaseContext && access.canViewService) {
       hintedServiceCaseResult = await getServiceCaseSummary({ service_case_id: serviceCaseContext.id });
       collectAssistantLinksFromToolOutput('get_service_case_summary', hintedServiceCaseResult, linkMap, access);
       if (hintedServiceCaseResult?.service_case?.id) toolNamesUsed.push('get_service_case_summary:context');
@@ -3094,10 +3153,12 @@ router.post('/respond', requireAuth, async (req, res) => {
       if (!toolCalls.length) break;
 
       const toolOutputs = [];
+      let queryFailed = false;
       for (const call of toolCalls) {
         const args = safeJsonParse(call.arguments, {});
         toolNamesUsed.push(call.name);
         const output = await executeTool(call.name, args, { req, access });
+        if (output?.error === 'tool_execution_failed') queryFailed = true;
         collectAssistantLinksFromToolOutput(call.name, output, linkMap, access);
         if (!pendingAction && output?.pending_action?.id) {
           pendingAction = output.pending_action;
@@ -3106,6 +3167,24 @@ router.post('/respond', requireAuth, async (req, res) => {
           type: 'function_call_output',
           call_id: call.call_id,
           output: JSON.stringify(output),
+        });
+      }
+
+      if (queryFailed) {
+        await logAudit({
+          req,
+          action: 'assistant_query',
+          entity: 'assistant',
+          description: 'Consulta al asistente IA fallida',
+          meta: { mode: assistantMode, role: access.role, tools_used: Array.from(new Set(toolNamesUsed)) },
+        });
+        return res.json({
+          ok: false,
+          mode: assistantMode,
+          answer: 'No pude completar la consulta del sistema. No voy a afirmar resultados con datos incompletos. Volve a intentar y, si persiste, revisemos el error del servidor.',
+          tools_used: Array.from(new Set(toolNamesUsed)),
+          links: [],
+          pending_action: null,
         });
       }
 

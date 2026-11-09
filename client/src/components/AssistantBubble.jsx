@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { ArrowUpRight, Sparkles, X } from "lucide-react";
 import api from "../api";
 import { ASSISTANT_ATTACH_EVENT } from "../utils/assistantContext";
 
@@ -8,10 +9,10 @@ const CONTEXT_STORAGE_KEY = "assistant_phase2_context";
 const CHIP_POSITION_KEY = "assistant_phase2_chip_position";
 
 const SUGGESTIONS = [
-  "Cuantas operaciones abiertas hay?",
-  "Que operaciones abiertas no tienen cotizacion?",
-  "Dame un resumen del cliente BIT FARMS",
-  "Creame una tarea para la operacion 508 que diga llamar de vuelta",
+  "¿Cuántas operaciones abiertas hay?",
+  "¿Qué operaciones abiertas no tienen cotización?",
+  "Mostrame los seguimientos pendientes",
+  "¿Qué operaciones requieren atención esta semana?",
 ];
 
 function loadStored(key) {
@@ -208,9 +209,9 @@ function AssistantResponseBody({ message }) {
   );
 }
 
-export default function AssistantBubble() {
+export default function AssistantBubble({ embedded = false }) {
   const navigate = useNavigate();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(embedded);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
   const [booting, setBooting] = useState(false);
@@ -495,51 +496,53 @@ export default function AssistantBubble() {
 
   return (
     <>
-      {!open && (
+      {!embedded && !open && (
         <button
           type="button"
-          className="fixed z-40 rounded-l-2xl bg-slate-950 px-3 py-4 text-sm font-semibold text-white shadow-lg hover:bg-slate-900 cursor-grab active:cursor-grabbing select-none"
+          className="fixed z-40 flex items-center gap-1 rounded-l-md bg-emerald-800 px-3 py-3 text-sm font-semibold text-white shadow-lg hover:bg-emerald-900 cursor-grab active:cursor-grabbing select-none"
           style={{ top: `${chipPosition.top}px`, right: `${chipPosition.right}px` }}
           onMouseDown={startChipDrag}
           onClick={handleChipClick}
           title="Abrir asistente IA"
         >
-          IA
+          <Sparkles size={16} aria-hidden="true" /> IA
         </button>
       )}
 
       <div
-        className={`fixed right-0 top-14 z-40 h-[calc(100vh-56px)] w-[430px] max-w-[calc(100vw-1rem)] border-l bg-white shadow-2xl transition-transform duration-300 ${
-          open ? "translate-x-0" : "translate-x-full"
-        }`}
+        className={embedded
+          ? "atm-assistant-embedded h-full min-h-[560px] overflow-hidden border border-slate-200 bg-white"
+          : `fixed right-0 top-14 z-40 h-[calc(100vh-56px)] w-[430px] max-w-[calc(100vw-1rem)] border-l bg-white shadow-2xl transition-transform duration-300 ${open ? "translate-x-0" : "translate-x-full"}`}
       >
         <div className="flex h-full flex-col overflow-hidden">
-          <div className="border-b bg-slate-950 px-4 py-3 text-white">
+          <div className="border-b border-slate-200 bg-white px-4 py-3 text-slate-900">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold">Asistente IA</div>
-                <div className="text-[11px] text-slate-300">
-                  Panel asistido con contexto adjunto
+                <div className="flex items-center gap-2 text-sm font-semibold"><Sparkles size={16} className="text-emerald-700" /> Asistente IA</div>
+                <div className="text-[11px] text-slate-500">
+                  {embedded ? "Consultas y acciones" : "Consultas con contexto adjunto"}
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  className="text-[11px] text-slate-300 hover:text-white"
+                  className="text-xs text-slate-600 hover:text-slate-900"
                   onClick={clearConversation}
                 >
                   Limpiar
                 </button>
-                <button
-                  type="button"
-                  className="rounded-lg border border-slate-700 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-900"
-                  onClick={() => setOpen(false)}
-                >
-                  Cerrar
-                </button>
+                {!embedded && <>
+                  <button type="button" className="rounded border border-slate-200 p-1.5 hover:bg-slate-50" onClick={() => navigate('/assistant')} title="Abrir panel completo" aria-label="Abrir panel completo"><ArrowUpRight size={16} /></button>
+                  <button type="button" className="rounded border border-slate-200 p-1.5 hover:bg-slate-50" onClick={() => setOpen(false)} title="Cerrar" aria-label="Cerrar"><X size={16} /></button>
+                </>}
               </div>
             </div>
           </div>
+
+          {embedded && <div className="flex flex-wrap gap-2 border-b border-slate-200 bg-white px-4 py-2">
+            <button type="button" className="rounded border border-slate-200 px-2 py-1.5 text-xs text-emerald-800 hover:bg-emerald-50 disabled:opacity-50" onClick={() => sendMessage("¿Qué requiere atención hoy?")} disabled={loading}>Prioridades de hoy</button>
+            <button type="button" className="rounded border border-slate-200 px-2 py-1.5 text-xs text-emerald-800 hover:bg-emerald-50 disabled:opacity-50" onClick={() => sendMessage("Resumí lo hecho hoy y lo pendiente para mañana")} disabled={loading}>Cierre de jornada</button>
+          </div>}
 
           <div className="border-b bg-slate-50 px-4 py-3">
             <div className="flex items-center justify-between gap-2">
@@ -590,10 +593,6 @@ export default function AssistantBubble() {
             </div>
           </div>
 
-          <div className="border-b bg-slate-50 px-4 py-2 text-[11px] text-slate-600">
-            Consulta datos reales y puede proponer acciones con confirmacion.
-          </div>
-
           <div ref={listRef} className="flex-1 overflow-auto bg-white px-4 py-4">
             <div className="space-y-3">
               {booting && <div className="text-xs text-slate-500">Cargando asistente...</div>}
@@ -612,9 +611,6 @@ export default function AssistantBubble() {
 
               {!messages.length && !booting && (
                 <div className="space-y-3">
-                  <div className="text-sm text-slate-700">
-                    Este panel puede trabajar con contexto vivo. Adjunta una operación, un cliente o un contacto y luego consulta o pide una acción.
-                  </div>
                   <div className="grid gap-2">
                     {SUGGESTIONS.map((item) => (
                       <button

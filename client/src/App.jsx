@@ -1,7 +1,7 @@
 // client/src/App.jsx
 import React, { useEffect, useState } from 'react';
 import { NavLink, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, ChartNoAxesCombined, ListTodo, MessageSquare, KanbanSquare, Truck, Boxes, Factory, Wrench, CalendarDays, ClipboardList, Users, Settings, Folder, Wallet, FileText, ReceiptText, Package, Building2, FileCheck2, Phone, LogOut, Sun, Moon, ShieldCheck, UserRound, CreditCard, ChevronDown, ChevronUp, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { LayoutDashboard, ChartNoAxesCombined, ListTodo, MessageSquare, KanbanSquare, Truck, Boxes, Factory, Wrench, CalendarDays, ClipboardList, Users, Settings, Folder, Wallet, FileText, ReceiptText, Package, Building2, FileCheck2, Phone, LogOut, Sun, Moon, ShieldCheck, UserRound, CreditCard, ChevronDown, ChevronUp, PanelLeftClose, PanelLeftOpen, Sparkles } from 'lucide-react';
 
 import Pipeline from './pages/Pipeline';
 import CommercialDashboard from './pages/CommercialDashboard.jsx';
@@ -24,6 +24,7 @@ import Quotes from './pages/Quotes.jsx';
 import QuoteEditor from './pages/QuoteEditor.jsx';
 import GlobalSearchBar from './components/GlobalSearchBar.jsx';
 import AssistantBubble from './components/AssistantBubble.jsx';
+import AssistantDashboard from './pages/AssistantDashboard.jsx';
 
 // Admin
 import UsersAdmin from './pages/UsersAdmin.jsx';
@@ -85,6 +86,7 @@ const sidebarIcons = {
   commercial: <ChartNoAxesCombined size={18} />,
   commissions: <Wallet size={18} />,
   assistantFollowup: <ListTodo size={18} />,
+  assistant: <Sparkles size={18} />,
   prospecting: <MessageSquare size={18} />,
   kanban: <KanbanSquare size={18} />,
   cargo: <Truck size={18} />,
@@ -191,6 +193,7 @@ function Layout({ children }) {
         <nav className="p-3 space-y-1">
           <SideLink to="/general" icon={sidebarIcons.general} label="Inicio" />
           <SideLink to="/calendar" icon={sidebarIcons.calendar} label="Agenda" />
+          <SideLink to="/assistant" icon={sidebarIcons.assistant} label="Asistente IA" />
           <SideLink to="/workspace/atm-cargo" icon={sidebarIcons.cargo} label="ATM Cargo" />
           <div>
             <button
@@ -418,7 +421,7 @@ function Layout({ children }) {
         </div>
         <div className="p-4 lg:p-5">{children}</div>
       </main>
-      <AssistantBubble />
+      {pathname !== '/assistant' && <AssistantBubble />}
     </div>
   );
 }
@@ -484,6 +487,7 @@ export default function App() {
                 <Route path="/commercial-dashboard/commissions" element={<CommissionSheet />} />
                 <Route path="/lost-deals" element={<LostDeals />} />
                 <Route path="/general" element={<General />} />
+                <Route path="/assistant" element={<AssistantDashboard />} />
 
                 {/* Contactos */}
                 <Route path="/contacts" element={<Contacts />} />
