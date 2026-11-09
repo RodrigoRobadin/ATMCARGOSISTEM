@@ -1,6 +1,7 @@
 // client/src/pages/Contacts.jsx
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { Plus, Search, X } from "lucide-react";
 import { api } from "../api";
 
 export default function Contacts() {
@@ -58,17 +59,23 @@ export default function Contacts() {
   }
 
   return (
-    <div>
-      <div className="flex items-start justify-between mb-4 gap-3 flex-wrap">
-        <h2 className="text-lg font-semibold">Contactos</h2>
+    <div className="atm-contacts">
+      <div className="atm-contacts-heading">
+        <div><h1>Contactos</h1><p>Personas vinculadas a clientes y operaciones</p></div>
+        <button type="button" onClick={() => setOpen(true)} className="atm-primary atm-contacts-new">
+          <Plus size={17} aria-hidden="true" /> Nuevo contacto
+        </button>
+      </div>
 
-        <form onSubmit={onSearch} className="flex items-center gap-2 flex-wrap">
+      <form onSubmit={onSearch} className="atm-contacts-filters">
+          <div className="atm-contacts-search"><Search size={17} aria-hidden="true" />
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Buscar por nombre, email o teléfono…"
             className="border rounded-lg px-3 py-2 text-sm w-64"
           />
+          </div>
 
           <div className="relative">
             <input
@@ -90,7 +97,7 @@ export default function Contacts() {
             onChange={(e) => setOwner(e.target.value)}
             className="border rounded-lg px-3 py-2 text-sm"
           >
-            <option value="">Owner (todos)</option>
+            <option value="">Todos los responsables</option>
             {owners.length
               ? owners.map((u) => (
                   <option key={u.id} value={u.id}>
@@ -105,10 +112,10 @@ export default function Contacts() {
             onChange={(e) => setVisibility(e.target.value)}
             className="border rounded-lg px-3 py-2 text-sm"
           >
-            <option value="">Visibilidad (todas)</option>
-            <option value="company">company</option>
-            <option value="shared">shared</option>
-            <option value="private">private</option>
+            <option value="">Toda visibilidad</option>
+            <option value="company">Empresa</option>
+            <option value="shared">Compartido</option>
+            <option value="private">Privado</option>
           </select>
 
           <label className="flex items-center gap-1 text-sm">
@@ -120,26 +127,20 @@ export default function Contacts() {
             Sólo con email
           </label>
 
-          <button className="px-3 py-2 text-sm rounded-lg border">Buscar</button>
+          <button className="atm-contacts-apply px-3 py-2 text-sm rounded-lg border">Buscar</button>
           <button
             type="button"
             onClick={onClear}
-            className="px-3 py-2 text-sm rounded-lg border"
+            className="atm-contacts-clear px-3 py-2 text-sm rounded-lg border"
           >
             Limpiar
           </button>
 
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="px-3 py-2 text-sm rounded-lg bg-black text-white"
-          >
-            ➕ Nuevo contacto
-          </button>
         </form>
-      </div>
 
-      <div className="overflow-x-auto bg-white shadow rounded-xl">
+      <div className="atm-contacts-result-count">{rows.length} {rows.length === 1 ? "contacto" : "contactos"}</div>
+
+      <div className="atm-contacts-table overflow-x-auto bg-white shadow rounded-xl">
         <table className="min-w-full border-collapse">
           <thead className="bg-slate-100 text-sm text-left">
             <tr>
@@ -156,7 +157,7 @@ export default function Contacts() {
             {rows.map((c) => (
               <tr key={c.id} className="hover:bg-slate-50">
                 <td className="px-4 py-2 border-b">
-                  <Link to={`/contacts/${c.id}`} className="text-blue-600 hover:underline">
+                  <Link to={`/contacts/${c.id}`} className="atm-contacts-name-link">
                     {c.name || c.email || `Contacto #${c.id}`}
                   </Link>
                 </td>
@@ -166,7 +167,7 @@ export default function Contacts() {
                 <td className="px-4 py-2 border-b">{c.org_name || "—"}</td>
                 <td className="px-4 py-2 border-b">
                   {c.label ? (
-                    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs bg-slate-200">
+                    <span className="atm-contacts-label inline-flex items-center rounded-full px-2 py-0.5 text-xs">
                       {c.label}
                     </span>
                   ) : "—"}
@@ -255,11 +256,11 @@ function NewContactModal({ onClose, onCreated, owners = [], labelOptions = [] })
   }
 
   return (
-    <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
-      <form onSubmit={submit} className="bg-white rounded-2xl p-4 w-full max-w-md space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Nuevo contacto</h3>
-          <button type="button" onClick={onClose} className="text-sm">✕</button>
+    <div className="atm-form-overlay fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4">
+      <form onSubmit={submit} className="atm-contact-modal atm-form-modal bg-white rounded-2xl w-full max-w-md">
+        <div className="atm-contact-modal-head flex items-center justify-between">
+          <div><div className="atm-form-eyebrow">Contactos</div><h2 className="atm-form-title">Nuevo contacto</h2></div>
+          <button type="button" onClick={onClose} className="atm-form-icon-close" aria-label="Cerrar formulario" title="Cerrar"><X size={18} aria-hidden="true" /></button>
         </div>
 
         <label className="block text-sm">Nombre
@@ -293,13 +294,13 @@ function NewContactModal({ onClose, onCreated, owners = [], labelOptions = [] })
             </datalist>
           </label>
 
-          <label className="block text-sm">Owner
+          <label className="block text-sm">Responsable
             <select
               className="w-full border rounded-lg px-3 py-2"
               value={owner_user_id}
               onChange={(e)=>setOwnerUserId(e.target.value)}
             >
-              <option value="">(sin owner)</option>
+              <option value="">Sin responsable</option>
               {owners.map(u => (
                 <option key={u.id} value={u.id}>{u.name}</option>
               ))}
@@ -313,9 +314,9 @@ function NewContactModal({ onClose, onCreated, owners = [], labelOptions = [] })
             value={visibility}
             onChange={(e)=>setVisibility(e.target.value)}
           >
-            <option value="company">company</option>
-            <option value="shared">shared</option>
-            <option value="private">private</option>
+            <option value="company">Empresa</option>
+            <option value="shared">Compartido</option>
+            <option value="private">Privado</option>
           </select>
         </label>
 
@@ -343,9 +344,9 @@ function NewContactModal({ onClose, onCreated, owners = [], labelOptions = [] })
           )}
         </div>
 
-        <div className="pt-2 flex gap-2 justify-end">
+        <div className="atm-contact-modal-actions pt-2 flex gap-2 justify-end">
           <button type="button" onClick={onClose} className="px-3 py-2 border rounded-lg">Cancelar</button>
-          <button className="px-3 py-2 rounded-lg bg-black text-white">Crear</button>
+          <button className="atm-form-submit px-3 py-2 rounded-lg text-white">Crear contacto</button>
         </div>
       </form>
     </div>

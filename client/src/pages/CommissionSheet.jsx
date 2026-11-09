@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { FileDown, Plus } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../auth.jsx';
 import CommissionPanel from '../components/CommissionPanel.jsx';
@@ -123,31 +124,38 @@ export default function CommissionSheet() {
     }
   };
 
-  return <div className="space-y-4">
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><h1 className="text-xl font-semibold">Planilla de comisiones</h1><p className="text-sm text-slate-500">Liquidaciones comerciales, facturas y trazabilidad por operacion.</p></div>
-      <div className="flex gap-2">
-        <button type="button" className="rounded bg-black px-3 py-2 text-sm text-white" onClick={openCreate}>Nueva liquidacion</button>
-        <button type="button" className="rounded border px-3 py-2 text-sm" onClick={exportPdf}>Exportar PDF</button>
-        {selectedRows.length ? <button type="button" className="rounded bg-black px-3 py-2 text-sm text-white" onClick={openInvoice}>Registrar factura ({selectedRows.length})</button> : null}
+  return <div className="atm-commissions min-w-0 space-y-5">
+    <header className="atm-page-heading flex-wrap">
+      <div><h1>Planilla de comisiones</h1><p className="atm-page-subtitle">Liquidaciones comerciales y facturas por operación</p></div>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className="atm-primary inline-flex min-h-10 items-center gap-2 rounded-md px-4 text-sm font-semibold" onClick={openCreate}><Plus size={17} /> Nueva liquidación</button>
+        <button type="button" className="atm-secondary inline-flex min-h-10 items-center gap-2 rounded-md px-4 text-sm font-medium" onClick={exportPdf}><FileDown size={16} /> Exportar PDF</button>
+        {selectedRows.length ? <button type="button" className="atm-primary min-h-10 rounded-md px-4 text-sm font-semibold" onClick={openInvoice}>Registrar factura ({selectedRows.length})</button> : null}
       </div>
-    </div>
+    </header>
 
     {error ? <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
 
-    <div className="flex flex-wrap gap-2 rounded-lg border bg-white p-3">
-      {isAdmin ? <select className="rounded border px-3 py-2 text-sm" value={filters.user_id} onChange={(e) => setFilters({ ...filters, user_id: e.target.value })}><option value="">Todos los ejecutivos</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name || item.email}</option>)}</select> : null}
-      <select className="rounded border px-3 py-2 text-sm" value={filters.business_unit} onChange={(e) => setFilters({ ...filters, business_unit: e.target.value })}><option value="">Cargo + Industrial</option><option value="atm-cargo">ATM Cargo</option><option value="atm-industrial">ATM Industrial</option></select>
-      <select className="rounded border px-3 py-2 text-sm" value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="">Todos los estados</option><option value="borrador">Borrador</option><option value="enviada_aprobacion">Pendiente aprobacion</option><option value="aprobada_facturar">Aprobada para facturar</option><option value="facturada">Facturada</option><option value="pagada">Pagada</option><option value="anulada">Anulada</option></select>
+    <div className="atm-commission-filters flex flex-wrap gap-2">
+      {isAdmin ? <select aria-label="Ejecutivo" value={filters.user_id} onChange={(e) => setFilters({ ...filters, user_id: e.target.value })}><option value="">Todos los ejecutivos</option>{users.map((item) => <option key={item.id} value={item.id}>{item.name || item.email}</option>)}</select> : null}
+      <select aria-label="Unidad" value={filters.business_unit} onChange={(e) => setFilters({ ...filters, business_unit: e.target.value })}><option value="">Cargo + Industrial</option><option value="atm-cargo">ATM Cargo</option><option value="atm-industrial">ATM Industrial</option></select>
+      <select aria-label="Estado" value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="">Todos los estados</option><option value="borrador">Borrador</option><option value="enviada_aprobacion">Pendiente aprobacion</option><option value="aprobada_facturar">Aprobada para facturar</option><option value="facturada">Facturada</option><option value="pagada">Pagada</option><option value="anulada">Anulada</option></select>
     </div>
 
-    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-      {Object.entries(totals).map(([code, total]) => <div key={code} className="rounded-lg border bg-white p-3 text-sm"><b>{code}</b><div>Profit ventas: {money(total.profit, code)}</div><div>Comision bruta: {money(total.commissionGross, code)}</div><div>IVA descontado: {money(total.iva, code)}</div><div>Comision vendedor: {money(total.commissionNet, code)}</div><div>Profit ATM: {money(total.atm, code)}</div></div>)}
+    <div className="atm-commission-summary space-y-2">
+      {Object.entries(totals).map(([code, total]) => <section key={code} className="atm-commission-currency">
+        <h2>{code}</h2>
+        <div><span>Profit ventas</span><strong>{money(total.profit, code)}</strong></div>
+        <div><span>Comisión bruta</span><strong>{money(total.commissionGross, code)}</strong></div>
+        <div><span>IVA descontado</span><strong>{money(total.iva, code)}</strong></div>
+        <div><span>Comisión vendedor</span><strong>{money(total.commissionNet, code)}</strong></div>
+        <div className="atm-commission-profit"><span>Profit ATM</span><strong>{money(total.atm, code)}</strong></div>
+      </section>)}
     </div>
 
-    <div className="overflow-auto rounded-lg border bg-white">
-      <table className="min-w-full text-sm">
-        <thead className="bg-slate-100 text-slate-600"><tr><th className="px-3 py-2" />{['REF.', 'Cliente', 'Ejecutivo', 'Compra', 'Venta', 'Profit', '%', 'Comision bruta', 'IVA descontado', 'Comision vendedor', 'Profit ATM', 'Estado', 'Acciones'].map((heading) => <th key={heading} className="px-3 py-2 text-left">{heading}</th>)}</tr></thead>
+    <div className="atm-commission-table-wrap overflow-x-auto">
+      <table className="w-full min-w-[1580px] text-sm">
+        <thead><tr><th className="px-3 py-2" />{['REF.', 'Cliente', 'Ejecutivo', 'Compra', 'Venta', 'Profit', '%', 'Comisión bruta', 'IVA descontado', 'Comisión vendedor', 'Profit ATM', 'Estado', 'Acciones'].map((heading) => <th key={heading} className="px-3 py-2 text-left">{heading}</th>)}</tr></thead>
         <tbody>
           {rows.map((row) => {
             const isCancelled = row.status === 'anulada';

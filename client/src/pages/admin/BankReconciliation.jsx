@@ -352,7 +352,7 @@ export default function BankReconciliation() {
       return Math.abs(new Date(a.payment_date) - new Date(movement.movement_date)) - Math.abs(new Date(b.payment_date) - new Date(movement.movement_date));
     });
 
-  return <main className="mx-auto max-w-7xl px-4 py-6 text-slate-900">
+  return <main className="atm-admin-ops atm-admin-ops-bank min-w-0 px-4 py-6 text-slate-900">
     <div className="mb-5 flex flex-wrap items-end justify-between gap-3 border-b pb-4">
       <div><h1 className="text-xl font-semibold">Libro banco y conciliación</h1></div>
       <label className="text-sm font-medium">Cuenta de la empresa

@@ -1,6 +1,7 @@
 // client/src/pages/service/ServiceModule.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
+import { FileText, Plus, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "../../api";
 import ServiceSheet from "./ServiceSheet.jsx";
@@ -424,7 +425,7 @@ export default function ServiceModule() {
     const selectedOrg = orgOptions.find((org) => String(org.id) === String(orgId));
     const selectedCityId = String(draft.city_id || selectedOrg?.city_id || "");
     return (
-      <aside className="pointer-events-auto w-full max-w-sm rounded-xl border bg-white p-4 shadow-xl">
+      <aside className="atm-form-branch pointer-events-auto w-full max-w-sm rounded-xl border bg-white p-4 shadow-xl">
         <div className="text-sm font-semibold text-slate-900">Crear sucursal rápida</div>
         <div className="mt-1 text-xs text-slate-500">Se guarda en la organización seleccionada y queda asignada automáticamente.</div>
         <div className="mt-4 space-y-3">
@@ -467,7 +468,7 @@ export default function ServiceModule() {
           </label>
           <button
             type="button"
-            className="w-full rounded bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
+            className="atm-form-submit w-full rounded px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
             onClick={() => createBranchFor(kind)}
             disabled={!orgId}
           >
@@ -748,35 +749,50 @@ export default function ServiceModule() {
   if (loading) return <div className="text-sm text-slate-500">Cargando...</div>;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
+    <div className="atm-pipeline atm-service-module space-y-4">
+      <div className="atm-page-heading">
         <div>
-          <h1 className="text-xl font-semibold">Reparación y mantenimiento</h1>
-          <p className="text-xs text-slate-500">Pipeline, equipos y planilla por cliente.</p>
+          <h1 className="atm-pipeline-title">Servicio y Mantenimiento</h1>
+          <p className="atm-page-subtitle">Operaciones de servicio</p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="inline-flex rounded-lg border overflow-hidden">
+        <button
+          className="atm-primary atm-new-operation"
+          onClick={() => {
+            setActiveModal("case");
+            setShowCaseModal(true);
+          }}
+        >
+          <Plus size={18} aria-hidden="true" /> Nuevo servicio
+        </button>
+      </div>
+      <div className="atm-view-tabs atm-service-tabs">
+          <div role="group" aria-label="Vista de servicio" className="inline-flex">
             <button
-              className={`px-3 py-1.5 text-sm ${view === "pipeline" ? "bg-slate-900 text-white" : "bg-white"}`}
+              className="px-3 py-1.5 text-sm"
+              aria-pressed={view === "pipeline"}
               onClick={() => setView("pipeline")}
             >
-              Pipeline
+              Embudo
             </button>
             <button
-              className={`px-3 py-1.5 text-sm ${view === "doors" ? "bg-slate-900 text-white" : "bg-white"}`}
+              className="px-3 py-1.5 text-sm"
+              aria-pressed={view === "doors"}
               onClick={() => setView("doors")}
             >
               Equipos
             </button>
             <button
-              className={`px-3 py-1.5 text-sm ${view === "sheet" ? "bg-slate-900 text-white" : "bg-white"}`}
+              className="px-3 py-1.5 text-sm"
+              aria-pressed={view === "sheet"}
               onClick={() => setView("sheet")}
             >
               Planilla
             </button>
           </div>
+      </div>
+      <div className="atm-service-actions">
           <button
-            className="btn"
+            className="atm-secondary inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm"
             onClick={() => {
               setEditingDoorId(null);
               setDoorForm(emptyDoor);
@@ -785,18 +801,8 @@ export default function ServiceModule() {
               setShowDoorModal(true);
             }}
           >
-            + Nuevo equipo
+            <Plus size={16} aria-hidden="true" /> Nuevo equipo
           </button>
-          <button
-            className="btn btn-primary"
-            onClick={() => {
-              setActiveModal("case");
-              setShowCaseModal(true);
-            }}
-          >
-            + Nuevo servicio
-          </button>
-        </div>
       </div>
 
       {error && <div className="text-sm text-red-600">{error}</div>}
@@ -832,19 +838,19 @@ export default function ServiceModule() {
             </div>
           )}
           <DragDropContext onDragEnd={onDragEnd}>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4">
+            <div className="atm-board">
               {stages.map((stage) => (
                 <Droppable droppableId={String(stage.id)} key={stage.id}>
                   {(provided) => (
                     <div
                       ref={provided.innerRef}
                       {...provided.droppableProps}
-                      className="bg-white rounded-2xl shadow p-3 min-h-[200px]"
+                      className="atm-column"
                     >
-                    <div className="sticky top-[73px] z-20 -mx-3 -mt-3 mb-2 rounded-t-2xl border-b border-slate-100 bg-white px-3 pb-2 pt-3 shadow-sm dark:border-slate-800 dark:bg-slate-950">
-                      <div className="font-medium flex items-center justify-between">
-                        <span>{stage.name}</span>
-                        <span className="text-xs bg-slate-100 rounded px-2 py-0.5">
+                    <div className="atm-column-header">
+                      <div className="atm-stage-headline">
+                        <span className="atm-stage-name">{stage.name}</span>
+                        <span className="atm-count text-xs rounded px-2 py-0.5">
                           {grouped[stage.id]?.length || 0}
                         </span>
                       </div>
@@ -863,12 +869,12 @@ export default function ServiceModule() {
                         const labels = Object.keys(sums);
                         if (labels.length === 0) return null;
                         return (
-                          <div className="mt-2 flex flex-wrap gap-2">
+                          <div className="atm-stage-profit-list flex flex-wrap gap-1">
                             {labels.map((label) => {
                               const decimals = label === "Gs" ? 0 : 2;
                               const val = Number(sums[label] || 0);
                               return (
-                                <span key={label} className="text-xs bg-emerald-100 text-emerald-700 rounded px-2 py-0.5">
+                                <span key={label} className="atm-profit text-xs">
                                   {`Profit ${label} ${val.toLocaleString("es-ES", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`}
                                 </span>
                               );
@@ -904,26 +910,26 @@ export default function ServiceModule() {
                                 event.preventDefault();
                                 setOutcomeMenu({ serviceCase: c, x: event.clientX, y: event.clientY });
                               }}
-                              className="block border rounded-xl p-3 bg-white hover:shadow transition cursor-pointer"
+                              className="atm-deal-card block border p-3 bg-white transition cursor-pointer dark:bg-slate-900 dark:border-slate-800"
                             >
                               <div
-                                className="text-sm font-semibold truncate"
+                                className="text-sm font-semibold leading-snug break-words"
                                 title={[c.reference || `#${c.id}`, c.title].filter(Boolean).join(" - ")}
                               >
-                                {[c.reference || `#${c.id}`, c.title].filter(Boolean).join(" - ")}
+                                {c.title || c.reference || `#${c.id}`}
                               </div>
-                              <div className="text-xs text-slate-600 truncate">
-                                {(c.org_name || "-") + " - " + (c.door_count > 1 ? `${c.door_count} equipos` : (c.placa_id || "Equipo"))}
-                              </div>
+                              <div className="atm-card-client text-xs text-slate-600 truncate" title={[c.org_name, c.placa_id].filter(Boolean).join(' · ')}>{c.org_name || "-"}</div>
+                              {c.reference && <div className="text-[11px] text-slate-500 mt-1">{c.reference}</div>}
+                              {c.door_count <= 1 && c.placa_id && <div className="text-[11px] text-slate-500 truncate" title={c.placa_id}>Equipo: {c.placa_id}</div>}
                               <div className="flex items-center gap-2 flex-wrap mt-2">
                                 {typeof c.profit_total_display === "number" && (
-                                  <span className="text-xs bg-emerald-100 text-emerald-700 rounded px-2 py-0.5">
+                                  <span className="atm-card-profit text-xs">
                                     {(() => {
                                       const curr = String(c.profit_total_currency || "USD").toUpperCase();
                                       const label = curr === "PYG" || curr === "GS" ? "Gs" : "USD";
                                       const decimals = label === "Gs" ? 0 : 2;
                                       const val = Number(c.profit_total_display || 0);
-                                      return `Profit ${label} ${val.toLocaleString("es-ES", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`;
+                                      return <><small>Profit {label}</small><strong>{val.toLocaleString("es-ES", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}</strong></>;
                                     })()}
                                   </span>
                                 )}
@@ -953,6 +959,7 @@ export default function ServiceModule() {
                         </Draggable>
                       );
                       })}
+                      {!grouped[stage.id]?.length && <div className="atm-empty-stage"><FileText size={27} strokeWidth={1.4} aria-hidden="true" /><span>No hay servicios<br />en esta etapa</span></div>}
                       {provided.placeholder}
                     </div>
                     </div>
@@ -965,17 +972,20 @@ export default function ServiceModule() {
       )}
 
       {view === "doors" && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
+        <div className="atm-service-content atm-service-equipment space-y-3">
+          <div className="atm-service-content-head">
+            <div><h2>Equipos</h2><p>Equipos registrados por cliente</p></div>
+          </div>
+          <div className="atm-service-toolbar flex items-center gap-2">
             <input
-              className="border rounded px-3 py-2 w-full max-w-md"
+              className="atm-service-search border rounded px-3 py-2 w-full max-w-md"
               placeholder="Buscar por placa, nombre, serie, sector, organizacion o modelo"
               value={doorSearch}
               onChange={(e) => setDoorSearch(e.target.value)}
             />
-            <span className="text-xs text-slate-500">{groupedDoorsByOrg.length} clientes</span>
+            <span className="atm-service-count">{groupedDoorsByOrg.length} clientes</span>
           </div>
-          <div className="bg-white border rounded-lg overflow-auto">
+          <div className="atm-service-table-wrap bg-white border rounded-lg overflow-auto">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-100 text-slate-600">
                 <tr>
@@ -991,7 +1001,7 @@ export default function ServiceModule() {
                     <td className="px-3 py-2">
                       <button
                         type="button"
-                        className="text-blue-600 underline"
+                        className="atm-service-link"
                         onClick={() => openClientDoors(g)}
                       >
                         {g.org_name || g.org_id || "Sin cliente"}
@@ -1022,6 +1032,7 @@ export default function ServiceModule() {
           </div>
         </div>
       )}
+
 
       {view === "sheet" && (
         <ServiceSheet />
@@ -1122,25 +1133,26 @@ export default function ServiceModule() {
 
       {showDoorModal && (
         <div
-          className={`fixed inset-0 ${doorModalVariant === "side" ? "pointer-events-none" : "bg-black/30 flex items-start justify-center gap-4 overflow-auto p-4"} ${activeModal === "door" ? "z-[70]" : "z-[60]"}`}
+          className={`atm-form-overlay atm-service-overlay fixed inset-0 ${doorModalVariant === "side" ? "pointer-events-none" : "bg-black/30 flex items-start justify-center gap-4 overflow-auto p-4"} ${activeModal === "door" ? "z-[70]" : "z-[60]"}`}
         >
           <div
-            className={`${doorModalVariant === "side" ? "absolute right-0 top-0 h-full w-full max-w-md shadow-xl border-l border-slate-200" : "rounded-xl w-full max-w-2xl max-h-[92vh] shadow-xl"} bg-white p-4 overflow-auto pointer-events-auto`}
+            className={`atm-form-modal atm-service-form ${doorModalVariant === "side" ? "atm-service-form-side absolute right-0 top-0 h-full w-full max-w-md shadow-xl border-l border-slate-200" : "rounded-xl w-full max-w-2xl max-h-[92vh] shadow-xl"} bg-white p-4 overflow-auto pointer-events-auto`}
             onMouseDown={() => setActiveModal("door")}
           >
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-lg font-semibold">
+            <div className="atm-service-form-header flex items-center justify-between mb-2">
+              <div className="atm-form-title">
                 {editingDoorId ? "Editar equipo" : "Nuevo equipo"}
               </div>
               <button
                 type="button"
-                className="text-sm text-slate-600 hover:underline"
+                className="atm-form-icon-close"
+                aria-label="Cerrar formulario de equipo" title="Cerrar"
                 onClick={() => setShowDoorModal(false)}
               >
-                Cerrar
+                <X size={18} aria-hidden="true" />
               </button>
             </div>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="atm-service-form-fields grid grid-cols-1 gap-3 md:grid-cols-2">
               <div className="space-y-1 md:col-span-2">
                 <label className="text-xs text-slate-500">Organización</label>
                 <input
@@ -1327,23 +1339,23 @@ export default function ServiceModule() {
               </div>
             </div>
 
-            <div className="mt-4 flex justify-end gap-2">
+            <div className="atm-service-form-actions mt-4 flex justify-end gap-2">
               <button className="btn" onClick={() => setShowDoorModal(false)}>Cancelar</button>
               <button className="btn btn-primary" onClick={saveDoor}>Guardar</button>
             </div>
           </div>
-          {doorModalVariant !== "side" && renderBranchQuickCreatePanel("door")}
+          {doorModalVariant !== "side" && doorForm.org_id && renderBranchQuickCreatePanel("door")}
         </div>
       )}
 
       {showCaseModal && (
-        <div className={`fixed inset-0 bg-black/30 flex items-start justify-center gap-4 overflow-auto p-4 ${activeModal === "case" ? "z-[70]" : "z-[60]"}`}>
+        <div className={`atm-form-overlay atm-service-overlay fixed inset-0 bg-black/30 flex items-start justify-center gap-4 overflow-auto p-4 ${activeModal === "case" ? "z-[70]" : "z-[60]"}`}>
           <div
-            className="bg-white rounded-xl w-full max-w-xl max-h-[92vh] overflow-auto p-4 shadow-xl"
+            className="atm-form-modal atm-service-form bg-white rounded-xl w-full max-w-xl max-h-[92vh] overflow-auto p-4 shadow-xl"
             onMouseDown={() => setActiveModal("case")}
           >
-            <div className="text-lg font-semibold mb-2">Nuevo servicio</div>
-            <div className="grid grid-cols-1 gap-3">
+            <div className="atm-service-form-header flex items-center justify-between mb-2"><div><div className="atm-form-eyebrow">Servicio y mantenimiento</div><div className="atm-form-title">Nuevo servicio</div></div><button type="button" className="atm-form-icon-close" aria-label="Cerrar formulario de servicio" title="Cerrar" onClick={() => setShowCaseModal(false)}><X size={18} aria-hidden="true" /></button></div>
+            <div className="atm-service-form-fields grid grid-cols-1 gap-3">
               <label className="space-y-1">
                 <span className="block text-xs text-slate-500">Título del servicio o mantenimiento</span>
                 <input
@@ -1382,7 +1394,7 @@ export default function ServiceModule() {
                   ))}
                 </datalist>
               </div>
-                            <div className="rounded-lg border bg-slate-50 p-3 space-y-3">
+              <div className="atm-service-form-group border p-3 space-y-3">
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-slate-600">Sucursal</label>
                   <select
@@ -1399,7 +1411,7 @@ export default function ServiceModule() {
                   </select>
                 </div><p className="text-[11px] text-slate-500">Los equipos sin sucursal se muestran siempre como apoyo.</p>
               </div>
-              <div className="border rounded p-2">
+              <div className="atm-service-form-group border rounded p-2">
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-xs text-slate-500">Equipos del cliente</div>
                   <button
@@ -1423,7 +1435,7 @@ export default function ServiceModule() {
                 </div>
                 <div className="max-h-40 overflow-auto space-y-1">
                   {caseDoors.length === 0 && (
-                    <div className="text-xs text-slate-400">No hay equipos para esta organizaciÃ³n</div>
+                    <div className="text-xs text-slate-400">No hay equipos para esta organización</div>
                   )}
                   {caseDoors.map((d) => {
                     const checked = (caseForm.door_ids || []).includes(d.id);
@@ -1462,29 +1474,33 @@ export default function ServiceModule() {
                   </div>
                 )}
               </div>
-              <select
-                className="border rounded px-2 py-1"
-                value={caseForm.stage_id}
-                onChange={(e) => setCaseForm({ ...caseForm, stage_id: e.target.value })}
-              >
-                <option value="">Etapa inicial</option>
-                {stages.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
-              <input
-                type="date"
-                className="border rounded px-2 py-1"
-                value={caseForm.scheduled_date}
-                onChange={(e) => setCaseForm({ ...caseForm, scheduled_date: e.target.value })}
-              />
+              <label className="space-y-1"><span className="block text-xs text-slate-500">Etapa inicial</span>
+                <select
+                  className="w-full border rounded px-2 py-1"
+                  value={caseForm.stage_id}
+                  onChange={(e) => setCaseForm({ ...caseForm, stage_id: e.target.value })}
+                >
+                  <option value="">Seleccionar etapa</option>
+                  {stages.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1"><span className="block text-xs text-slate-500">Fecha programada</span>
+                <input
+                  type="date"
+                  className="w-full border rounded px-2 py-1"
+                  value={caseForm.scheduled_date}
+                  onChange={(e) => setCaseForm({ ...caseForm, scheduled_date: e.target.value })}
+                />
+              </label>
             </div>
-            <div className="mt-4 flex justify-end gap-2">
+            <div className="atm-service-form-actions mt-4 flex justify-end gap-2">
               <button className="btn" onClick={() => setShowCaseModal(false)}>Cancelar</button>
               <button className="btn btn-primary" onClick={createCase}>Crear</button>
             </div>
           </div>
-          {renderBranchQuickCreatePanel("case")}
+          {caseForm.org_id && renderBranchQuickCreatePanel("case")}
         </div>
       )}
     </div>

@@ -976,21 +976,21 @@ async function handleCreate(e) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 overflow-y-auto">
-      <div className="w-full max-w-3xl bg-white rounded-2xl shadow-xl">
-        <div className="px-4 py-3 border-b flex items-center justify-between">
+    <div className="atm-form-overlay fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 overflow-y-auto">
+      <div className="atm-form-modal w-full max-w-3xl bg-white rounded-2xl shadow-xl">
+        <div className="atm-form-header px-4 py-3 border-b flex items-center justify-between">
           <div>
-            <div className="text-xs text-slate-500">Nueva operación</div>
-            <div className="text-lg font-semibold">{referencePreview}</div>
+            <div className="atm-form-eyebrow">ATM Cargo</div>
+            <div className="atm-form-title">Nueva operación <span>{referencePreview}</span></div>
           </div>
-        <button className="text-sm px-3 py-1.5 rounded-lg border" onClick={onClose}>
+        <button type="button" className="atm-form-close text-sm px-3 py-1.5 rounded-lg border" onClick={onClose}>
             Cerrar
           </button>
         </div>
 
-        <form onSubmit={handleCreate} className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <form onSubmit={handleCreate} className="atm-form-body p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Empresa / contacto */}
-          <div className="bg-slate-50 rounded-xl p-3">
+          <div className="atm-form-section">
             <div className="font-medium mb-2">Cliente</div>
             <div className="grid gap-2">
               <label className="text-sm" ref={orgBoxRef}>
@@ -1143,7 +1143,7 @@ async function handleCreate(e) {
           </div>
 
           {/* Datos de operación */}
-          <div className="bg-slate-50 rounded-xl p-3">
+          <div className="atm-form-section">
             <div className="font-medium mb-2">Operación</div>
             <div className="grid gap-2">
               <label className="text-sm">
@@ -1219,7 +1219,7 @@ async function handleCreate(e) {
               </label>
 
               {/* Campo visible y robusto */}
-              <label className="text-sm flex items-center gap-2">
+              <label className="atm-form-operation-type text-sm">
                 Tipo de operación
                 <Select
                   value={tipoOp}
@@ -1242,7 +1242,7 @@ async function handleCreate(e) {
           </div>
 
           {/* Carga */}
-          <div className="bg-slate-50 rounded-xl p-3">
+          <div className="atm-form-section">
             <div className="font-medium mb-2">Carga</div>
             <div className="grid grid-cols-2 gap-2">
               <label className="text-sm col-span-2">
@@ -1328,7 +1328,7 @@ async function handleCreate(e) {
           </div>
 
           {/* CRM */}
-          <div className="bg-slate-50 rounded-xl p-3">
+          <div className="atm-form-section">
             <div className="font-medium mb-2">CRM</div>
             <div className="grid gap-2">
               <label className="text-sm">
@@ -1381,7 +1381,7 @@ async function handleCreate(e) {
           </div>
 
           {/* Acciones */}
-          <div className="md:col-span-2 flex items-center justify-end gap-2 pt-2">
+          <div className="atm-form-actions md:col-span-2 flex items-center justify-end gap-2 pt-2">
             {!canSave ? (
               <div className="mr-auto max-w-xl text-xs text-amber-700">
                 Falta completar: {validationIssues.join(", ")}.
@@ -1389,7 +1389,7 @@ async function handleCreate(e) {
             ) : null}
             <button
               type="button"
-              className="px-3 py-2 text-sm rounded-lg border"
+              className="atm-form-close px-3 py-2 text-sm rounded-lg border"
               onClick={onClose}
             >
               Cancelar
@@ -1397,7 +1397,7 @@ async function handleCreate(e) {
             <button
               type="submit"
               disabled={saving}
-              className="px-3 py-2 text-sm rounded-lg bg-black text-white disabled:opacity-60"
+              className="atm-form-submit px-3 py-2 text-sm rounded-lg text-white disabled:opacity-60"
             >
               {saving ? "Creando…" : "Crear operación"}
             </button>

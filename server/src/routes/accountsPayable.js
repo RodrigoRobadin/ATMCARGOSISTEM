@@ -1516,6 +1516,9 @@ function buildDocumentDashboard(rows = []) {
     blocked_documents: 0,
     scheduled_documents: 0,
     missing_supplier_bank: 0,
+    overdue_count: 0,
+    due_today_count: 0,
+    upcoming_7d_count: 0,
     by_status: {},
     balance_by_currency: {},
     overdue_by_currency: {},
@@ -1546,6 +1549,16 @@ function buildDocumentDashboard(rows = []) {
     const currency = String(row.currency_code || 'PYG').toUpperCase();
     dashboard.by_status[status] = (dashboard.by_status[status] || 0) + 1;
     if (balance > 0.009) {
+      const dueDate = row.due_date ? new Date(row.due_date) : null;
+      const dueStart = dueDate && !Number.isNaN(dueDate.getTime())
+        ? new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate())
+        : null;
+      if (dueStart) {
+        const daysUntilDue = Math.round((dueStart - todayStart) / msPerDay);
+        if (daysUntilDue < 0) dashboard.overdue_count += 1;
+        if (daysUntilDue === 0) dashboard.due_today_count += 1;
+        if (daysUntilDue >= 0 && daysUntilDue <= 7) dashboard.upcoming_7d_count += 1;
+      }
       dashboard.open_documents += 1;
       dashboard.balance_by_currency[currency] =
         (dashboard.balance_by_currency[currency] || 0) + balance;
@@ -1554,11 +1567,9 @@ function buildDocumentDashboard(rows = []) {
       if (status === 'bloqueado') dashboard.blocked_documents += 1;
       if (!hasSupplierBankData(row)) dashboard.missing_supplier_bank += 1;
       const bucket = ensureCurrency(currency);
-      const dueDate = row.due_date ? new Date(row.due_date) : null;
-      if (!dueDate || Number.isNaN(dueDate.getTime())) {
+      if (!dueStart) {
         bucket.no_due_date += balance;
       } else {
-        const dueStart = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
         const diffDays = Math.floor((todayStart - dueStart) / msPerDay);
         if (diffDays > 0) {
           dashboard.overdue_by_currency[currency] =
@@ -1853,7 +1864,7 @@ export async function fetchAccountsPayableDocuments(query = {}) {
       : null;
     if (quick_filter === 'due_today') return dueStart?.getTime() === todayStart.getTime();
     if (quick_filter === 'due_7d') {
-      if (!dueStart) return false;
+      if (!dueStart || Number(row.balance || 0) <= 0.009) return false;
       const max = new Date(todayStart);
       max.setDate(max.getDate() + 7);
       return dueStart >= todayStart && dueStart <= max;
@@ -1868,23 +1879,31 @@ export async function fetchAccountsPayableDocuments(query = {}) {
     return true;
   };
 
-  normalized = normalized.filter((row) => {
+  const scopedRows = normalized.filter((row) => {
+    const dueDate = row.due_date ? new Date(row.due_date) : null;
+    const dueStart = dueDate && !Number.isNaN(dueDate.getTime())
+      ? new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate())
+      : null;
+    const isOverdue = dueStart && dueStart < todayStart && Number(row.balance || 0) > 0.009;
+    if (String(open_only || '') === '1' && Number(row.balance || 0) <= 0.009) return false;
+    if (String(overdue || '') === '1' && !isOverdue) return false;
+    return true;
+  });
+
+  const dashboard = buildDocumentDashboard(scopedRows);
+  normalized = scopedRows.filter((row) => {
     const dueDate = row.due_date ? new Date(row.due_date) : null;
     const dueStart = dueDate && !Number.isNaN(dueDate.getTime())
       ? new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate())
       : null;
     const isOverdue = dueStart && dueStart < todayStart && Number(row.balance || 0) > 0.009;
     const isDueToday = dueStart && dueStart.getTime() === todayStart.getTime() && Number(row.balance || 0) > 0.009;
-    if (String(open_only || '') === '1' && Number(row.balance || 0) <= 0.009) return false;
-    if (String(overdue || '') === '1' && !isOverdue) return false;
     if (status === 'vencido') return isOverdue;
     if (status === 'vence_hoy') return isDueToday;
     if (status && status !== 'por_pagar' && row.payable_status !== status) return false;
     if (status === 'por_pagar' && Number(row.balance || 0) <= 0.009) return false;
     return matchesQuickFilter(row);
   });
-
-  const dashboard = buildDocumentDashboard(normalized);
   return { rows: normalized, dashboard };
 }
 

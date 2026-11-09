@@ -4,6 +4,8 @@ import { useNavigate } from "react-router-dom";
 import api from "../api";
 import Chatbox from "./Chatbox.jsx";
 import GlobalSearchPanel from "./GlobalSearchPanel.jsx";
+import { Bell, CalendarDays, ListTodo, MessageSquare } from "lucide-react";
+import { useAuth } from "../auth.jsx";
 
 export default function GlobalSearchBar() {
   const [counts, setCounts] = useState({ activities: 0, tasks: 0, notes: 0 });
@@ -18,10 +20,11 @@ export default function GlobalSearchBar() {
   const tasksTimer = useRef();
   const notifTimer = useRef();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const icons = {
-    activities: String.fromCodePoint(0x1F4C5),
-    tasks: String.fromCodePoint(0x1F514),
-    notes: String.fromCodePoint(0x1F4AC),
+    activities: <CalendarDays size={18} />,
+    tasks: <ListTodo size={18} />,
+    notes: <MessageSquare size={18} />,
   };
 
   useEffect(() => {
@@ -144,7 +147,9 @@ export default function GlobalSearchBar() {
 
   return (
     <>
-      <div className="flex items-center gap-3">
+      <div className="atm-global-bar flex items-center gap-3">
+        <GlobalSearchPanel />
+        <div className="atm-topbar-actions flex items-center gap-3">
         <Chatbox />
       <div
         className="relative"
@@ -156,7 +161,7 @@ export default function GlobalSearchBar() {
           className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg border bg-white text-sm font-semibold hover:bg-slate-50"
           title="Recordatorios"
         >
-          R
+          <Bell size={18} aria-hidden="true" />
           {notifCount > 0 && (
             <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-emerald-600 text-white text-[10px] leading-[18px] text-center">
               {notifCount}
@@ -209,7 +214,6 @@ export default function GlobalSearchBar() {
         )}
       </div>
 
-      <GlobalSearchPanel />
       <div className="flex items-center gap-2 shrink-0">
         <div
           className="relative"
@@ -348,6 +352,11 @@ export default function GlobalSearchBar() {
             </span>
           )}
         </button>
+      </div>
+      <div className="atm-user-profile" title={`${user?.name || user?.email || 'Usuario'} · ${user?.role || ''}`}>
+        <span className="atm-user-initials">{String(user?.name || user?.email || 'U').trim().slice(0, 1).toUpperCase()}</span>
+        <span className="atm-user-details"><strong>{user?.name || user?.email || 'Usuario'}</strong><small>{user?.role || ''}</small></span>
+      </div>
       </div>
       </div>
     </>

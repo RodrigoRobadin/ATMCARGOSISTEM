@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { History, RefreshCw, RotateCcw, Search } from "lucide-react";
 import { api } from "../api";
 import { LOSS_REASONS } from "../components/DealCommercialOutcomeControls.jsx";
 import ReopenServiceCaseModal from "./service/ReopenServiceCaseModal.jsx";
@@ -60,7 +61,7 @@ function ReopenDealModal({ deal, onClose, onSaved }) {
 
   return (
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/45 p-4">
-      <form className="w-full max-w-lg rounded-lg bg-white p-5 shadow-2xl dark:bg-slate-950" onSubmit={submit}>
+      <form className="atm-lost-modal w-full max-w-lg p-5" onSubmit={submit}>
         <h2 className="text-lg font-semibold">Rehabilitar operación</h2>
         <p className="mt-1 text-sm text-slate-500">
           {deal.reference || deal.title || `Operación #${deal.id}`} volverá al Kanban activo en la etapa elegida.
@@ -80,8 +81,8 @@ function ReopenDealModal({ deal, onClose, onSaved }) {
         </label>
         {error ? <div className="mt-3 rounded border border-red-200 bg-red-50 p-2 text-sm text-red-700">{error}</div> : null}
         <div className="mt-5 flex justify-end gap-2">
-          <button type="button" className="rounded border px-3 py-2 text-sm" onClick={onClose} disabled={saving}>Cancelar</button>
-          <button type="submit" className="rounded bg-emerald-700 px-3 py-2 text-sm text-white disabled:opacity-60" disabled={loading || saving}>
+          <button type="button" className="atm-secondary rounded-md px-3 py-2 text-sm" onClick={onClose} disabled={saving}>Cancelar</button>
+          <button type="submit" className="atm-primary rounded-md px-3 py-2 text-sm disabled:opacity-60" disabled={loading || saving}>
             {saving ? "Rehabilitando..." : "Rehabilitar"}
           </button>
         </div>
@@ -105,18 +106,18 @@ function OutcomeHistoryModal({ deal, onClose }) {
   if (!deal) return null;
   return (
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/45 p-4">
-      <div className="w-full max-w-2xl rounded-lg bg-white p-5 shadow-2xl dark:bg-slate-950">
+      <div className="atm-lost-modal w-full max-w-2xl p-5">
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold">Historial comercial</h2>
             <p className="text-sm text-slate-500">{deal.reference || deal.title || `Operación #${deal.id}`}</p>
           </div>
-          <button type="button" className="rounded border px-3 py-2 text-sm" onClick={onClose}>Cerrar</button>
+          <button type="button" className="atm-secondary rounded-md px-3 py-2 text-sm" onClick={onClose}>Cerrar</button>
         </div>
         {error ? <div className="mt-4 rounded border border-red-200 bg-red-50 p-2 text-sm text-red-700">{error}</div> : null}
         <div className="mt-4 max-h-[55vh] space-y-3 overflow-auto">
           {rows.map((row) => (
-            <div key={row.id} className="rounded border p-3 text-sm dark:border-slate-800">
+            <div key={row.id} className="atm-lost-history-entry border-l-2 py-2 pl-3 text-sm">
               <div className="font-medium">{row.event_type === "reopened" ? "Operación rehabilitada" : "Marcada como no cerrada"}</div>
               <div className="mt-1 text-xs text-slate-500">{formatDate(row.created_at)} · {row.actor_name || "Usuario"}</div>
               {row.reason_category ? <div className="mt-2">Motivo: {reasonLabel(row.reason_category)}</div> : null}
@@ -176,29 +177,37 @@ export default function LostDeals() {
   }, [rows, query]);
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="atm-lost min-w-0 space-y-5">
+      <header className="atm-page-heading flex-wrap">
         <div>
-          <h1 className="text-xl font-semibold">Operaciones no cerradas</h1>
-          <p className="text-sm text-slate-500">Oportunidades preservadas para análisis, seguimiento o rehabilitación.</p>
+          <h1>Operaciones no cerradas</h1>
+          <p className="atm-page-subtitle">Oportunidades preservadas para análisis, seguimiento o rehabilitación</p>
         </div>
-        <button type="button" className="rounded border px-3 py-2 text-sm" onClick={load}>Actualizar</button>
-      </div>
+        <button type="button" className="atm-secondary inline-flex min-h-10 items-center gap-2 rounded-md px-4 text-sm font-medium" onClick={load}><RefreshCw size={16} /> Actualizar</button>
+      </header>
 
-      <input
-        className="w-full max-w-md rounded border px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        placeholder="Buscar por operación, cliente, comercial o motivo"
-      />
+      <div className="atm-lost-toolbar flex flex-wrap items-center justify-between gap-3">
+        <label className="atm-lost-search flex min-w-0 items-center gap-2">
+          <Search size={17} aria-hidden="true" />
+          <input
+            type="search"
+            className="min-w-0 flex-1 bg-transparent text-sm outline-none"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Buscar operación, cliente, comercial o motivo"
+            aria-label="Buscar operaciones no cerradas"
+          />
+        </label>
+        <span className="atm-lost-count">{filteredRows.length} {filteredRows.length === 1 ? "operación" : "operaciones"}</span>
+      </div>
 
       {error ? <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
       {loading ? <div className="text-sm text-slate-500">Cargando...</div> : null}
 
       {!loading ? (
-        <div className="overflow-auto rounded-lg border bg-white dark:border-slate-800 dark:bg-slate-950">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-left text-slate-600 dark:bg-slate-900 dark:text-slate-300">
+        <div className="atm-lost-table overflow-x-auto">
+          <table className="w-full min-w-[1000px] text-sm">
+            <thead className="text-left">
               <tr>
                 <th className="px-3 py-2">Operación</th>
                 <th className="px-3 py-2">Cliente</th>
@@ -211,9 +220,9 @@ export default function LostDeals() {
             </thead>
             <tbody>
               {filteredRows.map((row) => (
-                <tr key={`${row.source_type}-${row.id}`} className="border-t align-top dark:border-slate-800">
+                <tr key={`${row.source_type}-${row.id}`} className="border-t align-top">
                   <td className="px-3 py-3">
-                    <Link to={row.source_type === "service" ? `/service/cases/${row.id}` : `/operations/${row.id}`} className="font-medium text-blue-700 hover:underline dark:text-blue-300">
+                    <Link to={row.source_type === "service" ? `/service/cases/${row.id}` : `/operations/${row.id}`} className="atm-lost-reference font-semibold hover:underline">
                       {row.reference || row.title || `#${row.id}`}
                     </Link>
                     <div className="text-xs text-slate-500">{row.business_unit_name || "-"}</div>
@@ -227,8 +236,10 @@ export default function LostDeals() {
                   </td>
                   <td className="px-3 py-3 whitespace-nowrap">{formatDate(row.lost_at)}</td>
                   <td className="px-3 py-3 text-right whitespace-nowrap">
-                    <button type="button" className="mr-2 rounded border px-2 py-1 text-xs" onClick={() => setDealHistory(row)}>Historial</button>
-                    <button type="button" className="rounded bg-emerald-700 px-2 py-1 text-xs text-white" onClick={() => setDealToReopen(row)}>Rehabilitar</button>
+                    <div className="flex justify-end gap-2">
+                      <button type="button" className="atm-secondary inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs" onClick={() => setDealHistory(row)}><History size={14} /> Historial</button>
+                      <button type="button" className="atm-primary inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs" onClick={() => setDealToReopen(row)}><RotateCcw size={14} /> Rehabilitar</button>
+                    </div>
                   </td>
                 </tr>
               ))}

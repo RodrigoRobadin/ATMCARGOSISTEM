@@ -84,11 +84,11 @@ function ExpectedCloseCell({ deal, isProspect, onSaved, readOnly = false }) {
 
 export function PipelineViewSwitch({ value, onChange }) {
   return (
-    <div role="group" aria-label="Vista del pipeline" className="inline-flex rounded-md border border-slate-300 bg-white p-0.5">
+    <div role="group" aria-label="Vista del pipeline" className="inline-flex rounded-md border border-slate-200 bg-white p-0.5 dark:bg-slate-900 dark:border-slate-700">
       {views.map((view) => (
         <button key={view.key} type="button" onClick={() => onChange(view.key)}
           aria-pressed={value === view.key}
-          className={`rounded px-3 py-1.5 text-sm ${value === view.key ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}>
+          className={`rounded px-3 py-1.5 text-sm ${value === view.key ? 'bg-[#e5ecdd] text-[#1e5c49] font-semibold dark:bg-emerald-900 dark:text-emerald-100' : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800'}`}>
           {view.label}
         </button>
       ))}

@@ -1,6 +1,7 @@
 // client/src/App.jsx
 import React, { useEffect, useState } from 'react';
-import { NavLink, Routes, Route, Navigate } from 'react-router-dom';
+import { NavLink, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { LayoutDashboard, ChartNoAxesCombined, ListTodo, MessageSquare, KanbanSquare, Truck, Boxes, Factory, Wrench, CalendarDays, ClipboardList, Users, Settings, Folder, Wallet, FileText, ReceiptText, Package, Building2, FileCheck2, Phone, LogOut, Sun, Moon, ShieldCheck, UserRound, CreditCard, ChevronDown, ChevronUp, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 
 import Pipeline from './pages/Pipeline';
 import CommercialDashboard from './pages/CommercialDashboard.jsx';
@@ -77,46 +78,48 @@ import RequestFreight from './pages/RequestFreight.jsx';
 
 // ---------------- UI helpers ----------------
 const sidebarIcons = {
-  header: String.fromCodePoint(0x1F9ED),
-  themeOn: String.fromCodePoint(0x2600),
-  themeOff: String.fromCodePoint(0x1F319),
-  general: String.fromCodePoint(0x1F4CB),
-  commercial: String.fromCodePoint(0x1F4C8),
-  commissions: String.fromCodePoint(0x1F4B0),
-  kanban: String.fromCodePoint(0x1F9E9),
-  cargo: String.fromCodePoint(0x1F69A),
-  container: String.fromCodePoint(0x1F4E6),
-  industrial: String.fromCodePoint(0x1F3ED),
-  service: String.fromCodePoint(0x1F527),
-  calendar: String.fromCodePoint(0x1F4C5),
-  admin: String.fromCodePoint(0x1F4C4),
-  audit: String.fromCodePoint(0x1F4CB),
-  user: String.fromCodePoint(0x1F464),
-  params: String.fromCodePoint(0x2699),
-  adminOps: String.fromCodePoint(0x1F4C1),
-  finance: String.fromCodePoint(0x1F4CA),
-  account: String.fromCodePoint(0x1F4C4),
-  payments: String.fromCodePoint(0x1F9FE),
-  expenses: String.fromCodePoint(0x1F4B3),
-  catalog: String.fromCodePoint(0x1F4C4),
-  contacts: String.fromCodePoint(0x1F464),
-  orgs: String.fromCodePoint(0x1F3E2),
-  invoices: String.fromCodePoint(0x1F4B5),
-  orders: String.fromCodePoint(0x1F4E6),
-  followup: String.fromCodePoint(0x1F4DE),
-  quotes: String.fromCodePoint(0x1F4DD),
-  logout: String.fromCodePoint(0x1F6AA),
+  header: <Factory size={18} />,
+  themeOn: <Sun size={18} />,
+  themeOff: <Moon size={18} />,
+  general: <LayoutDashboard size={18} />,
+  commercial: <ChartNoAxesCombined size={18} />,
+  commissions: <Wallet size={18} />,
+  assistantFollowup: <ListTodo size={18} />,
+  prospecting: <MessageSquare size={18} />,
+  kanban: <KanbanSquare size={18} />,
+  cargo: <Truck size={18} />,
+  container: <Boxes size={18} />,
+  industrial: <Factory size={18} />,
+  service: <Wrench size={18} />,
+  calendar: <CalendarDays size={18} />,
+  admin: <ClipboardList size={18} />,
+  audit: <ShieldCheck size={18} />,
+  user: <UserRound size={18} />,
+  params: <Settings size={18} />,
+  adminOps: <Folder size={18} />,
+  finance: <ChartNoAxesCombined size={18} />,
+  account: <FileText size={18} />,
+  payments: <CreditCard size={18} />,
+  expenses: <ReceiptText size={18} />,
+  catalog: <Package size={18} />,
+  contacts: <Users size={18} />,
+  orgs: <Building2 size={18} />,
+  invoices: <ReceiptText size={18} />,
+  orders: <FileCheck2 size={18} />,
+  followup: <Phone size={18} />,
+  quotes: <FileText size={18} />,
+  logout: <LogOut size={18} />,
 };
 
 const linkCls = ({ isActive }) =>
-  `flex items-center rounded-lg text-sm px-3 py-2 transition-all
+  `atm-nav-link flex items-center rounded-lg text-sm px-3 py-2 transition-all
    justify-center group-hover:justify-start
    gap-0 group-hover:gap-2
    ${isActive ? 'bg-black text-white dark:bg-white dark:text-black' : 'hover:bg-slate-100 dark:hover:bg-slate-800 dark:text-slate-200'}`;
 
 function SideLink({ to, icon, label }) {
   return (
-    <NavLink to={to} className={linkCls}>
+    <NavLink to={to} className={linkCls} title={label}>
       <span className="text-base w-6 text-center">{icon}</span>
       <span className="hidden group-hover:inline">{label}</span>
     </NavLink>
@@ -125,6 +128,7 @@ function SideLink({ to, icon, label }) {
 
 function Layout({ children }) {
   const { logout, user } = useAuth();
+  const { pathname } = useLocation();
   const role = String(user?.role || '').toLowerCase();
   const isServiceRole = role === 'service';
   const canSeeAdminCore = role === 'admin' || role === 'manager';
@@ -136,8 +140,12 @@ function Layout({ children }) {
   const [darkMode, setDarkMode] = useState(false);
   const [containerMenuOpen, setContainerMenuOpen] = useState(false);
   const [commercialMenuOpen, setCommercialMenuOpen] = useState(false);
-  const [adminOpsMenuOpen, setAdminOpsMenuOpen] = useState(false);
-  const [invoicesMenuOpen, setInvoicesMenuOpen] = useState(false);
+  const [adminOpsMenuOpen, setAdminOpsMenuOpen] = useState(() => pathname.startsWith('/invoices'));
+  const [invoicesMenuOpen, setInvoicesMenuOpen] = useState(() => pathname.startsWith('/invoices'));
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    const saved = localStorage.getItem('atm-sidebar-collapsed');
+    return saved === null ? window.innerWidth < 900 : saved === '1';
+  });
 
   useEffect(() => {
     const stored = localStorage.getItem('theme');
@@ -146,6 +154,13 @@ function Layout({ children }) {
     document.documentElement.classList.toggle('dark', isDark);
   }, []);
 
+  useEffect(() => {
+    if (pathname.startsWith('/invoices')) {
+      setAdminOpsMenuOpen(true);
+      setInvoicesMenuOpen(true);
+    }
+  }, [pathname]);
+
   function toggleTheme() {
     const next = !darkMode;
     setDarkMode(next);
@@ -153,52 +168,30 @@ function Layout({ children }) {
     localStorage.setItem('theme', next ? 'dark' : 'light');
   }
 
+  function toggleSidebar() {
+    setSidebarCollapsed((value) => {
+      localStorage.setItem('atm-sidebar-collapsed', value ? '0' : '1');
+      return !value;
+    });
+  }
+
   return (
-    <div className="min-h-screen flex bg-gray-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100">
+    <div className="atm-app min-h-screen flex dark:bg-slate-900 dark:text-slate-100">
       {/* Lateral colapsable por hover */}
       <aside
-        className="
-          group bg-white border-r dark:bg-slate-950 dark:border-slate-800
-          w-[64px] hover:w-[220px]
-          transition-[width] duration-300 ease-in-out
-          overflow-hidden
-        "
+        className={`atm-sidebar group sticky top-0 h-screen shrink-0 overflow-y-auto overflow-x-hidden border-r transition-[width] duration-200 dark:bg-slate-950 dark:border-slate-800 ${sidebarCollapsed ? 'atm-sidebar-collapsed w-[64px]' : 'w-[232px]'}`}
       >
         {/* Header: compacto (icono) / expandido (título) */}
-        <div className="border-b dark:border-slate-800">
-          <div className="h-14 flex items-center justify-center text-xl group-hover:hidden select-none">{sidebarIcons.header}</div>
-          <div className="hidden group-hover:block p-4">
-            <div className="text-lg font-semibold">CRM MVP</div>
-            <div className="text-xs text-slate-500 dark:text-slate-400">GRUPO ATM</div>
-          </div>
+        <div className="atm-sidebar-brand border-b dark:border-slate-800 h-16 flex items-center justify-between px-3">
+          {!sidebarCollapsed && <div className="atm-brand-lockup"><span className="atm-brand-mark" aria-hidden="true" /><span>ATM CargoSoft</span></div>}
+          <button type="button" onClick={toggleSidebar} className="atm-sidebar-toggle h-8 w-8 shrink-0 rounded-md flex items-center justify-center" aria-label={sidebarCollapsed ? 'Expandir menú' : 'Contraer menú'} title={sidebarCollapsed ? 'Expandir menú' : 'Contraer menú'}>{sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button>
         </div>
 
         {/* Navegación */}
         <nav className="p-3 space-y-1">
-          {canSeeCommercialModules && (
-            <>
-              <div>
-                <button type="button" onClick={() => setCommercialMenuOpen((open) => !open)} className="w-full flex items-center rounded-lg text-sm px-3 py-2 transition-all justify-center group-hover:justify-start gap-0 group-hover:gap-2 hover:bg-slate-100 dark:hover:bg-slate-800 dark:text-slate-200" title="Dashboard comercial">
-                  <span className="text-base w-6 text-center">{sidebarIcons.commercial}</span>
-                  <span className="hidden group-hover:inline flex-1 text-left">Dashboard comercial</span>
-                  <span className="hidden group-hover:inline text-[10px] text-slate-500">{commercialMenuOpen ? '▲' : '▼'}</span>
-                </button>
-                <div className={`${commercialMenuOpen ? 'block' : 'hidden'} ml-8 mt-1 space-y-1`}>
-                  <SideLink to="/commercial-dashboard" icon={sidebarIcons.commercial} label="Dashboard" />
-                  <SideLink to="/commercial-dashboard/commissions" icon={sidebarIcons.commissions} label="Planilla de comisiones" />
-                </div>
-              </div>
-              <SideLink to="/lost-deals" icon={sidebarIcons.followup} label="No cerradas" />
-            </>
-          )}
-          <SideLink to="/general" icon={sidebarIcons.general} label="Vista general" />
-          <SideLink to="/" icon={sidebarIcons.kanban} label="Kanban" />
-
-          <hr className="my-2 dark:border-slate-800" />
-          <div className="hidden group-hover:block text-xs text-slate-500 dark:text-slate-400 px-1 pb-1">
-            Workspaces
-          </div>
-          <SideLink to="/workspace/atm-cargo" icon={sidebarIcons.cargo} label="ATM CARGO" />
+          <SideLink to="/general" icon={sidebarIcons.general} label="Inicio" />
+          <SideLink to="/calendar" icon={sidebarIcons.calendar} label="Agenda" />
+          <SideLink to="/workspace/atm-cargo" icon={sidebarIcons.cargo} label="ATM Cargo" />
           <div>
             <button
               type="button"
@@ -207,12 +200,12 @@ function Layout({ children }) {
                          justify-center group-hover:justify-start
                          gap-0 group-hover:gap-2
                          hover:bg-slate-100 dark:hover:bg-slate-800 dark:text-slate-200"
-              title="ATM CONTAINER"
+              title="ATM Container"
             >
               <span className="text-base w-6 text-center">{sidebarIcons.container}</span>
-              <span className="hidden group-hover:inline flex-1 text-left">ATM CONTAINER</span>
+              <span className="hidden group-hover:inline flex-1 text-left">ATM Container</span>
               <span className="hidden group-hover:inline text-[10px] text-slate-500">
-                {containerMenuOpen ? '▲' : '▼'}
+                {containerMenuOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               </span>
             </button>
             <div className={`${containerMenuOpen ? 'block' : 'hidden'} ml-8 mt-1 space-y-1`}>
@@ -243,11 +236,32 @@ function Layout({ children }) {
               />
             </div>
           </div>
-          <SideLink to="/workspace/atm-industrial" icon={sidebarIcons.industrial} label="ATM INDUSTRIAL" />
+          <SideLink to="/workspace/atm-industrial" icon={sidebarIcons.industrial} label="ATM Industrial" />
           {(role === 'admin' || role === 'service') && (
-            <SideLink to="/service" icon={sidebarIcons.service} label="Reparación y mantenimiento" />
+            <SideLink to="/service" icon={sidebarIcons.service} label="Servicio" />
           )}
-          <SideLink to="/calendar" icon={sidebarIcons.calendar} label="Calendario general" />
+          {canSeeCommercialModules && <SideLink to="/quotes" icon={sidebarIcons.quotes} label="Cotizaciones" />}
+          {canSeeContactsModules && <SideLink to="/contacts" icon={sidebarIcons.contacts} label="Contactos" />}
+
+          <hr className="my-3 dark:border-slate-800" />
+          <div className="hidden group-hover:block text-[11px] uppercase text-slate-500 dark:text-slate-400 px-3 pb-1">Herramientas</div>
+          <SideLink to="/" icon={sidebarIcons.kanban} label="Kanban general" />
+          {canSeeCommercialModules && (
+            <>
+              <div>
+                <button type="button" onClick={() => setCommercialMenuOpen((open) => !open)} className="atm-nav-group w-full flex items-center rounded-lg text-sm px-3 py-2 transition-all justify-center group-hover:justify-start gap-0 group-hover:gap-2 hover:bg-slate-100 dark:hover:bg-slate-800 dark:text-slate-200" title="Dashboard comercial">
+                  <span className="text-base w-6 text-center">{sidebarIcons.commercial}</span>
+                  <span className="hidden group-hover:inline flex-1 text-left">Dashboard comercial</span>
+                  <span className="hidden group-hover:inline text-slate-500">{commercialMenuOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</span>
+                </button>
+                <div className={`${commercialMenuOpen ? 'block' : 'hidden'} ml-8 mt-1 space-y-1`}>
+                  <SideLink to="/commercial-dashboard" icon={sidebarIcons.commercial} label="Dashboard" />
+                  <SideLink to="/commercial-dashboard/commissions" icon={sidebarIcons.commissions} label="Planilla de comisiones" />
+                </div>
+              </div>
+              <SideLink to="/lost-deals" icon={sidebarIcons.followup} label="No cerradas" />
+            </>
+          )}
 
           {canSeeAdminBlock && (
             <>
@@ -256,7 +270,7 @@ function Layout({ children }) {
                 <>
                   <SideLink to="/admin/users" icon={sidebarIcons.user} label="Usuarios" />
                   {role === 'admin' && <SideLink to="/audit" icon={sidebarIcons.audit} label="Auditoría" />}
-                  <SideLink to="/admin/params" icon={sidebarIcons.params} label="Par\u00e1metros" />
+                  <SideLink to="/admin/params" icon={sidebarIcons.params} label="Parámetros" />
                 </>
               )}
               {canSeeFinanceBlock && (
@@ -274,9 +288,9 @@ function Layout({ children }) {
                       title="Administración (Ops)"
                     >
                       <span className="text-base w-6 text-center">{sidebarIcons.adminOps}</span>
-                      <span className="hidden group-hover:inline flex-1 text-left">Administraci\u00f3n (Ops)</span>
+                      <span className="hidden group-hover:inline flex-1 text-left">Administración (Ops)</span>
                       <span className="hidden group-hover:inline text-[10px] text-slate-500">
-                        {adminOpsMenuOpen ? '▲' : '▼'}
+                        {adminOpsMenuOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                       </span>
                     </button>
                     <div className={`${adminOpsMenuOpen ? 'block' : 'hidden'} ml-8 mt-1 space-y-1`}>
@@ -299,10 +313,10 @@ function Layout({ children }) {
                         >
                           <span className="text-base w-6 text-center">{sidebarIcons.invoices}</span>
                           <span className="hidden group-hover:inline flex-1 text-left">Facturas</span>
-                          <span className="hidden group-hover:inline text-[10px] text-slate-500">{invoicesMenuOpen ? '^' : 'v'}</span>
+                          <span className="hidden group-hover:inline text-slate-500">{invoicesMenuOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</span>
                         </button>
                         <div className={`${invoicesMenuOpen ? 'block' : 'hidden'} ml-8 mt-1 space-y-1`}>
-                          <SideLink to="/invoices" icon={sidebarIcons.invoices} label="Listado de facturas" />
+                          <SideLink to="/invoices" icon={sidebarIcons.invoices} label="Facturación" />
                           <SideLink to="/invoices/credit-notes" icon={sidebarIcons.account} label="Notas de credito" />
                         </div>
                       </div>
@@ -352,7 +366,6 @@ function Layout({ children }) {
           {canSeeContactsModules && (
             <>
               <hr className="my-2 dark:border-slate-800" />
-              <SideLink to="/contacts" icon={sidebarIcons.contacts} label="Contactos" />
               <SideLink to="/organizations" icon={sidebarIcons.orgs} label="Organizaciones" />
             </>
           )}
@@ -360,9 +373,8 @@ function Layout({ children }) {
           {canSeeCommercialModules && (
             <>
               <hr className="my-2 dark:border-slate-800" />
-              <SideLink to="/purchase-orders" icon={sidebarIcons.orders} label="\u00d3rdenes de compra" />
+              <SideLink to="/purchase-orders" icon={sidebarIcons.orders} label="Órdenes de compra" />
               {canSeeFollowupManagement && <SideLink to="/followup-management" icon={sidebarIcons.followup} label="Gestion de seguimiento" />}
-              <SideLink to="/quotes" icon={sidebarIcons.quotes} label="Cotizaciones" />
             </>
           )}
 
@@ -400,11 +412,11 @@ function Layout({ children }) {
       </aside>
 
       {/* Contenido principal */}
-      <main className="bg-gray-50 dark:bg-slate-900 flex-1 min-w-0">
-        <div className="p-4 border-b bg-white dark:bg-slate-950 dark:border-slate-800 sticky top-0 z-40">
+      <main className="atm-main dark:bg-slate-900 flex-1 min-w-0">
+        <div className="atm-topbar px-4 py-3 border-b dark:bg-slate-950 dark:border-slate-800 sticky top-0 z-40">
           <GlobalSearchBar />
         </div>
-        <div className="p-4">{children}</div>
+        <div className="p-4 lg:p-5">{children}</div>
       </main>
       <AssistantBubble />
     </div>

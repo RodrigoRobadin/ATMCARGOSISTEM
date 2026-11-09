@@ -9,10 +9,10 @@ const labels = { 'operation-expense': 'Compra operativa', 'purchase-invoice': 'F
 const money = (value, currency) => `${currency} ${Number(value || 0).toLocaleString('es-PY', { minimumFractionDigits: currency === 'PYG' ? 0 : 2, maximumFractionDigits: 2 })}`;
 const newKey = () => crypto.randomUUID();
 
-export default function UnifiedPaymentOrders({ onClose, onChanged, companyAccounts = [], initialOrderId = null, initialSupplierId = null, initialDocumentKeys = [] }) {
+export default function UnifiedPaymentOrders({ onClose, onChanged, companyAccounts = [], initialView = 'list', initialOrderId = null, initialSupplierId = null, initialDocumentKeys = [], embedded = false }) {
   const { user } = useAuth();
   const isAdmin = String(user?.role || '').toLowerCase() === 'admin';
-  const [view, setView] = useState('list');
+  const [view, setView] = useState(initialView);
   const [orders, setOrders] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [supplierId, setSupplierId] = useState(initialSupplierId ? String(initialSupplierId) : '');
@@ -191,11 +191,11 @@ export default function UnifiedPaymentOrders({ onClose, onChanged, companyAccoun
   }
 
   return (
-    <div className="fixed inset-0 z-[110] bg-black/40 p-2 md:p-6" role="dialog" aria-modal="true" aria-label="Órdenes de pago">
-      <div className="mx-auto flex h-full max-w-6xl flex-col overflow-hidden rounded-lg bg-white shadow-xl">
+    <div className={embedded ? 'atm-unified-orders-embedded' : 'fixed inset-0 z-[110] bg-black/40 p-2 md:p-6'} role={embedded ? undefined : 'dialog'} aria-modal={embedded ? undefined : 'true'} aria-label="Órdenes de pago">
+      <div className={embedded ? 'atm-unified-orders-content' : 'mx-auto flex h-full max-w-6xl flex-col overflow-hidden rounded-lg bg-white shadow-xl'}>
         <header className="flex items-center justify-between border-b px-5 py-3">
           <div className="flex items-center gap-4"><h2 className="text-lg font-semibold">Órdenes de pago</h2><nav className="flex gap-1 text-sm"><button className={`px-3 py-1.5 ${view === 'list' ? 'border-b-2 border-blue-600 font-semibold' : ''}`} onClick={() => setView('list')}>Todas</button><button className={`px-3 py-1.5 ${view === 'new' ? 'border-b-2 border-blue-600 font-semibold' : ''}`} onClick={() => setView('new')}>Nueva orden</button></nav></div>
-          <button type="button" className="px-2 py-1 text-xl" onClick={onClose} aria-label="Cerrar">×</button>
+          {!embedded && <button type="button" className="px-2 py-1 text-xl" onClick={onClose} aria-label="Cerrar">×</button>}
         </header>
         {error && <div className="mx-5 mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{error}</div>}
         <div className="flex-1 overflow-auto p-5">

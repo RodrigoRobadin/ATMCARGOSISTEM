@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { Plus } from "lucide-react";
 import { api } from "../api";
 import { useAuth } from "../auth.jsx";
 import { CallForm } from "./FollowUpManagement.jsx";
@@ -294,27 +295,27 @@ export default function CommercialDashboard() {
     load();
   }
 
-  return <div className="min-w-0 space-y-4 pb-8 text-slate-900">
-    <header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-4">
-      <div className="min-w-0"><h1 className="text-xl font-semibold">Dashboard comercial</h1><p className="mt-0.5 text-xs text-slate-500">{new Intl.DateTimeFormat('es-PY', { timeZone: 'America/Asuncion', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date())}</p><div className="mt-3 flex gap-1 text-xs"><button type="button" onClick={() => setFilter('view', lastWorkView.current)} aria-pressed={filters.view !== 'sessions'} className={`border-b-2 px-2 py-1.5 ${filters.view !== 'sessions' ? 'border-teal-700 font-semibold text-teal-800' : 'border-transparent text-slate-600 hover:text-slate-900'}`}>Cartera</button><button type="button" onClick={() => setFilter('view', 'sessions')} aria-pressed={filters.view === 'sessions'} className={`border-b-2 px-2 py-1.5 ${filters.view === 'sessions' ? 'border-teal-700 font-semibold text-teal-800' : 'border-transparent text-slate-600 hover:text-slate-900'}`}>Sesiones</button></div></div>
-      <div className="flex flex-wrap items-center gap-2 text-sm">
+  return <div className="atm-commercial min-w-0 space-y-5 pb-8 text-slate-900">
+    <header className="atm-commercial-header flex flex-wrap items-start justify-between gap-4">
+      <div className="min-w-0"><h1>Dashboard comercial</h1><p className="atm-page-subtitle">{new Intl.DateTimeFormat('es-PY', { timeZone: 'America/Asuncion', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date())}</p><div className="atm-commercial-tabs mt-4 flex gap-1 text-sm"><button type="button" onClick={() => setFilter('view', lastWorkView.current)} aria-pressed={filters.view !== 'sessions'} className={`border-b-2 px-3 py-2 ${filters.view !== 'sessions' ? 'border-teal-700 font-semibold text-teal-800' : 'border-transparent text-slate-600 hover:text-slate-900'}`}>Cartera</button><button type="button" onClick={() => setFilter('view', 'sessions')} aria-pressed={filters.view === 'sessions'} className={`border-b-2 px-3 py-2 ${filters.view === 'sessions' ? 'border-teal-700 font-semibold text-teal-800' : 'border-transparent text-slate-600 hover:text-slate-900'}`}>Sesiones</button></div></div>
+      <div className="atm-commercial-actions flex flex-wrap items-center gap-2 text-sm">
         <select aria-label="Unidad" value={filters.businessUnit} onChange={(e) => setFilter("businessUnit", e.target.value)} className="max-w-44 rounded border border-slate-300 bg-white px-3 py-2"><option value="">Cargo + Industrial</option><option value="atm-cargo">ATM Cargo</option><option value="atm-industrial">ATM Industrial</option></select>
         {isAdmin && <select aria-label="Comercial" value={filters.userId} onChange={(e) => setFilter("userId", e.target.value)} className="max-w-48 rounded border border-slate-300 bg-white px-3 py-2"><option value="">Todos los comerciales</option>{users.map((person) => <option key={person.id} value={person.id}>{person.name || person.email}</option>)}</select>}
-        <button type="button" onClick={() => setOrganizationModalOpen(true)} className="rounded bg-teal-700 px-3 py-2 font-medium text-white hover:bg-teal-800"><span aria-hidden="true" className="mr-1.5 text-base leading-none">+</span>Nueva organización</button>
-        <button type="button" onClick={() => setContactModalOpen(true)} className="rounded border border-slate-300 bg-white px-3 py-2 font-medium text-teal-800 hover:bg-slate-50"><span aria-hidden="true" className="mr-1.5 text-base leading-none">+</span>Nuevo contacto</button>
+        <button type="button" onClick={() => setOrganizationModalOpen(true)} className="atm-primary inline-flex items-center gap-2 rounded-md px-3 py-2 font-medium"><Plus size={16} />Nueva organización</button>
+        <button type="button" onClick={() => setContactModalOpen(true)} className="atm-secondary inline-flex items-center gap-2 rounded-md px-3 py-2 font-medium"><Plus size={16} />Nuevo contacto</button>
       </div>
     </header>
     {notice && <div role="status" className="flex flex-wrap items-center justify-between gap-2 border-l-4 border-emerald-600 bg-emerald-50 px-3 py-2 text-sm text-emerald-900"><span>{notice.text} {notice.dealId && <Link to={`/operations/${notice.dealId}`} className="font-semibold underline">Abrir {notice.reference || 'prospecto'}</Link>}</span><button type="button" onClick={() => setNotice(null)} className="text-xs font-medium">Cerrar</button></div>}
     {!inSessions && error && <p role="alert" className="border-l-4 border-red-500 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
     {inSessions ? <CommercialSessions businessUnit={filters.businessUnit} userId={filters.userId} isAdmin={isAdmin} /> : <>
-    <section aria-label="Indicadores comerciales" className="grid grid-cols-2 overflow-hidden rounded border border-slate-200 bg-white sm:grid-cols-4">
+    <section aria-label="Indicadores comerciales" className="atm-commercial-metrics grid grid-cols-2 overflow-hidden sm:grid-cols-4">
       <Metric label="Seguimientos vencidos" value={summary.overdue_activities || 0} urgent selected={filters.view === "overdue"} onClick={() => setFilter("view", "overdue")} />
       <Metric label="Sin próximo paso" value={summary.missing_next_activity || 0} selected={filters.view === "missing"} onClick={() => setFilter("view", "missing")} />
       <Metric label="Sin cotizar" value={summary.unquoted_deals || 0} selected={filters.view === "unquoted"} onClick={() => setFilter("view", "unquoted")} />
       <Metric label="Ofertas por vencer" value={summary.expiring_quotes || 0} urgent selected={filters.view === "expiring"} onClick={() => setFilter("view", "expiring")} />
     </section>
     {queueMessage && <p role="status" className="border-l-4 border-emerald-600 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{queueMessage}</p>}
-    <section className="min-w-0 overflow-hidden rounded border border-slate-200 bg-white xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(310px,25%)]">
+    <section className="atm-commercial-workspace min-w-0 overflow-hidden xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(310px,25%)]">
       <div className="min-w-0">
         <section aria-labelledby="commercial-agenda-title" className="border-b">
           <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3"><h2 id="commercial-agenda-title" className="text-sm font-semibold">Agenda de hoy <span className="ml-1 font-normal text-slate-500">{agenda.length}</span></h2>{canManageFollowups(user?.role) && <Link to="/followup-management?tab=agenda" className="text-xs font-medium text-blue-700 hover:underline">Abrir agenda completa</Link>}</div>
@@ -334,7 +335,7 @@ export default function CommercialDashboard() {
             {canManageFollowups(user?.role) && <Link to="/followup-management" className="text-xs text-blue-700 hover:underline">Gestión de seguimiento</Link>}
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-xs text-slate-500"><h2 id="commercial-work-title" className="font-medium text-slate-700">{VIEW_NAMES[filters.view] || VIEW_NAMES.priorities}</h2><span>{loading ? 'Actualizando...' : `${rows.length} operación${rows.length === 1 ? '' : 'es'}`}</span></div>
-          <div className="overflow-x-auto">
+          <div className="atm-commercial-table overflow-x-auto">
             <table className="w-full min-w-[790px] text-sm">
               <thead className="bg-slate-50 text-xs text-slate-600"><tr><th className="px-3 py-2 text-left font-medium">Operación</th><th className="px-3 py-2 text-left font-medium">Cliente</th><th className="px-3 py-2 text-left font-medium">Etapa / fechas</th><th className="px-3 py-2 text-left font-medium">Último contacto</th><th className="px-3 py-2 text-left font-medium">Próxima acción</th><th className="px-3 py-2 text-right font-medium">Acción</th></tr></thead>
               <tbody>

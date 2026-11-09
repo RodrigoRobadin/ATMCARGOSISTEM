@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ClipboardList, FileSpreadsheet, FileText, MoreHorizontal, Search } from 'lucide-react';
 import { api } from '../../api';
 import {
   companyBankAccountLabel,
@@ -23,6 +24,7 @@ const STATUS_TABS = [
   { value: 'programado', label: 'Programados' },
   { value: 'pagado', label: 'Pagado' },
 ];
+const PRIMARY_STATUS_TABS = ['por_pagar', 'vencido', 'vence_hoy', 'due_7d', 'listo_pago', 'pagado'];
 
 const STATUS_META = {
   vencido: { label: 'Vencido', tone: 'red' },
@@ -84,10 +86,10 @@ function CurrencySummary({ label, values, tone = 'slate' }) {
   };
   const entries = Object.entries(values || {});
   return (
-    <div className="border rounded-xl p-3 bg-white">
-      <div className="text-xs text-slate-500">{label}</div>
+    <div className="atm-payable-currency-summary">
+      <div>{label}</div>
       {entries.length ? (
-        <div className="mt-2 flex flex-wrap gap-1.5">
+        <div className="atm-payable-currency-values">
           {entries.map(([currency, amount]) => (
             <span
               key={currency}
@@ -98,7 +100,7 @@ function CurrencySummary({ label, values, tone = 'slate' }) {
           ))}
         </div>
       ) : (
-        <div className="mt-2 inline-flex rounded-lg px-3 py-1.5 text-sm font-semibold bg-slate-50 text-slate-500">
+        <div className="atm-payable-no-data">
           Sin datos
         </div>
       )}
@@ -115,11 +117,11 @@ function MetricBox({ label, value, tone = 'slate' }) {
     red: 'bg-red-50 text-red-700',
   };
   return (
-    <div className="border rounded-xl p-3 bg-white">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className={`mt-2 inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${tones[tone] || tones.slate}`}>
+    <div className="atm-payable-metric">
+      <div>{label}</div>
+      <strong className={tones[tone] || tones.slate}>
         {value}
-      </div>
+      </strong>
     </div>
   );
 }
@@ -261,6 +263,9 @@ export default function AccountsPayable() {
     blocked_documents: 0,
     scheduled_documents: 0,
     missing_supplier_bank: 0,
+    overdue_count: 0,
+    due_today_count: 0,
+    upcoming_7d_count: 0,
     by_status: {},
     balance_by_currency: {},
     overdue_by_currency: {},
@@ -278,6 +283,7 @@ export default function AccountsPayable() {
   });
   const [selectedVendor, setSelectedVendor] = useState(null);
   const [unifiedOrdersOpen, setUnifiedOrdersOpen] = useState(false);
+  const [startUnifiedNew, setStartUnifiedNew] = useState(false);
   const [initialUnifiedOrderId, setInitialUnifiedOrderId] = useState(null);
   const [initialUnifiedSupplierId, setInitialUnifiedSupplierId] = useState(null);
   const [initialUnifiedDocumentKeys, setInitialUnifiedDocumentKeys] = useState([]);
@@ -541,6 +547,7 @@ export default function AccountsPayable() {
 
   function openGenerateOrder(row) {
     setActionsMenu(null);
+    setStartUnifiedNew(true);
     setInitialUnifiedOrderId(null);
     setInitialUnifiedSupplierId(row?.supplier_id || null);
     setInitialUnifiedDocumentKeys([`${row.source_type}:${row.invoice_id || row.expense_id}`]);
@@ -779,6 +786,7 @@ export default function AccountsPayable() {
     const url = new URL(window.location.href);
     if (url.searchParams.get('new_order') !== '1') return;
     const supplierId = Number(url.searchParams.get('supplier_id'));
+    setStartUnifiedNew(true);
     setInitialUnifiedOrderId(null);
     setInitialUnifiedSupplierId(Number.isSafeInteger(supplierId) && supplierId > 0 ? supplierId : null);
     setInitialUnifiedDocumentKeys(url.searchParams.getAll('document').filter((key) => /^(operation-expense|purchase-invoice|admin-expense):[1-9]\d*$/.test(key)));
@@ -826,69 +834,85 @@ export default function AccountsPayable() {
     !scheduleAccountOptions.some((account) => companyBankAccountValue(account) === scheduleForm.planned_company_account);
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="atm-admin-ops atm-admin-ops-payable min-w-0 p-6 space-y-4">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Cuentas a pagar</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            Bandeja de pagos por proveedor, vencimiento, OP y estado de cobranza interna.
-          </p>
+          <p className="text-sm text-slate-500 mt-1">Facturas, vencimientos y pagos pendientes a proveedores.</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <button type="button" onClick={() => { setInitialUnifiedOrderId(null); setInitialUnifiedSupplierId(null); setInitialUnifiedDocumentKeys([]); setUnifiedOrdersOpen(true); }} className="px-3 py-2 text-sm rounded border border-blue-600 bg-blue-600 text-white hover:bg-blue-700">
-            Órdenes de pago
+          <button type="button" onClick={() => { setStartUnifiedNew(false); setInitialUnifiedOrderId(null); setInitialUnifiedSupplierId(null); setInitialUnifiedDocumentKeys([]); setUnifiedOrdersOpen(true); }} className="atm-payable-primary inline-flex items-center gap-2 px-3 py-2 text-sm rounded border border-blue-600 bg-blue-600 text-white hover:bg-blue-700">
+            <ClipboardList size={16} /> Crear orden de pago
           </button>
-          <button type="button" onClick={exportSummaryPdf} className="px-3 py-2 text-sm rounded-lg border hover:bg-slate-50">
-            Exportar PDF
+          <button type="button" onClick={exportSummaryPdf} className="inline-flex items-center gap-2 px-3 py-2 text-sm rounded-lg border hover:bg-slate-50">
+            <FileText size={16} /> PDF
           </button>
-          <button type="button" onClick={exportSummary} className="px-3 py-2 text-sm rounded-lg border hover:bg-slate-50">
-            Exportar Excel
+          <button type="button" onClick={exportSummary} className="inline-flex items-center gap-2 px-3 py-2 text-sm rounded-lg border hover:bg-slate-50">
+            <FileSpreadsheet size={16} /> Excel
           </button>
-          <button type="button" onClick={exportPaymentPlan} className="px-3 py-2 text-sm rounded-lg bg-black text-white hover:bg-slate-800">
-            Planilla de pagos
+          <button type="button" onClick={exportPaymentPlan} className="inline-flex items-center gap-2 px-3 py-2 text-sm rounded-lg border hover:bg-slate-50">
+            <FileSpreadsheet size={16} /> Planilla de pagos
           </button>
         </div>
       </div>
 
-      {unifiedOrdersOpen && <UnifiedPaymentOrders initialOrderId={initialUnifiedOrderId} initialSupplierId={initialUnifiedSupplierId} initialDocumentKeys={initialUnifiedDocumentKeys} onClose={() => setUnifiedOrdersOpen(false)} onChanged={reloadAll} companyAccounts={companyAccounts} />}
+      {unifiedOrdersOpen && <UnifiedPaymentOrders initialView={startUnifiedNew ? 'new' : 'list'} initialOrderId={initialUnifiedOrderId} initialSupplierId={initialUnifiedSupplierId} initialDocumentKeys={initialUnifiedDocumentKeys} onClose={() => setUnifiedOrdersOpen(false)} onChanged={reloadAll} companyAccounts={companyAccounts} />}
 
-      <div className="bg-white rounded-2xl border p-4 space-y-3">
-        <div className="flex flex-wrap gap-2">
-          {STATUS_TABS.map((tab) => {
+      <div className="atm-payable-overview">
+        <div className="atm-payable-metrics">
+          <MetricBox label="Documentos abiertos" value={documentsDashboard.open_documents || 0} tone="slate" />
+          <MetricBox label="Listos para pagar" value={documentsDashboard.ready_to_pay || 0} tone="emerald" />
+          <MetricBox label="Programados" value={documentsDashboard.scheduled_documents || 0} tone="blue" />
+          <MetricBox label="Sin cuenta bancaria" value={documentsDashboard.missing_supplier_bank || 0} tone="amber" />
+          <MetricBox label="Vencidos" value={documentsDashboard.overdue_count || 0} tone="red" />
+        </div>
+        <div className="atm-payable-currency-strip">
+          <CurrencySummary label="Saldo pendiente" values={documentsDashboard.balance_by_currency} tone="emerald" />
+          <CurrencySummary label="Saldo vencido" values={documentsDashboard.overdue_by_currency} tone="red" />
+        </div>
+      </div>
+
+      <div className="atm-payable-filters">
+        <div className="atm-payable-tabs" role="group" aria-label="Estado de cuentas a pagar">
+          {STATUS_TABS.filter((tab) => PRIMARY_STATUS_TABS.includes(tab.value)).map((tab) => {
             const active = filters.status_tab === tab.value;
-            const countKey = tab.quick ? null : tab.value;
             const count =
-              tab.value === 'vencido'
-                ? dashboard?.overdue_count
+              tab.value === 'por_pagar'
+                ? documentsDashboard?.open_documents
+                : tab.value === 'vencido'
+                  ? documentsDashboard?.overdue_count
                 : tab.value === 'vence_hoy'
-                  ? dashboard?.due_today_count
-                  : countKey
-                    ? documentsDashboard?.by_status?.[countKey]
-                    : dashboard?.upcoming_7d_count;
+                  ? documentsDashboard?.due_today_count
+                  : tab.value === 'due_7d'
+                    ? documentsDashboard?.upcoming_7d_count
+                    : documentsDashboard?.by_status?.[tab.value];
             return (
               <button
                 key={tab.value}
                 type="button"
                 onClick={() => setFilters((prev) => ({ ...prev, status_tab: tab.value, quick_filter: '' }))}
-                className={`px-3 py-1.5 text-sm rounded-full border transition ${
-                  active ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 hover:bg-slate-50'
-                }`}
+                aria-pressed={active}
               >
                 {tab.label}
-                {Number(count || 0) > 0 ? <span className="ml-1 opacity-75">({count})</span> : null}
+                <span>{Number(count || 0)}</span>
               </button>
             );
           })}
+          <select aria-label="Otros estados" value={PRIMARY_STATUS_TABS.includes(filters.status_tab) ? '' : filters.status_tab}
+            onChange={(event) => event.target.value && setFilters((prev) => ({ ...prev, status_tab: event.target.value, quick_filter: '' }))}>
+            <option value="">Otros estados</option>
+            {STATUS_TABS.filter((tab) => !PRIMARY_STATUS_TABS.includes(tab.value)).map((tab) => (
+              <option key={tab.value} value={tab.value}>{tab.label}</option>
+            ))}
+          </select>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
-          <input
-            className="border rounded-lg px-3 py-2"
-            placeholder="Proveedor, RUC, documento u operacion"
-            value={filters.supplier_q}
-            onChange={(e) => setFilters((prev) => ({ ...prev, supplier_q: e.target.value }))}
-          />
+        <div className="atm-payable-filter-row">
+          <label className="atm-payable-search"><Search size={16} aria-hidden="true" />
+            <input aria-label="Buscar cuentas a pagar" placeholder="Buscar proveedor, RUC, factura u operación"
+              value={filters.supplier_q} onChange={(e) => setFilters((prev) => ({ ...prev, supplier_q: e.target.value }))} />
+          </label>
           <select
-            className="border rounded-lg px-3 py-2"
+            aria-label="Módulo" className="border rounded-lg px-3 py-2"
             value={filters.module_key}
             onChange={(e) => setFilters((prev) => ({ ...prev, module_key: e.target.value }))}
           >
@@ -897,16 +921,7 @@ export default function AccountsPayable() {
             ))}
           </select>
           <select
-            className="border rounded-lg px-3 py-2"
-            value={filters.source_type}
-            onChange={(e) => setFilters((prev) => ({ ...prev, source_type: e.target.value }))}
-          >
-            {sourceOptions.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-          <select
-            className="border rounded-lg px-3 py-2"
+            aria-label="Moneda" className="border rounded-lg px-3 py-2"
             value={filters.currency_code}
             onChange={(e) => setFilters((prev) => ({ ...prev, currency_code: e.target.value }))}
           >
@@ -915,7 +930,17 @@ export default function AccountsPayable() {
             <option value="USD">USD</option>
             <option value="BRL">BRL</option>
           </select>
-          <label className="inline-flex items-center gap-2 border rounded-lg px-3 py-2">
+        </div>
+        <details className="atm-payable-more">
+          <summary>Más filtros</summary>
+          <div className="atm-payable-advanced-grid">
+          <label>Tipo de documento
+            <select className="border rounded-lg px-3 py-2" value={filters.source_type}
+              onChange={(e) => setFilters((prev) => ({ ...prev, source_type: e.target.value }))}>
+              {sourceOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <label className="atm-payable-check">
             <input
               type="checkbox"
               checked={filters.open_only}
@@ -923,7 +948,7 @@ export default function AccountsPayable() {
             />
             Solo abiertos
           </label>
-          <label className="inline-flex items-center gap-2 border rounded-lg px-3 py-2">
+          <label className="atm-payable-check">
             <input
               type="checkbox"
               checked={filters.overdue}
@@ -931,48 +956,36 @@ export default function AccountsPayable() {
             />
             Solo vencidos
           </label>
-        </div>
+          </div>
+        </details>
       </div>
 
-      <div className="grid grid-cols-2 xl:grid-cols-7 gap-2">
-        <MetricBox label="Docs abiertos" value={documentsDashboard.open_documents || 0} tone="blue" />
-        <MetricBox label="Listos para pagar" value={documentsDashboard.ready_to_pay || 0} tone="emerald" />
-        <MetricBox label="Programados" value={documentsDashboard.scheduled_documents || 0} tone="blue" />
-        <MetricBox label="Sin cuenta proveedor" value={documentsDashboard.missing_supplier_bank || 0} tone="amber" />
-        <MetricBox label="Vencidos" value={dashboard.overdue_count || 0} tone="red" />
-        <CurrencySummary label="Saldo pendiente" values={documentsDashboard.balance_by_currency} tone="blue" />
-        <CurrencySummary label="Saldo vencido" values={documentsDashboard.overdue_by_currency} tone="red" />
-      </div>
-
-      <div className="bg-white border rounded-2xl overflow-visible">
-        <div className="px-4 py-3 border-b bg-slate-50 flex items-center justify-between gap-3">
-          <div className="font-medium">Bandeja de documentos</div>
-          <div className="text-xs text-slate-500">{documents.length} documentos</div>
+      <div className="atm-payable-documents">
+        <div className="atm-payable-section-head">
+          <div><h2>Documentos</h2><span>Facturas y gastos vinculados a proveedores</span></div>
+          <span>{documents.length} {documents.length === 1 ? 'documento' : 'documentos'}</span>
         </div>
         {documentsLoading ? (
           <div className="p-4 text-sm text-slate-500">Cargando documentos...</div>
         ) : documents.length === 0 ? (
           <div className="p-4 text-sm text-slate-500">No hay documentos para los filtros actuales.</div>
         ) : (
-          <div className="overflow-x-auto overflow-y-visible">
-            <table className="min-w-full text-sm">
+          <div className="atm-payable-table-wrap overflow-x-auto overflow-y-visible">
+            <table className="atm-payable-table min-w-full text-sm">
               <thead className="bg-white">
                 <tr className="border-b">
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Proveedor</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Documento</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Modulo</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Fuente</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Operacion</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Vence</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Programado</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Saldo</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">OP</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Estado</th>
+                  <th className="text-left px-3 py-3">Proveedor</th>
+                  <th className="text-left px-3 py-3">Documento</th>
+                  <th className="text-left px-3 py-3">Origen</th>
+                  <th className="text-left px-3 py-3">Vencimiento</th>
+                  <th className="text-right px-3 py-3">Saldo</th>
+                  <th className="text-left px-3 py-3">Pago previsto</th>
+                  <th className="text-left px-3 py-3">Orden de pago</th>
+                  <th className="text-left px-3 py-3">Situación</th>
                   {ENABLE_DOCUMENT_VALIDATION && (
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Doc.</th>
+                    <th className="text-left px-3 py-3">Doc.</th>
                   )}
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Alertas</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-slate-600">Acciones</th>
+                  <th className="text-right px-3 py-3">Acciones</th>
                 </tr>
               </thead>
               <tbody>
@@ -982,41 +995,39 @@ export default function AccountsPayable() {
                   const open = actionsMenu?.row === row;
                   return (
                     <tr key={`${row.source_type}-${row.invoice_id || row.expense_id}`} className="border-b last:border-b-0">
-                      <td className="px-4 py-3">
-                        <div className="font-medium">{row.supplier_name || 'Proveedor sin nombre'}</div>
-                        <div className="text-xs text-slate-500">{row.supplier_ruc || '-'}</div>
+                      <td className="px-3 py-3 atm-payable-provider">
+                        <strong>{row.supplier_name || 'Proveedor sin nombre'}</strong>
+                        <small>{row.supplier_ruc ? `RUC ${row.supplier_ruc}` : 'Sin RUC'}</small>
+                        {!row.supplier_has_bank_account && <small className="atm-payable-warning">Sin cuenta bancaria</small>}
                       </td>
-                      <td className="px-4 py-3">
-                        <div className="font-medium">{row.document_number || '-'}</div>
-                        <div className="text-xs text-slate-500">{fmtDate(row.invoice_date)}</div>
+                      <td className="px-3 py-3 atm-payable-document">
+                        <button type="button" onClick={() => openInvoice(row)}>{row.document_number || 'Sin número'}</button>
+                        <small>{fmtDate(row.invoice_date)}</small>
+                        {row.operation_reference && <button type="button" className="atm-payable-operation-link" onClick={() => openOperation(row)}>{row.operation_reference}</button>}
                       </td>
-                      <td className="px-4 py-3 text-xs text-slate-600">{row.module_name || '-'}</td>
-                      <td className="px-4 py-3 text-xs text-slate-600">{sourceTypeLabel(row.source_type)}</td>
-                      <td className="px-4 py-3">
-                        {row.operation_reference ? (
-                          <button type="button" className="text-blue-600 hover:underline" onClick={() => openOperation(row)}>
-                            {row.operation_reference}
-                          </button>
-                        ) : '-'}
+                      <td className="px-3 py-3 atm-payable-source">
+                        {sourceTypeLabel(row.source_type)}
+                        <small>{row.module_name || 'Sin módulo'}</small>
                       </td>
-                      <td className="px-4 py-3">{fmtDate(row.due_date)}</td>
-                      <td className="px-4 py-3">
-                        <div>{fmtDate(row.scheduled_payment_date)}</div>
-                        <div className="text-xs text-slate-500">
-                          {row.priority && row.priority !== 'normal' ? row.priority : ''}
-                        </div>
+                      <td className="px-3 py-3 atm-payable-date">
+                        {fmtDate(row.due_date)}
+                        {row.payable_status === 'vencido' && <small className="atm-payable-warning">Vencido</small>}
                       </td>
-                      <td className="px-4 py-3">
-                        <div className="font-medium">{fmtMoney(row.balance, row.currency_code)}</div>
+                      <td className="px-3 py-3 text-right atm-payable-balance">
+                        <strong>{fmtMoney(row.balance, row.currency_code)}</strong>
                         {Number(row.credited_amount || 0) > 0 ? (
-                          <div className="text-xs text-emerald-700">
+                          <small>
                             NC {fmtMoney(row.credited_amount, row.currency_code)} - Neto {fmtMoney(row.net_amount, row.currency_code)}
-                          </div>
+                          </small>
                         ) : null}
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-3 py-3 atm-payable-date">
+                        {fmtDate(row.scheduled_payment_date)}
+                        {row.priority && row.priority !== 'normal' && <small>Prioridad {row.priority}</small>}
+                      </td>
+                      <td className="px-3 py-3 atm-payable-order">
                         {row.unified_order_id ? (
-                          <button type="button" className="text-blue-600 hover:underline" onClick={() => { setInitialUnifiedOrderId(row.unified_order_id); setInitialUnifiedSupplierId(null); setInitialUnifiedDocumentKeys([]); setUnifiedOrdersOpen(true); }}>
+                          <button type="button" className="text-blue-600 hover:underline" onClick={() => { setStartUnifiedNew(false); setInitialUnifiedOrderId(row.unified_order_id); setInitialUnifiedSupplierId(null); setInitialUnifiedDocumentKeys([]); setUnifiedOrdersOpen(true); }}>
                             {row.unified_order_number}
                           </button>
                         ) : row.payment_order_number ? (
@@ -1025,9 +1036,14 @@ export default function AccountsPayable() {
                           </button>
                         ) : '-'}
                       </td>
-                      <td className="px-4 py-3"><StatusChip {...meta} /></td>
+                      <td className="px-3 py-3 atm-payable-situation">
+                        <StatusChip {...meta} />
+                        {Array.isArray(row.alerts) && row.alerts.filter((alert) => alert !== 'Proveedor sin cuenta bancaria').map((alert) => (
+                          <small key={alert} className="atm-payable-warning" title={alert}>{alert}</small>
+                        ))}
+                      </td>
                       {ENABLE_DOCUMENT_VALIDATION && (
-                        <td className="px-4 py-3">
+                        <td className="px-3 py-3">
                           <button
                             type="button"
                             className="space-y-1 text-left"
@@ -1040,34 +1056,12 @@ export default function AccountsPayable() {
                           </button>
                         </td>
                       )}
-                      <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-2">
-                          {!row.supplier_has_bank_account && <StatusChip label="Proveedor sin cuenta" tone="amber" />}
-                          {row.supplier_has_bank_account && (
-                            <span className="text-xs text-slate-500" title={supplierBankLabel(row)}>
-                              Cuenta cargada
-                            </span>
-                          )}
-                          {Array.isArray(row.alerts) && row.alerts.filter((alert) => alert !== 'Proveedor sin cuenta bancaria').map((alert) => (
-                            <StatusChip
-                              key={alert}
-                              label={alert}
-                              tone={
-                                alert.includes('retenido') ||
-                                alert.includes('Sin numero') ||
-                                alert.includes('vencimiento') ||
-                                alert.includes('observado')
-                                  ? 'red'
-                                  : 'amber'
-                              }
-                            />
-                          ))}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 relative">
+                      <td className="px-3 py-3 text-right relative">
                         <button
                           type="button"
-                          className="px-2.5 py-1.5 text-xs rounded-lg border hover:bg-slate-50"
+                          className="atm-payable-actions-button"
+                          aria-label={`Acciones para ${row.document_number || row.supplier_name || 'documento'}`}
+                          title="Más acciones"
                           onClick={(event) => {
                             if (open) {
                               setActionsMenu(null);
@@ -1080,7 +1074,7 @@ export default function AccountsPayable() {
                             setActionsMenu({ row, left, top: Math.max(8, top) });
                           }}
                         >
-                          Acciones
+                          <MoreHorizontal size={17} />
                         </button>
                         {open && (
                           <div
@@ -1149,6 +1143,8 @@ export default function AccountsPayable() {
         )}
       </div>
 
+      <details className="atm-payable-analysis">
+        <summary>Análisis por proveedor y módulo</summary>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
         <div className="bg-white border rounded-2xl overflow-hidden">
           <div className="px-4 py-3 border-b bg-slate-50 font-medium">Deuda por modulo</div>
@@ -1287,6 +1283,7 @@ export default function AccountsPayable() {
           </div>
         )}
       </div>
+      </details>
 
       {paymentRow && (
         <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-4">
@@ -1673,6 +1670,7 @@ export default function AccountsPayable() {
         initialMovementKind={selectedVendor?.movement_kind || 'all'}
         onDataChanged={reloadAll}
         onCreatePaymentOrder={(row) => {
+          setStartUnifiedNew(true);
           setInitialUnifiedOrderId(null);
           setInitialUnifiedSupplierId(selectedVendor?.supplier_id || null);
           const sourceType = row?.source_type || (row?.module_key === 'admin-purchases' ? 'purchase-invoice' : row?.module_key === 'admin-expenses' ? 'admin-expense' : 'operation-expense');

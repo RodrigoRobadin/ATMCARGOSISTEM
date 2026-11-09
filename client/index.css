@@ -1,8 +1,774 @@
-/* client/src/index.css */
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+:root {
+  --atm-bg: #f7f7f4;
+  --atm-surface: #fff;
+  --atm-forest: #26735b;
+  --atm-forest-hover: #1e5c49;
+  --atm-sage: #e5ecdd;
+  --atm-ink: #172126;
+  --atm-muted: #596660;
+  --atm-border: #e2e5de;
+  --atm-warn-bg: #fff4d8;
+  --atm-error-bg: #fff0ef;
+}
 
-/* opcional: helpers */
-html, body, #root { height: 100%; }
-:root { color-scheme: light; }
+body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+.atm-app { background: var(--atm-bg); color: var(--atm-ink); }
+.atm-app .atm-main { background: var(--atm-bg); }
+.atm-app .atm-sidebar { background: var(--atm-surface); border-color: var(--atm-border); }
+.atm-sidebar-brand { position: sticky; top: 0; z-index: 2; background: var(--atm-surface); border-color: var(--atm-border); }
+.atm-brand-lockup { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; font-size: 17px; font-weight: 750; color: var(--atm-ink); }
+.atm-brand-mark { position: relative; display: block; width: 20px; height: 17px; flex: 0 0 20px; background: var(--atm-forest); clip-path: polygon(30% 0, 66% 0, 37% 100%, 0 100%); }
+.atm-brand-mark::after { content: ""; position: absolute; inset: 0; background: #74a38a; transform: translateX(9px); }
+.atm-sidebar-toggle { color: var(--atm-muted); opacity: .65; }
+.atm-sidebar-toggle:hover { opacity: 1; background: var(--atm-sage); }
+.atm-app .atm-topbar { background: var(--atm-surface); border-color: var(--atm-border); }
+.atm-global-bar { justify-content: space-between; min-height: 40px; }
+.atm-topbar-actions { margin-left: auto; flex-shrink: 0; }
+.atm-user-profile { display: flex; align-items: center; gap: 9px; padding-left: 16px; margin-left: 5px; border-left: 1px solid var(--atm-border); min-width: 0; }
+.atm-user-initials { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 34px; width: 34px; height: 34px; border-radius: 50%; background: var(--atm-sage); color: var(--atm-forest-hover); font-size: 13px; font-weight: 700; }
+.atm-user-details { display: flex; flex-direction: column; min-width: 0; max-width: 145px; line-height: 1.2; }
+.atm-user-details strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 650; }
+.atm-user-details small { color: var(--atm-muted); font-size: 11px; margin-top: 3px; text-transform: capitalize; }
+.atm-topbar-actions > .flex button, .atm-topbar-actions > .relative button { color: #34423e; border-color: var(--atm-border); }
+.atm-app .atm-nav-link, .atm-app .atm-nav-group { color: #34423e; }
+.atm-app .atm-nav-link:hover, .atm-app .atm-nav-group:hover { background: #f2f5ef; }
+.atm-app .atm-nav-link[aria-current="page"] { background: var(--atm-sage); color: var(--atm-forest-hover); font-weight: 600; }
+.atm-app .atm-sidebar hr { border-color: var(--atm-border); }
+.atm-sidebar:not(.atm-sidebar-collapsed) nav :is(a, button) { justify-content: flex-start; gap: 8px; }
+.atm-sidebar:not(.atm-sidebar-collapsed) nav :is(a, button) > span:not(:first-child) { display: inline; }
+.atm-sidebar:not(.atm-sidebar-collapsed) nav :is(a, button) > span.flex-1 { flex: 1; }
+.atm-sidebar:not(.atm-sidebar-collapsed) nav > div.hidden { display: block; }
+.atm-sidebar-collapsed nav :is(a, button) { justify-content: center; gap: 0; }
+.atm-sidebar-collapsed nav :is(a, button) > span:not(:first-child) { display: none; }
+.atm-sidebar-collapsed nav > div:not(.px-3) > div.ml-8 { display: none; }
+
+.atm-app input:not([type="checkbox"]):not([type="radio"]),
+.atm-app select, .atm-app textarea { accent-color: var(--atm-forest); }
+.atm-app :is(input, select, textarea, button, a):focus-visible {
+  outline: 2px solid var(--atm-forest);
+  outline-offset: 2px;
+}
+.atm-app .atm-primary { background: var(--atm-forest); color: #fff; }
+.atm-app .atm-primary:hover { background: var(--atm-forest-hover); }
+.atm-app .atm-secondary { background: #fff; border: 1px solid var(--atm-border); color: var(--atm-ink); }
+.atm-app .atm-secondary:hover { background: #f2f5ef; }
+
+.atm-pipeline .atm-pipeline-header { margin-bottom: 16px; }
+.atm-pipeline .atm-pipeline-title { font-size: 32px; line-height: 1.15; font-weight: 700; }
+.atm-page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 0 0 14px; }
+.atm-page-subtitle { color: var(--atm-muted); font-size: 15px; margin-top: 2px; }
+.atm-new-operation { display: inline-flex; align-items: center; gap: 9px; min-height: 41px; padding: 0 17px; border-radius: 6px; font-size: 14px; white-space: nowrap; }
+.atm-view-tabs { border-bottom: 1px solid var(--atm-border); margin-bottom: 18px; }
+.atm-view-tabs [role="group"] { border: 0; padding: 0; gap: 14px; border-radius: 0; background: transparent; }
+.atm-view-tabs [role="group"] button { border-radius: 0; background: transparent; border-bottom: 2px solid transparent; padding: 9px 16px 10px; color: var(--atm-muted); }
+.atm-view-tabs [role="group"] button[aria-pressed="true"] { color: var(--atm-forest-hover); border-bottom-color: var(--atm-forest); }
+.atm-service-tabs { overflow-x: auto; }
+.atm-service-tabs [role="group"] { white-space: nowrap; }
+.atm-service-actions { display: flex; justify-content: flex-end; margin-top: 0; }
+.atm-filter-row { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; flex-wrap: wrap; }
+.atm-filter-search { display: flex; align-items: center; gap: 10px; border: 1px solid var(--atm-border); border-radius: 6px; background: #fff; padding: 0 12px; height: 40px; width: 315px; max-width: 100%; color: var(--atm-muted); }
+.atm-filter-search input[type="search"] { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; font-size: 13px; }
+.atm-filter-row .atm-pipeline-controls { gap: 10px; }
+.atm-pipeline .atm-pipeline-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.atm-pipeline .atm-pipeline-controls :is(input[type="search"], select) {
+  min-height: 38px; border: 1px solid var(--atm-border); border-radius: 6px; background: #fff;
+}
+.atm-pipeline .atm-pipeline-controls select { max-width: 210px; padding: 0 28px 0 12px; font-size: 13px; }
+.atm-more-filters { position: relative; }
+.atm-more-filters summary, .atm-attention-filter { display: inline-flex; align-items: center; gap: 9px; min-height: 38px; border: 1px solid var(--atm-border); border-radius: 6px; background: #fff; padding: 0 12px; color: #34423e; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.atm-more-filters summary { list-style: none; }
+.atm-more-filters summary::-webkit-details-marker { display: none; }
+.atm-more-filters[open] summary, .atm-attention-filter[aria-pressed="true"] { border-color: #a5bca9; background: var(--atm-sage); color: var(--atm-forest-hover); }
+.atm-filter-popover { position: absolute; top: calc(100% + 6px); left: 0; z-index: 45; display: grid; gap: 8px; min-width: 228px; padding: 14px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); box-shadow: 0 8px 22px rgba(20, 40, 30, .1); }
+.atm-filter-popover label { font-size: 12px; font-weight: 600; }
+.atm-filter-popover button { display: flex; align-items: center; gap: 8px; padding: 8px; text-align: left; color: var(--atm-forest-hover); font-size: 13px; }
+.atm-attention-filter { margin-left: auto; }
+.atm-pipeline .atm-board { display: flex; align-items: stretch; gap: 10px; height: calc(100dvh - 280px); min-height: 480px; overflow-x: auto; overflow-y: hidden; padding-bottom: 8px; }
+.atm-pipeline .atm-column {
+  display: flex; flex-direction: column; flex: 1 0 190px; min-width: 190px; min-height: 0; border: 1px solid var(--atm-border);
+  border-top: 3px solid #83a58d; border-radius: 7px; background: #f8f9f6; padding: 10px;
+}
+.atm-pipeline .atm-column-header {
+  position: relative; z-index: 1; flex: none; background: #f8f9f6; border-bottom: 1px solid var(--atm-border);
+  margin: -10px -10px 10px; padding: 12px 10px 10px; min-height: 68px;
+}
+.atm-stage-headline { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; font-size: 14px; font-weight: 650; line-height: 1.25; }
+.atm-stage-name { min-width: 0; overflow-wrap: anywhere; }
+.atm-stage-profit-list { min-height: 18px; margin-top: 5px; color: var(--atm-muted); font-size: 11px; }
+.atm-stage-profit-list .atm-profit { background: transparent; color: var(--atm-muted); padding: 0; }
+.atm-pipeline .atm-deal-card {
+  border-radius: 6px; border-color: var(--atm-border); box-shadow: 0 1px 2px rgba(18, 40, 31, .04);
+}
+.atm-pipeline .atm-column .space-y-2 { display: flex; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; flex-direction: column; gap: 6px; padding-right: 2px; }
+.atm-pipeline .atm-column .space-y-2 > * + * { margin-top: 0; }
+.atm-pipeline .atm-deal-card { padding: 10px; font-size: 12px; }
+.atm-pipeline .atm-deal-card > .text-sm { font-size: 12px; }
+.atm-empty-stage { display: flex; align-items: center; flex-direction: column; gap: 9px; padding: 115px 8px 24px; color: #9aa39d; text-align: center; font-size: 12px; line-height: 1.45; }
+.atm-card-client { margin-top: 3px; }
+.atm-card-profit { display: inline-flex; flex-direction: column; gap: 1px; background: transparent; color: var(--atm-forest-hover); padding: 0; }
+.atm-card-profit small { color: var(--atm-muted); font-size: 10px; font-weight: 400; }
+.atm-card-profit strong { font-size: 15px; line-height: 1; font-weight: 700; }
+.atm-pipeline .atm-deal-card:hover { border-color: #a5bca9; box-shadow: 0 3px 10px rgba(18, 40, 31, .09); }
+.atm-pipeline .atm-deal-card.atm-needs-attention { background: var(--atm-error-bg); border-color: #ec9f9a; }
+.atm-pipeline .atm-profit { color: var(--atm-forest-hover); background: #e8f3ed; }
+.atm-pipeline .atm-count { background: #edf0ed; color: #34423e; }
+
+.atm-service-content { min-width: 0; color: var(--atm-ink); }
+.atm-service-content-head { min-height: 48px; gap: 16px; margin-bottom: 15px; }
+.atm-service-content-head h2 { font-size: 20px; line-height: 1.25; font-weight: 700; color: var(--atm-ink); }
+.atm-service-content-head p { margin-top: 3px; font-size: 13px; color: var(--atm-muted); }
+.atm-service-toolbar { min-width: 0; gap: 10px; margin-bottom: 14px; }
+.atm-service-toolbar :is(input, select) { min-height: 38px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-ink); font-size: 13px; }
+.atm-service-toolbar select { padding: 0 28px 0 11px; }
+.atm-service-toolbar input { padding: 0 11px; }
+.atm-service-toolbar input::placeholder { color: #8a968e; }
+.atm-service-toolbar .atm-service-search { max-width: min(460px, 100%); }
+.atm-service-count { color: var(--atm-muted); font-size: 12px; white-space: nowrap; }
+.atm-service-outline { background: var(--atm-surface); border-color: var(--atm-border); color: var(--atm-ink); font-size: 13px; }
+.atm-service-outline:hover { background: #f2f5ef; }
+.atm-service-link { color: var(--atm-forest-hover); font-weight: 600; text-decoration: none; }
+.atm-service-link:hover { text-decoration: underline; }
+.atm-service-content .btn-primary { background: var(--atm-forest); border-color: var(--atm-forest); color: #fff; }
+.atm-service-content .btn-primary:hover { background: var(--atm-forest-hover); }
+.atm-service-table-wrap { border-color: var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-service-table-wrap table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.atm-service-table-wrap thead { background: #edf2ec; color: #34423e; }
+.atm-service-table-wrap th { padding-top: 11px; padding-bottom: 11px; font-size: 11px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; white-space: nowrap; }
+.atm-service-table-wrap tbody tr { border-color: var(--atm-border); }
+.atm-service-table-wrap tbody tr:hover { background: #f5f8f4; }
+.atm-service-table-wrap td { color: var(--atm-ink); vertical-align: middle; }
+.atm-service-table-wrap td :is(button, a).underline { color: var(--atm-forest-hover); text-underline-offset: 2px; }
+.atm-service-sheet .atm-service-table-wrap > div:first-child { background: #eef3eb; color: var(--atm-forest-hover); padding: 12px 14px; }
+.atm-service-sheet .atm-service-table-wrap tfoot { background: #f2f6f0; border-color: var(--atm-border); }
+.atm-service-agenda .atm-service-toolbar > .inline-flex { border-color: var(--atm-border); border-radius: 6px; }
+.atm-service-agenda .atm-service-toolbar > .inline-flex button { min-height: 38px; min-width: 55px; background: var(--atm-surface); color: var(--atm-muted); border-right: 1px solid var(--atm-border); }
+.atm-service-agenda .atm-service-toolbar > .inline-flex button:last-child { border-right: 0; }
+.atm-service-agenda .atm-service-toolbar > .inline-flex button.atm-service-selected { background: var(--atm-forest); color: #fff; }
+.atm-service-period { border-color: var(--atm-border); border-radius: 6px; padding: 9px; }
+.atm-service-period > div { color: var(--atm-ink); font-size: 14px; }
+.atm-service-calendar { border-color: var(--atm-border); border-radius: 6px; overflow: hidden; }
+.atm-service-calendar > div { border-color: var(--atm-border); }
+.atm-service-calendar > div:nth-child(-n+7) { background: #edf2ec; color: #34423e; }
+.atm-service-calendar button { border-color: #c9dfd0; background: #e9f4ec; color: #164b37; }
+.atm-service-calendar button:hover { background: #dcefe2; }
+.atm-service-agenda section.bg-white.border { border-color: var(--atm-border); border-radius: 6px; }
+.atm-service-agenda section.bg-white.border > h3 { color: var(--atm-forest-hover); }
+.atm-service-agenda section.bg-white.border button { border-left-color: var(--atm-forest); background: #e9f4ec; }
+
+.atm-form-overlay { align-items: center; overscroll-behavior: contain; background: rgba(18, 31, 25, .48); }
+.atm-form-modal { display: flex; flex-direction: column; max-height: calc(100dvh - 32px); min-height: 0; overflow: hidden; border: 1px solid var(--atm-border); border-radius: 8px; background: var(--atm-surface); box-shadow: 0 20px 60px rgba(15, 34, 23, .2); color: var(--atm-ink); }
+.atm-form-header { flex: none; min-height: 72px; padding: 15px 22px; border-color: var(--atm-border); background: #f4f7f2; }
+.atm-form-eyebrow { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--atm-forest-hover); }
+.atm-form-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 9px; font-size: 20px; line-height: 1.25; font-weight: 700; color: var(--atm-ink); }
+.atm-form-title span { color: var(--atm-muted); font-size: 13px; font-weight: 500; }
+.atm-form-close, .atm-form-icon-close { display: inline-flex; align-items: center; justify-content: center; min-height: 34px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-ink); }
+.atm-form-close:hover, .atm-form-icon-close:hover { background: #e8efe5; }
+.atm-form-icon-close { width: 34px; padding: 0; flex: 0 0 34px; }
+.atm-form-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; gap: 20px; padding: 20px 22px 0; }
+.atm-form-section { min-width: 0; padding: 0 0 18px; border-bottom: 1px solid var(--atm-border); background: transparent; }
+.atm-form-section > .font-medium { margin-bottom: 13px; color: var(--atm-forest-hover); font-size: 14px; font-weight: 700; }
+.atm-form-section > .grid { gap: 11px; }
+.atm-form-operation-type { display: block; }
+.atm-form-operation-type > select { display: block; width: 100%; }
+.atm-form-operation-type > span { display: block; margin-top: 3px; color: var(--atm-muted); }
+.atm-form-modal label { color: #34423e; font-size: 12px; font-weight: 600; }
+.atm-form-modal label > :is(input, select, textarea), .atm-form-modal label > .relative, .atm-form-modal label > div > :is(input, select) { margin-top: 5px; }
+.atm-form-modal :is(input, select, textarea):not([type="checkbox"]):not([type="radio"]) { min-height: 38px; border: 1px solid #cfd8ce; border-radius: 6px; background: #fff; color: var(--atm-ink); font-size: 13px; }
+.atm-form-modal :is(input, select, textarea):not([type="checkbox"]):not([type="radio"]):focus { border-color: var(--atm-forest); outline: 2px solid #d4e8d8; outline-offset: 0; box-shadow: none; }
+.atm-form-modal :is(input, select, textarea):disabled, .atm-form-modal :is(input, textarea):read-only { background: #f0f3ef; }
+.atm-form-modal :is(input, select, textarea)::placeholder { color: #89948c; }
+.atm-form-actions { position: sticky; bottom: 0; z-index: 4; flex-wrap: wrap; min-height: 70px; margin-top: 0; padding: 13px 0; border-top: 1px solid var(--atm-border); background: var(--atm-surface); }
+.atm-form-submit, .atm-form-modal .btn-primary { background: var(--atm-forest); border: 1px solid var(--atm-forest); border-radius: 6px; color: #fff; font-weight: 600; }
+.atm-form-submit:hover, .atm-form-modal .btn-primary:hover { background: var(--atm-forest-hover); }
+.atm-form-submit:disabled, .atm-form-modal .btn-primary:disabled { opacity: .55; cursor: not-allowed; }
+.atm-form-branch { max-height: calc(100dvh - 32px); overflow-y: auto; border-color: var(--atm-border); border-radius: 8px; background: var(--atm-surface); color: var(--atm-ink); }
+.atm-form-branch input, .atm-form-branch select { border-color: #cfd8ce; border-radius: 6px; }
+.atm-service-form { display: block; overflow-y: auto; padding: 0 20px 18px; }
+.atm-service-form-header { position: sticky; top: 0; z-index: 5; min-height: 66px; margin: 0 -20px 16px; padding: 13px 20px; border-bottom: 1px solid var(--atm-border); background: #f4f7f2; }
+.atm-service-form-fields { min-width: 0; gap: 14px; }
+.atm-service-form-fields > .space-y-1, .atm-service-form-fields > label { min-width: 0; }
+.atm-service-form-group { border-color: var(--atm-border); border-radius: 6px; background: #f8faf7; }
+.atm-service-form-group > div > .text-xs { color: var(--atm-forest-hover); font-weight: 700; }
+.atm-service-form-actions { position: sticky; bottom: -18px; z-index: 5; min-height: 65px; margin: 18px -20px -18px; padding: 12px 20px; border-top: 1px solid var(--atm-border); background: var(--atm-surface); }
+.atm-service-form-actions .btn:not(.btn-primary) { border: 1px solid var(--atm-border); background: var(--atm-surface); color: var(--atm-ink); }
+.atm-service-form-side { max-height: 100dvh; border-radius: 0; }
+.atm-service-overlay:not(.pointer-events-none) { align-items: flex-start; flex-wrap: wrap; overflow-y: auto; }
+.atm-service-overlay > .atm-form-branch { flex: 0 1 320px; }
+
+.atm-contacts { min-width: 0; color: var(--atm-ink); }
+.atm-contacts-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 21px; }
+.atm-contacts-heading h1 { font-size: 30px; line-height: 1.15; font-weight: 700; }
+.atm-contacts-heading p { margin-top: 3px; color: var(--atm-muted); font-size: 14px; }
+.atm-contacts-new { display: inline-flex; align-items: center; justify-content: center; gap: 8px; flex: none; min-height: 40px; padding: 0 15px; border-radius: 6px; font-size: 13px; font-weight: 600; }
+.atm-contacts-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-bottom: 14px; }
+.atm-contacts-filters :is(input:not([type="checkbox"]), select) { min-height: 38px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-ink); font-size: 13px; }
+.atm-contacts-filters select { max-width: 210px; }
+.atm-contacts-search { display: flex; align-items: center; gap: 7px; width: 300px; max-width: 100%; min-height: 38px; padding: 0 10px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-muted); }
+.atm-contacts-search input { flex: 1; min-width: 0; width: 100%; padding: 0; border: 0 !important; background: transparent !important; outline: 0; }
+.atm-contacts-filters input::placeholder { color: #88948d; }
+.atm-contacts-filters label { display: inline-flex; align-items: center; gap: 6px; min-height: 38px; padding: 0 7px; color: var(--atm-muted); white-space: nowrap; }
+.atm-contacts-apply, .atm-contacts-clear { min-height: 38px; border-color: var(--atm-border); background: var(--atm-surface); color: var(--atm-ink); font-size: 13px; }
+.atm-contacts-apply { background: var(--atm-forest); border-color: var(--atm-forest); color: #fff; }
+.atm-contacts-apply:hover { background: var(--atm-forest-hover); }
+.atm-contacts-clear:hover { background: #f0f4ee; }
+.atm-contacts-result-count { margin-bottom: 8px; color: var(--atm-muted); font-size: 12px; }
+.atm-contacts-table { border: 1px solid var(--atm-border); border-radius: 6px; box-shadow: none; }
+.atm-contacts-table table { width: 100%; min-width: 880px; font-variant-numeric: tabular-nums; }
+.atm-contacts-table thead { background: #edf2ec; color: #34423e; }
+.atm-contacts-table th { padding: 11px 14px; border-color: var(--atm-border); font-size: 11px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.atm-contacts-table td { padding: 11px 14px; border-color: var(--atm-border); color: var(--atm-ink); }
+.atm-contacts-table tbody tr:hover { background: #f5f8f4; }
+.atm-contacts-name-link { color: var(--atm-forest-hover); font-weight: 650; text-decoration: none; }
+.atm-contacts-name-link:hover { text-decoration: underline; }
+.atm-contacts-label { border-radius: 4px; background: #e9f3eb; color: var(--atm-forest-hover); }
+.atm-contact-modal { display: block; overflow-y: auto; padding: 0 20px 0; }
+.atm-contact-modal-head { position: sticky; top: 0; z-index: 4; min-height: 70px; margin: 0 -20px 16px; padding: 12px 20px; border-bottom: 1px solid var(--atm-border); background: #f4f7f2; }
+.atm-contact-modal > label, .atm-contact-modal > .grid, .atm-contact-modal > .relative { display: block; margin-bottom: 12px; }
+.atm-contact-modal > .grid { display: grid; gap: 10px; }
+.atm-contact-modal label { display: block; min-width: 0; }
+.atm-contact-modal label > :is(input, select) { display: block; width: 100%; margin-top: 5px; }
+.atm-contact-modal-actions { position: sticky; bottom: 0; z-index: 4; min-height: 67px; margin: 16px -20px 0; padding: 12px 20px; border-top: 1px solid var(--atm-border); background: var(--atm-surface); }
+.atm-contact-modal-actions button:first-child { border-color: var(--atm-border); color: var(--atm-ink); }
+.atm-contact-detail { color: var(--atm-ink); }
+.atm-contact-detail-header { border-color: var(--atm-border); border-radius: 6px; background: var(--atm-surface); box-shadow: none; }
+.atm-contact-detail-header h1 { color: var(--atm-ink); }
+.atm-contact-detail-header button.bg-emerald-600 { background: var(--atm-forest); }
+.atm-contact-detail .atm-contact-details section, .atm-contact-detail .atm-contact-engagement > div > section { border-color: var(--atm-border); border-radius: 6px; background: var(--atm-surface); box-shadow: none; }
+.atm-contact-detail .atm-contact-details section > header { border-color: var(--atm-border); background: #f4f7f2; color: var(--atm-ink); }
+.atm-contact-detail :is(a, button).text-blue-600, .atm-contact-detail :is(a, button).text-blue-700 { color: var(--atm-forest-hover); }
+.atm-contact-detail .atm-contact-engagement button.border-blue-600 { border-color: var(--atm-forest); background: #e8f3eb; color: var(--atm-forest-hover); }
+
+.atm-general, .atm-commercial, .atm-commissions { color: var(--atm-ink); }
+.atm-general .atm-page-heading h1, .atm-commercial-header h1, .atm-commissions .atm-page-heading h1 { font-size: 30px; line-height: 1.15; font-weight: 700; }
+.atm-general-filter, .atm-commercial-actions select, .atm-commission-filters select { min-height: 40px; max-width: 230px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); padding: 0 32px 0 12px; color: var(--atm-ink); font-size: 13px; }
+.atm-general-count { margin-bottom: -12px; color: var(--atm-muted); font-size: 12px; }
+.atm-general-table, .atm-commission-table-wrap { border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-general-table table, .atm-commission-table-wrap table { width: 100%; font-variant-numeric: tabular-nums; }
+.atm-general-table thead, .atm-commission-table-wrap thead, .atm-commercial-table thead { background: #edf2ec; color: #34423e; }
+.atm-general-table th, .atm-commission-table-wrap th, .atm-commercial-table th { padding-top: 11px; padding-bottom: 11px; border-color: var(--atm-border); font-size: 11px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.atm-general-table td, .atm-commission-table-wrap td { padding-top: 11px; padding-bottom: 11px; border-color: var(--atm-border); vertical-align: middle; }
+.atm-general-table tbody tr:hover, .atm-commission-table-wrap tbody tr:hover, .atm-commercial-table tbody tr:hover { background: #f5f8f4; }
+.atm-general-table tbody tr:last-child td { border-bottom: 0; }
+.atm-commercial-header { border-bottom: 1px solid var(--atm-border); }
+.atm-commercial-tabs button { border-radius: 0; }
+.atm-commercial-tabs button[aria-pressed="true"] { border-color: var(--atm-forest); color: var(--atm-forest-hover); }
+.atm-commercial-actions select { max-width: min(210px, 100%); }
+.atm-commercial-metrics { border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-commercial-metrics button[aria-pressed="true"] { border-color: var(--atm-forest); background: #eef5ed; }
+.atm-commercial-workspace { border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-commercial-workspace :is(a.text-blue-700, button.text-blue-700) { color: var(--atm-forest-hover); }
+.atm-commercial-workspace :is(button.border-teal-700, button[aria-selected="true"]) { border-color: var(--atm-forest); color: var(--atm-forest-hover); }
+.atm-commercial-workspace select { border-color: var(--atm-border); border-radius: 6px; }
+.atm-commercial-table table { width: 100%; }
+.atm-commercial-table td { border-color: var(--atm-border); }
+.atm-commercial-table a.font-semibold { color: var(--atm-forest-hover); }
+.atm-commercial-sessions { border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-commercial-sessions > div { border-color: var(--atm-border); }
+.atm-commercial-sessions > div.bg-slate-50\/60, .atm-commercial-sessions section > div.bg-slate-50 { background: #f4f7f2; }
+.atm-commercial-sessions :is(input, select) { border-color: var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-ink); }
+.atm-commercial-sessions button[aria-pressed="true"] { background: var(--atm-forest); color: #fff; }
+.atm-commercial-sessions button[role="tab"][aria-selected="true"] { border-color: var(--atm-forest); color: var(--atm-forest-hover); }
+.atm-commercial-sessions a.text-blue-700 { color: var(--atm-forest-hover); }
+.atm-commission-filters { align-items: center; }
+.atm-commission-currency { display: grid; grid-template-columns: 66px repeat(5, minmax(135px, 1fr)); align-items: stretch; min-width: 0; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-commission-currency > * { min-width: 0; padding: 12px 14px; border-right: 1px solid var(--atm-border); }
+.atm-commission-currency > *:last-child { border-right: 0; }
+.atm-commission-currency h2 { display: flex; align-items: center; color: var(--atm-forest-hover); font-size: 13px; font-weight: 700; }
+.atm-commission-currency span { display: block; color: var(--atm-muted); font-size: 11px; }
+.atm-commission-currency strong { display: block; margin-top: 3px; overflow-wrap: anywhere; font-size: 14px; font-weight: 650; }
+.atm-commission-profit strong { color: var(--atm-forest-hover); font-weight: 750; }
+.atm-commission-table-wrap td:nth-child(n+5):nth-child(-n+12) { white-space: nowrap; }
+.atm-commission-table-wrap td:nth-child(7), .atm-commission-table-wrap td:nth-child(12) { color: var(--atm-forest-hover); font-weight: 700; }
+.atm-commission-table-wrap td:nth-child(2) { font-weight: 650; }
+.atm-commission-table-wrap input[type="checkbox"] { accent-color: var(--atm-forest); }
+.atm-commissions .atm-commission-table-wrap button { border-radius: 5px; }
+.atm-commissions > .fixed.items-center > div { max-height: calc(100dvh - 32px); overflow-y: auto; border: 1px solid var(--atm-border); border-radius: 8px; }
+.atm-commissions > .fixed button.bg-black { background: var(--atm-forest); }
+.atm-commissions > .fixed button.bg-black:hover { background: var(--atm-forest-hover); }
+
+.atm-lost { color: var(--atm-ink); }
+.atm-lost .atm-page-heading h1 { font-size: 30px; line-height: 1.15; font-weight: 700; }
+.atm-lost-search { width: min(410px, 100%); min-height: 40px; padding: 0 12px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-muted); }
+.atm-lost-search input { color: var(--atm-ink); }
+.atm-lost-search input::placeholder { color: #89948c; }
+.atm-lost-count { color: var(--atm-muted); font-size: 12px; }
+.atm-lost-table { border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-lost-table table { width: 100%; font-variant-numeric: tabular-nums; }
+.atm-lost-table thead { background: #edf2ec; color: #34423e; }
+.atm-lost-table th { padding-top: 11px; padding-bottom: 11px; font-size: 11px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.atm-lost-table td { border-color: var(--atm-border); color: var(--atm-ink); }
+.atm-lost-table tbody tr:hover { background: #f5f8f4; }
+.atm-lost-reference { color: var(--atm-forest-hover); }
+.atm-lost-modal, .atm-lost > .fixed form { max-height: calc(100dvh - 32px); overflow-y: auto; border: 1px solid var(--atm-border); border-radius: 8px; background: var(--atm-surface); box-shadow: 0 20px 60px rgba(15, 34, 23, .2); color: var(--atm-ink); }
+.atm-lost-modal select, .atm-lost > .fixed form select { border-color: var(--atm-border); background: var(--atm-surface); color: var(--atm-ink); }
+.atm-lost > .fixed form button.bg-emerald-700 { background: var(--atm-forest); }
+.atm-lost > .fixed form button.bg-emerald-700:hover { background: var(--atm-forest-hover); }
+.atm-lost-history-entry { border-color: #8caa94; }
+
+.atm-params, .atm-finance, .atm-sales-report { color: var(--atm-ink); }
+.atm-params-header, .atm-finance-header { padding-bottom: 16px; border-bottom: 1px solid var(--atm-border); }
+.atm-params-header h1, .atm-finance-header h1, .atm-sales-report .atm-page-heading h1 { font-size: 30px; line-height: 1.15; font-weight: 700; }
+.atm-params-search { min-height: 40px; padding: 0 12px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-muted); }
+.atm-params-search input { color: var(--atm-ink); }
+.atm-params-search input::placeholder { color: #89948c; }
+.atm-params-nav { padding: 3px 12px 0 0; border-right: 1px solid var(--atm-border); }
+.atm-params-nav h2 { color: var(--atm-muted); }
+.atm-params-nav-link { border-radius: 6px; color: #34423e; }
+.atm-params-nav-link:hover, .atm-params-nav-link[aria-expanded="true"] { background: #e9f1e8; color: var(--atm-forest-hover); }
+.atm-params-nav-count { color: var(--atm-muted); }
+.atm-params-sections { min-width: 0; }
+.atm-params-section { overflow: hidden; border-bottom: 1px solid var(--atm-border); background: transparent; }
+.atm-params-section > button { background: #f0f4ed; }
+.atm-params-section > button:hover { background: #e7f0e5; }
+.atm-params-section > button h2 { color: var(--atm-ink); font-size: 16px; }
+.atm-params-section > button > span { color: var(--atm-forest-hover); }
+.atm-params-section > div.border-t { border-color: var(--atm-border); }
+.atm-params-field { border-color: var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-params-field > .font-medium { color: var(--atm-forest-hover); font-size: 13px; font-weight: 700; }
+.atm-params-field table { min-width: 440px; }
+.atm-params-field th { color: var(--atm-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.atm-params-field :is(input:not([type="checkbox"]), select, textarea) { border-color: #cfd8ce; border-radius: 6px; background: var(--atm-surface); color: var(--atm-ink); }
+.atm-params-field button.bg-blue-600, .atm-params-section button.bg-blue-600 { background: var(--atm-forest); }
+.atm-params-field button.bg-blue-600:hover, .atm-params-section button.bg-blue-600:hover { background: var(--atm-forest-hover); }
+.atm-finance-controls { max-width: 100%; }
+.atm-finance-controls :is(select, input), .atm-finance-preset { min-height: 40px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); padding: 0 11px; color: var(--atm-ink); font-size: 13px; }
+.atm-finance-controls select { max-width: 205px; }
+.atm-finance-preset:hover { background: #edf3eb; }
+.atm-finance-summary { border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-finance-metric { min-width: 0; border-right: 1px solid var(--atm-border); }
+.atm-finance-metric:last-child { border-right: 0; }
+.atm-finance-metric > div:first-child { color: var(--atm-muted); }
+.atm-finance-metric > div:nth-child(2) { font-variant-numeric: tabular-nums; }
+.atm-finance-tabs { border-bottom: 1px solid var(--atm-border); }
+.atm-finance-tab { margin-bottom: -1px; border-bottom: 2px solid transparent; color: var(--atm-muted); white-space: nowrap; }
+.atm-finance-tab:hover { color: var(--atm-ink); }
+.atm-finance-tab[aria-pressed="true"] { border-bottom-color: var(--atm-forest); color: var(--atm-forest-hover); font-weight: 700; }
+.atm-finance .bg-black { background: var(--atm-forest); }
+.atm-finance .bg-black:hover { background: var(--atm-forest-hover); }
+.atm-finance .overflow-auto.rounded-lg.border { border-color: var(--atm-border); border-radius: 6px; }
+.atm-finance .overflow-auto.rounded-lg.border table { font-variant-numeric: tabular-nums; }
+.atm-finance .overflow-auto.rounded-lg.border thead { background: #edf2ec; }
+.atm-finance .overflow-auto.rounded-lg.border th { font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.atm-sales-filters { min-width: 0; border-bottom: 1px solid var(--atm-border); }
+.atm-sales-filters label { min-width: 0; color: #34423e; font-size: 12px; font-weight: 600; }
+.atm-sales-filters :is(input:not([type="checkbox"]), select) { min-width: 0; min-height: 40px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-ink); font-size: 13px; }
+.atm-sales-filters input[type="checkbox"] { accent-color: var(--atm-forest); }
+.atm-sales-months h2, .atm-sales-operations h2 { color: var(--atm-ink); font-size: 16px; font-weight: 700; }
+.atm-sales-currency { border-bottom: 1px solid var(--atm-border); }
+.atm-sales-currency > div:first-child { color: var(--atm-forest-hover); }
+.atm-sales-table { border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-sales-table table { width: 100%; font-variant-numeric: tabular-nums; }
+.atm-sales-table thead { background: #edf2ec; color: #34423e; }
+.atm-sales-table thead tr { background: transparent; }
+.atm-sales-table th { padding-top: 11px; padding-bottom: 11px; font-size: 11px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.atm-sales-table td { padding-top: 9px; padding-bottom: 9px; border-color: var(--atm-border); }
+.atm-sales-table tbody tr:hover { background: #f5f8f4; }
+.atm-sales-month-link, .atm-sales-report a.text-blue-700 { color: var(--atm-forest-hover); }
+.atm-sales-month-link:hover { background: #e9f3eb; }
+.atm-sales-report .text-emerald-800 { color: var(--atm-forest-hover); }
+
+.atm-admin-ops { width: 100%; min-width: 0; color: var(--atm-ink); }
+.atm-admin-ops-bank { max-width: none; }
+.atm-admin-ops > :first-child:has(h1) { min-width: 0; padding-bottom: 17px; border-bottom: 1px solid var(--atm-border); }
+.atm-admin-ops h1 { color: var(--atm-ink); font-size: 28px; line-height: 1.2; font-weight: 700; }
+.atm-admin-ops > :first-child p { margin-top: 3px; color: var(--atm-muted); font-size: 13px; }
+.atm-admin-ops h2 { color: var(--atm-ink); font-size: 16px; line-height: 1.3; font-weight: 700; }
+.atm-admin-ops h3 { color: var(--atm-ink); font-weight: 700; }
+.atm-admin-ops :is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea) { min-width: 0; border-color: #cfd8ce; border-radius: 6px; background-color: var(--atm-surface); color: var(--atm-ink); }
+.atm-admin-ops label > :is(input:not([type="checkbox"]):not([type="radio"]), select), .atm-admin-ops > :first-child :is(input, select) { min-height: 38px; }
+.atm-admin-ops :is(input, textarea)::placeholder { color: #89948c; }
+.atm-admin-ops :is(input, select, textarea):focus { border-color: var(--atm-forest); outline-color: #c4e0cd; }
+.atm-admin-ops input[type="checkbox"] { accent-color: var(--atm-forest); }
+.atm-admin-ops :is(button, a).bg-blue-600, .atm-admin-ops :is(button, a).bg-blue-700, .atm-admin-ops :is(button, a).bg-slate-900, .atm-admin-ops :is(button, a).bg-black { border-color: var(--atm-forest); background: var(--atm-forest); color: #fff; }
+.atm-admin-ops :is(button, a).bg-blue-600:hover, .atm-admin-ops :is(button, a).bg-blue-700:hover, .atm-admin-ops :is(button, a).bg-slate-900:hover, .atm-admin-ops :is(button, a).bg-black:hover { background: var(--atm-forest-hover); }
+.atm-admin-ops :is(button, a).text-blue-600, .atm-admin-ops :is(button, a).text-blue-700 { color: var(--atm-forest-hover); }
+.atm-admin-ops button:disabled { cursor: not-allowed; }
+.atm-admin-ops :is(.rounded-lg, .rounded-xl, .rounded-2xl).border.bg-white, .atm-admin-ops :is(.rounded-lg, .rounded-xl, .rounded-2xl).bg-white.border { border-color: var(--atm-border); border-radius: 6px; box-shadow: none; }
+.atm-admin-ops > .bg-white.border.p-4, .atm-admin-ops > .bg-white.border.p-3 { padding: 12px 0 17px; border: 0; border-bottom: 1px solid var(--atm-border); border-radius: 0; background: transparent; }
+.atm-admin-ops table { font-variant-numeric: tabular-nums; }
+.atm-admin-ops table thead { background: #edf2ec; color: #34423e; }
+.atm-admin-ops table thead th { padding-top: 10px; padding-bottom: 10px; border-color: var(--atm-border); font-size: 11px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.atm-admin-ops table tbody td { border-color: var(--atm-border); }
+.atm-admin-ops table tbody tr:hover { background: #f5f8f4; }
+.atm-admin-ops :is(.overflow-x-auto, .overflow-auto):has(> table) { max-width: 100%; }
+.atm-admin-ops > .grid:has(> .bg-white.border) { gap: 0; overflow: hidden; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-admin-ops > .grid:has(> .bg-white.border) > .bg-white.border { min-width: 0; border: 0; border-right: 1px solid var(--atm-border); border-radius: 0; }
+.atm-admin-ops > .grid:has(> .bg-white.border) > .bg-white.border:last-child { border-right: 0; }
+.atm-admin-ops > .grid:has(> .bg-white.border) > .bg-white.border > div:first-child { color: var(--atm-muted); }
+.atm-admin-ops > .grid:has(> .bg-white.border) > .bg-white.border > div:nth-child(2) { color: var(--atm-forest-hover); }
+.atm-admin-ops-board > .mb-4.-mx-1 { margin-bottom: 20px; border-bottom: 1px solid var(--atm-border); }
+.atm-admin-ops-board > .mb-4.-mx-1 button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--atm-muted); }
+.atm-admin-ops-board > .mb-4.-mx-1 button[aria-pressed="true"] { border-bottom-color: var(--atm-forest); background: transparent; color: var(--atm-forest-hover); font-weight: 700; }
+.atm-admin-ops-board > :first-child .inline-flex button { min-height: 38px; border-right: 1px solid var(--atm-border); }
+.atm-admin-ops-board > :first-child .inline-flex button:last-child { border-right: 0; }
+.atm-admin-ops-pipeline { gap: 10px; }
+.atm-admin-ops-column { min-width: 0; padding: 10px; border: 1px solid var(--atm-border); border-top: 3px solid #78a487; border-radius: 6px; background: #f8faf7; box-shadow: none; }
+.atm-admin-ops-column > div:first-child { min-height: 52px; }
+.atm-admin-ops-column > div:first-child span.text-slate-900 { color: var(--atm-ink); }
+.atm-admin-ops-card { border-color: var(--atm-border); border-radius: 6px; background: var(--atm-surface); box-shadow: 0 1px 2px rgba(22, 45, 29, .05); }
+.atm-admin-ops-card:hover { border-color: #9cbaa3; box-shadow: 0 3px 10px rgba(22, 45, 29, .1); }
+.atm-admin-ops-card > div:first-child a { color: var(--atm-ink); }
+.atm-admin-ops-card > div:first-child a:hover { color: var(--atm-forest-hover); }
+.atm-admin-ops-bank > section { padding-bottom: 23px; border-color: var(--atm-border); }
+.atm-admin-ops-bank > section h2 { margin-bottom: 15px; }
+.atm-admin-ops-bank > section > .flex:has(> span) { padding: 12px 0; }
+.atm-admin-ops-bank table, .atm-admin-ops-expenses table { width: 100%; }
+.atm-admin-ops-expenses .atm-expenses-list-wrap { width: 100%; min-width: 0; }
+.atm-admin-ops-expenses .atm-expenses-list-table { width: 100%; min-width: 1100px; }
+.atm-expenses-header-tools { flex-wrap: wrap; }
+.atm-expenses-exchange { display: flex; align-items: end; gap: 9px; }
+.atm-expenses-exchange > div:first-child { white-space: nowrap; }
+.atm-expenses-exchange > div:last-child { display: flex; gap: 5px; }
+.atm-admin-ops-expenses .atm-expenses-new { background: var(--atm-forest); color: #fff; }
+.atm-admin-ops-expenses .atm-expenses-new:hover { background: var(--atm-forest-hover); }
+.atm-expenses-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-expenses-metric { min-width: 0; padding: 14px 17px; border-right: 1px solid var(--atm-border); }
+.atm-expenses-metric:last-child { border-right: 0; }
+.atm-expenses-metric-label { color: var(--atm-muted); font-size: 12px; }
+.atm-expenses-metric-value { margin-top: 4px; font-size: 20px; line-height: 1.25; font-weight: 700; }
+.atm-expenses-metric-value .space-y-0\.5 { display: flex; flex-wrap: wrap; gap: 2px 11px; }
+.atm-expenses-tabs { border-bottom: 1px solid var(--atm-border); }
+.atm-expenses-tabs button { border-bottom: 2px solid transparent; color: var(--atm-muted); }
+.atm-expenses-tabs button[aria-pressed="true"] { border-bottom-color: var(--atm-forest); color: var(--atm-forest-hover); font-weight: 700; }
+.atm-expenses-tabs button span { margin-left: 5px; font-size: 11px; }
+.atm-expenses-list-heading { gap: 12px; }
+.atm-expenses-create { border-color: var(--atm-border); border-radius: 6px; }
+.atm-expenses-list { min-width: 0; }
+.atm-expenses-list > .grid { grid-template-columns: minmax(250px, 2fr) repeat(4, minmax(125px, 1fr)); gap: 9px; }
+.atm-expenses-list-wrap { border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-expenses-list-table tbody td { vertical-align: middle; font-size: 12px; }
+.atm-expenses-list-table tbody td small { display: block; margin-top: 3px; color: var(--atm-muted); font-size: 11px; line-height: 1.3; }
+.atm-expenses-list-table tbody td .atm-expenses-warning { color: #b42318; }
+.atm-expenses-date, .atm-expenses-money { white-space: nowrap; }
+.atm-expenses-description { min-width: 170px; max-width: 260px; }
+.atm-expenses-description button { color: var(--atm-forest-hover); font-weight: 650; text-align: left; overflow-wrap: anywhere; }
+.atm-expenses-provider { min-width: 120px; max-width: 180px; overflow-wrap: anywhere; }
+.atm-expenses-receipt { min-width: 115px; }
+.atm-expenses-balance { color: var(--atm-forest-hover); font-weight: 700; }
+.atm-expenses-situation { min-width: 135px; }
+.atm-expenses-actions-button { display: inline-grid; width: 32px; height: 32px; place-items: center; border: 1px solid var(--atm-border); border-radius: 5px; color: var(--atm-ink); }
+.atm-expenses-actions-button:hover { background: #f0f6ef; }
+.atm-admin-ops-expenses .fixed .atm-expenses-metric { border: 1px solid var(--atm-border); border-radius: 6px; }
+.atm-admin-ops-purchases .atm-purchases-primary { background: var(--atm-forest); }
+.atm-admin-ops-purchases .atm-purchases-primary:hover, .atm-purchases-search-button:hover { background: var(--atm-forest-hover); }
+.atm-purchases-flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; padding: 8px 0 14px; border-bottom: 1px solid var(--atm-border); }
+.atm-purchases-flow-step { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 5px 12px; color: var(--atm-muted); font-size: 12px; border-right: 1px solid var(--atm-border); }
+.atm-purchases-flow-step:first-child { padding-left: 0; }
+.atm-purchases-flow-step:last-child { border-right: 0; }
+.atm-purchases-flow-number { display: grid; flex: 0 0 22px; height: 22px; place-items: center; border: 1px solid var(--atm-border); border-radius: 50%; color: var(--atm-forest-hover); font-size: 11px; font-weight: 700; }
+.atm-purchases-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-purchases-metric { display: grid; gap: 1px; min-width: 0; padding: 14px 17px; text-align: left; border-right: 1px solid var(--atm-border); }
+.atm-purchases-metric:last-child { border-right: 0; }
+.atm-purchases-metric:hover, .atm-purchases-metric[aria-pressed="true"] { background: #f0f6ef; }
+.atm-purchases-metric[aria-pressed="true"] { box-shadow: inset 0 3px var(--atm-forest); }
+.atm-purchases-metric-label { color: var(--atm-muted); font-size: 12px; }
+.atm-purchases-metric strong { color: var(--atm-ink); font-size: 23px; line-height: 1.2; }
+.atm-purchases-metric-red strong { color: #b42318; }
+.atm-purchases-metric-amber strong { color: #a45b09; }
+.atm-purchases-metric-green strong { color: var(--atm-forest-hover); }
+.atm-purchases-metric-caption { color: var(--atm-muted); font-size: 11px; }
+.atm-purchases-filters { padding-bottom: 16px; border-bottom: 1px solid var(--atm-border); }
+.atm-purchases-tabs { display: flex; gap: 7px; overflow-x: auto; margin-bottom: 14px; border-bottom: 1px solid var(--atm-border); white-space: nowrap; }
+.atm-purchases-tabs button { padding: 9px 12px; border-bottom: 2px solid transparent; color: var(--atm-muted); font-size: 13px; }
+.atm-purchases-tabs button[aria-pressed="true"] { border-bottom-color: var(--atm-forest); color: var(--atm-forest-hover); font-weight: 700; }
+.atm-purchases-tabs button span { margin-left: 4px; font-size: 11px; }
+.atm-admin-ops .atm-purchases-tabs select { align-self: center; width: auto; min-height: 32px; margin-left: auto; border: 0; background: transparent; font-size: 13px; }
+.atm-purchases-filter-row { display: grid; grid-template-columns: minmax(220px, 1.8fr) minmax(150px, 1fr) minmax(145px, .7fr) auto; gap: 9px; align-items: center; }
+.atm-purchases-filter-row > :is(input, select, button), .atm-purchases-search { height: 38px; }
+.atm-purchases-search { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 11px; border: 1px solid #cfd8ce; border-radius: 6px; background: var(--atm-surface); color: var(--atm-muted); }
+.atm-admin-ops .atm-purchases-search input { width: 100%; min-height: 0; padding: 0; border: 0; background: transparent; outline: 0; }
+.atm-purchases-search-button { background: var(--atm-forest); color: white; }
+.atm-purchases-more { margin-top: 10px; }
+.atm-purchases-more summary { width: max-content; cursor: pointer; color: var(--atm-forest-hover); font-size: 12px; font-weight: 600; }
+.atm-purchases-advanced-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.atm-purchases-advanced-grid label { display: grid; gap: 5px; min-width: 0; color: var(--atm-muted); font-size: 12px; }
+.atm-purchases-advanced-grid label > :is(input, select) { width: 100%; }
+.atm-purchases-advanced-grid .atm-purchases-overdue { display: flex; align-items: center; gap: 7px; }
+.atm-purchases-results { min-width: 0; }
+.atm-purchases-results-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; margin-bottom: 10px; }
+.atm-purchases-results-head span, .atm-purchases-view-total { color: var(--atm-muted); font-size: 12px; }
+.atm-purchases-view-total { text-align: right; }
+.atm-purchases-table-wrap { max-width: 100%; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-purchases-table { width: 100%; min-width: 1050px; }
+.atm-purchases-table tbody td { vertical-align: middle; font-size: 12px; }
+.atm-purchases-table tbody td small { display: block; margin-top: 3px; color: var(--atm-muted); font-size: 11px; line-height: 1.3; }
+.atm-purchases-table :is(.atm-purchases-supplier-cell, .atm-purchases-document-cell, .atm-purchases-operation-cell) { min-width: 135px; max-width: 225px; }
+.atm-purchases-supplier-cell strong { display: block; overflow-wrap: anywhere; font-weight: 650; }
+.atm-purchases-document-cell button, .atm-purchases-operation-cell a { color: var(--atm-forest-hover); font-weight: 650; text-align: left; }
+.atm-purchases-document-cell a { display: block; margin-top: 3px; color: var(--atm-forest-hover); font-size: 11px; }
+.atm-purchases-table tbody td .atm-purchases-warning { color: #b42318; }
+.atm-purchases-date { white-space: nowrap; }
+.atm-purchases-date-overdue { color: #b42318; font-weight: 600; }
+.atm-purchases-money { white-space: nowrap; }
+.atm-purchases-balance { color: var(--atm-forest-hover); font-weight: 700; }
+.atm-purchases-status { min-width: 120px; white-space: nowrap; }
+.atm-purchases-actions { white-space: nowrap; }
+.atm-purchases-actions button { display: inline-grid; width: 32px; height: 32px; place-items: center; border: 1px solid var(--atm-border); border-radius: 5px; color: var(--atm-ink); }
+.atm-purchases-actions button + button { margin-left: 4px; }
+.atm-purchases-actions button:hover { background: #f0f6ef; }
+.atm-purchases-row-selected { background: #f0f6ef; }
+.atm-purchases-selection { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 16px; border-radius: 0 0 6px 6px; background: var(--atm-forest); color: white; }
+.atm-purchases-selection div { display: grid; gap: 1px; font-size: 12px; }
+.atm-purchases-selection span { opacity: .85; }
+.atm-purchases-selection button { padding: 8px 12px; border: 1px solid #ffffff8c; border-radius: 5px; font-size: 12px; font-weight: 700; }
+.atm-purchases-selection button:hover { background: #ffffff24; }
+.atm-admin-ops-payable > .grid.grid-cols-2 { gap: 0; overflow: hidden; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-admin-ops-payable > .grid.grid-cols-2 > div { min-width: 0; border: 0; border-right: 1px solid var(--atm-border); border-radius: 0; }
+.atm-admin-ops-payable > .grid.grid-cols-2 > div:last-child { border-right: 0; }
+.atm-admin-ops-payable .atm-payable-primary { background: var(--atm-forest); border-color: var(--atm-forest); }
+.atm-admin-ops-payable .atm-payable-primary:hover { background: var(--atm-forest-hover); }
+.atm-payable-overview { border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-payable-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.atm-payable-metric { min-width: 0; padding: 14px 17px; border-right: 1px solid var(--atm-border); }
+.atm-payable-metric:last-child { border-right: 0; }
+.atm-payable-metric > div { color: var(--atm-muted); font-size: 12px; }
+.atm-payable-metric strong { display: block; margin-top: 3px; background: transparent; font-size: 23px; line-height: 1.2; }
+.atm-payable-currency-strip { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--atm-border); }
+.atm-payable-currency-summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; padding: 11px 17px; font-size: 12px; }
+.atm-payable-currency-summary:first-child { border-right: 1px solid var(--atm-border); }
+.atm-payable-currency-summary > div:first-child, .atm-payable-no-data { color: var(--atm-muted); }
+.atm-payable-currency-values { display: flex; flex-wrap: wrap; gap: 6px; }
+.atm-payable-currency-values span { border-radius: 4px; }
+.atm-payable-filters { padding-bottom: 16px; border-bottom: 1px solid var(--atm-border); }
+.atm-payable-tabs { display: flex; gap: 5px; overflow-x: auto; margin-bottom: 13px; border-bottom: 1px solid var(--atm-border); white-space: nowrap; }
+.atm-payable-tabs button { padding: 9px 11px; border-bottom: 2px solid transparent; color: var(--atm-muted); font-size: 13px; }
+.atm-payable-tabs button[aria-pressed="true"] { border-bottom-color: var(--atm-forest); color: var(--atm-forest-hover); font-weight: 700; }
+.atm-payable-tabs button span { margin-left: 5px; font-size: 11px; }
+.atm-admin-ops .atm-payable-tabs select { align-self: center; width: auto; min-height: 32px; margin-left: auto; border: 0; background: transparent; font-size: 13px; }
+.atm-payable-filter-row { display: grid; grid-template-columns: minmax(240px, 2fr) minmax(180px, 1fr) minmax(145px, .7fr); gap: 9px; }
+.atm-payable-filter-row select, .atm-payable-search { height: 38px; }
+.atm-payable-search { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 11px; border: 1px solid #cfd8ce; border-radius: 6px; background: var(--atm-surface); color: var(--atm-muted); }
+.atm-admin-ops .atm-payable-search input { width: 100%; min-height: 0; padding: 0; border: 0; background: transparent; outline: 0; }
+.atm-payable-more { margin-top: 10px; }
+.atm-payable-more summary, .atm-payable-analysis summary { width: max-content; cursor: pointer; color: var(--atm-forest-hover); font-size: 12px; font-weight: 600; }
+.atm-payable-advanced-grid { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; gap: 12px; align-items: end; margin-top: 12px; }
+.atm-payable-advanced-grid label { display: grid; gap: 5px; min-width: 0; color: var(--atm-muted); font-size: 12px; }
+.atm-payable-advanced-grid .atm-payable-check { display: flex; align-items: center; gap: 7px; min-height: 38px; }
+.atm-payable-documents { min-width: 0; }
+.atm-payable-section-head { display: flex; justify-content: space-between; align-items: end; gap: 12px; margin-bottom: 10px; }
+.atm-payable-section-head :is(span) { color: var(--atm-muted); font-size: 12px; }
+.atm-payable-section-head h2 { margin-bottom: 2px; }
+.atm-payable-table-wrap { max-width: 100%; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-payable-table { width: 100%; min-width: 1100px; }
+.atm-payable-table tbody td { vertical-align: middle; font-size: 12px; }
+.atm-payable-table tbody td small { display: block; margin-top: 3px; color: var(--atm-muted); font-size: 11px; line-height: 1.3; }
+.atm-payable-table tbody td .atm-payable-warning { color: #b42318; }
+.atm-payable-provider, .atm-payable-document { min-width: 145px; max-width: 240px; }
+.atm-payable-provider strong { display: block; overflow-wrap: anywhere; }
+.atm-payable-document button, .atm-payable-order button { color: var(--atm-forest-hover); font-weight: 650; text-align: left; }
+.atm-payable-document .atm-payable-operation-link { display: block; margin-top: 3px; font-size: 11px; }
+.atm-payable-source { min-width: 145px; }
+.atm-payable-date, .atm-payable-balance { white-space: nowrap; }
+.atm-payable-balance strong { color: var(--atm-forest-hover); }
+.atm-payable-situation { min-width: 135px; max-width: 200px; }
+.atm-payable-situation small { overflow-wrap: anywhere; }
+.atm-payable-actions-button { display: inline-grid; width: 32px; height: 32px; place-items: center; border: 1px solid var(--atm-border); border-radius: 5px; color: var(--atm-ink); }
+.atm-payable-actions-button:hover { background: #f0f6ef; }
+.atm-payable-analysis { padding-top: 14px; border-top: 1px solid var(--atm-border); }
+.atm-payable-analysis summary { margin-bottom: 12px; font-size: 13px; }
+.atm-payable-analysis > .grid { margin-bottom: 12px; }
+.atm-payable-analysis > .grid > div, .atm-payable-analysis > .bg-white.border { border-color: var(--atm-border); border-radius: 6px; }
+.atm-admin-ops-payment-orders .atm-payment-primary { background: var(--atm-forest); border-color: var(--atm-forest); }
+.atm-admin-ops-payment-orders .atm-payment-primary:hover { background: var(--atm-forest-hover); }
+.atm-payment-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-payment-metric { min-width: 0; padding: 14px 17px; border-right: 1px solid var(--atm-border); }
+.atm-payment-metric:last-child { border-right: 0; }
+.atm-payment-metric > div { color: var(--atm-muted); font-size: 12px; }
+.atm-payment-metric strong { display: block; margin-top: 4px; background: transparent; font-size: 17px; line-height: 1.3; overflow-wrap: anywhere; }
+.atm-payment-filters { padding-bottom: 12px; border-bottom: 1px solid var(--atm-border); }
+.atm-payment-tabs { display: flex; gap: 5px; overflow-x: auto; margin-bottom: 13px; border-bottom: 1px solid var(--atm-border); white-space: nowrap; }
+.atm-payment-tabs button { padding: 9px 11px; border-bottom: 2px solid transparent; color: var(--atm-muted); font-size: 13px; }
+.atm-payment-tabs button[aria-pressed="true"] { border-bottom-color: var(--atm-forest); color: var(--atm-forest-hover); font-weight: 700; }
+.atm-payment-tabs button span { margin-left: 5px; font-size: 11px; }
+.atm-admin-ops .atm-payment-tabs select { align-self: center; width: auto; min-height: 32px; margin-left: auto; border: 0; background: transparent; font-size: 13px; }
+.atm-payment-filter-main { display: grid; grid-template-columns: minmax(240px, 2fr) minmax(160px, 1fr) minmax(145px, .7fr) auto; gap: 9px; }
+.atm-payment-filter-main > input, .atm-payment-filter-main > select, .atm-payment-search { min-width: 0; height: 38px; }
+.atm-payment-search { display: flex; align-items: center; gap: 8px; padding: 0 11px; border: 1px solid #cfd8ce; border-radius: 6px; background: var(--atm-surface); color: var(--atm-muted); }
+.atm-admin-ops .atm-payment-search input { width: 100%; min-height: 0; padding: 0; border: 0; background: transparent; outline: 0; }
+.atm-payment-search-button { background: var(--atm-forest); color: white; font-weight: 650; }
+.atm-payment-search-button:hover { background: var(--atm-forest-hover); }
+.atm-payment-more { margin-top: 10px; }
+.atm-payment-more summary { width: max-content; cursor: pointer; color: var(--atm-forest-hover); font-size: 12px; font-weight: 600; }
+.atm-payment-advanced-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; align-items: end; margin-top: 12px; }
+.atm-payment-advanced-grid > * { min-width: 0; }
+.atm-payment-advanced-grid input, .atm-payment-advanced-grid select { width: 100%; min-height: 38px; }
+.atm-payment-filter-footer { display: flex; justify-content: flex-end; margin-top: 8px; }
+.atm-payment-filter-footer button { color: var(--atm-forest-hover); font-weight: 600; }
+.atm-payment-results-head { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
+.atm-payment-results-head h2 { color: var(--atm-ink); font-size: 16px; font-weight: 700; }
+.atm-payment-results-head span { color: var(--atm-muted); font-size: 12px; }
+.atm-payment-table-wrap { max-width: 100%; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-payment-table { width: 100%; min-width: 1080px; }
+.atm-payment-table tbody td { vertical-align: middle; font-size: 12px; }
+.atm-payment-table tbody td small { display: block; margin-top: 3px; color: var(--atm-muted); font-size: 11px; line-height: 1.3; }
+.atm-payment-table tbody td .atm-payment-warning { color: #b42318; }
+.atm-payment-order button { color: var(--atm-forest-hover); font-weight: 700; text-align: left; }
+.atm-payment-order, .atm-payment-invoices, .atm-payment-date { white-space: nowrap; }
+.atm-payment-supplier { min-width: 170px; max-width: 250px; }
+.atm-payment-supplier strong { display: block; overflow-wrap: anywhere; }
+.atm-payment-supplier small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.atm-payment-money { white-space: nowrap; }
+.atm-payment-balance { color: var(--atm-forest-hover); font-weight: 700; }
+.atm-payment-status { min-width: 108px; }
+.atm-payment-actions-button { display: inline-grid; width: 32px; height: 32px; place-items: center; border: 1px solid var(--atm-border); border-radius: 5px; color: var(--atm-ink); }
+.atm-payment-actions-button:hover { background: #f0f6ef; }
+.atm-payment-selection { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 16px; border-radius: 0 0 6px 6px; background: var(--atm-forest); color: white; font-size: 12px; }
+.atm-payment-selection button { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; border: 1px solid #ffffff8c; border-radius: 5px; font-weight: 700; }
+.atm-payment-selection button:hover { background: #ffffff24; }
+.atm-payment-workspace-head { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 18px; border-bottom: 1px solid var(--atm-border); }
+.atm-payment-workspace-head h1 { color: var(--atm-ink); font-size: 26px; font-weight: 700; }
+.atm-payment-workspace-head p { margin-bottom: 14px; color: var(--atm-muted); font-size: 13px; }
+.atm-payment-workspace-tabs { display: flex; gap: 6px; align-self: stretch; align-items: end; }
+.atm-payment-workspace-tabs button { padding: 10px 13px; border-bottom: 2px solid transparent; color: var(--atm-muted); font-size: 13px; }
+.atm-payment-workspace-tabs button[aria-pressed="true"] { border-bottom-color: var(--atm-forest); color: var(--atm-forest-hover); font-weight: 700; }
+.atm-unified-orders-embedded { min-width: 0; }
+.atm-unified-orders-content { min-width: 0; overflow: hidden; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
+.atm-unified-orders-content > header { flex-wrap: wrap; gap: 10px; border-color: var(--atm-border); }
+.atm-unified-orders-content > header > div { flex-wrap: wrap; }
+.atm-unified-orders-content > header nav button { white-space: nowrap; }
+.atm-unified-orders-content > .flex-1 { min-width: 0; }
+.atm-unified-orders-content table { width: 100%; min-width: max(100%, 860px); }
+.atm-unified-orders-embedded .border-blue-600 { border-color: var(--atm-forest); }
+.atm-unified-orders-embedded .bg-blue-600 { background: var(--atm-forest); }
+.atm-unified-orders-embedded .text-blue-700 { color: var(--atm-forest-hover); }
+.atm-payment-workspace > .atm-admin-ops-payment-orders { padding: 0; }
+.atm-admin-ops :is(button, a).rounded-full { border-radius: 6px; }
+.atm-admin-ops > .fixed > div, .atm-admin-ops > .fixed > form { max-height: calc(100dvh - 24px); overflow-y: auto; border-radius: 8px; }
+
+.dark .atm-app { --atm-bg: #111a18; --atm-surface: #1c2925; --atm-ink: #f1f5f2; --atm-muted: #a9b9b1; --atm-border: #34453e; --atm-sage: #294539; color: var(--atm-ink); }
+.dark .atm-app .atm-nav-link, .dark .atm-app .atm-nav-group { color: #e3ece6; }
+.dark .atm-app .atm-nav-link:hover, .dark .atm-app .atm-nav-group:hover { background: #293a33; }
+.dark .atm-pipeline .atm-column, .dark .atm-pipeline .atm-column-header { background: #1b2924; }
+.dark .atm-pipeline .atm-count { background: #304139; color: #edf4ee; }
+.dark .atm-pipeline .atm-profit { background: #284b39; color: #bce9cd; }
+.dark .atm-pipeline .atm-deal-card.atm-needs-attention { background: #3a2525; }
+.dark .atm-service-table-wrap thead, .dark .atm-service-sheet .atm-service-table-wrap > div:first-child, .dark .atm-service-calendar > div:nth-child(-n+7) { background: #294539; color: #e3ece6; }
+.dark .atm-service-table-wrap tbody tr:hover, .dark .atm-service-sheet .atm-service-table-wrap tfoot { background: #22352d; }
+.dark .atm-form-header, .dark .atm-service-form-header { background: #263b30; }
+.dark .atm-form-modal label { color: #e3ece6; }
+.dark .atm-form-modal :is(input, select, textarea):not([type="checkbox"]):not([type="radio"]), .dark .atm-form-close, .dark .atm-form-icon-close { background: #1c2925; color: #f1f5f2; border-color: #506357; }
+.dark .atm-service-form-group { background: #22352d; }
+.dark .atm-contacts-table thead, .dark .atm-contact-modal-head, .dark .atm-contact-detail .atm-contact-details section > header { background: #294539; color: #e3ece6; }
+.dark .atm-contacts-table tbody tr:hover { background: #22352d; }
+.dark .atm-general-table thead, .dark .atm-commission-table-wrap thead, .dark .atm-commercial-table thead { background: #294539; color: #e3ece6; }
+.dark .atm-general-table tbody tr:hover, .dark .atm-commission-table-wrap tbody tr:hover, .dark .atm-commercial-table tbody tr:hover { background: #22352d; }
+.dark .atm-commercial-metrics button[aria-pressed="true"] { background: #294539; }
+.dark .atm-lost-table thead { background: #294539; color: #e3ece6; }
+.dark .atm-lost-table tbody tr:hover { background: #22352d; }
+.dark .atm-params-nav-link { color: #e3ece6; }
+.dark .atm-params-nav-link:hover, .dark .atm-params-nav-link[aria-expanded="true"], .dark .atm-params-section > button { background: #294539; color: #e3ece6; }
+.dark .atm-params-section > button:hover, .dark .atm-finance-preset:hover { background: #315341; }
+.dark .atm-finance .overflow-auto.rounded-lg.border thead, .dark .atm-sales-table thead { background: #294539; color: #e3ece6; }
+.dark .atm-sales-table tbody tr:hover { background: #22352d; }
+.dark .atm-admin-ops :is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea) { border-color: #506357; background-color: #1c2925; color: #f1f5f2; }
+.dark .atm-admin-ops table thead { background: #294539; color: #e3ece6; }
+.dark .atm-admin-ops table tbody tr:hover { background: #22352d; }
+.dark .atm-admin-ops-column { background: #1b2924; }
+.dark .atm-admin-ops-card { background: #1c2925; }
+.dark .atm-payable-search { border-color: #506357; }
+.dark .atm-payable-actions-button:hover { background: #294539; }
+.dark .atm-purchases-metric:hover, .dark .atm-purchases-metric[aria-pressed="true"], .dark .atm-purchases-row-selected, .dark .atm-purchases-actions button:hover { background: #294539; }
+.dark .atm-purchases-search { border-color: #506357; }
+.dark .atm-payment-search { border-color: #506357; }
+.dark .atm-payment-actions-button:hover { background: #294539; }
+
+@media (max-width: 900px) {
+  .atm-payment-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .atm-payment-metric:nth-child(2) { border-right: 0; }
+  .atm-payment-metric:nth-child(-n+2) { border-bottom: 1px solid var(--atm-border); }
+  .atm-payment-filter-main, .atm-payment-advanced-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .atm-expenses-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .atm-expenses-metric:nth-child(3) { border-right: 0; }
+  .atm-expenses-metric:nth-child(-n+3) { border-bottom: 1px solid var(--atm-border); }
+  .atm-admin-ops-expenses .atm-expenses-list > .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .atm-payable-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .atm-payable-metric:nth-child(3) { border-right: 0; }
+  .atm-payable-metric:nth-child(-n+3) { border-bottom: 1px solid var(--atm-border); }
+  .atm-payable-filter-row { grid-template-columns: minmax(0, 1fr) minmax(180px, .6fr); }
+  .atm-payable-filter-row select:last-child { grid-column: 2; }
+  .atm-purchases-filter-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .atm-purchases-advanced-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .atm-commission-currency { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .atm-commission-currency > * { border-bottom: 1px solid var(--atm-border); }
+  .atm-commission-currency > *:nth-child(2n) { border-right: 0; }
+  .atm-commission-currency > *:nth-last-child(-n+2) { border-bottom: 0; }
+}
+
+@media (max-width: 640px) {
+  .atm-payment-workspace { padding: 16px; }
+  .atm-payment-workspace-head { align-items: flex-start; flex-direction: column; }
+  .atm-payment-workspace-tabs { width: 100%; }
+  .atm-unified-orders-content > header, .atm-unified-orders-content > .flex-1 { padding: 12px; }
+  .atm-admin-ops-payment-orders { padding: 16px; }
+  .atm-payment-filter-main, .atm-payment-advanced-grid { grid-template-columns: minmax(0, 1fr); }
+  .atm-payment-metric { padding: 11px 12px; }
+  .atm-payment-selection { align-items: flex-start; flex-direction: column; }
+  .atm-expenses-header-tools { width: 100%; }
+  .atm-expenses-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .atm-expenses-metric:nth-child(n) { border-right: 1px solid var(--atm-border); border-bottom: 1px solid var(--atm-border); }
+  .atm-expenses-metric:nth-child(2n) { border-right: 0; }
+  .atm-expenses-metric:last-child { border-bottom: 0; }
+  .atm-admin-ops-expenses .atm-expenses-list > .grid { grid-template-columns: minmax(0, 1fr); }
+  .atm-admin-ops-payable { padding: 16px; }
+  .atm-payable-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .atm-payable-metric:nth-child(n) { border-right: 1px solid var(--atm-border); border-bottom: 1px solid var(--atm-border); }
+  .atm-payable-metric:nth-child(2n) { border-right: 0; }
+  .atm-payable-metric:last-child { border-bottom: 0; }
+  .atm-payable-currency-strip, .atm-payable-filter-row, .atm-payable-advanced-grid { grid-template-columns: minmax(0, 1fr); }
+  .atm-payable-currency-summary:first-child { border-right: 0; border-bottom: 1px solid var(--atm-border); }
+  .atm-payable-filter-row select:last-child { grid-column: auto; }
+  .atm-payable-section-head { align-items: flex-start; flex-direction: column; }
+  .atm-admin-ops-purchases { padding: 16px; }
+  .atm-purchases-flow, .atm-purchases-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .atm-purchases-flow-step:nth-child(2), .atm-purchases-metric:nth-child(2) { border-right: 0; }
+  .atm-purchases-flow-step:nth-child(-n+2), .atm-purchases-metric:nth-child(-n+2) { border-bottom: 1px solid var(--atm-border); }
+  .atm-purchases-filter-row { grid-template-columns: minmax(0, 1fr); }
+  .atm-purchases-advanced-grid { grid-template-columns: minmax(0, 1fr); }
+  .atm-purchases-results-head, .atm-purchases-selection { align-items: flex-start; flex-direction: column; }
+  .atm-purchases-view-total { text-align: left; }
+  .atm-admin-ops h1 { font-size: 23px; }
+  .atm-admin-ops > :first-child:has(h1) { align-items: stretch; flex-direction: column; }
+  .atm-admin-ops > .grid:has(> .bg-white.border) > .bg-white.border, .atm-admin-ops-payable > .grid.grid-cols-2 > div { border-right: 0; border-bottom: 1px solid var(--atm-border); }
+  .atm-admin-ops > .grid:has(> .bg-white.border) > .bg-white.border:last-child, .atm-admin-ops-payable > .grid.grid-cols-2 > div:last-child { border-bottom: 0; }
+  .atm-admin-ops-bank > :first-child select { min-width: 0; width: 100%; }
+  .atm-sidebar:not(.atm-sidebar-collapsed) { position: fixed; z-index: 60; box-shadow: 8px 0 24px rgba(20, 40, 30, .12); }
+  .atm-pipeline .atm-column { flex-basis: min(252px, 82vw); min-width: min(252px, 82vw); }
+  .atm-pipeline .atm-pipeline-title { font-size: 21px; }
+  .atm-attention-filter { margin-left: 0; }
+  .atm-filter-search { width: 100%; }
+  .atm-user-details { display: none; }
+  .atm-topbar-actions { gap: 5px; }
+  .atm-topbar-actions > .flex { display: none; }
+  .atm-service-content-head { align-items: flex-start; }
+  .atm-service-toolbar { flex-wrap: wrap; }
+  .atm-service-toolbar :is(input, select) { max-width: 100%; }
+  .atm-service-equipment .atm-service-search { width: 100%; }
+  .atm-service-calendar { overflow-x: auto; }
+  .atm-service-calendar > div { min-width: 78px; }
+  .atm-service-period > div { text-align: center; }
+  .atm-form-overlay { align-items: flex-start; padding: 8px; }
+  .atm-form-modal { max-height: calc(100dvh - 16px); }
+  .atm-form-header { padding: 12px 15px; }
+  .atm-form-title { font-size: 17px; }
+  .atm-form-body { padding: 16px 15px 0; gap: 15px; }
+  .atm-form-modal .grid-cols-2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .atm-form-modal .grid-cols-2 > * { min-width: 0; }
+  .atm-form-actions { justify-content: stretch; }
+  .atm-form-actions button { flex: 1; }
+  .atm-service-form { padding: 0 15px 15px; }
+  .atm-service-form-header { margin: 0 -15px 15px; padding: 12px 15px; }
+  .atm-service-form-actions { margin: 18px -15px -15px; padding: 12px 15px; }
+  .atm-form-branch { max-height: calc(100dvh - 16px); }
+  .atm-service-overlay > .atm-form-branch { flex-basis: 100%; max-width: 100%; }
+  .atm-contacts-heading { align-items: stretch; flex-direction: column; gap: 12px; }
+  .atm-contacts-heading h1 { font-size: 23px; }
+  .atm-contacts-new { align-self: flex-start; }
+  .atm-contacts-search { width: 100%; }
+  .atm-contacts-filters > .relative { flex: 1 1 170px; }
+  .atm-contacts-filters > .relative input { width: 100%; }
+  .atm-contacts-filters select { flex: 1 1 160px; max-width: 100%; }
+  .atm-contact-modal { padding: 0 15px; }
+  .atm-contact-modal-head { margin: 0 -15px 15px; padding: 12px 15px; }
+  .atm-contact-modal-actions { margin: 16px -15px 0; padding: 12px 15px; }
+}

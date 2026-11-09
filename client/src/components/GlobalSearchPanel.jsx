@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api";
 import { useAuth } from "../auth.jsx";
+import { Search } from "lucide-react";
 
 const EMPTY_RESULTS = {
   people: [],
@@ -326,15 +327,15 @@ export default function GlobalSearchPanel() {
   };
 
   return (
-    <div className="relative flex-1 max-w-[720px]">
+    <div className="relative flex-1 max-w-[500px] min-w-0">
       <button
         type="button"
         onClick={() => setOpen(true)}
         className="flex h-10 w-full items-center gap-3 rounded-lg border border-slate-300 bg-white px-3 text-left text-sm text-slate-500 shadow-sm hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-600/30 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
         aria-label="Abrir búsqueda global"
       >
-        <span aria-hidden="true" className="text-xl leading-none">⌕</span>
-        <span className="min-w-0 flex-1 truncate">{query || "Buscar en ATM CargoSoft"}</span>
+        <Search size={18} aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate">{query || "Buscar operaciones, clientes, contactos..."}</span>
         <kbd className="hidden border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-400 sm:inline dark:border-slate-600 dark:bg-slate-700">Esc</kbd>
       </button>
 
@@ -345,7 +346,7 @@ export default function GlobalSearchPanel() {
             onMouseDown={(event) => event.stopPropagation()}
           >
             <div className="relative mx-auto mb-2 max-w-[520px]">
-              <span aria-hidden="true" className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-2xl text-slate-500">⌕</span>
+              <Search size={20} aria-hidden="true" className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
               <input
                 ref={overlayInputRef}
                 value={query}

@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useState } from "react";
 import { api } from "../../api";
-import { Link } from "react-router-dom";
+import { Download, FileSpreadsheet, MoreHorizontal, Plus, Search } from "lucide-react";
+import UnifiedPaymentOrders from "./UnifiedPaymentOrders.jsx";
 import {
   companyBankAccountLabel,
   companyBankAccountValue,
@@ -19,6 +20,7 @@ const STATUS_TABS = [
   { value: "anulada", label: "Anuladas" },
   { value: "vencida", label: "Vencidas" },
 ];
+const PRIMARY_STATUS_TABS = ["todas", "pendiente", "aprobada", "pago_parcial", "pagada", "vencida"];
 const STATUS_LABELS = {
   pendiente: "Pendiente",
   aprobada: "Aprobada",
@@ -106,7 +108,7 @@ function hasSupplierBankData(row) {
   return Boolean(row?.supplier_bank_name || row?.supplier_bank_account || row?.supplier_bank_holder || row?.supplier_bank_cci_iban);
 }
 
-export default function PaymentOrders() {
+function LegacyPaymentOrders({ onCreateUnified }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [rows, setRows] = useState([]);
@@ -576,91 +578,101 @@ export default function PaymentOrders() {
     !scheduleAccountOptions.some((account) => companyBankAccountValue(account) === scheduleForm.planned_company_account);
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="atm-admin-ops atm-admin-ops-payment-orders min-w-0 p-6 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">Ordenes de pago</h1>
-          <p className="text-slate-500 text-sm">Órdenes operativas anteriores. Las nuevas órdenes de varios documentos se gestionan en Cuentas a pagar.</p>
+          <h2 className="text-2xl font-bold text-slate-800">Órdenes anteriores</h2>
+          <p className="text-slate-500 text-sm">Consulta y seguimiento de órdenes operativas anteriores.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link to="/admin-ops/accounts-payable" className="px-3 py-2 text-sm rounded border border-blue-600 bg-blue-600 text-white">
-            Nueva orden unificada
-          </Link>
+          <button type="button" onClick={onCreateUnified} className="atm-payment-primary inline-flex items-center gap-2 px-3 py-2 text-sm rounded border text-white">
+            <Plus size={16} /> Nueva orden unificada
+          </button>
           <button
-            className="px-3 py-2 text-sm rounded border bg-white"
+            className="inline-flex items-center gap-2 px-3 py-2 text-sm rounded border bg-white"
             onClick={() => {
               setExportFilters(filters);
               setExportOpen(true);
             }}
           >
-            Exportar
+            <FileSpreadsheet size={16} /> Exportar Excel
           </button>
-          {selectedIds.size > 0 && (
-            <button className="px-3 py-2 text-sm rounded border bg-white" onClick={downloadZip}>
-              Descargar ZIP ({selectedIds.size})
-            </button>
-          )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+      <div className="atm-payment-metrics">
         {[
           ["Monto OP", "amount", "bg-blue-50 text-blue-700"],
           ["Pagado", "paid", "bg-emerald-50 text-emerald-700"],
           ["Saldo pendiente", "balance", "bg-amber-50 text-amber-700"],
           ["Vencido", "overdue", "bg-red-50 text-red-700"],
         ].map(([label, key, cls]) => (
-          <div key={key} className="rounded-xl border bg-white p-3 shadow-sm">
-            <div className="text-xs text-slate-500">{label}</div>
-            <div className={`mt-2 rounded-lg px-2 py-1 text-xs font-semibold ${cls}`}>
+          <div key={key} className="atm-payment-metric">
+            <div>{label}</div>
+            <strong className={cls}>
               {Object.entries(dashboard.byCurrency)
                 .filter(([, values]) => Number(values[key] || 0) > 0)
                 .map(([currency, values]) => `${currency} ${formatMoney(values[key], currency)}`)
                 .join(" · ") || "--"}
-            </div>
+            </strong>
           </div>
         ))}
       </div>
 
-      <div className="bg-white rounded-2xl shadow p-4">
-        <div className="mb-4 flex flex-wrap gap-2">
-          {STATUS_TABS.map((tab) => (
+      <div className="atm-payment-filters">
+        <div className="atm-payment-tabs" role="group" aria-label="Estado de órdenes de pago">
+          {STATUS_TABS.filter((tab) => PRIMARY_STATUS_TABS.includes(tab.value)).map((tab) => (
             <button
               key={tab.value}
-              className={`rounded-full border px-3 py-1.5 text-xs ${
-                filters.status_tab === tab.value ? "bg-black text-white" : "bg-white text-slate-700 hover:bg-slate-50"
-              }`}
+              type="button"
+              aria-pressed={filters.status_tab === tab.value}
               onClick={() => setFilters((f) => ({ ...f, status_tab: tab.value }))}
             >
               {tab.label}
-              <span className={`ml-2 rounded-full px-1.5 py-0.5 ${filters.status_tab === tab.value ? "bg-white/20" : "bg-slate-100"}`}>
-                {dashboard.counts[tab.value] || 0}
-              </span>
+              <span>{dashboard.counts[tab.value] || 0}</span>
             </button>
           ))}
+          <select aria-label="Otros estados" value={PRIMARY_STATUS_TABS.includes(filters.status_tab) ? "" : filters.status_tab}
+            onChange={(event) => event.target.value && setFilters((f) => ({ ...f, status_tab: event.target.value }))}>
+            <option value="">Otros estados</option>
+            {STATUS_TABS.filter((tab) => !PRIMARY_STATUS_TABS.includes(tab.value)).map((tab) => (
+              <option key={tab.value} value={tab.value}>{tab.label} ({dashboard.counts[tab.value] || 0})</option>
+            ))}
+          </select>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <input
-            className="border rounded px-2 py-1"
+        <div className="atm-payment-filter-main">
+          <label className="atm-payment-search"><Search size={16} aria-hidden="true" /><input
+            aria-label="Buscar órdenes de pago"
             list="payment-orders-search-suggestions"
-            placeholder="Buscar (cliente, factura, referencia, orden)"
+            placeholder="Buscar orden, factura u operación"
             value={filters.search_q}
             onChange={(e) => setFilters((f) => ({ ...f, search_q: e.target.value }))}
-          />
+          /></label>
           <datalist id="payment-orders-search-suggestions">
             {searchSuggestions.map((s) => (
               <option key={s} value={s} />
             ))}
           </datalist>
           <input
-            className="border rounded px-2 py-1"
-            placeholder="Proveedor (nombre o RUC)"
+            aria-label="Proveedor" className="border rounded px-2 py-1"
+            placeholder="Proveedor o RUC"
             value={filters.supplier_q}
             onChange={(e) => setFilters((f) => ({ ...f, supplier_q: e.target.value }))}
           />
+          <select aria-label="Moneda" className="border rounded px-2 py-1" value={filters.currency_code}
+            onChange={(e) => setFilters((f) => ({ ...f, currency_code: e.target.value }))}>
+            <option value="">Todas las monedas</option>
+            <option value="PYG">PYG</option>
+            <option value="USD">USD</option>
+          </select>
+          <button className="atm-payment-search-button px-3 py-2 text-sm rounded" onClick={load}>Buscar</button>
+        </div>
+        <details className="atm-payment-more">
+          <summary>Más filtros</summary>
+          <div className="atm-payment-advanced-grid">
           <input
             className="border rounded px-2 py-1"
-            placeholder="Operacion (referencia)"
+            aria-label="Operación" placeholder="Operación (referencia)"
             value={filters.operation_q}
             onChange={(e) => setFilters((f) => ({ ...f, operation_q: e.target.value }))}
           />
@@ -675,15 +687,6 @@ export default function PaymentOrders() {
                 {s}
               </option>
             ))}
-          </select>
-          <select
-            className="border rounded px-2 py-1"
-            value={filters.currency_code}
-            onChange={(e) => setFilters((f) => ({ ...f, currency_code: e.target.value }))}
-          >
-            <option value="">Moneda</option>
-            <option value="PYG">PYG</option>
-            <option value="USD">USD</option>
           </select>
           <div>
             <div className="text-xs text-slate-500 mb-1">Creacion desde</div>
@@ -739,13 +742,11 @@ export default function PaymentOrders() {
               onChange={(e) => setFilters((f) => ({ ...f, due_to: e.target.value }))}
             />
           </div>
-        </div>
-        <div className="mt-3 flex gap-2">
-          <button className="px-3 py-2 text-sm rounded bg-black text-white" onClick={load}>
-            Buscar
-          </button>
+          </div>
+        </details>
+        <div className="atm-payment-filter-footer">
           <button
-            className="px-3 py-2 text-sm rounded border"
+            className="text-sm"
             onClick={() => {
               setFilters({
                 from_date: "",
@@ -763,54 +764,43 @@ export default function PaymentOrders() {
               });
             }}
           >
-            Limpiar
+            Limpiar filtros
           </button>
-          {selectedIds.size > 0 && (
-            <>
-              <div className="text-sm text-slate-600 flex items-center">
-                Seleccionadas: <span className="ml-1 font-semibold">{selectedIds.size}</span>
-              </div>
-            </>
-          )}
         </div>
       </div>
 
       {error && <div className="text-sm text-red-600 mb-3">{error}</div>}
 
-      <div className="bg-white rounded-2xl shadow overflow-auto">
-        <table className="min-w-full text-sm">
+      <div className="atm-payment-results-head"><div><h2>Órdenes operativas</h2><span>{visibleRows.length} {visibleRows.length === 1 ? "orden" : "órdenes"} en esta vista</span></div></div>
+      <div className="atm-payment-table-wrap overflow-auto">
+        <table className="atm-payment-table min-w-full text-sm">
           <thead className="bg-slate-100 text-slate-600">
             <tr>
               <th className="text-left px-3 py-2">
-                <input type="checkbox" checked={allSelected()} onChange={toggleSelectAll} />
+                <input type="checkbox" aria-label="Seleccionar órdenes visibles" checked={allSelected()} onChange={toggleSelectAll} />
               </th>
               <th className="text-left px-3 py-2">Orden</th>
               <th className="text-left px-3 py-2">Proveedor</th>
-              <th className="text-left px-3 py-2">Cuenta proveedor</th>
-              <th className="text-left px-3 py-2">Factura</th>
-              <th className="text-left px-3 py-2">Cant</th>
-              <th className="text-left px-3 py-2">Operacion</th>
-              <th className="text-left px-3 py-2">Metodo</th>
-              <th className="text-left px-3 py-2">Fecha pago</th>
-              <th className="text-left px-3 py-2">Vencimiento</th>
-              <th className="text-left px-3 py-2">Monto</th>
-              <th className="text-left px-3 py-2">Pagado</th>
-              <th className="text-left px-3 py-2">Saldo</th>
+              <th className="text-left px-3 py-2">Facturas</th>
+              <th className="text-left px-3 py-2">Fechas</th>
+              <th className="text-right px-3 py-2">Monto</th>
+              <th className="text-right px-3 py-2">Pagado</th>
+              <th className="text-right px-3 py-2">Falta pagar</th>
               <th className="text-left px-3 py-2">Estado</th>
-              <th className="text-left px-3 py-2">Acciones</th>
+              <th className="text-right px-3 py-2">Acciones</th>
             </tr>
           </thead>
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={16} className="px-3 py-4 text-center text-slate-500">
+                <td colSpan={10} className="px-3 py-4 text-center text-slate-500">
                   Cargando...
                 </td>
               </tr>
             )}
             {!loading && visibleRows.length === 0 && (
               <tr>
-                <td colSpan={16} className="px-3 py-4 text-center text-slate-500">
+                <td colSpan={10} className="px-3 py-4 text-center text-slate-500">
                   Sin resultados.
                 </td>
               </tr>
@@ -821,54 +811,46 @@ export default function PaymentOrders() {
                   <td className="px-3 py-2">
                     <input
                       type="checkbox"
+                      aria-label={`Seleccionar orden ${r.order_number || r.id}`}
                       checked={selectedIds.has(r.id)}
                       onChange={() => toggleSelected(r.id)}
                     />
                   </td>
-                  <td className="px-3 py-2">{r.order_number || "-"}</td>
-                  <td className="px-3 py-2">
-                    <div>{r.supplier_display || "-"}</div>
-                    <div className="text-xs text-slate-500">{r.supplier_ruc_display || r.supplier_ruc || ""}</div>
+                  <td className="px-3 py-2 atm-payment-order">
+                    <button type="button" onClick={() => openDetail(r)}>{r.order_number || `OP ${r.id}`}</button>
+                    <small>{r.operation_reference || "Sin operación"}</small>
                   </td>
-                  <td className="px-3 py-2">
-                    {supplierBankLabel(r) || (
-                      <span className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-700">Proveedor sin cuenta</span>
-                    )}
+                  <td className="px-3 py-2 atm-payment-supplier">
+                    <strong>{r.supplier_display || "Sin proveedor"}</strong>
+                    <small>{r.supplier_ruc_display || r.supplier_ruc || "Sin RUC"}</small>
+                    {supplierBankLabel(r) ? <small title={supplierBankLabel(r)}>{supplierBankLabel(r)}</small> : <small className="atm-payment-warning">Sin cuenta bancaria</small>}
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 atm-payment-invoices">
                     {r.invoices_list ? (
-                      <div className="flex flex-col gap-1">
-                        {parseOrderInvoices(r).map((invoice, idx) => (
-                          <div key={`${r.id}-inv-${idx}`} className="text-xs text-slate-700">
-                            {invoice.receipt_number || "-"} · {(invoice.currency_code || r.currency_code || "PYG")} {formatMoney(invoice.amount, invoice.currency_code || r.currency_code)}
-                          </div>
-                        ))}
-                      </div>
+                      <>{parseOrderInvoices(r)[0]?.receipt_number || "Sin número"}<small>{parseOrderInvoices(r).length} {parseOrderInvoices(r).length === 1 ? "factura" : "facturas"}</small></>
                     ) : (
-                      <span>{r.receipt_number || "-"}</span>
+                      <>{r.receipt_number || "Sin número"}<small>{r.invoice_count || 1} {Number(r.invoice_count || 1) === 1 ? "factura" : "facturas"}</small></>
                     )}
                   </td>
-                  <td className="px-3 py-2">{r.invoice_count || 0}</td>
-                  <td className="px-3 py-2">{r.operation_reference || "-"}</td>
-                  <td className="px-3 py-2">{r.payment_method || "-"}</td>
-                  <td className="px-3 py-2">{r.payment_date || "-"}</td>
-                  <td className="px-3 py-2">{r.due_date || "-"}</td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 atm-payment-date">{r.payment_date || "Sin fecha de pago"}<small>Vence: {r.due_date || "-"}</small><small>{r.payment_method || "Sin método"}</small></td>
+                  <td className="px-3 py-2 text-right atm-payment-money">
                     {r.currency_code || "PYG"} {formatMoney(r.amount, r.currency_code)}
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 text-right atm-payment-money">
                     {r.currency_code || "PYG"} {formatMoney(r.paid_amount, r.currency_code)}
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 text-right atm-payment-money atm-payment-balance">
                     {r.currency_code || "PYG"} {formatMoney(r.balance, r.currency_code)}
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 atm-payment-status">
                     <StatusBadge status={r.status} />
-                    {isOverdue(r) && <span className="ml-2 text-xs px-2 py-1 rounded bg-red-100 text-red-700">Vencida</span>}
+                    {isOverdue(r) && <small className="atm-payment-warning">Vencida</small>}
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 text-right">
                     <button
-                      className="px-2 py-1 rounded border text-xs hover:bg-slate-50"
+                      className="atm-payment-actions-button"
+                      title="Más acciones"
+                      aria-label={`Más acciones para orden ${r.order_number || r.id}`}
                       onClick={(event) => {
                         const rect = event.currentTarget.getBoundingClientRect();
                         setActionsMenu({
@@ -879,7 +861,7 @@ export default function PaymentOrders() {
                         });
                       }}
                     >
-                      Acciones
+                      <MoreHorizontal size={17} />
                     </button>
                   </td>
                 </tr>
@@ -887,6 +869,12 @@ export default function PaymentOrders() {
           </tbody>
         </table>
       </div>
+      {selectedIds.size > 0 && (
+        <div className="atm-payment-selection">
+          <strong>{selectedIds.size} {selectedIds.size === 1 ? "orden seleccionada" : "órdenes seleccionadas"}</strong>
+          <button type="button" onClick={downloadZip}><Download size={16} /> Descargar ZIP</button>
+        </div>
+      )}
 
       {actionsMenu && (
         <div
@@ -1315,6 +1303,41 @@ export default function PaymentOrders() {
             </div>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+export default function PaymentOrders() {
+  const [view, setView] = useState("unified");
+  const [unifiedView, setUnifiedView] = useState("list");
+  const [companyAccounts, setCompanyAccounts] = useState([]);
+
+  useEffect(() => {
+    let active = true;
+    api.get("/params", { params: { keys: "company_bank_account", only_active: 1 } })
+      .then(({ data }) => {
+        if (active) setCompanyAccounts(parseCompanyBankAccounts(data?.company_bank_account || []));
+      })
+      .catch(() => {
+        if (active) setCompanyAccounts([]);
+      });
+    return () => { active = false; };
+  }, []);
+
+  return (
+    <div className="atm-admin-ops atm-payment-workspace min-w-0 p-6">
+      <div className="atm-payment-workspace-head">
+        <div><h1>Órdenes de pago</h1><p>Pagos a proveedores de todos los módulos.</p></div>
+        <div className="atm-payment-workspace-tabs" role="group" aria-label="Tipo de orden">
+          <button type="button" aria-pressed={view === "unified"} onClick={() => { setUnifiedView("list"); setView("unified"); }}>Unificadas</button>
+          <button type="button" aria-pressed={view === "legacy"} onClick={() => setView("legacy")}>Anteriores</button>
+        </div>
+      </div>
+      {view === "unified" ? (
+        <UnifiedPaymentOrders embedded initialView={unifiedView} companyAccounts={companyAccounts} />
+      ) : (
+        <LegacyPaymentOrders onCreateUnified={() => { setUnifiedView("new"); setView("unified"); }} />
       )}
     </div>
   );

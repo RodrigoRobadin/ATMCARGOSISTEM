@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
+import { CircleAlert, FileText, Filter, Plus, Search, Settings2 } from "lucide-react";
 import { api } from "../api";
 import NewOperationModal from "../components/NewOperationModal";
 import NewIndustrialOperationModal from "../components/NewIndustrialOperationModal";
@@ -480,16 +481,26 @@ export default function Workspace() {
     );
 
   return (
-    <div>
-      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+    <div className="atm-pipeline">
+      <div className="atm-page-heading">
         <div>
-          <h2 className="text-lg font-semibold">Workspace: {bu.name}</h2>
-          <p className="text-xs text-slate-500">
-            Pipeline: {pipelineId ?? "—"}
-          </p>
+          <h2 className="atm-pipeline-title">{isIndustrial ? 'ATM Industrial' : isContainer ? 'ATM Container' : key === 'atm-cargo' ? 'ATM Cargo' : bu.name}</h2>
+          <p className="atm-page-subtitle">Operaciones comerciales</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <button onClick={() => setOpenModal(true)} className="atm-primary atm-new-operation" type="button">
+          <Plus size={18} aria-hidden="true" /> Nueva operación
+        </button>
+      </div>
+      <div className="atm-view-tabs">
           <PipelineViewSwitch value={view} onChange={changeView} />
+      </div>
+      <div className="atm-filter-row">
+        <div className="atm-filter-search">
+          <Search size={18} aria-hidden="true" />
+          <input type="search" aria-label="Buscar operaciones" placeholder="Buscar operación o cliente..." value={search}
+            onChange={(event) => setSearch(event.target.value)} />
+        </div>
+        <div className="atm-pipeline-controls">
           <select aria-label="Estado del trabajo" value={completedOnly ? 'completed' : 'active'}
             onChange={(event) => setSearchParams((current) => {
               const next = new URLSearchParams(current);
@@ -501,25 +512,14 @@ export default function Workspace() {
             <option value="active">Trabajos activos</option>
             <option value="completed">Finalizados</option>
           </select>
-          <input type="search" aria-label="Buscar operaciones" placeholder="Buscar operación o cliente" value={search}
-            onChange={(event) => setSearch(event.target.value)} className="min-w-48 rounded border bg-white px-3 py-2 text-sm" />
-          <select aria-label="Filtrar por etapa" value={selectedStageId} onChange={(event) => setSelectedStageId(event.target.value)}
-            className="rounded border bg-white px-3 py-2 text-sm">
-            <option value="">Todas las etapas</option>
-            {stages.map((stage) => <option key={stage.id} value={stage.id}>{stageLabel(stage)}</option>)}
-          </select>
-          {!completedOnly && <label className="flex items-center gap-2 px-2 text-sm whitespace-nowrap cursor-pointer">
-            <input type="checkbox" checked={attentionOnly} onChange={(event) => setAttentionOnly(event.target.checked)} />
-            Requieren atención
-          </label>}
           {isIndustrial && isAdmin ? (
             <select
-              className="px-3 py-2 text-sm rounded-lg border bg-white dark:bg-slate-950 dark:border-slate-700"
+              className="atm-responsible-select"
               value={selectedAdvisorUserId}
               onChange={(event) => selectAdvisor(event.target.value)}
               title="Filtrar operaciones por comercial"
             >
-              <option value="">Todos los comerciales</option>
+              <option value="">Todos los responsables</option>
               {advisorUsers.map((advisor) => (
                 <option key={advisor.id} value={advisor.id}>
                   {advisor.name || advisor.email || `Usuario ${advisor.id}`}
@@ -527,54 +527,54 @@ export default function Workspace() {
               ))}
             </select>
           ) : null}
-          <button
-            onClick={() =>
-              nav(
-                `/pipelines/${pipelineId || ""}/edit?back=${encodeURIComponent(
-                  location.pathname
-                )}`
-              )
-            }
-            className="px-3 py-2 text-sm rounded-lg border hover:bg-slate-50"
-            title="Editar columnas del pipeline"
-          >
-            ✏️ Editar pipeline
-          </button>
-
-          <button
-            onClick={() => setOpenModal(true)}
-            className="px-3 py-2 text-sm rounded-lg bg-black text-white"
-          >
-            ➕ Nueva operación
-          </button>
+          <details className="atm-more-filters">
+            <summary><Filter size={17} aria-hidden="true" /> Más filtros</summary>
+            <div className="atm-filter-popover">
+              <label htmlFor="workspace-stage-filter">Etapa</label>
+              <select id="workspace-stage-filter" value={selectedStageId} onChange={(event) => setSelectedStageId(event.target.value)}>
+                <option value="">Todas las etapas</option>
+                {stages.map((stage) => <option key={stage.id} value={stage.id}>{stageLabel(stage)}</option>)}
+              </select>
+              <button type="button" onClick={() => nav(`/pipelines/${pipelineId || ""}/edit?back=${encodeURIComponent(location.pathname)}`)}>
+                <Settings2 size={16} aria-hidden="true" /> Editar pipeline
+              </button>
+            </div>
+          </details>
         </div>
+        {!completedOnly && <button type="button" aria-pressed={attentionOnly} onClick={() => setAttentionOnly((value) => !value)} className="atm-attention-filter">
+          <CircleAlert size={17} aria-hidden="true" /> Requieren atención
+        </button>}
       </div>
 
       {view === 'funnel' ? <DragDropContext onDragEnd={onDragEnd}>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4">
+        <div className="atm-board">
           {displayedStages.map((stage) => (
             <Droppable droppableId={String(stage.id)} key={stage.id}>
               {(provided) => (
                 <div
                   ref={provided.innerRef}
                   {...provided.droppableProps}
-                  className="bg-white rounded-2xl shadow p-3 min-h-[200px]"
+                  className="atm-column"
                 >
-                  <div className="sticky top-[73px] z-20 -mx-3 -mt-3 mb-2 rounded-t-2xl border-b border-slate-100 bg-white px-3 pb-2 pt-3 shadow-sm dark:border-slate-800 dark:bg-slate-950">
-                      <div className="font-medium flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span>{stageLabel(stage)}</span>
+                  <div className="atm-column-header">
+                      <div className="atm-stage-headline">
+                        <span className="atm-stage-name">{stageLabel(stage)}</span>
+                        <span className="atm-count text-xs rounded px-2 py-0.5">
+                          {grouped[stage.id]?.length || 0}
+                        </span>
+                      </div>
+                      <div className="atm-stage-profit-list">
                           {(() => {
                             const sums = stageProfitSums(stage.id);
                             const labels = Object.keys(sums || {});
                             if (!labels.length) return null;
                             return (
-                              <span className="flex items-center gap-2">
+                              <span className="flex flex-wrap gap-1">
                                 {labels.map((label) => {
                                   const decimals = label === "Gs" ? 0 : 2;
                                   const val = Number(sums[label] || 0);
                                   return (
-                                    <span key={label} className="text-xs bg-emerald-50 text-emerald-700 rounded px-2 py-0.5">
+                                    <span key={label} className="atm-profit text-xs rounded px-2 py-0.5">
                                       {`Profit ${label} ${val.toLocaleString("es-ES", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`}
                                     </span>
                                   );
@@ -582,14 +582,7 @@ export default function Workspace() {
                               </span>
                             );
                           })()}
-                        </div>
-                      <span className="text-xs bg-slate-100 rounded px-2 py-0.5">
-                        {grouped[stage.id]?.length || 0}
-                      </span>
-                    </div>
-                    <div className="text-xs text-slate-500 mt-0.5">
-                      {(grouped[stage.id]?.length || 0)} {completedOnly ? 'finalizados' : 'abiertos'}
-                    </div>
+                      </div>
                   </div>
 
                   <div className="space-y-2">
@@ -617,11 +610,7 @@ export default function Workspace() {
 
                       const titleText = isProspectStage
                         ? deal.org_name || deal.title || "Prospecto"
-                        : isIndustrial
-                        ? [deal.reference, deal.title]
-                            .filter((value, index, values) => value && (index === 0 || value !== values[0]))
-                            .join(" - ")
-                        : deal.reference || deal.title;
+                        : deal.title || deal.reference;
                       const secondaryRight = isProspectStage
                         ? deal.created_by_name || deal.contact_name || "—"
                         : deal.contact_name || "—";
@@ -656,8 +645,8 @@ export default function Workspace() {
                                 openInNewTab(detailUrl);
                               }}
                               onContextMenu={(event) => openOutcomeMenu(event, deal)}
-                              className={`relative block w-full border rounded-xl p-3 hover:shadow transition cursor-pointer ${
-                                hasOverBudget || attention ? "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30" : "bg-white dark:bg-slate-900 dark:border-slate-800"
+                              className={`atm-deal-card relative block w-full border p-3 transition cursor-pointer ${
+                                hasOverBudget || attention ? "atm-needs-attention border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30" : "bg-white dark:bg-slate-900 dark:border-slate-800"
                               }`}
                               title={[hasOverBudget ? "Sobrecosto" : null, attention?.label].filter(Boolean).join(" · ") || "Doble clic para abrir"}
                             >
@@ -665,15 +654,16 @@ export default function Workspace() {
                                 className={`absolute top-2 right-2 h-2.5 w-2.5 rounded-full ${signalMeta.dotClass}`}
                                 title={signalMeta.tooltip}
                               />
-                              <div className="text-sm font-semibold truncate" title={titleText}>
+                              <div className="text-sm font-semibold leading-snug pr-3 break-words" title={titleText}>
                                 {titleText}
                               </div>
                               {completedOnly && <div className="text-xs font-medium text-emerald-700">Finalizada · Aprobada</div>}
-                              <div className="text-xs text-slate-600 truncate">
+                              <div className="atm-card-client text-xs text-slate-600 truncate" title={[deal.org_name, deal.contact_name].filter(Boolean).join(' · ')}>
                                 {isProspectStage
                                   ? `Agregado por ${secondaryRight}`
-                                  : `${deal.org_name || "—"} • ${secondaryRight}`}
+                                  : deal.org_name || "—"}
                               </div>
+                              {!isProspectStage && deal.reference && <div className="text-[11px] text-slate-500 mt-1">{deal.reference}</div>}
 
                               <div className="flex items-center gap-2 flex-wrap mt-2">
                                   {(() => {
@@ -684,16 +674,12 @@ export default function Workspace() {
                                       const decimals = label === "Gs" ? 0 : 2;
                                       const val = Number(q.profit_total_display || 0);
                                       return (
-                                        <span className="text-xs bg-emerald-50 text-emerald-700 rounded px-2 py-0.5">
-                                          {`${label} ${val.toLocaleString("es-ES", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`}
-                                        </span>
+                                        <span className="atm-card-profit text-xs"><small>Profit {label}</small><strong>{val.toLocaleString("es-ES", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}</strong></span>
                                       );
                                     }
                                     const fallback = Number(deal.value || 0);
                                     return (
-                                      <span className="text-xs bg-emerald-50 text-emerald-700 rounded px-2 py-0.5">
-                                        {`USD ${fallback.toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                                      </span>
+                                      <span className="atm-card-profit text-xs"><small>Valor USD</small><strong>{fallback.toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
                                     );
                                   })()}
                                 {typeof createdDays === "number" && (
@@ -715,11 +701,18 @@ export default function Workspace() {
                                     : ""}
                                 </div>
                               )}
+                              {deal.next_task_due_at && !completedOnly && (
+                                <div className="mt-2 border-t border-slate-100 pt-2 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300">
+                                  Próximo seguimiento: {formatShortDate(deal.next_task_due_at)}
+                                </div>
+                              )}
+                              {deal.deal_advisor_name && <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{deal.deal_advisor_name}</div>}
                             </a>
                           )}
                         </Draggable>
                       );
                     })}
+                    {!grouped[stage.id]?.length && <div className="atm-empty-stage"><FileText size={27} strokeWidth={1.4} aria-hidden="true" /><span>No hay operaciones<br />en esta etapa</span></div>}
                     {provided.placeholder}
                   </div>
                 </div>

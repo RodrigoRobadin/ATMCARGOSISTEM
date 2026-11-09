@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { Plus } from "lucide-react";
 import { api } from "../api";
 import AddDealModal from "../components/AddDealModal";
 
@@ -45,17 +46,16 @@ export default function General() {
   if (loading) return <div className="text-sm text-slate-600">Cargando…</div>;
 
   return (
-    <div>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4">
+    <div className="atm-general min-w-0 space-y-5">
+      <header className="atm-page-heading flex-wrap">
         <div>
-          <h2 className="text-lg font-semibold">Vista general</h2>
-          <p className="text-xs text-slate-500">Pipeline: {pipelineId ?? "—"}</p>
+          <h1>Vista general</h1>
+          <p className="atm-page-subtitle">Operaciones comerciales</p>
         </div>
-
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <select
-            className="border rounded-lg px-3 py-2 text-sm"
+            aria-label="Unidad de negocio"
+            className="atm-general-filter"
             value={selectedBU}
             onChange={onChangeBU}
           >
@@ -69,21 +69,22 @@ export default function General() {
           </select>
 
           <button
+            type="button"
             onClick={() => setOpenModal(true)}
-            className="px-3 py-2 text-sm rounded-lg bg-black text-white"
+            className="atm-primary inline-flex min-h-10 items-center gap-2 rounded-md px-4 text-sm font-semibold"
           >
-            ➕ Nuevo Deal
+            <Plus size={17} /> Nueva operación
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* Tabla */}
-      <div className="overflow-x-auto bg-white shadow rounded-xl">
-        <table className="min-w-full border-collapse">
-          <thead className="bg-slate-100 text-sm text-left">
+      <div className="atm-general-count">{deals.length} {deals.length === 1 ? "operación" : "operaciones"}</div>
+      <div className="atm-general-table overflow-x-auto">
+        <table className="w-full min-w-[940px] border-collapse text-sm">
+          <thead className="text-left">
             <tr>
               <th className="px-4 py-2 border-b">ID</th>
-              <th className="px-4 py-2 border-b">Unidad de Negocio</th>
+              <th className="px-4 py-2 border-b">Unidad de negocio</th>
               <th className="px-4 py-2 border-b">Referencia</th>
               <th className="px-4 py-2 border-b">Organización</th>
               <th className="px-4 py-2 border-b">Contacto</th>
@@ -92,17 +93,17 @@ export default function General() {
               <th className="px-4 py-2 border-b">Creado</th>
             </tr>
           </thead>
-          <tbody className="text-sm">
+          <tbody>
             {deals.map((d) => {
               const etapa = stages.find((s) => s.id === d.stage_id)?.name || "—";
               return (
-                <tr key={d.id} className="hover:bg-slate-50">
+                <tr key={d.id}>
                   <td className="px-4 py-2 border-b">{d.id}</td>
                   <td className="px-4 py-2 border-b">{d.business_unit_name || "—"}</td>
-                  <td className="px-4 py-2 border-b">{d.title}</td>
+                  <td className="px-4 py-2 border-b font-semibold">{d.title}</td>
                   <td className="px-4 py-2 border-b">{d.org_name || "—"}</td>
                   <td className="px-4 py-2 border-b">{d.contact_name || "—"}</td>
-                  <td className="px-4 py-2 border-b">
+                  <td className="px-4 py-2 border-b whitespace-nowrap tabular-nums">
                     ${Number(d.value || 0).toLocaleString()}
                   </td>
                   <td className="px-4 py-2 border-b">{etapa}</td>
@@ -117,7 +118,7 @@ export default function General() {
             {!deals.length && (
               <tr>
                 <td colSpan={8} className="px-4 py-6 text-center text-slate-500">
-                  No hay deals para este filtro.
+                  No hay operaciones para este filtro.
                 </td>
               </tr>
             )}
@@ -125,7 +126,6 @@ export default function General() {
         </table>
       </div>
 
-      {/* Modal */}
       {openModal && (
         <AddDealModal
           onClose={() => setOpenModal(false)}

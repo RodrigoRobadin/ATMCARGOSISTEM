@@ -1,5 +1,6 @@
 // client/src/pages/AdminParams.jsx
 import React, { useEffect, useMemo, useState } from "react";
+import { Search } from "lucide-react";
 import { API_BASE, api } from "../api";
 import { parseCompanyBankAccountRow } from "../utils/companyBankAccounts";
 import QuoteTemplateCard from "../components/QuoteTemplateCard.jsx";
@@ -64,9 +65,9 @@ const PARAM_GROUPS = [
     ],
   },
   {
-    title: "Facturaci?n",
+    title: "Facturación",
     description:
-      "Timbrado, vigencia y numeraci?n de facturas por unidad de negocio. Las claves legacy viejas quedan ocultas y solo se usan como compatibilidad interna.",
+      "Timbrado, vigencia y numeración de facturas por unidad de negocio. Las claves anteriores quedan ocultas y solo se usan como compatibilidad interna.",
     keys: [
       "invoice_timbre_number_cargo",
       "invoice_timbre_valid_from_cargo",
@@ -81,9 +82,9 @@ const PARAM_GROUPS = [
     ],
   },
   {
-    title: "Notas de cr?dito",
+    title: "Notas de crédito",
     description:
-      "Serie fiscal de notas de cr?dito por unidad de negocio. El correlativo administrativo solo se usa como semilla si la serie todav?a no tiene emitidos. Las claves legacy viejas quedan ocultas en la UI.",
+      "Serie fiscal de notas de crédito por unidad de negocio. El correlativo administrativo solo se usa como semilla si la serie todavía no tiene emitidos.",
     keys: [
       "credit_exp_cargo",
       "credit_next_number_cargo",
@@ -121,7 +122,7 @@ export default function AdminParams() {
   const [creditNumbering, setCreditNumbering] = useState(null);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
-  const [openSections, setOpenSections] = useState(() => new Set([slugify(PARAM_GROUPS[0]?.title), slugify("Facturaci?n")]));
+  const [openSections, setOpenSections] = useState(() => new Set([slugify(PARAM_GROUPS[0]?.title), slugify("Facturación")]));
   const keysParam = useMemo(buildKeysParam, []);
   const groupedSections = useMemo(
     () =>
@@ -338,40 +339,30 @@ export default function AdminParams() {
   if (loading) return <div className="text-sm text-slate-600">Cargando?</div>;
 
   return (
-    <div className="space-y-4">
-      <div className="rounded-2xl bg-white p-5 shadow">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-          <div className="space-y-2">
-            <div className="inline-flex w-fit rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
-              Parametros del sistema
-            </div>
-            <div>
-              <h1 className="text-2xl font-semibold text-slate-900">Administraci?n de Par?metros</h1>
-              <p className="max-w-3xl text-sm text-slate-600">
-                Agrupa la configuraci?n por bloque funcional para que puedas ubicar y editar m?s r?pido cada secci?n del sistema.
-              </p>
-            </div>
+    <div className="atm-params min-w-0 space-y-5">
+      <header className="atm-params-header flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <h1>Parámetros</h1>
+            <p className="atm-page-subtitle">Configuración del sistema por área</p>
           </div>
 
-          <div className="w-full xl:max-w-sm">
-            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Buscar par?metro o secci?n
-            </label>
+          <label className="atm-params-search flex w-full items-center gap-2 xl:max-w-sm">
+            <Search size={17} aria-hidden="true" />
             <input
-              type="text"
+              type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Ej.: timbrado, logo, incoterm"
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+              aria-label="Buscar parámetro o sección"
+              className="min-w-0 flex-1 bg-transparent text-sm outline-none"
             />
-          </div>
-        </div>
-      </div>
+          </label>
+      </header>
 
-      <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
-        <aside className="rounded-2xl bg-white p-4 shadow xl:sticky xl:top-4 xl:h-fit">
-          <div className="mb-3 text-sm font-semibold text-slate-900">Bloques</div>
-          <div className="space-y-2">
+      <div className="grid min-w-0 gap-6 xl:grid-cols-[235px_minmax(0,1fr)]">
+        <aside className="atm-params-nav xl:sticky xl:top-4 xl:h-fit">
+          <h2 className="mb-3 text-xs font-semibold uppercase">Secciones</h2>
+          <div className="space-y-1">
             {visibleSections.map((group) => (
               <button
                 key={group.sectionId}
@@ -380,10 +371,11 @@ export default function AdminParams() {
                   document.getElementById(group.sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
                   if (!group.isOpen) toggleSection(group.sectionId);
                 }}
-                className="flex w-full items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-left text-sm text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+                className="atm-params-nav-link flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm"
+                aria-expanded={group.isOpen}
               >
                 <span>{group.title}</span>
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
+                <span className="atm-params-nav-count text-xs font-medium">
                   {group.visibleKeys.length}
                 </span>
               </button>
@@ -391,10 +383,10 @@ export default function AdminParams() {
           </div>
         </aside>
 
-        <div className="space-y-4">
+        <div className="atm-params-sections min-w-0 space-y-4">
           {!visibleSections.length && (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-500 shadow">
-              No hay coincidencias para la b?squeda actual.
+              No hay coincidencias para la búsqueda actual.
             </div>
           )}
 
@@ -402,12 +394,13 @@ export default function AdminParams() {
             <section
               key={group.sectionId}
               id={group.sectionId}
-              className="rounded-2xl bg-white shadow"
+              className="atm-params-section scroll-mt-4"
             >
               <button
                 type="button"
                 onClick={() => toggleSection(group.sectionId)}
-                className="flex w-full flex-col gap-3 rounded-2xl p-4 text-left lg:flex-row lg:items-start lg:justify-between"
+                className="flex w-full flex-col gap-3 px-4 py-4 text-left lg:flex-row lg:items-start lg:justify-between"
+                aria-expanded={group.isOpen}
               >
                 <div>
                   <div className="flex items-center gap-3">
@@ -430,7 +423,7 @@ export default function AdminParams() {
               {group.isOpen && (
                 <div className="border-t border-slate-100 p-4 pt-4">
                   <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                    {group.title === "Facturaci?n" && (
+                    {group.title === "Facturación" && (
                       <div className="lg:col-span-2">
                         <FiscalStampQuickEditor
                           map={map}
@@ -441,7 +434,7 @@ export default function AdminParams() {
                         <InvoiceNumberingStatusPanel status={invoiceNumbering} />
                   </div>
                 )}
-                {group.title === "Notas de cr?dito" && (
+                {group.title === "Notas de crédito" && (
                   <div className="lg:col-span-2">
                     <CreditNoteNumberingStatusPanel status={creditNumbering} />
                       </div>
@@ -578,7 +571,7 @@ function ParamCard({
   }
 
   return (
-    <div className="border rounded-xl p-3">
+    <div className="atm-params-field min-w-0 border p-3">
       <div className="font-medium mb-2">{prettyLabel(label)}</div>
 
       {isCompanyBankAccount ? (
@@ -1196,7 +1189,7 @@ function CreditNoteNumberingStatusPanel({ status }) {
   return (
     <div className="rounded-xl border bg-slate-50 p-3">
       <div className="mb-3">
-        <div className="font-medium">Estado actual de numeraci?n de notas de cr?dito</div>
+        <div className="font-medium">Estado actual de numeración de notas de crédito</div>
         <div className="text-sm text-slate-600">
           Muestra la serie activa de NC, el siguiente n?mero real seg?n notas emitidas y el correlativo administrativo configurado en par?metros.
         </div>
@@ -1221,7 +1214,7 @@ function CreditNoteNumberingStatusPanel({ status }) {
                   <StatusItem label="N?mero administrativo" value={row.configured_credit_note_number} wide />
                   <StatusItem
                     label="Origen del siguiente n?mero"
-                    value={row.sequence_source === "param_seed" ? "Par?metros (serie sin emitidos)" : "Base de datos"}
+                    value={row.sequence_source === "param_seed" ? "Parámetros (serie sin emitidos)" : "Base de datos"}
                   />
                   <StatusItem label="?ltima NC emitida" value={row.last_issued_credit_note_number} wide />
                 </div>

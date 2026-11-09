@@ -851,17 +851,15 @@ export default function NewIndustrialOperationModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className={`w-full max-w-3xl bg-white rounded-2xl shadow-xl transition-[margin] ${branchFormOpen ? 'lg:mr-96' : ''}`}>
-        <div className="px-4 py-3 border-b flex items-center justify-between">
+    <div className="atm-form-overlay fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className={`atm-form-modal w-full max-w-3xl bg-white rounded-2xl shadow-xl transition-[margin] ${branchFormOpen ? 'lg:mr-96' : ''}`}>
+        <div className="atm-form-header px-4 py-3 border-b flex items-center justify-between">
           <div>
-            <div className="text-xs text-slate-500">
-              Nueva operación industrial
-            </div>
-            <div className="text-lg font-semibold">{referencePreview}</div>
+            <div className="atm-form-eyebrow">ATM Industrial</div>
+            <div className="atm-form-title">Nueva operación <span>{referencePreview}</span></div>
           </div>
           <button
-            className="text-sm px-3 py-1.5 rounded-lg border"
+            type="button" className="atm-form-close text-sm px-3 py-1.5 rounded-lg border"
             onClick={onClose}
           >
             Cerrar
@@ -870,10 +868,10 @@ export default function NewIndustrialOperationModal({
 
         <form
           onSubmit={handleCreate}
-          className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4"
+          className="atm-form-body p-4 grid grid-cols-1 md:grid-cols-2 gap-4"
         >
           {/* Cliente */}
-          <div className="bg-slate-50 rounded-xl p-3">
+          <div className="atm-form-section">
             <div className="font-medium mb-2">Cliente</div>
             <div className="grid gap-2">
               <label className="text-sm" ref={orgBoxRef}>
@@ -1037,7 +1035,7 @@ export default function NewIndustrialOperationModal({
           </div>
 
           {/* Proyecto industrial */}
-          <div className="bg-slate-50 rounded-xl p-3">
+          <div className="atm-form-section">
             <div className="font-medium mb-2">Proyecto industrial</div>
             <div className="grid gap-2">
               <label className="text-sm">
@@ -1114,7 +1112,7 @@ export default function NewIndustrialOperationModal({
           </div>
 
           {/* CRM */}
-          <div className="bg-slate-50 rounded-xl p-3 md:col-span-2">
+          <div className="atm-form-section md:col-span-2">
             <div className="font-medium mb-2">CRM</div>
             <div className="grid md:grid-cols-3 gap-2">
               <label className="text-sm">
@@ -1167,7 +1165,7 @@ export default function NewIndustrialOperationModal({
           </div>
 
           {/* Acciones */}
-          <div className="md:col-span-2 flex items-center justify-end gap-2 pt-2">
+          <div className="atm-form-actions md:col-span-2 flex items-center justify-end gap-2 pt-2">
             <button
               type="button"
               className="px-3 py-2 text-sm rounded-lg border"
@@ -1178,7 +1176,7 @@ export default function NewIndustrialOperationModal({
             <button
               type="submit"
               disabled={!canSave || saving}
-              className="px-3 py-2 text-sm rounded-lg bg-black text-white disabled:opacity-60"
+              className="atm-form-submit px-3 py-2 text-sm rounded-lg text-white disabled:opacity-60"
             >
               {saving ? "Creando…" : "Crear operación industrial"}
             </button>
@@ -1187,7 +1185,7 @@ export default function NewIndustrialOperationModal({
       </div>
 
       {branchFormOpen && (
-        <div className="fixed inset-4 lg:inset-auto lg:right-4 lg:top-1/2 lg:-translate-y-1/2 lg:w-96 z-[60] bg-white border shadow-xl rounded-lg overflow-hidden">
+        <div className="atm-form-branch fixed inset-4 lg:inset-auto lg:right-4 lg:top-1/2 lg:-translate-y-1/2 lg:w-96 z-[60] bg-white border shadow-xl rounded-lg overflow-hidden">
           <div className="px-4 py-3 border-b flex items-center justify-between">
             <div>
               <div className="font-semibold">

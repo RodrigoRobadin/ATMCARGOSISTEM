@@ -270,8 +270,9 @@ export default function ServiceSheet() {
   }, [rows, statusFilter, search]);
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2 flex-wrap">
+    <div className="atm-service-content atm-service-sheet space-y-4">
+      <div className="atm-service-content-head"><div><h2>Planilla de servicios</h2><p>Facturacion, costos y cobros por periodo</p></div></div>
+      <div className="atm-service-toolbar flex items-center gap-2 flex-wrap">
         <select
           className="border rounded px-2 py-1"
           value={monthFrom}
@@ -368,7 +369,7 @@ export default function ServiceSheet() {
               return acc;
             }, {});
             return (
-            <div key={g.month} className="bg-white border rounded-lg overflow-auto">
+            <div key={g.month} className="atm-service-table-wrap bg-white border rounded-lg overflow-auto">
               <div className="bg-slate-100 px-3 py-2 text-sm font-semibold">
                 {monthLabel(g.month)}
               </div>

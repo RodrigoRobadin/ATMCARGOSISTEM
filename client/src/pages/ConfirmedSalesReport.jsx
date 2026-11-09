@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { ChevronDown, ChevronRight, FileDown, FileSpreadsheet } from 'lucide-react';
 import api from '../api.js';
 
 const MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -94,23 +95,23 @@ export default function ConfirmedSalesReport() {
   }
 
   return (
-    <div className="space-y-5 p-4 md:p-6">
-      <header className="flex flex-wrap items-end justify-between gap-3 border-b pb-4">
+    <div className="atm-sales-report min-w-0 space-y-5">
+      <header className="atm-page-heading flex-wrap">
         <div>
-          <h1 className="text-xl font-semibold text-slate-900">Informe de ventas</h1>
-          <p className="text-sm text-slate-600">Operaciones confirmadas · Importes presupuestados de la ultima revision</p>
+          <h1>Informe de ventas</h1>
+          <p className="atm-page-subtitle">Operaciones confirmadas · Importes de la última revisión</p>
         </div>
-        <div className="flex gap-2">
-          <button type="button" onClick={() => download('xlsx')} disabled={!!exporting || loading} className="rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50">
-            {exporting === 'xlsx' ? 'Exportando...' : 'Excel'}
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => download('xlsx')} disabled={!!exporting || loading} className="atm-secondary inline-flex min-h-10 items-center gap-2 rounded-md px-4 text-sm font-medium disabled:opacity-50">
+            <FileSpreadsheet size={16} /> {exporting === 'xlsx' ? 'Exportando...' : 'Excel'}
           </button>
-          <button type="button" onClick={() => download('pdf')} disabled={!!exporting || loading} className="rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50">
-            {exporting === 'pdf' ? 'Exportando...' : 'PDF'}
+          <button type="button" onClick={() => download('pdf')} disabled={!!exporting || loading} className="atm-secondary inline-flex min-h-10 items-center gap-2 rounded-md px-4 text-sm font-medium disabled:opacity-50">
+            <FileDown size={16} /> {exporting === 'pdf' ? 'Exportando...' : 'PDF'}
           </button>
         </div>
       </header>
 
-      <form onSubmit={(event) => { event.preventDefault(); setFilters({ ...draft }); }} className="grid grid-cols-2 gap-3 border-b pb-4 text-sm md:grid-cols-[90px_130px_170px_190px_minmax(160px,1fr)_auto_auto] md:items-end">
+      <form onSubmit={(event) => { event.preventDefault(); setFilters({ ...draft }); }} className="atm-sales-filters grid grid-cols-2 gap-3 pb-4 text-sm md:grid-cols-3 md:items-end xl:grid-cols-[90px_150px_170px_180px_minmax(140px,1fr)_auto_auto]">
         <label className="grid gap-1">Año
           <input type="number" min="2000" max="2100" value={draft.year} onChange={(event) => setDraft({ ...draft, year: event.target.value })} className="w-full rounded border px-2 py-2" />
         </label>
@@ -140,7 +141,7 @@ export default function ConfirmedSalesReport() {
           <input type="checkbox" checked={draft.pending} onChange={(event) => setDraft({ ...draft, pending: event.target.checked })} />
           Pendientes
         </label>
-        <button type="submit" disabled={loading} className="col-span-2 rounded bg-slate-900 px-4 py-2 font-medium text-white disabled:opacity-50 md:col-span-1">Aplicar</button>
+        <button type="submit" disabled={loading} className="atm-primary col-span-2 min-h-10 rounded-md px-4 font-semibold disabled:opacity-50 md:col-span-1">Aplicar</button>
       </form>
 
       {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
@@ -148,7 +149,7 @@ export default function ConfirmedSalesReport() {
 
       {!loading && report && (
         <>
-          <section className="space-y-3">
+          <section className="atm-sales-months space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-base font-semibold">Resumen mensual {filters.year}</h2>
               <span className="text-sm text-slate-600">{report.rows.length} operaciones</span>
@@ -158,9 +159,9 @@ export default function ConfirmedSalesReport() {
               const monthRows = activeMonth
                 ? report.rows.filter((row) => row.confirmation.date.slice(0, 7) === activeMonth.month && row.currency === total.currency)
                 : [];
-              return <div key={total.currency} className="border-b pb-3">
+              return <div key={total.currency} className="atm-sales-currency pb-3">
                 <div className="mb-1 text-sm font-semibold">{total.currency} · {total.count} operaciones · {total.pending_count} pendientes</div>
-                <div className="overflow-x-auto">
+                <div className="atm-sales-table overflow-x-auto">
                 <table className="min-w-[650px] w-full border-collapse text-sm">
                   <thead><tr className="bg-slate-100 text-left"><th className="px-2 py-1">Mes</th><th className="px-2 py-1 text-right">Operaciones</th><th className="px-2 py-1 text-right">Pendientes</th><th className="px-2 py-1 text-right">Compra</th><th className="px-2 py-1 text-right">Venta</th><th className="px-2 py-1 text-right">Profit</th></tr></thead>
                   <tbody>
@@ -172,9 +173,9 @@ export default function ConfirmedSalesReport() {
                             aria-expanded={expandedMonth === `${month.month}|${total.currency}`}
                             title={`Ver operaciones de ${MONTHS[Number(month.month.slice(5, 7)) - 1]}`}
                             onClick={() => setExpandedMonth((current) => current === `${month.month}|${total.currency}` ? '' : `${month.month}|${total.currency}`)}
-                            className="inline-flex items-center gap-2 whitespace-nowrap rounded px-1 py-1 font-medium text-blue-700 hover:bg-blue-50 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
+                            className="atm-sales-month-link inline-flex items-center gap-2 whitespace-nowrap rounded px-1 py-1 font-medium hover:underline"
                           >
-                            <span aria-hidden="true" className="w-3 text-slate-500">{expandedMonth === `${month.month}|${total.currency}` ? '▾' : '▸'}</span>
+                            {expandedMonth === `${month.month}|${total.currency}` ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
                             {MONTHS[Number(month.month.slice(5, 7)) - 1]}
                           </button>
                         </td>
@@ -216,9 +217,9 @@ export default function ConfirmedSalesReport() {
             {!totals.length && <p className="py-3 text-sm text-slate-500">No hay operaciones confirmadas para estos filtros.</p>}
           </section>
 
-          <section className="space-y-2">
+          <section className="atm-sales-operations space-y-2">
             <h2 className="text-base font-semibold">Operaciones</h2>
-            <div className="overflow-x-auto border-t">
+            <div className="atm-sales-table overflow-x-auto">
               <table className="min-w-[1300px] w-full border-collapse text-sm">
                 <thead><tr className="bg-slate-100 text-left"><th className="px-2 py-2">Fecha</th><th className="px-2 py-2">Confirmación</th><th className="px-2 py-2">Operación</th><th className="px-2 py-2">Cliente</th><th className="px-2 py-2">Unidad</th><th className="px-2 py-2">Ejecutivo</th><th className="px-2 py-2">Revisión</th><th className="px-2 py-2 text-right">Compra</th><th className="px-2 py-2 text-right">Venta</th><th className="px-2 py-2 text-right">Profit</th></tr></thead>
                 <tbody>

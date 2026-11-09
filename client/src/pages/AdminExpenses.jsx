@@ -1,6 +1,8 @@
 // client/src/pages/AdminExpenses.jsx
 import React, { useEffect, useMemo, useState } from 'react';
+import { FileSpreadsheet, MoreHorizontal, Plus, Search } from 'lucide-react';
 import { api } from '../api';
+import { unifiedPaymentOrderUrl } from '../utils/paymentOrderNavigation.js';
 import { useAuth } from '../auth.jsx';
 import AdminExpensesMastersModal from '../components/AdminExpensesMastersModal';
 import {
@@ -67,9 +69,9 @@ function statusBadgeClass(status) {
 function SummaryCard({ label, children, tone = 'slate' }) {
   const toneClass = tone === 'red' ? 'text-red-700' : tone === 'emerald' ? 'text-emerald-700' : 'text-slate-900';
   return (
-    <div className="rounded-lg border bg-white p-4">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className={`mt-2 text-lg font-semibold ${toneClass}`}>{children}</div>
+    <div className="atm-expenses-metric">
+      <div className="atm-expenses-metric-label">{label}</div>
+      <div className={`atm-expenses-metric-value ${toneClass}`}>{children}</div>
     </div>
   );
 }
@@ -176,6 +178,7 @@ export default function AdminExpenses() {
   const [mastersOpen, setMastersOpen] = useState(false);
   const [companyAccounts, setCompanyAccounts] = useState([]);
   const [activeTab, setActiveTab] = useState('por_pagar');
+  const [showCreateForm, setShowCreateForm] = useState(false);
   const [detailExpense, setDetailExpense] = useState(null);
   const [detailData, setDetailData] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -630,23 +633,16 @@ export default function AdminExpenses() {
     );
   }
 
-  async function requestPaymentOrder(expense) {
+  function requestPaymentOrder(expense) {
     if (!expense?.id) return;
     const balance = getExpenseBalance(expense);
     if (balance <= 0.009) return alert('El gasto no tiene saldo pendiente.');
-    if (!window.confirm(`Solicitar orden de pago por ${fmtMoney(balance)} ${expense.currency_code || ''}?`)) return;
-    try {
-      await api.post(`/admin-expenses/${expense.id}/payment-orders`, {
-        amount: balance,
-        payment_date: expense.due_date || null,
-        description: expense.description || expense.receipt_number || `Gasto #${expense.id}`,
-      });
-      setActionsMenu(null);
-      await loadExpenses();
-    } catch (e) {
-      console.error('Error requesting payment order', e);
-      alert(e?.response?.data?.error || 'No se pudo solicitar la orden de pago.');
-    }
+    if (!expense.provider_id) return alert('Vinculá este gasto con una organización proveedora antes de incluirlo en una orden de pago.');
+    window.location.assign(unifiedPaymentOrderUrl({
+      supplierId: expense.provider_id,
+      documentIds: [expense.id],
+      sourceType: 'admin-expense',
+    }));
   }
 
   async function approvePaymentOrder(expense) {
@@ -973,6 +969,7 @@ export default function AdminExpenses() {
       setNewInvoiceMode('resumen');
       setNewInvoiceItems([]);
       setNewInvoiceOpen(false);
+      setShowCreateForm(false);
       await loadExpenses();
       await loadUpcomingRecurrences();
       setNewExpenseHasInvoice(false);
@@ -1009,6 +1006,8 @@ export default function AdminExpenses() {
       return status !== 'anulado' && status !== 'pagado' && balance > 0.009;
     });
   }, [activeTab, expenses]);
+  const showExpenseList = ['por_pagar', 'vencidos', 'pagados', 'anulados'].includes(activeTab);
+  const showExpenseFilters = showExpenseList || activeTab === 'reportes';
 
   const summary = useMemo(() => {
     const pending = {};
@@ -1029,6 +1028,19 @@ export default function AdminExpenses() {
       if (!e.has_attachment) missingAttachments += 1;
     });
     return { pending, overdue, paid, missingAttachments };
+  }, [expenses]);
+
+  const tabCounts = useMemo(() => {
+    const counts = { por_pagar: 0, vencidos: 0, pagados: 0, anulados: 0 };
+    for (const expense of expenses) {
+      const status = String(expense.status || '').toLowerCase();
+      const balance = Number(expense.balance ?? (Number(expense.amount || 0) - Number(expense.paid_amount || 0)));
+      if (status === 'anulado') { counts.anulados += 1; continue; }
+      if (status === 'pagado' || balance <= 0.009) { counts.pagados += 1; continue; }
+      counts.por_pagar += 1;
+      if (expense.is_overdue || isBeforeToday(expense.due_date)) counts.vencidos += 1;
+    }
+    return counts;
   }, [expenses]);
 
   const renderMoneyStack = (values) => {
@@ -1127,14 +1139,14 @@ export default function AdminExpenses() {
   if (loading) return <div className="text-sm text-slate-600">Cargando...</div>;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
+    <div className="atm-admin-ops atm-admin-ops-expenses min-w-0 space-y-6">
+      <div className="atm-expenses-header flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-semibold">Gastos administrativos</h1>
-          <p className="text-sm text-slate-500">Carga, clasificacion y control de gastos internos.</p>
+          <p className="text-sm text-slate-500">Registro y seguimiento de los gastos internos de la empresa.</p>
         </div>
-        <div className="flex items-center gap-3">
-          <div>
+        <div className="atm-expenses-header-tools flex items-center gap-3">
+          <div className="atm-expenses-exchange">
             <div className="text-xs text-slate-500">TC Gs/USD</div>
             <div className="flex gap-2">
               <input
@@ -1150,16 +1162,20 @@ export default function AdminExpenses() {
               </button>
             </div>
           </div>
+          <button type="button" className="atm-expenses-new inline-flex items-center gap-2 px-3 py-2 text-sm rounded"
+            onClick={() => { setShowCreateForm(activeTab === 'por_pagar' ? !showCreateForm : true); setActiveTab('por_pagar'); }}>
+            <Plus size={16} /> {showCreateForm && activeTab === 'por_pagar' ? 'Cerrar formulario' : 'Nuevo gasto'}
+          </button>
           <button
-            className="px-3 py-2 text-sm rounded border"
+            className="inline-flex items-center gap-2 px-3 py-2 text-sm rounded border"
             onClick={handleExport}
           >
-            Exportar libro compras
+            <FileSpreadsheet size={16} /> Exportar libro compras
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+      <div className="atm-expenses-summary">
         <SummaryCard label="Pendiente">{renderMoneyStack(summary.pending)}</SummaryCard>
         <SummaryCard label="Vencido" tone="red">{renderMoneyStack(summary.overdue)}</SummaryCard>
         <SummaryCard label="Pagado" tone="emerald">{renderMoneyStack(summary.paid)}</SummaryCard>
@@ -1167,18 +1183,17 @@ export default function AdminExpenses() {
         <SummaryCard label="Recurrencias proximas">{upcomingRecurrences.length}</SummaryCard>
       </div>
 
-      <div className="bg-white border rounded-lg p-2 overflow-x-auto">
+      <div className="atm-expenses-tabs overflow-x-auto" role="group" aria-label="Vistas de gastos administrativos">
         <div className="flex gap-2 min-w-max">
           {EXPENSE_TABS.map((tab) => (
             <button
               key={tab.key}
               type="button"
-              className={`px-3 py-2 rounded-md text-sm ${
-                activeTab === tab.key ? 'bg-black text-white' : 'hover:bg-slate-100 text-slate-700'
-              }`}
+              className="px-3 py-2 text-sm"
+              aria-pressed={activeTab === tab.key}
               onClick={() => setActiveTab(tab.key)}
             >
-              {tab.label}
+              {tab.label}{tabCounts[tab.key] != null && <span>{tabCounts[tab.key]}</span>}
             </button>
           ))}
         </div>
@@ -1331,10 +1346,10 @@ export default function AdminExpenses() {
       )}
 
 
-      <div className={activeTab === 'mensual' ? 'hidden' : 'flex items-center justify-between'}>
+      <div className={showExpenseList ? 'atm-expenses-list-heading flex items-center justify-between' : 'hidden'}>
         <div>
-          <h2 className="text-lg font-semibold">Registro de gastos</h2>
-          <p className="text-sm text-slate-500">Carga de gastos administrativos.</p>
+          <h2 className="text-lg font-semibold">Gastos registrados</h2>
+          <p className="text-sm text-slate-500">{visibleExpenses.length} {visibleExpenses.length === 1 ? 'gasto' : 'gastos'} en esta vista</p>
         </div>
         <button
           className="px-3 py-2 text-sm border rounded"
@@ -1345,7 +1360,7 @@ export default function AdminExpenses() {
         </button>
       </div>
 
-      <form onSubmit={handleCreateExpense} className={activeTab === 'mensual' ? 'hidden' : 'bg-white border rounded-lg p-4 space-y-3'}>
+      <form onSubmit={handleCreateExpense} className={activeTab !== 'por_pagar' || !showCreateForm ? 'hidden' : 'atm-expenses-create bg-white border rounded-lg p-4 space-y-3'}>
         <div className="text-sm font-semibold">Nuevo gasto</div>
         <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
           <div>
@@ -1556,9 +1571,9 @@ export default function AdminExpenses() {
         </div>
       </form>
 
-      <div className={activeTab === 'mensual' ? 'hidden' : 'bg-white border rounded-lg p-4 space-y-3'}>
+      <div className={showExpenseFilters ? 'atm-expenses-list space-y-3' : 'hidden'}>
         <div className="flex items-center justify-between">
-          <div className="text-sm font-semibold">Listado</div>
+          <div className="text-sm font-semibold">Buscar gastos</div>
           <button className="text-sm border rounded px-3 py-1" onClick={handleApplyFilters}>
             Refrescar
           </button>
@@ -1620,79 +1635,68 @@ export default function AdminExpenses() {
             </select>
           </div>
         </div>
-        <div className="overflow-auto">
-          <table className="min-w-full text-sm">
+        <div className={showExpenseList ? 'atm-expenses-list-wrap overflow-auto' : 'hidden'}>
+          <table className="atm-expenses-list-table min-w-full text-sm">
             <thead className="bg-slate-100 text-slate-600">
               <tr>
                 <th className="text-left px-3 py-2">Fecha</th>
+                <th className="text-left px-3 py-2">Gasto</th>
                 <th className="text-left px-3 py-2">Proveedor</th>
-                <th className="text-left px-3 py-2">Categoria</th>
-                <th className="text-left px-3 py-2">Centro</th>
-                <th className="text-left px-3 py-2">Condición</th>
-                <th className="text-left px-3 py-2">Vencimiento</th>
-                <th className="text-left px-3 py-2">Descripcion</th>
-                <th className="text-right px-3 py-2">Monto</th>
-                <th className="text-right px-3 py-2">Pagado</th>
-                <th className="text-right px-3 py-2">Saldo</th>
-                <th className="text-left px-3 py-2">Moneda</th>
-                <th className="text-left px-3 py-2">OP</th>
-                <th className="text-left px-3 py-2">Estado</th>
-                <th className="text-left px-3 py-2">Alertas</th>
-                <th className="text-left px-3 py-2">Acciones</th>
+                <th className="text-left px-3 py-2">Comprobante</th>
+                <th className="text-left px-3 py-2">Vence</th>
+                <th className="text-right px-3 py-2">Total</th>
+                <th className="text-right px-3 py-2">Falta pagar</th>
+                <th className="text-left px-3 py-2">Situación</th>
+                <th className="text-right px-3 py-2">Acciones</th>
               </tr>
             </thead>
             <tbody>
               {visibleExpenses.map((e) => (
                 <tr key={e.id} className="border-t">
-                  <td className="px-3 py-2">{e.expense_date}</td>
-                  <td className="px-3 py-2">{e.provider_name || e.supplier_name || '-'}</td>
-                  <td className="px-3 py-2">{e.category_name || '-'}</td>
-                  <td className="px-3 py-2">{e.cost_center_name || '-'}</td>
-                  <td className="px-3 py-2">{e.condition_type || '-'}</td>
-                  <td className="px-3 py-2">{e.due_date || '-'}</td>
-                  <td className="px-3 py-2">{e.description || '-'}</td>
-                  <td className="px-3 py-2 text-right">{fmtMoney(e.amount)}</td>
-                  <td className="px-3 py-2 text-right">{fmtMoney(e.paid_amount || 0)}</td>
+                  <td className="px-3 py-2 atm-expenses-date">{e.expense_date || '-'}</td>
+                  <td className="px-3 py-2 atm-expenses-description">
+                    <button type="button" onClick={() => openDetailDrawer(e)}>{e.description || `Gasto #${e.id}`}</button>
+                    <small>{e.category_name || 'Sin categoría'} · {e.cost_center_name || 'Sin centro'}</small>
+                  </td>
+                  <td className="px-3 py-2 atm-expenses-provider">{e.provider_name || e.supplier_name || 'Sin proveedor'}</td>
+                  <td className="px-3 py-2 atm-expenses-receipt">
+                    {e.receipt_number || 'Sin factura'}
+                    <small>{e.invoice_date || '-'}</small>
+                  </td>
+                  <td className="px-3 py-2 atm-expenses-date">{e.due_date || '-'}<small>{e.condition_type || '-'}</small></td>
+                  <td className="px-3 py-2 text-right atm-expenses-money">{e.currency_code || 'PYG'} {fmtMoney(e.amount)}</td>
+                  <td className="px-3 py-2 text-right atm-expenses-money atm-expenses-balance">
+                    {e.currency_code || 'PYG'} {fmtMoney(e.balance ?? (Number(e.amount || 0) - Number(e.paid_amount || 0)))}
+                    {Number(e.paid_amount || 0) > 0 && <small>Pagado: {e.currency_code || 'PYG'} {fmtMoney(e.paid_amount)}</small>}
+                  </td>
+                  <td className="px-3 py-2 atm-expenses-situation">
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs capitalize ${statusBadgeClass(e.status)}`}>{e.status || '-'}</span>
+                    {e.payment_order_number && <small>OP {e.payment_order_number} · {e.payment_order_status || '-'}</small>}
+                    {e.is_overdue && <small className="atm-expenses-warning">Vencido</small>}
+                    {!e.has_attachment && <small className="atm-expenses-warning">Sin comprobante</small>}
+                    {e.recurrence_id && <small>Recurrente</small>}
+                  </td>
                   <td className="px-3 py-2 text-right">
-                    {fmtMoney(e.balance ?? (Number(e.amount || 0) - Number(e.paid_amount || 0)))}
-                  </td>
-                  <td className="px-3 py-2">{e.currency_code || '-'}</td>
-                  <td className="px-3 py-2">
-                    {e.payment_order_number ? (
-                      <span className="whitespace-nowrap text-xs font-medium">
-                        {e.payment_order_number}<br />
-                        <span className="font-normal capitalize text-slate-500">{e.payment_order_status}</span>
-                      </span>
-                    ) : <span className="text-xs text-slate-400">Sin OP</span>}
-                  </td>
-                  <td className="px-3 py-2 capitalize">
-                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs ${statusBadgeClass(e.status)}`}>
-                      {e.status || '-'}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="flex flex-wrap gap-1">
-                      {e.is_overdue ? <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700">Vencido</span> : null}
-                      {!e.invoice_date && !e.receipt_number ? <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700">Factura pendiente</span> : null}
-                      {!e.has_attachment ? <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700">Sin comprobante</span> : null}
-                      {e.recurrence_id ? <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700">Recurrente</span> : null}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2">
                     <div className="relative">
                       <button
-                        className="text-xs border rounded px-2 py-1 hover:bg-slate-50"
+                        className="atm-expenses-actions-button"
                         type="button"
-                        onClick={() => setActionsMenu((prev) => (prev === e.id ? null : e.id))}
+                        title="Más acciones"
+                        aria-label={`Más acciones para gasto ${e.id}`}
+                        onClick={(event) => {
+                          if (actionsMenu?.id === e.id) { setActionsMenu(null); return; }
+                          const rect = event.currentTarget.getBoundingClientRect();
+                          setActionsMenu({ id: e.id, top: Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 320)), left: Math.max(8, Math.min(rect.right - 176, window.innerWidth - 184)) });
+                        }}
                       >
-                        Acciones
+                        <MoreHorizontal size={17} />
                       </button>
-                      {actionsMenu === e.id && (
-                        <div className="absolute right-0 z-30 mt-1 w-44 rounded-lg border bg-white py-1 shadow-lg">
+                      {actionsMenu?.id === e.id && (
+                        <div className="fixed z-[80] max-h-[calc(100vh-16px)] w-44 overflow-y-auto rounded-lg border bg-white py-1 text-left shadow-lg" style={{ top: actionsMenu.top, left: actionsMenu.left }}>
                           <button className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-50" type="button" onClick={() => { setActionsMenu(null); openDetailDrawer(e); }}>Ver detalle</button>
                           <button className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-50" type="button" onClick={() => { setActionsMenu(null); openInvoiceModal(e); }}>{e.invoice_date || e.receipt_number ? 'Editar factura' : 'Cargar factura'}</button>
                           {e.has_attachment ? <button className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-50" type="button" onClick={() => { setActionsMenu(null); handleViewReceipt(e.id); }}>Ver comprobante</button> : null}
-                          {!e.payment_order_id && getExpenseBalance(e) > 0.009 ? <button className="block w-full px-3 py-2 text-left text-xs text-blue-700 hover:bg-blue-50" type="button" onClick={() => requestPaymentOrder(e)}>Solicitar OP</button> : null}
+                          {!e.payment_order_id && getExpenseBalance(e) > 0.009 ? <button className="block w-full px-3 py-2 text-left text-xs text-blue-700 hover:bg-blue-50" type="button" onClick={() => requestPaymentOrder(e)}>Incluir en orden de pago</button> : null}
                           {isAdmin && String(e.payment_order_status || '').toLowerCase() === 'pendiente' ? <button className="block w-full px-3 py-2 text-left text-xs text-emerald-700 hover:bg-emerald-50" type="button" onClick={() => approvePaymentOrder(e)}>Aprobar OP</button> : null}
                           {paymentOrderAllowsPayment(e) ? <button className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-50" type="button" onClick={() => { setActionsMenu(null); openPaymentModal(e); }}>Registrar pago</button> : null}
                           {isAdmin && e.payment_order_id && !['pagada', 'anulada'].includes(String(e.payment_order_status || '').toLowerCase()) ? <button className="block w-full px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50" type="button" onClick={() => cancelPaymentOrder(e)}>Anular OP</button> : null}
@@ -1705,7 +1709,7 @@ export default function AdminExpenses() {
               ))}
               {!visibleExpenses.length && (
                 <tr>
-                  <td colSpan={15} className="px-3 py-4 text-center text-slate-500">
+                  <td colSpan={9} className="px-3 py-4 text-center text-slate-500">
                     Sin gastos registrados.
                   </td>
                 </tr>

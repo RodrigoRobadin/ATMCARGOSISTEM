@@ -166,7 +166,7 @@ export default function AdminWorkspace() {
   }
 
   return (
-    <div className="p-6">
+    <div className="atm-admin-ops atm-admin-ops-board min-w-0 p-6">
       <div className="mb-4 flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">
@@ -194,6 +194,7 @@ export default function AdminWorkspace() {
 
           <div className="inline-flex rounded-lg border overflow-hidden">
             <button
+              aria-pressed={view === "pipeline"}
               className={`px-3 py-1.5 text-sm ${
                 view === "pipeline" ? "bg-slate-900 text-white" : "bg-white"
               }`}
@@ -202,6 +203,7 @@ export default function AdminWorkspace() {
               Pipeline
             </button>
             <button
+              aria-pressed={view === "table"}
               className={`px-3 py-1.5 text-sm ${
                 view === "table" ? "bg-slate-900 text-white" : "bg-white"
               }`}
@@ -221,6 +223,7 @@ export default function AdminWorkspace() {
               <button
                 key={option.key}
                 type="button"
+                aria-pressed={active}
                 onClick={() => setModuleFilter(option.key)}
                 className={`px-3 py-1.5 text-sm rounded-full border whitespace-nowrap transition ${
                   active

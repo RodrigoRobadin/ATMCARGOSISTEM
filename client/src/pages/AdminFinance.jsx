@@ -75,7 +75,7 @@ function SummaryCard({ title, values, tone = "slate" }) {
   const entries = Object.entries(values || {}).sort(([a], [b]) => a.localeCompare(b));
   const toneClass = tone === "red" ? "text-red-700" : tone === "emerald" ? "text-emerald-700" : "text-slate-900";
   return (
-    <div className="rounded-lg border bg-white p-4">
+    <div className="atm-finance-metric p-4">
       <div className="text-xs text-slate-500">{title}</div>
       <div className={`mt-2 space-y-1 text-lg font-semibold ${toneClass}`}>
         {entries.length ? entries.map(([currency, amount]) => (
@@ -91,7 +91,8 @@ function TabButton({ active, children, onClick }) {
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-lg px-3 py-2 text-sm ${active ? "bg-black text-white" : "border bg-white hover:bg-slate-50"}`}
+      aria-pressed={active}
+      className="atm-finance-tab px-3 py-2 text-sm"
     >
       {children}
     </button>
@@ -1272,20 +1273,19 @@ export default function AdminFinance() {
   }
 
   return (
-    <div className="space-y-4 p-1">
-      <div className="rounded-lg border bg-white p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="atm-finance min-w-0 space-y-5">
+      <header className="atm-finance-header">
+        <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
-            <div className="text-xs text-slate-500">Gerencia</div>
-            <div className="text-2xl font-bold">Flujo de caja proyectado</div>
-            <div className="text-sm text-slate-500">Entradas, salidas y saldo esperado por moneda.</div>
+            <h1>Gerencia</h1>
+            <p className="atm-page-subtitle">Flujo de caja proyectado</p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <select className="rounded-lg border px-2 py-2 text-sm" value={buId} onChange={(e) => setBuId(e.target.value)}>
+          <div className="atm-finance-controls flex flex-wrap items-center gap-2">
+            <select aria-label="Unidad de negocio" value={buId} onChange={(e) => setBuId(e.target.value)}>
               <option value="">Todas las unidades</option>
               {bus.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
-            <select className="rounded-lg border px-2 py-2 text-sm" value={currency} onChange={(e) => {
+            <select aria-label="Moneda" value={currency} onChange={(e) => {
               setCurrency(e.target.value);
               if (e.target.value) setGoalCurrency(e.target.value);
             }}>
@@ -1293,22 +1293,22 @@ export default function AdminFinance() {
               <option value="USD">USD</option>
               <option value="PYG">PYG</option>
             </select>
-            <button className="rounded border px-2 py-2 text-xs" onClick={() => applyPreset("m1")} type="button">Mes actual</button>
-            <button className="rounded border px-2 py-2 text-xs" onClick={() => applyPreset("next3")} type="button">Prox. 3 meses</button>
-            <button className="rounded border px-2 py-2 text-xs" onClick={() => applyPreset("m3")} type="button">Ult. 3 meses</button>
-            <input type="date" className="rounded-lg border px-2 py-2 text-sm" value={from} onChange={(e) => setFrom(e.target.value)} />
-            <input type="date" className="rounded-lg border px-2 py-2 text-sm" value={to} onChange={(e) => setTo(e.target.value)} />
-            <button className="rounded-lg bg-black px-3 py-2 text-sm text-white" onClick={load} type="button">Aplicar</button>
+            <button className="atm-finance-preset" onClick={() => applyPreset("m1")} type="button">Mes actual</button>
+            <button className="atm-finance-preset" onClick={() => applyPreset("next3")} type="button">Próx. 3 meses</button>
+            <button className="atm-finance-preset" onClick={() => applyPreset("m3")} type="button">Últ. 3 meses</button>
+            <input type="date" aria-label="Desde" value={from} onChange={(e) => setFrom(e.target.value)} />
+            <input type="date" aria-label="Hasta" value={to} onChange={(e) => setTo(e.target.value)} />
+            <button className="atm-primary min-h-10 rounded-md px-4 text-sm font-semibold" onClick={load} type="button">Aplicar</button>
           </div>
         </div>
-      </div>
+      </header>
 
       {error ? <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
       {loading ? <div className="text-sm text-slate-600">Cargando...</div> : null}
 
       {!loading && data ? (
         <>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <div className="atm-finance-summary grid overflow-hidden md:grid-cols-2 xl:grid-cols-5">
             <SummaryCard title="Cobrado real" values={summaryTotals.collected_real} tone="emerald" />
             <SummaryCard title="Por cobrar proyectado" values={summaryTotals.receivable_projected} tone="emerald" />
             <SummaryCard title="Pagado real" values={summaryTotals.paid_real} tone="red" />
@@ -1316,7 +1316,7 @@ export default function AdminFinance() {
             <SummaryCard title="Neto esperado" values={summaryTotals.net_expected} />
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="atm-finance-tabs flex flex-wrap gap-1" role="group" aria-label="Vistas de Gerencia">
             <TabButton active={tab === "flow"} onClick={() => setTab("flow")}>Flujo de caja</TabButton>
             <TabButton active={tab === "operations"} onClick={() => setTab("operations")}>Por operacion</TabButton>
             <TabButton active={tab === "calendar"} onClick={() => setTab("calendar")}>Calendario mensual</TabButton>

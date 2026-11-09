@@ -1,5 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { Eye, FileSpreadsheet, MoreHorizontal, Plus, Search } from "lucide-react";
 import { api } from "../../api";
 import OperationExpenseInvoices from "../../components/OperationExpenseInvoices.jsx";
 import { unifiedPaymentOrderUrl } from "../../utils/paymentOrderNavigation.js";
@@ -22,6 +23,7 @@ const STATUS_TABS = [
   { value: "sin_comprobante", label: "Sin comprobante" },
   { value: "sin_clasificar", label: "Sin clasificar" },
 ];
+const PRIMARY_STATUS_TABS = ["todos", "por_pagar", "vencido", "listo_pago", "pagado"];
 const PAYMENT_ORDER_LABELS = {
   pendiente: "Pendiente",
   aprobada: "Aprobada",
@@ -275,6 +277,16 @@ export default function OperationalPurchases() {
     }
     return sum;
   }, [visibleRows]);
+
+  const selectedTotals = useMemo(() => {
+    const amounts = {};
+    for (const row of rows) {
+      if (!selectedIds.has(row.id) || !isRowSelectable(row)) continue;
+      const currency = String(row.currency_code || "PYG").toUpperCase();
+      amounts[currency] = (amounts[currency] || 0) + Number(row.balance || 0);
+    }
+    return amounts;
+  }, [rows, selectedIds]);
 
   const dashboard = useMemo(() => {
     const counts = {};
@@ -607,18 +619,18 @@ export default function OperationalPurchases() {
     !paymentAccountOptions.some((account) => companyBankAccountValue(account) === paymentForm.account);
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="atm-admin-ops atm-admin-ops-purchases min-w-0 p-6 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Compras operativas</h1>
           <p className="text-slate-500 text-sm">Control operativo de facturas de compra vinculadas a operaciones.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button className="px-3 py-2 text-sm rounded bg-emerald-600 text-white" onClick={() => {
+          <button className="atm-purchases-primary inline-flex items-center gap-2 px-3 py-2 text-sm rounded bg-emerald-600 text-white" onClick={() => {
             setCreateSearch(""); setCreateResults([]); setSelectedOperation(null); setCreateModalOpen(true);
-          }}>Nueva factura</button>
+          }}><Plus size={16} /> Nueva factura de compra</button>
           <button
-            className="px-3 py-2 text-sm rounded border bg-white"
+            className="inline-flex items-center gap-2 px-3 py-2 text-sm rounded border bg-white"
             onClick={async () => {
               try {
                 const params = Object.entries(filters).reduce((acc, [k, v]) => {
@@ -643,120 +655,97 @@ export default function OperationalPurchases() {
               }
             }}
           >
-            Exportar Excel
+            <FileSpreadsheet size={16} /> Exportar Excel
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
-        {[
-          ["Pendiente", "pending", "bg-blue-50 text-blue-700"],
-          ["Vencido", "overdue", "bg-red-50 text-red-700"],
-          ["Pagado", "paid", "bg-emerald-50 text-emerald-700"],
-          ["Sin OP", "sinOp", "bg-amber-50 text-amber-700"],
-          ["OP pendiente", "opPending", "bg-amber-50 text-amber-700"],
-          ["Listo para pagar", "ready", "bg-emerald-50 text-emerald-700"],
-        ].map(([label, key, cls]) => (
-          <div key={key} className="rounded-xl border bg-white p-3 shadow-sm">
-            <div className="text-xs text-slate-500">{label}</div>
-            <div className={`mt-2 rounded-lg px-2 py-1 text-xs font-semibold ${cls}`}>
-              {Object.entries(dashboard.byCurrency)
-                .filter(([, values]) => Number(values[key] || 0) > 0)
-                .map(([currency, values]) => `${currency} ${formatMoney(values[key], currency)}`)
-                .join(" · ") || "--"}
-            </div>
+      <div className="atm-purchases-flow" aria-label="Etapas de la compra y el pago">
+        {["Factura registrada", "Datos y comprobante", "Orden de pago", "Pago registrado"].map((stage, index) => (
+          <div key={stage} className="atm-purchases-flow-step">
+            <span className="atm-purchases-flow-number">{index + 1}</span>
+            <span>{stage}</span>
           </div>
         ))}
       </div>
 
-      <div className="bg-white rounded-2xl shadow p-4">
-        <div className="mb-4 flex flex-wrap gap-2">
-          {STATUS_TABS.map((tab) => (
-            <button
-              key={tab.value}
-              className={`rounded-full border px-3 py-1.5 text-xs ${
-                filters.status_tab === tab.value ? "bg-black text-white" : "bg-white text-slate-700 hover:bg-slate-50"
-              }`}
-              onClick={() => setFilters((f) => ({ ...f, status_tab: tab.value }))}
-            >
-              {tab.label}
-              <span className={`ml-2 rounded-full px-1.5 py-0.5 ${filters.status_tab === tab.value ? "bg-white/20" : "bg-slate-100"}`}>
-                {dashboard.counts[tab.value] || 0}
-              </span>
+      <div className="atm-purchases-metrics">
+        {[
+          { label: "Sin comprobante", tab: "sin_comprobante", tone: "amber" },
+          { label: "Sin orden de pago", tab: "sin_op", tone: "neutral" },
+          { label: "Listas para pagar", tab: "listo_pago", tone: "green" },
+          { label: "Vencidas", tab: "vencido", tone: "red" },
+        ].map(({ label, tab, tone }) => (
+          <button key={tab} type="button" className={`atm-purchases-metric atm-purchases-metric-${tone}`} onClick={() => setFilters((f) => ({ ...f, status_tab: tab }))} aria-pressed={filters.status_tab === tab}>
+            <span className="atm-purchases-metric-label">{label}</span>
+            <strong>{dashboard.counts[tab] || 0}</strong>
+            <span className="atm-purchases-metric-caption">facturas</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="atm-purchases-filters">
+        <div className="atm-purchases-tabs" role="group" aria-label="Estado de compras">
+          {STATUS_TABS.filter((tab) => PRIMARY_STATUS_TABS.includes(tab.value)).map((tab) => (
+            <button key={tab.value} type="button" aria-pressed={filters.status_tab === tab.value}
+              onClick={() => setFilters((f) => ({ ...f, status_tab: tab.value }))}>
+              {tab.label} <span>{dashboard.counts[tab.value] || 0}</span>
             </button>
           ))}
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <input
-            className="border rounded px-2 py-1"
-            list="op-expense-search-suggestions"
-            placeholder="Buscar (cliente, factura, referencia, orden)"
-            value={filters.search_q}
-            onChange={(e) => setFilters((f) => ({ ...f, search_q: e.target.value }))} />
-          <datalist id="op-expense-search-suggestions">
-            {searchSuggestions.map((s) => (
-              <option key={s} value={s} />
+          <select aria-label="Otros estados" value={PRIMARY_STATUS_TABS.includes(filters.status_tab) ? "" : filters.status_tab}
+            onChange={(e) => e.target.value && setFilters((f) => ({ ...f, status_tab: e.target.value }))}>
+            <option value="">Otros estados</option>
+            {STATUS_TABS.filter((tab) => !PRIMARY_STATUS_TABS.includes(tab.value)).map((tab) => (
+              <option key={tab.value} value={tab.value}>{tab.label} ({dashboard.counts[tab.value] || 0})</option>
             ))}
-          </datalist>
-          <input className="border rounded px-2 py-1" placeholder="Cliente" value={filters.client_q}
-            onChange={(e) => setFilters((f) => ({ ...f, client_q: e.target.value }))} />
-          <input className="border rounded px-2 py-1" placeholder="Operacion" value={filters.operation_q}
-            onChange={(e) => setFilters((f) => ({ ...f, operation_q: e.target.value }))} />
-          <input className="border rounded px-2 py-1" placeholder="Proveedor" value={filters.supplier_q}
-            onChange={(e) => setFilters((f) => ({ ...f, supplier_q: e.target.value }))} />
-          <div>
-            <div className="text-xs text-slate-500 mb-1">Emision desde</div>
-            <input className="border rounded px-2 py-1 w-full" type="date" value={filters.from_date}
-              onChange={(e) => setFilters((f) => ({ ...f, from_date: e.target.value }))} />
-          </div>
-          <div>
-            <div className="text-xs text-slate-500 mb-1">Emision hasta</div>
-            <input className="border rounded px-2 py-1 w-full" type="date" value={filters.to_date}
-              onChange={(e) => setFilters((f) => ({ ...f, to_date: e.target.value }))} />
-          </div>
-          <div>
-            <div className="text-xs text-slate-500 mb-1">Vencimiento desde</div>
-            <input className="border rounded px-2 py-1 w-full" type="date" value={filters.due_from}
-              onChange={(e) => setFilters((f) => ({ ...f, due_from: e.target.value }))} />
-          </div>
-          <div>
-            <div className="text-xs text-slate-500 mb-1">Vencimiento hasta</div>
-            <input className="border rounded px-2 py-1 w-full" type="date" value={filters.due_to}
-              onChange={(e) => setFilters((f) => ({ ...f, due_to: e.target.value }))} />
-          </div>
-          <select className="border rounded px-2 py-1" value={filters.currency_code}
-            onChange={(e) => setFilters((f) => ({ ...f, currency_code: e.target.value }))}>
-            <option value="">Moneda</option>
-            <option value="PYG">PYG</option>
-            <option value="USD">USD</option>
-            <option value="BRL">BRL</option>
-            <option value="ARS">ARS</option>
           </select>
-          <select className="border rounded px-2 py-1" value={filters.payment_status}
-            onChange={(e) => setFilters((f) => ({ ...f, payment_status: e.target.value }))}>
-            <option value="">Estado pago</option>
-            <option value="pendiente">pendiente</option>
-            <option value="parcial">parcial</option>
-            <option value="pagado">pagado</option>
-            <option value="n/a">n/a</option>
-          </select>
-          <label className="text-sm flex items-center gap-2">
-            <input type="checkbox" checked={filters.overdue}
-              onChange={(e) => setFilters((f) => ({ ...f, overdue: e.target.checked }))} />
-            Vencidas
-          </label>
-          <button className="px-3 py-2 text-sm rounded bg-black text-white" onClick={load}>Buscar</button>
-          {selectedIds.size > 0 && (
-            <>
-              <button className="px-3 py-2 text-sm rounded border" onClick={createOrdersForSelected}>
-                Crear orden con seleccionadas
-              </button>
-              <div className="text-sm text-slate-600 flex items-center">
-                Seleccionadas: <span className="ml-1 font-semibold">{selectedIds.size}</span>
-              </div>
-            </>
-          )}
         </div>
+        <div className="atm-purchases-filter-row">
+          <label className="atm-purchases-search">
+            <Search size={16} aria-hidden="true" />
+            <input aria-label="Buscar compras" list="op-expense-search-suggestions"
+              placeholder="Buscar proveedor, factura u operación"
+              value={filters.search_q}
+              onChange={(e) => setFilters((f) => ({ ...f, search_q: e.target.value }))} />
+          </label>
+          <datalist id="op-expense-search-suggestions">
+            {searchSuggestions.map((s) => <option key={s} value={s} />)}
+          </datalist>
+          <input aria-label="Proveedor" className="atm-purchases-supplier border rounded px-3 py-2" placeholder="Proveedor"
+            value={filters.supplier_q} onChange={(e) => setFilters((f) => ({ ...f, supplier_q: e.target.value }))} />
+          <select aria-label="Moneda" className="border rounded px-3 py-2" value={filters.currency_code}
+            onChange={(e) => setFilters((f) => ({ ...f, currency_code: e.target.value }))}>
+            <option value="">Todas las monedas</option>
+            <option value="PYG">PYG</option><option value="USD">USD</option>
+            <option value="BRL">BRL</option><option value="ARS">ARS</option>
+          </select>
+          <button className="atm-purchases-search-button px-4 py-2 text-sm rounded" onClick={load}>Buscar</button>
+        </div>
+        <details className="atm-purchases-more">
+          <summary>Más filtros</summary>
+          <div className="atm-purchases-advanced-grid">
+            <label>Cliente<input className="border rounded px-2 py-1" value={filters.client_q}
+              onChange={(e) => setFilters((f) => ({ ...f, client_q: e.target.value }))} /></label>
+            <label>Operación<input className="border rounded px-2 py-1" value={filters.operation_q}
+              onChange={(e) => setFilters((f) => ({ ...f, operation_q: e.target.value }))} /></label>
+            <label>Emisión desde<input className="border rounded px-2 py-1" type="date" value={filters.from_date}
+              onChange={(e) => setFilters((f) => ({ ...f, from_date: e.target.value }))} /></label>
+            <label>Emisión hasta<input className="border rounded px-2 py-1" type="date" value={filters.to_date}
+              onChange={(e) => setFilters((f) => ({ ...f, to_date: e.target.value }))} /></label>
+            <label>Vencimiento desde<input className="border rounded px-2 py-1" type="date" value={filters.due_from}
+              onChange={(e) => setFilters((f) => ({ ...f, due_from: e.target.value }))} /></label>
+            <label>Vencimiento hasta<input className="border rounded px-2 py-1" type="date" value={filters.due_to}
+              onChange={(e) => setFilters((f) => ({ ...f, due_to: e.target.value }))} /></label>
+            <label>Estado del pago<select className="border rounded px-2 py-1" value={filters.payment_status}
+              onChange={(e) => setFilters((f) => ({ ...f, payment_status: e.target.value }))}>
+              <option value="">Todos</option><option value="pendiente">Pendiente</option>
+              <option value="parcial">Parcial</option><option value="pagado">Pagado</option>
+              <option value="n/a">No aplica</option>
+            </select></label>
+            <label className="atm-purchases-overdue"><input type="checkbox" checked={filters.overdue}
+              onChange={(e) => setFilters((f) => ({ ...f, overdue: e.target.checked }))} /> Solo vencidas</label>
+          </div>
+        </details>
       </div>
 
       {loading && <div className="text-slate-500">Cargando...</div>}
@@ -765,97 +754,76 @@ export default function OperationalPurchases() {
       )}
 
       {!loading && !error && (
-        <div className="bg-white rounded-2xl shadow p-4">
-          <div className="text-xs text-slate-500 mb-2">
-            Totales: {Object.keys(totals).length ? Object.entries(totals).map(([k, v]) => `${k} ${formatMoney(v, k)}`).join(" · ") : "--"}
+        <div className="atm-purchases-results">
+          <div className="atm-purchases-results-head">
+            <div>
+              <h2>Facturas de compra</h2>
+              <span>{visibleRows.length} en esta vista</span>
+            </div>
+            <div className="atm-purchases-view-total">
+              Saldo pendiente: {Object.keys(totals).length ? Object.entries(totals).map(([k, v]) => `${k} ${formatMoney(v, k)}`).join(" · ") : "--"}
+            </div>
           </div>
-          <div className="overflow-auto border rounded-lg">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-100 text-slate-600">
+          <div className="atm-purchases-table-wrap overflow-auto">
+            <table className="atm-purchases-table min-w-full text-sm">
+              <thead>
                 <tr>
                   <th className="text-left px-3 py-2">
-                    <input type="checkbox" checked={allSelected()} onChange={toggleSelectAll} />
+                    <input type="checkbox" aria-label="Seleccionar facturas visibles para orden de pago" checked={allSelected()} onChange={toggleSelectAll} />
                   </th>
-                  <th className="text-left px-3 py-2">Fecha</th>
-                  <th className="text-left px-3 py-2">Operacion</th>
-                  <th className="text-left px-3 py-2">Cliente</th>
                   <th className="text-left px-3 py-2">Proveedor</th>
-                  <th className="text-left px-3 py-2">Rubro</th>
-                  <th className="text-left px-3 py-2">Comprobante</th>
-                  <th className="text-left px-3 py-2">Condicion</th>
-                  <th className="text-left px-3 py-2">Vencimiento</th>
-                  <th className="text-left px-3 py-2">Total</th>
-                  <th className="text-left px-3 py-2">IVA</th>
-                  <th className="text-left px-3 py-2">Items</th>
-                  <th className="text-left px-3 py-2">Adjuntos</th>
-                  <th className="text-left px-3 py-2">Estado</th>
-                  <th className="text-left px-3 py-2">Saldo</th>
-                  <th className="text-left px-3 py-2">OP</th>
-                  <th className="text-left px-3 py-2">Acciones</th>
+                  <th className="text-left px-3 py-2">Factura</th>
+                  <th className="text-left px-3 py-2">Operación</th>
+                  <th className="text-left px-3 py-2">Vence</th>
+                  <th className="text-right px-3 py-2">Importe</th>
+                  <th className="text-right px-3 py-2">Falta pagar</th>
+                  <th className="text-left px-3 py-2">Situación</th>
+                  <th className="text-right px-3 py-2">Acciones</th>
                 </tr>
               </thead>
               <tbody>
                 {visibleRows.map((r) => (
-                  <tr key={r.id} className="border-t">
+                  <tr key={r.id} className={`border-t ${selectedIds.has(r.id) ? "atm-purchases-row-selected" : ""}`}>
                     <td className="px-3 py-2">
-                      <input type="checkbox" disabled={!isRowSelectable(r)} checked={selectedIds.has(r.id)}
+                      <input type="checkbox" aria-label={`Seleccionar factura ${r.receipt_number || r.id}`} disabled={!isRowSelectable(r)} checked={selectedIds.has(r.id)}
                         onChange={() => toggleSelected(r.id)} />
                     </td>
-                    <td className="px-3 py-2">{r.invoice_date || "--"}</td>
-                    <td className="px-3 py-2">
-                      <Link className="text-blue-600 underline" to={r.operation_type === "service" ? `/service/cases/${r.operation_id}` : `/operations/${r.operation_id}`}>
+                    <td className="px-3 py-2 atm-purchases-supplier-cell">
+                      <strong>{r.supplier_display || "Sin proveedor"}</strong>
+                      {r.supplier_ruc_display && <small>RUC {r.supplier_ruc_display}</small>}
+                      {!hasSupplierBankData(r) && Number(r.balance || 0) > 0 && (
+                        <small className="atm-purchases-warning">Sin cuenta bancaria</small>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 atm-purchases-document-cell">
+                      <button type="button" onClick={() => openDetail(r)}>{r.receipt_number || "Sin número"}</button>
+                      <small>{r.invoice_date || "Sin fecha"} · {r.receipt_type || "Factura de compra"}</small>
+                      {r.attachment_url ? (
+                        <a href={resolveUploadUrl(r.attachment_url)} target="_blank" rel="noreferrer">Ver archivo</a>
+                      ) : <small className="atm-purchases-warning">Falta comprobante</small>}
+                    </td>
+                    <td className="px-3 py-2 atm-purchases-operation-cell">
+                      <Link to={r.operation_type === "service" ? `/service/cases/${r.operation_id}` : `/operations/${r.operation_id}`}>
                         {r.operation_reference || r.operation_id}
                       </Link>
+                      <small>{r.client_name || "Sin cliente"}</small>
                     </td>
-                    <td className="px-3 py-2">{r.client_name || "--"}{r.client_ruc ? ` (${r.client_ruc})` : ""}</td>
-                    <td className="px-3 py-2">
-                      <div>{r.supplier_display || "--"}{r.supplier_ruc_display ? ` (${r.supplier_ruc_display})` : ""}</div>
-                      {!hasSupplierBankData(r) && Number(r.balance || 0) > 0 && (
-                        <span className="mt-1 inline-flex text-xs px-2 py-1 rounded bg-amber-100 text-amber-700">Proveedor sin cuenta</span>
-                      )}
+                    <td className={`px-3 py-2 atm-purchases-date ${isOverdue(r) ? "atm-purchases-date-overdue" : ""}`}>
+                      {r.due_date || "Sin fecha"}
+                      <small>{r.condition_type || "--"}</small>
                     </td>
-                    <td className="px-3 py-2 text-xs">{r.expense_rubros || r.expense_rubro || "Sin clasificar"}</td>
-                    <td className="px-3 py-2">
-                      {r.receipt_type || "--"}{r.receipt_number ? ` · ${r.receipt_number}` : ""}
-                      {r.attachment_url ? (
-                        <div>
-                          <a className="text-blue-600 underline text-xs" href={resolveUploadUrl(r.attachment_url)} target="_blank" rel="noreferrer">
-                            Ver comprobante
-                          </a>
-                        </div>
-                      ) : null}
+                    <td className="px-3 py-2 text-right atm-purchases-money">{r.currency_code || "PYG"} {formatMoney(r.amount_total, r.currency_code)}</td>
+                    <td className="px-3 py-2 text-right atm-purchases-money atm-purchases-balance">{r.currency_code || "PYG"} {formatMoney(r.balance, r.currency_code)}</td>
+                    <td className="px-3 py-2 atm-purchases-status">
+                      <span className={`text-xs px-2 py-1 rounded ${statusTone(rowStatus(r))}`}>{statusLabel(rowStatus(r))}</span>
+                      {isOverdue(r) && <small className="atm-purchases-warning">Vencida {daysOverdue(r.due_date)} d</small>}
+                      {r.payment_order_id && <small>OP: {r.payment_order_number || <PaymentOrderBadge status={r.payment_order_status} />}</small>}
+                      {Number(r.balance || 0) === 0 && r.payment_status !== "pagado" && <small className="atm-purchases-warning">Revisar estado</small>}
                     </td>
-                    <td className="px-3 py-2">{r.condition_type || "--"}</td>
-                    <td className="px-3 py-2">{r.due_date || "--"}</td>
-                    <td className="px-3 py-2">{r.currency_code || "PYG"} {formatMoney(r.amount_total, r.currency_code)}</td>
-                    <td className="px-3 py-2 text-xs">
-                      {[Number(r.iva_10 || 0) ? `10%: ${r.iva_10}` : null, Number(r.iva_5 || 0) ? `5%: ${r.iva_5}` : null, Number(r.iva_exempt || 0) ? `Ex: ${r.iva_exempt}` : null].filter(Boolean).join(" · ") || "--"}
-                    </td>
-                    <td className="px-3 py-2">{r.item_count || 0}</td>
-                    <td className="px-3 py-2">
-                      {r.attachment_count || 0}
-                      {Number(r.attachment_count || 0) > 0 && (
-                        <span className="ml-2 text-xs px-2 py-1 rounded bg-emerald-100 text-emerald-700">Con comprobante</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      <span className={`text-xs px-2 py-1 rounded ${statusTone(rowStatus(r))}`}>
-                        {statusLabel(rowStatus(r))}
-                      </span>
-                      {r.condition_type && String(r.condition_type).toUpperCase() === "CREDITO" && r.due_date && Number(r.balance || 0) > 0 && new Date(r.due_date) < new Date() && (
-                        <span className="ml-2 text-xs px-2 py-1 rounded bg-red-100 text-red-700">Vencida {daysOverdue(r.due_date)}d</span>
-                      )}
-                      {Number(r.balance || 0) === 0 && r.payment_status !== "pagado" && (
-                        <span className="ml-2 text-xs px-2 py-1 rounded bg-amber-100 text-amber-700">Revisar estado</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">{r.currency_code || "PYG"} {formatMoney(r.balance, r.currency_code)}</td>
-                    <td className="px-3 py-2">
-                      {r.payment_order_id ? <PaymentOrderBadge status={r.payment_order_status} /> : <span className="text-xs px-2 py-1 rounded bg-slate-100 text-slate-600">Sin OP</span>}
-                    </td>
-                    <td className="px-3 py-2 relative">
+                    <td className="px-3 py-2 text-right atm-purchases-actions">
+                      <button type="button" title="Ver detalle" aria-label={`Ver detalle de factura ${r.receipt_number || r.id}`} onClick={() => openDetail(r)}><Eye size={16} /></button>
                       <button
-                        className="px-2 py-1 rounded border text-xs hover:bg-slate-50"
+                        type="button" title="Más acciones" aria-label={`Más acciones para factura ${r.receipt_number || r.id}`}
                         onClick={(event) => {
                           const rect = event.currentTarget.getBoundingClientRect();
                           setActionsMenu({
@@ -866,17 +834,23 @@ export default function OperationalPurchases() {
                           });
                         }}
                       >
-                        Acciones
+                        <MoreHorizontal size={16} />
                       </button>
                     </td>
                   </tr>
                 ))}
                 {visibleRows.length === 0 && (
-                  <tr><td colSpan={17} className="px-3 py-4 text-center text-slate-500">Sin resultados.</td></tr>
+                  <tr><td colSpan={9} className="px-3 py-8 text-center text-slate-500">No hay facturas para este filtro.</td></tr>
                 )}
               </tbody>
             </table>
           </div>
+          {selectedIds.size > 0 && (
+            <div className="atm-purchases-selection">
+              <div><strong>{selectedIds.size} facturas seleccionadas</strong><span>{Object.entries(selectedTotals).map(([currency, value]) => `${currency} ${formatMoney(value, currency)}`).join(" · ")}</span></div>
+              <button type="button" onClick={createOrdersForSelected}>Crear orden con seleccionadas</button>
+            </div>
+          )}
         </div>
       )}
 
@@ -969,10 +943,15 @@ export default function OperationalPurchases() {
                   <div><span className="text-slate-500">Cliente:</span> <span className="font-medium">{detailInvoice.client_name || "--"}</span></div>
                   <div><span className="text-slate-500">Proveedor:</span> <span className="font-medium">{detailInvoice.supplier_display || "--"}</span></div>
                   <div><span className="text-slate-500">RUC proveedor:</span> <span className="font-medium">{detailInvoice.supplier_ruc_display || "--"}</span></div>
+                  <div><span className="text-slate-500">Comprobante:</span> <span className="font-medium">{detailInvoice.receipt_type || "--"} {detailInvoice.receipt_number || ""}</span></div>
+                  <div><span className="text-slate-500">Fecha de factura:</span> <span className="font-medium">{detailInvoice.invoice_date || "--"}</span></div>
                   <div><span className="text-slate-500">Cuenta proveedor:</span> <span className="font-medium">{supplierBankLabel(detailInvoice) || "Sin cuenta bancaria"}</span></div>
                   <div><span className="text-slate-500">Vencimiento:</span> <span className="font-medium">{detailInvoice.due_date || "--"}</span></div>
                   <div><span className="text-slate-500">Condicion:</span> <span className="font-medium">{detailInvoice.condition_type || "--"}</span></div>
                   <div><span className="text-slate-500">Adjuntos:</span> <span className="font-medium">{detailInvoice.attachment_count || 0}</span></div>
+                  <div><span className="text-slate-500">Ítems:</span> <span className="font-medium">{detailInvoice.item_count || 0}</span></div>
+                  <div><span className="text-slate-500">IVA 10%:</span> <span className="font-medium">{detailInvoice.currency_code || "PYG"} {formatMoney(detailInvoice.iva_10, detailInvoice.currency_code)}</span></div>
+                  <div><span className="text-slate-500">IVA 5%:</span> <span className="font-medium">{detailInvoice.currency_code || "PYG"} {formatMoney(detailInvoice.iva_5, detailInvoice.currency_code)}</span></div>
                   <div><span className="text-slate-500">Rubro:</span> <span className="font-medium">{detailInvoice.expense_rubros || detailInvoice.expense_rubro || "Sin clasificar"}</span></div>
                   <div><span className="text-slate-500">Revision costos:</span> <span className="font-medium">{detailInvoice.quote_revision_id ? `Industrial #${detailInvoice.quote_revision_id}` : detailInvoice.cost_sheet_version_number ? `DET COS ${detailInvoice.cost_sheet_version_number}` : "Sin revision asignada"}</span></div>
                 </div>

@@ -141,8 +141,8 @@ export default function ContactDetail() {
   const whatsappNumber = String(contact.phone || '').replace(/\D/g, '');
 
   return (
-    <div className="min-w-0 max-w-full space-y-4 overflow-x-hidden">
-      <header className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+    <div className="atm-contact-detail min-w-0 max-w-full space-y-4 overflow-x-hidden">
+      <header className="atm-contact-detail-header rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm dark:border-slate-700 dark:bg-slate-900">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-sm font-bold text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
@@ -172,7 +172,7 @@ export default function ContactDetail() {
       <AuditHistory entity="contact" id={id} />
 
       <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[400px_minmax(0,1fr)]">
-        <aside className="space-y-3 lg:max-h-[calc(100vh-155px)] lg:overflow-y-auto lg:pr-1">
+        <aside className="atm-contact-details space-y-3 lg:max-h-[calc(100vh-155px)] lg:overflow-y-auto lg:pr-1">
           <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
             <header className="border-b border-slate-200 px-4 py-3 text-sm font-semibold dark:border-slate-700">Resumen</header>
             <div className="space-y-3 p-4 text-sm">
@@ -206,7 +206,7 @@ export default function ContactDetail() {
               <FieldRow label="Nombre" value={contact.name} />
               <FieldRow label="Cargo" value={contact.title} />
               <FieldRow label="Etiqueta" value={contact.label} />
-              <FieldRow label="Visibilidad" value={contact.visibility} />
+              <FieldRow label="Visibilidad" value={{ company: 'Empresa', shared: 'Compartido', private: 'Privado' }[contact.visibility] || contact.visibility} />
               <FieldRow label="Creado" value={contact.created_at ? new Date(contact.created_at).toLocaleDateString('es-PY') : ''} />
               <FieldRow label="Notas" value={contact.notes} />
             </div>
@@ -277,7 +277,7 @@ export default function ContactDetail() {
           <Link to="/contacts" className="inline-block px-1 text-sm text-blue-600 hover:underline dark:text-blue-300">Volver a contactos</Link>
         </aside>
 
-        <main className="min-w-0">
+        <main className="atm-contact-engagement min-w-0">
           <OrganizationEngagementPanel
             person={contact}
             activities={activities}

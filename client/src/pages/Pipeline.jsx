@@ -341,10 +341,10 @@ export default function Pipeline() {
   }
 
   return (
-    <div>
-      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-        <h2 className="text-lg font-semibold">Pipeline</h2>
-        <div className="flex flex-wrap items-center gap-2">
+    <div className="atm-pipeline">
+      <div className="atm-pipeline-header flex flex-wrap items-center justify-between gap-3">
+        <h2 className="atm-pipeline-title">Pipeline</h2>
+        <div className="atm-pipeline-controls">
           <PipelineViewSwitch value={view} onChange={changeView} />
           <select aria-label="Estado del trabajo" value={completedOnly ? 'completed' : 'active'}
             onChange={(event) => setSearchParams((previous) => {
@@ -388,14 +388,14 @@ export default function Pipeline() {
             onClick={() =>
               nav(`/pipelines/${pipelineId || ""}/edit?back=${encodeURIComponent(location.pathname)}`)
             }
-            className="px-3 py-2 text-sm rounded-lg border hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
+            className="atm-secondary px-3 py-2 text-sm rounded-md dark:border-slate-700 dark:hover:bg-slate-800"
             title="Editar columnas del pipeline"
           >
-            ✏️ Editar pipeline
+            Editar pipeline
           </button>
           <button
             onClick={() => setOpenModal(true)}
-            className="px-3 py-2 text-sm rounded-lg bg-black text-white dark:bg-white dark:text-black"
+            className="atm-primary px-3 py-2 text-sm rounded-md"
           >
             Nueva operación
           </button>
@@ -403,24 +403,24 @@ export default function Pipeline() {
       </div>
 
       {view === 'funnel' ? <DragDropContext onDragEnd={onDragEnd}>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4">
+        <div className="atm-board">
           {displayedStages.map((stage) => (
             <Droppable droppableId={String(stage.id)} key={stage.id}>
               {(provided) => (
                 <div
                   ref={provided.innerRef}
                   {...provided.droppableProps}
-                  className="bg-white dark:bg-slate-950 dark:border dark:border-slate-800 rounded-2xl shadow p-3 min-h-[200px]"
+                  className="atm-column dark:border-slate-800"
                 >
-                  <div className="sticky top-[73px] z-20 -mx-3 -mt-3 mb-2 rounded-t-2xl border-b border-slate-100 bg-white px-3 pb-2 pt-3 shadow-sm dark:border-slate-800 dark:bg-slate-950">
+                  <div className="atm-column-header dark:border-slate-800">
                     <div className="font-medium flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <span>{stageLabel(stage)}</span>
-                        <span className="text-xs bg-emerald-50 text-emerald-700 rounded px-2 py-0.5">
+                        <span className="atm-profit text-xs rounded px-2 py-0.5">
                           Profit $ {stageProfit(stage.id).toLocaleString()}
                         </span>
                       </div>
-                      <span className="text-xs bg-slate-100 dark:bg-slate-800 rounded px-2 py-0.5">
+                      <span className="atm-count text-xs rounded px-2 py-0.5">
                         {grouped[stage.id]?.length || 0}
                       </span>
                     </div>
@@ -467,16 +467,17 @@ export default function Pipeline() {
                                 openInNewTab(getOperationUrl(deal.id));
                               }}
                               onContextMenu={(event) => openOutcomeMenu(event, deal)}
-                              className={`block w-full border rounded-xl p-3 hover:shadow transition cursor-pointer ${
+                              className={`atm-deal-card block w-full border p-3 transition cursor-pointer ${
                                 hasOverBudget || attention
-                                  ? "border-red-300 bg-red-50 dark:bg-red-950/30 dark:border-red-800"
+                                  ? "atm-needs-attention border-red-300 bg-red-50 dark:bg-red-950/30 dark:border-red-800"
                                   : "bg-white dark:bg-slate-900 dark:border-slate-800"
                               }`}
                               title={[hasOverBudget ? "Sobrecosto" : null, attention?.label].filter(Boolean).join(" · ") || "Doble clic para abrir"}
                             >
-                              <div className="text-sm font-semibold truncate">
-                                {deal.reference || deal.title}
+                              <div className="text-sm font-semibold leading-snug break-words">
+                                {deal.title || deal.reference}
                               </div>
+                              {deal.reference && <div className="mt-1 text-[11px] text-slate-500">{deal.reference}</div>}
                               {completedOnly && <span className="text-xs font-medium text-emerald-700">Finalizada · Aprobada</span>}
                               <div className="text-xs text-slate-600 dark:text-slate-400 truncate">
                                 {deal.org_name || "—"} • {deal.contact_name || "—"}
@@ -501,6 +502,8 @@ export default function Pipeline() {
                                   {cotizDays != null ? ` • ${cotizDays} d` : ""}
                                 </div>
                               )}
+                              {deal.next_task_due_at && !completedOnly && <div className="mt-2 border-t border-slate-100 pt-2 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300">Próximo seguimiento: {new Date(deal.next_task_due_at).toLocaleDateString('es-PY')}</div>}
+                              {deal.deal_advisor_name && <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{deal.deal_advisor_name}</div>}
                             </a>
                           )}
                         </Draggable>

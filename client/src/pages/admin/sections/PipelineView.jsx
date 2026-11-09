@@ -65,14 +65,14 @@ export default function PipelineView({
 
   return (
     <>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4">
+      <div className="atm-admin-ops-pipeline grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4">
         {stages.map((stage) => {
           const stageItems = itemsByStage.get(stage.id) || [];
 
           return (
             <div
               key={stage.id}
-              className="bg-white rounded-2xl shadow p-3 min-h-[240px]"
+              className="atm-admin-ops-column bg-white rounded-2xl shadow p-3 min-h-[240px]"
             >
               <div className="mb-3">
                 <div className="font-medium flex items-start justify-between gap-2">
@@ -102,7 +102,7 @@ export default function PipelineView({
                   return (
                     <div
                       key={`${item.op_type || "deal"}-${item.id}`}
-                      className="relative block w-full border rounded-xl p-3 hover:shadow transition bg-white cursor-pointer"
+                      className="atm-admin-ops-card relative block w-full border rounded-xl p-3 hover:shadow transition bg-white cursor-pointer"
                       onClick={() =>
                         window.open(
                           operationDetailUrl(item),
