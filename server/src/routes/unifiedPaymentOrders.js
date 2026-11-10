@@ -182,8 +182,9 @@ export default function unifiedPaymentOrdersRouter(loadDocuments, ensurePaymentM
         if (!currency) currency = doc.currency;
         if (currency !== doc.currency) throw error('La orden debe tener una sola moneda');
         if (await legacyOrderExists(conn, item.sourceType, item.sourceId)) throw error('Un documento ya tiene una orden anterior activa', 409);
-        if (await duplicateSupplierDocument(conn, supplierId, doc.supplierDocNumber, item.sourceType, item.sourceId)) {
-          throw error(`El comprobante ${doc.supplierDocNumber} aparece también en otro módulo. Revise el duplicado antes de pagar`, 409);
+        if (await duplicateSupplierDocument(conn, supplierId, doc.supplierDocNumber, item.sourceType, item.sourceId,
+          doc.row.operation_type, doc.row.operation_id)) {
+          throw error(`El comprobante ${doc.supplierDocNumber} ya figura en otro registro de la misma operación o en otro módulo. Revise el duplicado antes de pagar`, 409);
         }
         const reserved = await reservedCents(conn, item.sourceType, item.sourceId);
         if (item.amount > availableCents(doc.totals.balance, reserved / 100)) throw error(`El importe supera el saldo disponible de ${doc.number || item.sourceId}`, 409);

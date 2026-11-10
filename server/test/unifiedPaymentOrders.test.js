@@ -36,9 +36,39 @@ test('selection rejects duplicates, unsupported sources and invalid amounts', ()
 
 test('same supplier invoice number in another module is flagged', async () => {
   const conn = { query: async () => [[
-    { source_type: 'purchase-invoice', source_id: 4 },
-    { source_type: 'admin-expense', source_id: 9 },
+    { source_type: 'purchase-invoice', source_id: 4, operation_type: null, operation_id: null },
+    { source_type: 'admin-expense', source_id: 9, operation_type: null, operation_id: null },
   ]] };
   const duplicate = await duplicateSupplierDocument(conn, 12, '001-001-123', 'purchase-invoice', 4);
-  assert.deepEqual(duplicate, { source_type: 'admin-expense', source_id: 9 });
+  assert.equal(duplicate.source_id, 9);
+});
+
+test('same supplier invoice can fund costs in different operations', async () => {
+  const conn = { query: async () => [[
+    { source_type: 'operation-expense', source_id: 5, operation_type: 'deal', operation_id: 101 },
+    { source_type: 'operation-expense', source_id: 6, operation_type: 'deal', operation_id: 102 },
+  ]] };
+  assert.equal(await duplicateSupplierDocument(conn, 12, '001-001-123', 'operation-expense', 5, 'deal', 101), null);
+  const service = { query: async () => [[
+    { source_type: 'operation-expense', source_id: 5, operation_type: 'deal', operation_id: 101 },
+    { source_type: 'operation-expense', source_id: 7, operation_type: 'service', operation_id: 101 },
+  ]] };
+  assert.equal(await duplicateSupplierDocument(service, 12, '001-001-123', 'operation-expense', 5, 'deal', 101), null);
+});
+
+test('same invoice in one operation or another module remains flagged', async () => {
+  const sameOperation = { source_type: 'operation-expense', source_id: 6, operation_type: 'deal', operation_id: 101 };
+  const otherModule = { source_type: 'purchase-invoice', source_id: 9, operation_type: null, operation_id: null };
+  const conn = { query: async () => [[
+    { source_type: 'operation-expense', source_id: 5, operation_type: 'deal', operation_id: 101 },
+    sameOperation,
+    otherModule,
+  ]] };
+  assert.equal(await duplicateSupplierDocument(conn, 12, '001-001-123', 'operation-expense', 5, 'deal', 101), sameOperation);
+  const crossModule = { query: async () => [[
+    { source_type: 'operation-expense', source_id: 5, operation_type: 'deal', operation_id: 101 },
+    { source_type: 'operation-expense', source_id: 6, operation_type: 'deal', operation_id: 102 },
+    otherModule,
+  ]] };
+  assert.equal(await duplicateSupplierDocument(crossModule, 12, '001-001-123', 'operation-expense', 5, 'deal', 101), otherModule);
 });

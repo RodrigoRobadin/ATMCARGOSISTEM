@@ -182,20 +182,26 @@ export async function lockedDocument(conn, sourceType, sourceId) {
   return { row, totals, supplierId, currency, number: String(number || ''), supplierDocNumber: String(supplierDocNumber || ''), status: String(row.status || '').toLowerCase() };
 }
 
-export async function duplicateSupplierDocument(conn, supplierId, documentNumber, sourceType, sourceId) {
+export async function duplicateSupplierDocument(conn, supplierId, documentNumber, sourceType, sourceId, operationType = null, operationId = null) {
   const number = String(documentNumber || '').trim().toUpperCase();
   if (!number) return null;
   const [rows] = await conn.query(`
-    SELECT 'operation-expense' AS source_type, id AS source_id FROM operation_expense_invoices
+    SELECT 'operation-expense' AS source_type, id AS source_id, operation_type, operation_id FROM operation_expense_invoices
       WHERE supplier_id = ? AND UPPER(TRIM(receipt_number)) = ? AND status <> 'anulada'
     UNION ALL
-    SELECT 'purchase-invoice', id FROM purchase_invoices
+    SELECT 'purchase-invoice', id, NULL, NULL FROM purchase_invoices
       WHERE supplier_id = ? AND UPPER(TRIM(supplier_invoice_number)) = ? AND status <> 'anulada'
     UNION ALL
-    SELECT 'admin-expense', id FROM admin_expenses
+    SELECT 'admin-expense', id, NULL, NULL FROM admin_expenses
       WHERE provider_id = ? AND UPPER(TRIM(receipt_number)) = ? AND status <> 'anulado'`,
   [supplierId, number, supplierId, number, supplierId, number]);
-  return rows.find((row) => row.source_type !== sourceType || Number(row.source_id) !== Number(sourceId)) || null;
+  return rows.find((row) => {
+    if (row.source_type === sourceType && Number(row.source_id) === Number(sourceId)) return false;
+    return !(sourceType === 'operation-expense' && row.source_type === 'operation-expense'
+      && operationType && Number.isSafeInteger(Number(operationId)) && Number(operationId) > 0
+      && row.operation_type && Number.isSafeInteger(Number(row.operation_id)) && Number(row.operation_id) > 0
+      && (row.operation_type !== operationType || Number(row.operation_id) !== Number(operationId)));
+  }) || null;
 }
 
 export async function legacyOrderExists(conn, sourceType, sourceId) {
