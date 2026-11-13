@@ -17,7 +17,7 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-app .atm-main { background: var(--atm-bg); }
 .atm-app .atm-sidebar { background: var(--atm-surface); border-color: var(--atm-border); }
 .atm-sidebar-brand { position: sticky; top: 0; z-index: 2; background: var(--atm-surface); border-color: var(--atm-border); }
-.atm-brand-lockup { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; font-size: 17px; font-weight: 750; color: var(--atm-ink); }
+.atm-brand-lockup { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; font-size: 1.0625rem; font-weight: 750; color: var(--atm-ink); }
 .atm-brand-mark { position: relative; display: block; width: 20px; height: 17px; flex: 0 0 20px; background: var(--atm-forest); clip-path: polygon(30% 0, 66% 0, 37% 100%, 0 100%); }
 .atm-brand-mark::after { content: ""; position: absolute; inset: 0; background: #74a38a; transform: translateX(9px); }
 .atm-sidebar-toggle { color: var(--atm-muted); opacity: .65; }
@@ -26,10 +26,10 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-global-bar { justify-content: space-between; min-height: 40px; }
 .atm-topbar-actions { margin-left: auto; flex-shrink: 0; }
 .atm-user-profile { display: flex; align-items: center; gap: 9px; padding-left: 16px; margin-left: 5px; border-left: 1px solid var(--atm-border); min-width: 0; }
-.atm-user-initials { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 34px; width: 34px; height: 34px; border-radius: 50%; background: var(--atm-sage); color: var(--atm-forest-hover); font-size: 13px; font-weight: 700; }
+.atm-user-initials { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 34px; width: 34px; height: 34px; border-radius: 50%; background: var(--atm-sage); color: var(--atm-forest-hover); font-size: 0.8125rem; font-weight: 700; }
 .atm-user-details { display: flex; flex-direction: column; min-width: 0; max-width: 145px; line-height: 1.2; }
-.atm-user-details strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 650; }
-.atm-user-details small { color: var(--atm-muted); font-size: 11px; margin-top: 3px; text-transform: capitalize; }
+.atm-user-details strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8125rem; font-weight: 650; }
+.atm-user-details small { color: var(--atm-muted); font-size: 0.6875rem; margin-top: 3px; text-transform: capitalize; }
 .atm-topbar-actions > .flex button, .atm-topbar-actions > .relative button { color: #34423e; border-color: var(--atm-border); }
 .atm-app .atm-nav-link, .atm-app .atm-nav-group { color: #34423e; }
 .atm-app .atm-nav-link:hover, .atm-app .atm-nav-group:hover { background: #f2f5ef; }
@@ -55,10 +55,10 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-app .atm-secondary:hover { background: #f2f5ef; }
 
 .atm-pipeline .atm-pipeline-header { margin-bottom: 16px; }
-.atm-pipeline .atm-pipeline-title { font-size: 32px; line-height: 1.15; font-weight: 700; }
+.atm-pipeline .atm-pipeline-title { font-size: 2rem; line-height: 1.15; font-weight: 700; }
 .atm-page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 0 0 14px; }
-.atm-page-subtitle { color: var(--atm-muted); font-size: 15px; margin-top: 2px; }
-.atm-new-operation { display: inline-flex; align-items: center; gap: 9px; min-height: 41px; padding: 0 17px; border-radius: 6px; font-size: 14px; white-space: nowrap; }
+.atm-page-subtitle { color: var(--atm-muted); font-size: 0.9375rem; margin-top: 2px; }
+.atm-new-operation { display: inline-flex; align-items: center; gap: 9px; min-height: 41px; padding: 0 17px; border-radius: 6px; font-size: 0.875rem; white-space: nowrap; }
 .atm-view-tabs { border-bottom: 1px solid var(--atm-border); margin-bottom: 18px; }
 .atm-view-tabs [role="group"] { border: 0; padding: 0; gap: 14px; border-radius: 0; background: transparent; }
 .atm-view-tabs [role="group"] button { border-radius: 0; background: transparent; border-bottom: 2px solid transparent; padding: 9px 16px 10px; color: var(--atm-muted); }
@@ -68,21 +68,21 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-service-actions { display: flex; justify-content: flex-end; margin-top: 0; }
 .atm-filter-row { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; flex-wrap: wrap; }
 .atm-filter-search { display: flex; align-items: center; gap: 10px; border: 1px solid var(--atm-border); border-radius: 6px; background: #fff; padding: 0 12px; height: 40px; width: 315px; max-width: 100%; color: var(--atm-muted); }
-.atm-filter-search input[type="search"] { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; font-size: 13px; }
+.atm-filter-search input[type="search"] { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; font-size: 0.8125rem; }
 .atm-filter-row .atm-pipeline-controls { gap: 10px; }
 .atm-pipeline .atm-pipeline-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .atm-pipeline .atm-pipeline-controls :is(input[type="search"], select) {
   min-height: 38px; border: 1px solid var(--atm-border); border-radius: 6px; background: #fff;
 }
-.atm-pipeline .atm-pipeline-controls select { max-width: 210px; padding: 0 28px 0 12px; font-size: 13px; }
+.atm-pipeline .atm-pipeline-controls select { max-width: 210px; padding: 0 28px 0 12px; font-size: 0.8125rem; }
 .atm-more-filters { position: relative; }
-.atm-more-filters summary, .atm-attention-filter { display: inline-flex; align-items: center; gap: 9px; min-height: 38px; border: 1px solid var(--atm-border); border-radius: 6px; background: #fff; padding: 0 12px; color: #34423e; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.atm-more-filters summary, .atm-attention-filter { display: inline-flex; align-items: center; gap: 9px; min-height: 38px; border: 1px solid var(--atm-border); border-radius: 6px; background: #fff; padding: 0 12px; color: #34423e; font-size: 0.8125rem; cursor: pointer; white-space: nowrap; }
 .atm-more-filters summary { list-style: none; }
 .atm-more-filters summary::-webkit-details-marker { display: none; }
 .atm-more-filters[open] summary, .atm-attention-filter[aria-pressed="true"] { border-color: #a5bca9; background: var(--atm-sage); color: var(--atm-forest-hover); }
 .atm-filter-popover { position: absolute; top: calc(100% + 6px); left: 0; z-index: 45; display: grid; gap: 8px; min-width: 228px; padding: 14px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); box-shadow: 0 8px 22px rgba(20, 40, 30, .1); }
-.atm-filter-popover label { font-size: 12px; font-weight: 600; }
-.atm-filter-popover button { display: flex; align-items: center; gap: 8px; padding: 8px; text-align: left; color: var(--atm-forest-hover); font-size: 13px; }
+.atm-filter-popover label { font-size: 0.75rem; font-weight: 600; }
+.atm-filter-popover button { display: flex; align-items: center; gap: 8px; padding: 8px; text-align: left; color: var(--atm-forest-hover); font-size: 0.8125rem; }
 .atm-attention-filter { margin-left: auto; }
 .atm-pipeline .atm-board { display: flex; align-items: stretch; gap: 10px; height: calc(100dvh - 280px); min-height: 480px; overflow-x: auto; overflow-y: hidden; padding-bottom: 8px; }
 .atm-pipeline .atm-column {
@@ -93,22 +93,22 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
   position: relative; z-index: 1; flex: none; background: #f8f9f6; border-bottom: 1px solid var(--atm-border);
   margin: -10px -10px 10px; padding: 12px 10px 10px; min-height: 68px;
 }
-.atm-stage-headline { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; font-size: 14px; font-weight: 650; line-height: 1.25; }
+.atm-stage-headline { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; font-size: 0.875rem; font-weight: 650; line-height: 1.25; }
 .atm-stage-name { min-width: 0; overflow-wrap: anywhere; }
-.atm-stage-profit-list { min-height: 18px; margin-top: 5px; color: var(--atm-muted); font-size: 11px; }
+.atm-stage-profit-list { min-height: 18px; margin-top: 5px; color: var(--atm-muted); font-size: 0.6875rem; }
 .atm-stage-profit-list .atm-profit { background: transparent; color: var(--atm-muted); padding: 0; }
 .atm-pipeline .atm-deal-card {
   border-radius: 6px; border-color: var(--atm-border); box-shadow: 0 1px 2px rgba(18, 40, 31, .04);
 }
 .atm-pipeline .atm-column .space-y-2 { display: flex; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; flex-direction: column; gap: 6px; padding-right: 2px; }
 .atm-pipeline .atm-column .space-y-2 > * + * { margin-top: 0; }
-.atm-pipeline .atm-deal-card { padding: 10px; font-size: 12px; }
-.atm-pipeline .atm-deal-card > .text-sm { font-size: 12px; }
-.atm-empty-stage { display: flex; align-items: center; flex-direction: column; gap: 9px; padding: 115px 8px 24px; color: #9aa39d; text-align: center; font-size: 12px; line-height: 1.45; }
+.atm-pipeline .atm-deal-card { padding: 10px; font-size: 0.75rem; }
+.atm-pipeline .atm-deal-card > .text-sm { font-size: 0.75rem; }
+.atm-empty-stage { display: flex; align-items: center; flex-direction: column; gap: 9px; padding: 115px 8px 24px; color: #9aa39d; text-align: center; font-size: 0.75rem; line-height: 1.45; }
 .atm-card-client { margin-top: 3px; }
 .atm-card-profit { display: inline-flex; flex-direction: column; gap: 1px; background: transparent; color: var(--atm-forest-hover); padding: 0; }
-.atm-card-profit small { color: var(--atm-muted); font-size: 10px; font-weight: 400; }
-.atm-card-profit strong { font-size: 15px; line-height: 1; font-weight: 700; }
+.atm-card-profit small { color: var(--atm-muted); font-size: 0.625rem; font-weight: 400; }
+.atm-card-profit strong { font-size: 0.9375rem; line-height: 1; font-weight: 700; }
 .atm-pipeline .atm-deal-card:hover { border-color: #a5bca9; box-shadow: 0 3px 10px rgba(18, 40, 31, .09); }
 .atm-pipeline .atm-deal-card.atm-needs-attention { background: var(--atm-error-bg); border-color: #ec9f9a; }
 .atm-pipeline .atm-profit { color: var(--atm-forest-hover); background: #e8f3ed; }
@@ -116,16 +116,16 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 
 .atm-service-content { min-width: 0; color: var(--atm-ink); }
 .atm-service-content-head { min-height: 48px; gap: 16px; margin-bottom: 15px; }
-.atm-service-content-head h2 { font-size: 20px; line-height: 1.25; font-weight: 700; color: var(--atm-ink); }
-.atm-service-content-head p { margin-top: 3px; font-size: 13px; color: var(--atm-muted); }
+.atm-service-content-head h2 { font-size: 1.25rem; line-height: 1.25; font-weight: 700; color: var(--atm-ink); }
+.atm-service-content-head p { margin-top: 3px; font-size: 0.8125rem; color: var(--atm-muted); }
 .atm-service-toolbar { min-width: 0; gap: 10px; margin-bottom: 14px; }
-.atm-service-toolbar :is(input, select) { min-height: 38px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-ink); font-size: 13px; }
+.atm-service-toolbar :is(input, select) { min-height: 38px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-ink); font-size: 0.8125rem; }
 .atm-service-toolbar select { padding: 0 28px 0 11px; }
 .atm-service-toolbar input { padding: 0 11px; }
 .atm-service-toolbar input::placeholder { color: #8a968e; }
 .atm-service-toolbar .atm-service-search { max-width: min(460px, 100%); }
-.atm-service-count { color: var(--atm-muted); font-size: 12px; white-space: nowrap; }
-.atm-service-outline { background: var(--atm-surface); border-color: var(--atm-border); color: var(--atm-ink); font-size: 13px; }
+.atm-service-count { color: var(--atm-muted); font-size: 0.75rem; white-space: nowrap; }
+.atm-service-outline { background: var(--atm-surface); border-color: var(--atm-border); color: var(--atm-ink); font-size: 0.8125rem; }
 .atm-service-outline:hover { background: #f2f5ef; }
 .atm-service-link { color: var(--atm-forest-hover); font-weight: 600; text-decoration: none; }
 .atm-service-link:hover { text-decoration: underline; }
@@ -134,7 +134,7 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-service-table-wrap { border-color: var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
 .atm-service-table-wrap table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .atm-service-table-wrap thead { background: #edf2ec; color: #34423e; }
-.atm-service-table-wrap th { padding-top: 11px; padding-bottom: 11px; font-size: 11px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; white-space: nowrap; }
+.atm-service-table-wrap th { padding-top: 11px; padding-bottom: 11px; font-size: 0.6875rem; font-weight: 700; letter-spacing: 0; text-transform: uppercase; white-space: nowrap; }
 .atm-service-table-wrap tbody tr { border-color: var(--atm-border); }
 .atm-service-table-wrap tbody tr:hover { background: #f5f8f4; }
 .atm-service-table-wrap td { color: var(--atm-ink); vertical-align: middle; }
@@ -146,7 +146,7 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-service-agenda .atm-service-toolbar > .inline-flex button:last-child { border-right: 0; }
 .atm-service-agenda .atm-service-toolbar > .inline-flex button.atm-service-selected { background: var(--atm-forest); color: #fff; }
 .atm-service-period { border-color: var(--atm-border); border-radius: 6px; padding: 9px; }
-.atm-service-period > div { color: var(--atm-ink); font-size: 14px; }
+.atm-service-period > div { color: var(--atm-ink); font-size: 0.875rem; }
 .atm-service-calendar { border-color: var(--atm-border); border-radius: 6px; overflow: hidden; }
 .atm-service-calendar > div { border-color: var(--atm-border); }
 .atm-service-calendar > div:nth-child(-n+7) { background: #edf2ec; color: #34423e; }
@@ -159,22 +159,22 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-form-overlay { align-items: center; overscroll-behavior: contain; background: rgba(18, 31, 25, .48); }
 .atm-form-modal { display: flex; flex-direction: column; max-height: calc(100dvh - 32px); min-height: 0; overflow: hidden; border: 1px solid var(--atm-border); border-radius: 8px; background: var(--atm-surface); box-shadow: 0 20px 60px rgba(15, 34, 23, .2); color: var(--atm-ink); }
 .atm-form-header { flex: none; min-height: 72px; padding: 15px 22px; border-color: var(--atm-border); background: #f4f7f2; }
-.atm-form-eyebrow { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--atm-forest-hover); }
-.atm-form-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 9px; font-size: 20px; line-height: 1.25; font-weight: 700; color: var(--atm-ink); }
-.atm-form-title span { color: var(--atm-muted); font-size: 13px; font-weight: 500; }
+.atm-form-eyebrow { font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; color: var(--atm-forest-hover); }
+.atm-form-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 9px; font-size: 1.25rem; line-height: 1.25; font-weight: 700; color: var(--atm-ink); }
+.atm-form-title span { color: var(--atm-muted); font-size: 0.8125rem; font-weight: 500; }
 .atm-form-close, .atm-form-icon-close { display: inline-flex; align-items: center; justify-content: center; min-height: 34px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-ink); }
 .atm-form-close:hover, .atm-form-icon-close:hover { background: #e8efe5; }
 .atm-form-icon-close { width: 34px; padding: 0; flex: 0 0 34px; }
 .atm-form-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; gap: 20px; padding: 20px 22px 0; }
 .atm-form-section { min-width: 0; padding: 0 0 18px; border-bottom: 1px solid var(--atm-border); background: transparent; }
-.atm-form-section > .font-medium { margin-bottom: 13px; color: var(--atm-forest-hover); font-size: 14px; font-weight: 700; }
+.atm-form-section > .font-medium { margin-bottom: 13px; color: var(--atm-forest-hover); font-size: 0.875rem; font-weight: 700; }
 .atm-form-section > .grid { gap: 11px; }
 .atm-form-operation-type { display: block; }
 .atm-form-operation-type > select { display: block; width: 100%; }
 .atm-form-operation-type > span { display: block; margin-top: 3px; color: var(--atm-muted); }
-.atm-form-modal label { color: #34423e; font-size: 12px; font-weight: 600; }
+.atm-form-modal label { color: #34423e; font-size: 0.75rem; font-weight: 600; }
 .atm-form-modal label > :is(input, select, textarea), .atm-form-modal label > .relative, .atm-form-modal label > div > :is(input, select) { margin-top: 5px; }
-.atm-form-modal :is(input, select, textarea):not([type="checkbox"]):not([type="radio"]) { min-height: 38px; border: 1px solid #cfd8ce; border-radius: 6px; background: #fff; color: var(--atm-ink); font-size: 13px; }
+.atm-form-modal :is(input, select, textarea):not([type="checkbox"]):not([type="radio"]) { min-height: 38px; border: 1px solid #cfd8ce; border-radius: 6px; background: #fff; color: var(--atm-ink); font-size: 0.8125rem; }
 .atm-form-modal :is(input, select, textarea):not([type="checkbox"]):not([type="radio"]):focus { border-color: var(--atm-forest); outline: 2px solid #d4e8d8; outline-offset: 0; box-shadow: none; }
 .atm-form-modal :is(input, select, textarea):disabled, .atm-form-modal :is(input, textarea):read-only { background: #f0f3ef; }
 .atm-form-modal :is(input, select, textarea)::placeholder { color: #89948c; }
@@ -198,25 +198,25 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 
 .atm-contacts { min-width: 0; color: var(--atm-ink); }
 .atm-contacts-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 21px; }
-.atm-contacts-heading h1 { font-size: 30px; line-height: 1.15; font-weight: 700; }
-.atm-contacts-heading p { margin-top: 3px; color: var(--atm-muted); font-size: 14px; }
-.atm-contacts-new { display: inline-flex; align-items: center; justify-content: center; gap: 8px; flex: none; min-height: 40px; padding: 0 15px; border-radius: 6px; font-size: 13px; font-weight: 600; }
+.atm-contacts-heading h1 { font-size: 1.875rem; line-height: 1.15; font-weight: 700; }
+.atm-contacts-heading p { margin-top: 3px; color: var(--atm-muted); font-size: 0.875rem; }
+.atm-contacts-new { display: inline-flex; align-items: center; justify-content: center; gap: 8px; flex: none; min-height: 40px; padding: 0 15px; border-radius: 6px; font-size: 0.8125rem; font-weight: 600; }
 .atm-contacts-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-bottom: 14px; }
-.atm-contacts-filters :is(input:not([type="checkbox"]), select) { min-height: 38px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-ink); font-size: 13px; }
+.atm-contacts-filters :is(input:not([type="checkbox"]), select) { min-height: 38px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-ink); font-size: 0.8125rem; }
 .atm-contacts-filters select { max-width: 210px; }
 .atm-contacts-search { display: flex; align-items: center; gap: 7px; width: 300px; max-width: 100%; min-height: 38px; padding: 0 10px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-muted); }
 .atm-contacts-search input { flex: 1; min-width: 0; width: 100%; padding: 0; border: 0 !important; background: transparent !important; outline: 0; }
 .atm-contacts-filters input::placeholder { color: #88948d; }
 .atm-contacts-filters label { display: inline-flex; align-items: center; gap: 6px; min-height: 38px; padding: 0 7px; color: var(--atm-muted); white-space: nowrap; }
-.atm-contacts-apply, .atm-contacts-clear { min-height: 38px; border-color: var(--atm-border); background: var(--atm-surface); color: var(--atm-ink); font-size: 13px; }
+.atm-contacts-apply, .atm-contacts-clear { min-height: 38px; border-color: var(--atm-border); background: var(--atm-surface); color: var(--atm-ink); font-size: 0.8125rem; }
 .atm-contacts-apply { background: var(--atm-forest); border-color: var(--atm-forest); color: #fff; }
 .atm-contacts-apply:hover { background: var(--atm-forest-hover); }
 .atm-contacts-clear:hover { background: #f0f4ee; }
-.atm-contacts-result-count { margin-bottom: 8px; color: var(--atm-muted); font-size: 12px; }
+.atm-contacts-result-count { margin-bottom: 8px; color: var(--atm-muted); font-size: 0.75rem; }
 .atm-contacts-table { border: 1px solid var(--atm-border); border-radius: 6px; box-shadow: none; }
 .atm-contacts-table table { width: 100%; min-width: 880px; font-variant-numeric: tabular-nums; }
 .atm-contacts-table thead { background: #edf2ec; color: #34423e; }
-.atm-contacts-table th { padding: 11px 14px; border-color: var(--atm-border); font-size: 11px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.atm-contacts-table th { padding: 11px 14px; border-color: var(--atm-border); font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
 .atm-contacts-table td { padding: 11px 14px; border-color: var(--atm-border); color: var(--atm-ink); }
 .atm-contacts-table tbody tr:hover { background: #f5f8f4; }
 .atm-contacts-name-link { color: var(--atm-forest-hover); font-weight: 650; text-decoration: none; }
@@ -240,13 +240,13 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-contact-detail .atm-contact-engagement button.border-blue-600 { border-color: var(--atm-forest); background: #e8f3eb; color: var(--atm-forest-hover); }
 
 .atm-general, .atm-commercial, .atm-commissions { color: var(--atm-ink); }
-.atm-general .atm-page-heading h1, .atm-commercial-header h1, .atm-commissions .atm-page-heading h1 { font-size: 30px; line-height: 1.15; font-weight: 700; }
-.atm-general-filter, .atm-commercial-actions select, .atm-commission-filters select { min-height: 40px; max-width: 230px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); padding: 0 32px 0 12px; color: var(--atm-ink); font-size: 13px; }
-.atm-general-count { margin-bottom: -12px; color: var(--atm-muted); font-size: 12px; }
+.atm-general .atm-page-heading h1, .atm-commercial-header h1, .atm-commissions .atm-page-heading h1 { font-size: 1.875rem; line-height: 1.15; font-weight: 700; }
+.atm-general-filter, .atm-commercial-actions select, .atm-commission-filters select { min-height: 40px; max-width: 230px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); padding: 0 32px 0 12px; color: var(--atm-ink); font-size: 0.8125rem; }
+.atm-general-count { margin-bottom: -12px; color: var(--atm-muted); font-size: 0.75rem; }
 .atm-general-table, .atm-commission-table-wrap { border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
 .atm-general-table table, .atm-commission-table-wrap table { width: 100%; font-variant-numeric: tabular-nums; }
 .atm-general-table thead, .atm-commission-table-wrap thead, .atm-commercial-table thead { background: #edf2ec; color: #34423e; }
-.atm-general-table th, .atm-commission-table-wrap th, .atm-commercial-table th { padding-top: 11px; padding-bottom: 11px; border-color: var(--atm-border); font-size: 11px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.atm-general-table th, .atm-commission-table-wrap th, .atm-commercial-table th { padding-top: 11px; padding-bottom: 11px; border-color: var(--atm-border); font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
 .atm-general-table td, .atm-commission-table-wrap td { padding-top: 11px; padding-bottom: 11px; border-color: var(--atm-border); vertical-align: middle; }
 .atm-general-table tbody tr:hover, .atm-commission-table-wrap tbody tr:hover, .atm-commercial-table tbody tr:hover { background: #f5f8f4; }
 .atm-general-table tbody tr:last-child td { border-bottom: 0; }
@@ -274,9 +274,9 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-commission-currency { display: grid; grid-template-columns: 66px repeat(5, minmax(135px, 1fr)); align-items: stretch; min-width: 0; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
 .atm-commission-currency > * { min-width: 0; padding: 12px 14px; border-right: 1px solid var(--atm-border); }
 .atm-commission-currency > *:last-child { border-right: 0; }
-.atm-commission-currency h2 { display: flex; align-items: center; color: var(--atm-forest-hover); font-size: 13px; font-weight: 700; }
-.atm-commission-currency span { display: block; color: var(--atm-muted); font-size: 11px; }
-.atm-commission-currency strong { display: block; margin-top: 3px; overflow-wrap: anywhere; font-size: 14px; font-weight: 650; }
+.atm-commission-currency h2 { display: flex; align-items: center; color: var(--atm-forest-hover); font-size: 0.8125rem; font-weight: 700; }
+.atm-commission-currency span { display: block; color: var(--atm-muted); font-size: 0.6875rem; }
+.atm-commission-currency strong { display: block; margin-top: 3px; overflow-wrap: anywhere; font-size: 0.875rem; font-weight: 650; }
 .atm-commission-profit strong { color: var(--atm-forest-hover); font-weight: 750; }
 .atm-commission-table-wrap td:nth-child(n+5):nth-child(-n+12) { white-space: nowrap; }
 .atm-commission-table-wrap td:nth-child(7), .atm-commission-table-wrap td:nth-child(12) { color: var(--atm-forest-hover); font-weight: 700; }
@@ -288,15 +288,15 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-commissions > .fixed button.bg-black:hover { background: var(--atm-forest-hover); }
 
 .atm-lost { color: var(--atm-ink); }
-.atm-lost .atm-page-heading h1 { font-size: 30px; line-height: 1.15; font-weight: 700; }
+.atm-lost .atm-page-heading h1 { font-size: 1.875rem; line-height: 1.15; font-weight: 700; }
 .atm-lost-search { width: min(410px, 100%); min-height: 40px; padding: 0 12px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-muted); }
 .atm-lost-search input { color: var(--atm-ink); }
 .atm-lost-search input::placeholder { color: #89948c; }
-.atm-lost-count { color: var(--atm-muted); font-size: 12px; }
+.atm-lost-count { color: var(--atm-muted); font-size: 0.75rem; }
 .atm-lost-table { border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
 .atm-lost-table table { width: 100%; font-variant-numeric: tabular-nums; }
 .atm-lost-table thead { background: #edf2ec; color: #34423e; }
-.atm-lost-table th { padding-top: 11px; padding-bottom: 11px; font-size: 11px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.atm-lost-table th { padding-top: 11px; padding-bottom: 11px; font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
 .atm-lost-table td { border-color: var(--atm-border); color: var(--atm-ink); }
 .atm-lost-table tbody tr:hover { background: #f5f8f4; }
 .atm-lost-reference { color: var(--atm-forest-hover); }
@@ -308,7 +308,7 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 
 .atm-params, .atm-finance, .atm-sales-report { color: var(--atm-ink); }
 .atm-params-header, .atm-finance-header { padding-bottom: 16px; border-bottom: 1px solid var(--atm-border); }
-.atm-params-header h1, .atm-finance-header h1, .atm-sales-report .atm-page-heading h1 { font-size: 30px; line-height: 1.15; font-weight: 700; }
+.atm-params-header h1, .atm-finance-header h1, .atm-sales-report .atm-page-heading h1 { font-size: 1.875rem; line-height: 1.15; font-weight: 700; }
 .atm-params-search { min-height: 40px; padding: 0 12px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-muted); }
 .atm-params-search input { color: var(--atm-ink); }
 .atm-params-search input::placeholder { color: #89948c; }
@@ -321,18 +321,18 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-params-section { overflow: hidden; border-bottom: 1px solid var(--atm-border); background: transparent; }
 .atm-params-section > button { background: #f0f4ed; }
 .atm-params-section > button:hover { background: #e7f0e5; }
-.atm-params-section > button h2 { color: var(--atm-ink); font-size: 16px; }
+.atm-params-section > button h2 { color: var(--atm-ink); font-size: 1rem; }
 .atm-params-section > button > span { color: var(--atm-forest-hover); }
 .atm-params-section > div.border-t { border-color: var(--atm-border); }
 .atm-params-field { border-color: var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
-.atm-params-field > .font-medium { color: var(--atm-forest-hover); font-size: 13px; font-weight: 700; }
+.atm-params-field > .font-medium { color: var(--atm-forest-hover); font-size: 0.8125rem; font-weight: 700; }
 .atm-params-field table { min-width: 440px; }
-.atm-params-field th { color: var(--atm-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.atm-params-field th { color: var(--atm-muted); font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; }
 .atm-params-field :is(input:not([type="checkbox"]), select, textarea) { border-color: #cfd8ce; border-radius: 6px; background: var(--atm-surface); color: var(--atm-ink); }
 .atm-params-field button.bg-blue-600, .atm-params-section button.bg-blue-600 { background: var(--atm-forest); }
 .atm-params-field button.bg-blue-600:hover, .atm-params-section button.bg-blue-600:hover { background: var(--atm-forest-hover); }
 .atm-finance-controls { max-width: 100%; }
-.atm-finance-controls :is(select, input), .atm-finance-preset { min-height: 40px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); padding: 0 11px; color: var(--atm-ink); font-size: 13px; }
+.atm-finance-controls :is(select, input), .atm-finance-preset { min-height: 40px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); padding: 0 11px; color: var(--atm-ink); font-size: 0.8125rem; }
 .atm-finance-controls select { max-width: 205px; }
 .atm-finance-preset:hover { background: #edf3eb; }
 .atm-finance-summary { border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
@@ -349,19 +349,19 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-finance .overflow-auto.rounded-lg.border { border-color: var(--atm-border); border-radius: 6px; }
 .atm-finance .overflow-auto.rounded-lg.border table { font-variant-numeric: tabular-nums; }
 .atm-finance .overflow-auto.rounded-lg.border thead { background: #edf2ec; }
-.atm-finance .overflow-auto.rounded-lg.border th { font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.atm-finance .overflow-auto.rounded-lg.border th { font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; }
 .atm-sales-filters { min-width: 0; border-bottom: 1px solid var(--atm-border); }
-.atm-sales-filters label { min-width: 0; color: #34423e; font-size: 12px; font-weight: 600; }
-.atm-sales-filters :is(input:not([type="checkbox"]), select) { min-width: 0; min-height: 40px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-ink); font-size: 13px; }
+.atm-sales-filters label { min-width: 0; color: #34423e; font-size: 0.75rem; font-weight: 600; }
+.atm-sales-filters :is(input:not([type="checkbox"]), select) { min-width: 0; min-height: 40px; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); color: var(--atm-ink); font-size: 0.8125rem; }
 .atm-sales-filters input[type="checkbox"] { accent-color: var(--atm-forest); }
-.atm-sales-months h2, .atm-sales-operations h2 { color: var(--atm-ink); font-size: 16px; font-weight: 700; }
+.atm-sales-months h2, .atm-sales-operations h2 { color: var(--atm-ink); font-size: 1rem; font-weight: 700; }
 .atm-sales-currency { border-bottom: 1px solid var(--atm-border); }
 .atm-sales-currency > div:first-child { color: var(--atm-forest-hover); }
 .atm-sales-table { border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
 .atm-sales-table table { width: 100%; font-variant-numeric: tabular-nums; }
 .atm-sales-table thead { background: #edf2ec; color: #34423e; }
 .atm-sales-table thead tr { background: transparent; }
-.atm-sales-table th { padding-top: 11px; padding-bottom: 11px; font-size: 11px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.atm-sales-table th { padding-top: 11px; padding-bottom: 11px; font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
 .atm-sales-table td { padding-top: 9px; padding-bottom: 9px; border-color: var(--atm-border); }
 .atm-sales-table tbody tr:hover { background: #f5f8f4; }
 .atm-sales-month-link, .atm-sales-report a.text-blue-700 { color: var(--atm-forest-hover); }
@@ -371,9 +371,9 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-admin-ops { width: 100%; min-width: 0; color: var(--atm-ink); }
 .atm-admin-ops-bank { max-width: none; }
 .atm-admin-ops > :first-child:has(h1) { min-width: 0; padding-bottom: 17px; border-bottom: 1px solid var(--atm-border); }
-.atm-admin-ops h1 { color: var(--atm-ink); font-size: 28px; line-height: 1.2; font-weight: 700; }
-.atm-admin-ops > :first-child p { margin-top: 3px; color: var(--atm-muted); font-size: 13px; }
-.atm-admin-ops h2 { color: var(--atm-ink); font-size: 16px; line-height: 1.3; font-weight: 700; }
+.atm-admin-ops h1 { color: var(--atm-ink); font-size: 1.75rem; line-height: 1.2; font-weight: 700; }
+.atm-admin-ops > :first-child p { margin-top: 3px; color: var(--atm-muted); font-size: 0.8125rem; }
+.atm-admin-ops h2 { color: var(--atm-ink); font-size: 1rem; line-height: 1.3; font-weight: 700; }
 .atm-admin-ops h3 { color: var(--atm-ink); font-weight: 700; }
 .atm-admin-ops :is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea) { min-width: 0; border-color: #cfd8ce; border-radius: 6px; background-color: var(--atm-surface); color: var(--atm-ink); }
 .atm-admin-ops label > :is(input:not([type="checkbox"]):not([type="radio"]), select), .atm-admin-ops > :first-child :is(input, select) { min-height: 38px; }
@@ -388,7 +388,7 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-admin-ops > .bg-white.border.p-4, .atm-admin-ops > .bg-white.border.p-3 { padding: 12px 0 17px; border: 0; border-bottom: 1px solid var(--atm-border); border-radius: 0; background: transparent; }
 .atm-admin-ops table { font-variant-numeric: tabular-nums; }
 .atm-admin-ops table thead { background: #edf2ec; color: #34423e; }
-.atm-admin-ops table thead th { padding-top: 10px; padding-bottom: 10px; border-color: var(--atm-border); font-size: 11px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.atm-admin-ops table thead th { padding-top: 10px; padding-bottom: 10px; border-color: var(--atm-border); font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
 .atm-admin-ops table tbody td { border-color: var(--atm-border); }
 .atm-admin-ops table tbody tr:hover { background: #f5f8f4; }
 .atm-admin-ops :is(.overflow-x-auto, .overflow-auto):has(> table) { max-width: 100%; }
@@ -425,20 +425,20 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-expenses-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
 .atm-expenses-metric { min-width: 0; padding: 14px 17px; border-right: 1px solid var(--atm-border); }
 .atm-expenses-metric:last-child { border-right: 0; }
-.atm-expenses-metric-label { color: var(--atm-muted); font-size: 12px; }
-.atm-expenses-metric-value { margin-top: 4px; font-size: 20px; line-height: 1.25; font-weight: 700; }
+.atm-expenses-metric-label { color: var(--atm-muted); font-size: 0.75rem; }
+.atm-expenses-metric-value { margin-top: 4px; font-size: 1.25rem; line-height: 1.25; font-weight: 700; }
 .atm-expenses-metric-value .space-y-0\.5 { display: flex; flex-wrap: wrap; gap: 2px 11px; }
 .atm-expenses-tabs { border-bottom: 1px solid var(--atm-border); }
 .atm-expenses-tabs button { border-bottom: 2px solid transparent; color: var(--atm-muted); }
 .atm-expenses-tabs button[aria-pressed="true"] { border-bottom-color: var(--atm-forest); color: var(--atm-forest-hover); font-weight: 700; }
-.atm-expenses-tabs button span { margin-left: 5px; font-size: 11px; }
+.atm-expenses-tabs button span { margin-left: 5px; font-size: 0.6875rem; }
 .atm-expenses-list-heading { gap: 12px; }
 .atm-expenses-create { border-color: var(--atm-border); border-radius: 6px; }
 .atm-expenses-list { min-width: 0; }
 .atm-expenses-list > .grid { grid-template-columns: minmax(250px, 2fr) repeat(4, minmax(125px, 1fr)); gap: 9px; }
 .atm-expenses-list-wrap { border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
-.atm-expenses-list-table tbody td { vertical-align: middle; font-size: 12px; }
-.atm-expenses-list-table tbody td small { display: block; margin-top: 3px; color: var(--atm-muted); font-size: 11px; line-height: 1.3; }
+.atm-expenses-list-table tbody td { vertical-align: middle; font-size: 0.75rem; }
+.atm-expenses-list-table tbody td small { display: block; margin-top: 3px; color: var(--atm-muted); font-size: 0.6875rem; line-height: 1.3; }
 .atm-expenses-list-table tbody td .atm-expenses-warning { color: #b42318; }
 .atm-expenses-date, .atm-expenses-money { white-space: nowrap; }
 .atm-expenses-description { min-width: 170px; max-width: 260px; }
@@ -453,50 +453,50 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-admin-ops-purchases .atm-purchases-primary { background: var(--atm-forest); }
 .atm-admin-ops-purchases .atm-purchases-primary:hover, .atm-purchases-search-button:hover { background: var(--atm-forest-hover); }
 .atm-purchases-flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; padding: 8px 0 14px; border-bottom: 1px solid var(--atm-border); }
-.atm-purchases-flow-step { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 5px 12px; color: var(--atm-muted); font-size: 12px; border-right: 1px solid var(--atm-border); }
+.atm-purchases-flow-step { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 5px 12px; color: var(--atm-muted); font-size: 0.75rem; border-right: 1px solid var(--atm-border); }
 .atm-purchases-flow-step:first-child { padding-left: 0; }
 .atm-purchases-flow-step:last-child { border-right: 0; }
-.atm-purchases-flow-number { display: grid; flex: 0 0 22px; height: 22px; place-items: center; border: 1px solid var(--atm-border); border-radius: 50%; color: var(--atm-forest-hover); font-size: 11px; font-weight: 700; }
+.atm-purchases-flow-number { display: grid; flex: 0 0 22px; height: 22px; place-items: center; border: 1px solid var(--atm-border); border-radius: 50%; color: var(--atm-forest-hover); font-size: 0.6875rem; font-weight: 700; }
 .atm-purchases-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
 .atm-purchases-metric { display: grid; gap: 1px; min-width: 0; padding: 14px 17px; text-align: left; border-right: 1px solid var(--atm-border); }
 .atm-purchases-metric:last-child { border-right: 0; }
 .atm-purchases-metric:hover, .atm-purchases-metric[aria-pressed="true"] { background: #f0f6ef; }
 .atm-purchases-metric[aria-pressed="true"] { box-shadow: inset 0 3px var(--atm-forest); }
-.atm-purchases-metric-label { color: var(--atm-muted); font-size: 12px; }
-.atm-purchases-metric strong { color: var(--atm-ink); font-size: 23px; line-height: 1.2; }
+.atm-purchases-metric-label { color: var(--atm-muted); font-size: 0.75rem; }
+.atm-purchases-metric strong { color: var(--atm-ink); font-size: 1.4375rem; line-height: 1.2; }
 .atm-purchases-metric-red strong { color: #b42318; }
 .atm-purchases-metric-amber strong { color: #a45b09; }
 .atm-purchases-metric-green strong { color: var(--atm-forest-hover); }
-.atm-purchases-metric-caption { color: var(--atm-muted); font-size: 11px; }
+.atm-purchases-metric-caption { color: var(--atm-muted); font-size: 0.6875rem; }
 .atm-purchases-filters { padding-bottom: 16px; border-bottom: 1px solid var(--atm-border); }
 .atm-purchases-tabs { display: flex; gap: 7px; overflow-x: auto; margin-bottom: 14px; border-bottom: 1px solid var(--atm-border); white-space: nowrap; }
-.atm-purchases-tabs button { padding: 9px 12px; border-bottom: 2px solid transparent; color: var(--atm-muted); font-size: 13px; }
+.atm-purchases-tabs button { padding: 9px 12px; border-bottom: 2px solid transparent; color: var(--atm-muted); font-size: 0.8125rem; }
 .atm-purchases-tabs button[aria-pressed="true"] { border-bottom-color: var(--atm-forest); color: var(--atm-forest-hover); font-weight: 700; }
-.atm-purchases-tabs button span { margin-left: 4px; font-size: 11px; }
-.atm-admin-ops .atm-purchases-tabs select { align-self: center; width: auto; min-height: 32px; margin-left: auto; border: 0; background: transparent; font-size: 13px; }
+.atm-purchases-tabs button span { margin-left: 4px; font-size: 0.6875rem; }
+.atm-admin-ops .atm-purchases-tabs select { align-self: center; width: auto; min-height: 32px; margin-left: auto; border: 0; background: transparent; font-size: 0.8125rem; }
 .atm-purchases-filter-row { display: grid; grid-template-columns: minmax(220px, 1.8fr) minmax(150px, 1fr) minmax(145px, .7fr) auto; gap: 9px; align-items: center; }
 .atm-purchases-filter-row > :is(input, select, button), .atm-purchases-search { height: 38px; }
 .atm-purchases-search { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 11px; border: 1px solid #cfd8ce; border-radius: 6px; background: var(--atm-surface); color: var(--atm-muted); }
 .atm-admin-ops .atm-purchases-search input { width: 100%; min-height: 0; padding: 0; border: 0; background: transparent; outline: 0; }
 .atm-purchases-search-button { background: var(--atm-forest); color: white; }
 .atm-purchases-more { margin-top: 10px; }
-.atm-purchases-more summary { width: max-content; cursor: pointer; color: var(--atm-forest-hover); font-size: 12px; font-weight: 600; }
+.atm-purchases-more summary { width: max-content; cursor: pointer; color: var(--atm-forest-hover); font-size: 0.75rem; font-weight: 600; }
 .atm-purchases-advanced-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
-.atm-purchases-advanced-grid label { display: grid; gap: 5px; min-width: 0; color: var(--atm-muted); font-size: 12px; }
+.atm-purchases-advanced-grid label { display: grid; gap: 5px; min-width: 0; color: var(--atm-muted); font-size: 0.75rem; }
 .atm-purchases-advanced-grid label > :is(input, select) { width: 100%; }
 .atm-purchases-advanced-grid .atm-purchases-overdue { display: flex; align-items: center; gap: 7px; }
 .atm-purchases-results { min-width: 0; }
 .atm-purchases-results-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; margin-bottom: 10px; }
-.atm-purchases-results-head span, .atm-purchases-view-total { color: var(--atm-muted); font-size: 12px; }
+.atm-purchases-results-head span, .atm-purchases-view-total { color: var(--atm-muted); font-size: 0.75rem; }
 .atm-purchases-view-total { text-align: right; }
 .atm-purchases-table-wrap { max-width: 100%; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
 .atm-purchases-table { width: 100%; min-width: 1050px; }
-.atm-purchases-table tbody td { vertical-align: middle; font-size: 12px; }
-.atm-purchases-table tbody td small { display: block; margin-top: 3px; color: var(--atm-muted); font-size: 11px; line-height: 1.3; }
+.atm-purchases-table tbody td { vertical-align: middle; font-size: 0.75rem; }
+.atm-purchases-table tbody td small { display: block; margin-top: 3px; color: var(--atm-muted); font-size: 0.6875rem; line-height: 1.3; }
 .atm-purchases-table :is(.atm-purchases-supplier-cell, .atm-purchases-document-cell, .atm-purchases-operation-cell) { min-width: 135px; max-width: 225px; }
 .atm-purchases-supplier-cell strong { display: block; overflow-wrap: anywhere; font-weight: 650; }
 .atm-purchases-document-cell button, .atm-purchases-operation-cell a { color: var(--atm-forest-hover); font-weight: 650; text-align: left; }
-.atm-purchases-document-cell a { display: block; margin-top: 3px; color: var(--atm-forest-hover); font-size: 11px; }
+.atm-purchases-document-cell a { display: block; margin-top: 3px; color: var(--atm-forest-hover); font-size: 0.6875rem; }
 .atm-purchases-table tbody td .atm-purchases-warning { color: #b42318; }
 .atm-purchases-date { white-space: nowrap; }
 .atm-purchases-date-overdue { color: #b42318; font-weight: 600; }
@@ -509,9 +509,9 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-purchases-actions button:hover { background: #f0f6ef; }
 .atm-purchases-row-selected { background: #f0f6ef; }
 .atm-purchases-selection { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 16px; border-radius: 0 0 6px 6px; background: var(--atm-forest); color: white; }
-.atm-purchases-selection div { display: grid; gap: 1px; font-size: 12px; }
+.atm-purchases-selection div { display: grid; gap: 1px; font-size: 0.75rem; }
 .atm-purchases-selection span { opacity: .85; }
-.atm-purchases-selection button { padding: 8px 12px; border: 1px solid #ffffff8c; border-radius: 5px; font-size: 12px; font-weight: 700; }
+.atm-purchases-selection button { padding: 8px 12px; border: 1px solid #ffffff8c; border-radius: 5px; font-size: 0.75rem; font-weight: 700; }
 .atm-purchases-selection button:hover { background: #ffffff24; }
 .atm-admin-ops-payable > .grid.grid-cols-2 { gap: 0; overflow: hidden; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
 .atm-admin-ops-payable > .grid.grid-cols-2 > div { min-width: 0; border: 0; border-right: 1px solid var(--atm-border); border-radius: 0; }
@@ -522,42 +522,42 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-payable-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .atm-payable-metric { min-width: 0; padding: 14px 17px; border-right: 1px solid var(--atm-border); }
 .atm-payable-metric:last-child { border-right: 0; }
-.atm-payable-metric > div { color: var(--atm-muted); font-size: 12px; }
-.atm-payable-metric strong { display: block; margin-top: 3px; background: transparent; font-size: 23px; line-height: 1.2; }
+.atm-payable-metric > div { color: var(--atm-muted); font-size: 0.75rem; }
+.atm-payable-metric strong { display: block; margin-top: 3px; background: transparent; font-size: 1.4375rem; line-height: 1.2; }
 .atm-payable-currency-strip { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--atm-border); }
-.atm-payable-currency-summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; padding: 11px 17px; font-size: 12px; }
+.atm-payable-currency-summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; padding: 11px 17px; font-size: 0.75rem; }
 .atm-payable-currency-summary:first-child { border-right: 1px solid var(--atm-border); }
 .atm-payable-currency-summary > div:first-child, .atm-payable-no-data { color: var(--atm-muted); }
 .atm-payable-currency-values { display: flex; flex-wrap: wrap; gap: 6px; }
 .atm-payable-currency-values span { border-radius: 4px; }
 .atm-payable-filters { padding-bottom: 16px; border-bottom: 1px solid var(--atm-border); }
 .atm-payable-tabs { display: flex; gap: 5px; overflow-x: auto; margin-bottom: 13px; border-bottom: 1px solid var(--atm-border); white-space: nowrap; }
-.atm-payable-tabs button { padding: 9px 11px; border-bottom: 2px solid transparent; color: var(--atm-muted); font-size: 13px; }
+.atm-payable-tabs button { padding: 9px 11px; border-bottom: 2px solid transparent; color: var(--atm-muted); font-size: 0.8125rem; }
 .atm-payable-tabs button[aria-pressed="true"] { border-bottom-color: var(--atm-forest); color: var(--atm-forest-hover); font-weight: 700; }
-.atm-payable-tabs button span { margin-left: 5px; font-size: 11px; }
-.atm-admin-ops .atm-payable-tabs select { align-self: center; width: auto; min-height: 32px; margin-left: auto; border: 0; background: transparent; font-size: 13px; }
+.atm-payable-tabs button span { margin-left: 5px; font-size: 0.6875rem; }
+.atm-admin-ops .atm-payable-tabs select { align-self: center; width: auto; min-height: 32px; margin-left: auto; border: 0; background: transparent; font-size: 0.8125rem; }
 .atm-payable-filter-row { display: grid; grid-template-columns: minmax(240px, 2fr) minmax(180px, 1fr) minmax(145px, .7fr); gap: 9px; }
 .atm-payable-filter-row select, .atm-payable-search { height: 38px; }
 .atm-payable-search { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 11px; border: 1px solid #cfd8ce; border-radius: 6px; background: var(--atm-surface); color: var(--atm-muted); }
 .atm-admin-ops .atm-payable-search input { width: 100%; min-height: 0; padding: 0; border: 0; background: transparent; outline: 0; }
 .atm-payable-more { margin-top: 10px; }
-.atm-payable-more summary, .atm-payable-analysis summary { width: max-content; cursor: pointer; color: var(--atm-forest-hover); font-size: 12px; font-weight: 600; }
+.atm-payable-more summary, .atm-payable-analysis summary { width: max-content; cursor: pointer; color: var(--atm-forest-hover); font-size: 0.75rem; font-weight: 600; }
 .atm-payable-advanced-grid { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; gap: 12px; align-items: end; margin-top: 12px; }
-.atm-payable-advanced-grid label { display: grid; gap: 5px; min-width: 0; color: var(--atm-muted); font-size: 12px; }
+.atm-payable-advanced-grid label { display: grid; gap: 5px; min-width: 0; color: var(--atm-muted); font-size: 0.75rem; }
 .atm-payable-advanced-grid .atm-payable-check { display: flex; align-items: center; gap: 7px; min-height: 38px; }
 .atm-payable-documents { min-width: 0; }
 .atm-payable-section-head { display: flex; justify-content: space-between; align-items: end; gap: 12px; margin-bottom: 10px; }
-.atm-payable-section-head :is(span) { color: var(--atm-muted); font-size: 12px; }
+.atm-payable-section-head :is(span) { color: var(--atm-muted); font-size: 0.75rem; }
 .atm-payable-section-head h2 { margin-bottom: 2px; }
 .atm-payable-table-wrap { max-width: 100%; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
 .atm-payable-table { width: 100%; min-width: 1100px; }
-.atm-payable-table tbody td { vertical-align: middle; font-size: 12px; }
-.atm-payable-table tbody td small { display: block; margin-top: 3px; color: var(--atm-muted); font-size: 11px; line-height: 1.3; }
+.atm-payable-table tbody td { vertical-align: middle; font-size: 0.75rem; }
+.atm-payable-table tbody td small { display: block; margin-top: 3px; color: var(--atm-muted); font-size: 0.6875rem; line-height: 1.3; }
 .atm-payable-table tbody td .atm-payable-warning { color: #b42318; }
 .atm-payable-provider, .atm-payable-document { min-width: 145px; max-width: 240px; }
 .atm-payable-provider strong { display: block; overflow-wrap: anywhere; }
 .atm-payable-document button, .atm-payable-order button { color: var(--atm-forest-hover); font-weight: 650; text-align: left; }
-.atm-payable-document .atm-payable-operation-link { display: block; margin-top: 3px; font-size: 11px; }
+.atm-payable-document .atm-payable-operation-link { display: block; margin-top: 3px; font-size: 0.6875rem; }
 .atm-payable-source { min-width: 145px; }
 .atm-payable-date, .atm-payable-balance { white-space: nowrap; }
 .atm-payable-balance strong { color: var(--atm-forest-hover); }
@@ -566,7 +566,7 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-payable-actions-button { display: inline-grid; width: 32px; height: 32px; place-items: center; border: 1px solid var(--atm-border); border-radius: 5px; color: var(--atm-ink); }
 .atm-payable-actions-button:hover { background: #f0f6ef; }
 .atm-payable-analysis { padding-top: 14px; border-top: 1px solid var(--atm-border); }
-.atm-payable-analysis summary { margin-bottom: 12px; font-size: 13px; }
+.atm-payable-analysis summary { margin-bottom: 12px; font-size: 0.8125rem; }
 .atm-payable-analysis > .grid { margin-bottom: 12px; }
 .atm-payable-analysis > .grid > div, .atm-payable-analysis > .bg-white.border { border-color: var(--atm-border); border-radius: 6px; }
 .atm-admin-ops-payment-orders .atm-payment-primary { background: var(--atm-forest); border-color: var(--atm-forest); }
@@ -574,14 +574,14 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-payment-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
 .atm-payment-metric { min-width: 0; padding: 14px 17px; border-right: 1px solid var(--atm-border); }
 .atm-payment-metric:last-child { border-right: 0; }
-.atm-payment-metric > div { color: var(--atm-muted); font-size: 12px; }
-.atm-payment-metric strong { display: block; margin-top: 4px; background: transparent; font-size: 17px; line-height: 1.3; overflow-wrap: anywhere; }
+.atm-payment-metric > div { color: var(--atm-muted); font-size: 0.75rem; }
+.atm-payment-metric strong { display: block; margin-top: 4px; background: transparent; font-size: 1.0625rem; line-height: 1.3; overflow-wrap: anywhere; }
 .atm-payment-filters { padding-bottom: 12px; border-bottom: 1px solid var(--atm-border); }
 .atm-payment-tabs { display: flex; gap: 5px; overflow-x: auto; margin-bottom: 13px; border-bottom: 1px solid var(--atm-border); white-space: nowrap; }
-.atm-payment-tabs button { padding: 9px 11px; border-bottom: 2px solid transparent; color: var(--atm-muted); font-size: 13px; }
+.atm-payment-tabs button { padding: 9px 11px; border-bottom: 2px solid transparent; color: var(--atm-muted); font-size: 0.8125rem; }
 .atm-payment-tabs button[aria-pressed="true"] { border-bottom-color: var(--atm-forest); color: var(--atm-forest-hover); font-weight: 700; }
-.atm-payment-tabs button span { margin-left: 5px; font-size: 11px; }
-.atm-admin-ops .atm-payment-tabs select { align-self: center; width: auto; min-height: 32px; margin-left: auto; border: 0; background: transparent; font-size: 13px; }
+.atm-payment-tabs button span { margin-left: 5px; font-size: 0.6875rem; }
+.atm-admin-ops .atm-payment-tabs select { align-self: center; width: auto; min-height: 32px; margin-left: auto; border: 0; background: transparent; font-size: 0.8125rem; }
 .atm-payment-filter-main { display: grid; grid-template-columns: minmax(240px, 2fr) minmax(160px, 1fr) minmax(145px, .7fr) auto; gap: 9px; }
 .atm-payment-filter-main > input, .atm-payment-filter-main > select, .atm-payment-search { min-width: 0; height: 38px; }
 .atm-payment-search { display: flex; align-items: center; gap: 8px; padding: 0 11px; border: 1px solid #cfd8ce; border-radius: 6px; background: var(--atm-surface); color: var(--atm-muted); }
@@ -589,19 +589,19 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-payment-search-button { background: var(--atm-forest); color: white; font-weight: 650; }
 .atm-payment-search-button:hover { background: var(--atm-forest-hover); }
 .atm-payment-more { margin-top: 10px; }
-.atm-payment-more summary { width: max-content; cursor: pointer; color: var(--atm-forest-hover); font-size: 12px; font-weight: 600; }
+.atm-payment-more summary { width: max-content; cursor: pointer; color: var(--atm-forest-hover); font-size: 0.75rem; font-weight: 600; }
 .atm-payment-advanced-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; align-items: end; margin-top: 12px; }
 .atm-payment-advanced-grid > * { min-width: 0; }
 .atm-payment-advanced-grid input, .atm-payment-advanced-grid select { width: 100%; min-height: 38px; }
 .atm-payment-filter-footer { display: flex; justify-content: flex-end; margin-top: 8px; }
 .atm-payment-filter-footer button { color: var(--atm-forest-hover); font-weight: 600; }
 .atm-payment-results-head { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
-.atm-payment-results-head h2 { color: var(--atm-ink); font-size: 16px; font-weight: 700; }
-.atm-payment-results-head span { color: var(--atm-muted); font-size: 12px; }
+.atm-payment-results-head h2 { color: var(--atm-ink); font-size: 1rem; font-weight: 700; }
+.atm-payment-results-head span { color: var(--atm-muted); font-size: 0.75rem; }
 .atm-payment-table-wrap { max-width: 100%; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
 .atm-payment-table { width: 100%; min-width: 1080px; }
-.atm-payment-table tbody td { vertical-align: middle; font-size: 12px; }
-.atm-payment-table tbody td small { display: block; margin-top: 3px; color: var(--atm-muted); font-size: 11px; line-height: 1.3; }
+.atm-payment-table tbody td { vertical-align: middle; font-size: 0.75rem; }
+.atm-payment-table tbody td small { display: block; margin-top: 3px; color: var(--atm-muted); font-size: 0.6875rem; line-height: 1.3; }
 .atm-payment-table tbody td .atm-payment-warning { color: #b42318; }
 .atm-payment-order button { color: var(--atm-forest-hover); font-weight: 700; text-align: left; }
 .atm-payment-order, .atm-payment-invoices, .atm-payment-date { white-space: nowrap; }
@@ -613,14 +613,14 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .atm-payment-status { min-width: 108px; }
 .atm-payment-actions-button { display: inline-grid; width: 32px; height: 32px; place-items: center; border: 1px solid var(--atm-border); border-radius: 5px; color: var(--atm-ink); }
 .atm-payment-actions-button:hover { background: #f0f6ef; }
-.atm-payment-selection { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 16px; border-radius: 0 0 6px 6px; background: var(--atm-forest); color: white; font-size: 12px; }
+.atm-payment-selection { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 16px; border-radius: 0 0 6px 6px; background: var(--atm-forest); color: white; font-size: 0.75rem; }
 .atm-payment-selection button { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; border: 1px solid #ffffff8c; border-radius: 5px; font-weight: 700; }
 .atm-payment-selection button:hover { background: #ffffff24; }
 .atm-payment-workspace-head { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 18px; border-bottom: 1px solid var(--atm-border); }
-.atm-payment-workspace-head h1 { color: var(--atm-ink); font-size: 26px; font-weight: 700; }
-.atm-payment-workspace-head p { margin-bottom: 14px; color: var(--atm-muted); font-size: 13px; }
+.atm-payment-workspace-head h1 { color: var(--atm-ink); font-size: 1.625rem; font-weight: 700; }
+.atm-payment-workspace-head p { margin-bottom: 14px; color: var(--atm-muted); font-size: 0.8125rem; }
 .atm-payment-workspace-tabs { display: flex; gap: 6px; align-self: stretch; align-items: end; }
-.atm-payment-workspace-tabs button { padding: 10px 13px; border-bottom: 2px solid transparent; color: var(--atm-muted); font-size: 13px; }
+.atm-payment-workspace-tabs button { padding: 10px 13px; border-bottom: 2px solid transparent; color: var(--atm-muted); font-size: 0.8125rem; }
 .atm-payment-workspace-tabs button[aria-pressed="true"] { border-bottom-color: var(--atm-forest); color: var(--atm-forest-hover); font-weight: 700; }
 .atm-unified-orders-embedded { min-width: 0; }
 .atm-unified-orders-content { min-width: 0; overflow: hidden; border: 1px solid var(--atm-border); border-radius: 6px; background: var(--atm-surface); }
@@ -727,14 +727,14 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
   .atm-purchases-advanced-grid { grid-template-columns: minmax(0, 1fr); }
   .atm-purchases-results-head, .atm-purchases-selection { align-items: flex-start; flex-direction: column; }
   .atm-purchases-view-total { text-align: left; }
-  .atm-admin-ops h1 { font-size: 23px; }
+  .atm-admin-ops h1 { font-size: 1.4375rem; }
   .atm-admin-ops > :first-child:has(h1) { align-items: stretch; flex-direction: column; }
   .atm-admin-ops > .grid:has(> .bg-white.border) > .bg-white.border, .atm-admin-ops-payable > .grid.grid-cols-2 > div { border-right: 0; border-bottom: 1px solid var(--atm-border); }
   .atm-admin-ops > .grid:has(> .bg-white.border) > .bg-white.border:last-child, .atm-admin-ops-payable > .grid.grid-cols-2 > div:last-child { border-bottom: 0; }
   .atm-admin-ops-bank > :first-child select { min-width: 0; width: 100%; }
   .atm-sidebar:not(.atm-sidebar-collapsed) { position: fixed; z-index: 60; box-shadow: 8px 0 24px rgba(20, 40, 30, .12); }
   .atm-pipeline .atm-column { flex-basis: min(252px, 82vw); min-width: min(252px, 82vw); }
-  .atm-pipeline .atm-pipeline-title { font-size: 21px; }
+  .atm-pipeline .atm-pipeline-title { font-size: 1.3125rem; }
   .atm-attention-filter { margin-left: 0; }
   .atm-filter-search { width: 100%; }
   .atm-user-details { display: none; }
@@ -750,7 +750,7 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
   .atm-form-overlay { align-items: flex-start; padding: 8px; }
   .atm-form-modal { max-height: calc(100dvh - 16px); }
   .atm-form-header { padding: 12px 15px; }
-  .atm-form-title { font-size: 17px; }
+  .atm-form-title { font-size: 1.0625rem; }
   .atm-form-body { padding: 16px 15px 0; gap: 15px; }
   .atm-form-modal .grid-cols-2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .atm-form-modal .grid-cols-2 > * { min-width: 0; }
@@ -762,7 +762,7 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
   .atm-form-branch { max-height: calc(100dvh - 16px); }
   .atm-service-overlay > .atm-form-branch { flex-basis: 100%; max-width: 100%; }
   .atm-contacts-heading { align-items: stretch; flex-direction: column; gap: 12px; }
-  .atm-contacts-heading h1 { font-size: 23px; }
+  .atm-contacts-heading h1 { font-size: 1.4375rem; }
   .atm-contacts-new { align-self: flex-start; }
   .atm-contacts-search { width: 100%; }
   .atm-contacts-filters > .relative { flex: 1 1 170px; }

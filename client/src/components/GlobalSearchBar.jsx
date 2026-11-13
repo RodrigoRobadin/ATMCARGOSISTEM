@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import api from "../api";
 import Chatbox from "./Chatbox.jsx";
 import GlobalSearchPanel from "./GlobalSearchPanel.jsx";
-import { Bell, CalendarDays, ListTodo, MessageSquare } from "lucide-react";
+import { Bell, CalendarDays, ChevronDown, ListTodo, MessageSquare } from "lucide-react";
 import { useAuth } from "../auth.jsx";
 
 export default function GlobalSearchBar() {
@@ -19,13 +19,31 @@ export default function GlobalSearchBar() {
   const activitiesTimer = useRef();
   const tasksTimer = useRef();
   const notifTimer = useRef();
+  const profileRef = useRef(null);
+  const [showProfileSettings, setShowProfileSettings] = useState(false);
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, fontScale, changeFontScale } = useAuth();
   const icons = {
     activities: <CalendarDays size={18} />,
     tasks: <ListTodo size={18} />,
     notes: <MessageSquare size={18} />,
   };
+
+  useEffect(() => {
+    if (!showProfileSettings) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (!profileRef.current?.contains(event.target)) setShowProfileSettings(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setShowProfileSettings(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [showProfileSettings]);
 
   useEffect(() => {
     let active = true;
@@ -353,9 +371,43 @@ export default function GlobalSearchBar() {
           )}
         </button>
       </div>
-      <div className="atm-user-profile" title={`${user?.name || user?.email || 'Usuario'} · ${user?.role || ''}`}>
-        <span className="atm-user-initials">{String(user?.name || user?.email || 'U').trim().slice(0, 1).toUpperCase()}</span>
-        <span className="atm-user-details"><strong>{user?.name || user?.email || 'Usuario'}</strong><small>{user?.role || ''}</small></span>
+      <div className="atm-user-profile relative" ref={profileRef}>
+        <button
+          type="button"
+          className="flex min-w-0 items-center gap-2 text-left"
+          onClick={() => setShowProfileSettings((open) => !open)}
+          aria-label="Preferencias de visualización"
+          aria-expanded={showProfileSettings}
+          aria-controls="atm-profile-settings"
+          title="Preferencias de visualización"
+        >
+          <span className="atm-user-initials">{String(user?.name || user?.email || 'U').trim().slice(0, 1).toUpperCase()}</span>
+          <span className="atm-user-details"><strong>{user?.name || user?.email || 'Usuario'}</strong><small>{user?.role || ''}</small></span>
+          <ChevronDown size={16} aria-hidden="true" />
+        </button>
+        {showProfileSettings && (
+          <div id="atm-profile-settings" className="absolute right-0 top-full z-50 mt-2 w-64 max-w-[calc(100vw-1rem)] rounded-md border border-slate-200 bg-white p-4 text-slate-800 shadow-lg">
+            <div className="mb-3 text-sm font-semibold">Visualización</div>
+            <label htmlFor="atm-font-scale" className="mb-2 flex items-center justify-between gap-3 text-sm">
+              <span>Tamaño de letra</span>
+              <output htmlFor="atm-font-scale" className="font-semibold">{fontScale}%</output>
+            </label>
+            <input
+              id="atm-font-scale"
+              type="range"
+              min="90"
+              max="130"
+              step="10"
+              value={fontScale}
+              onChange={(event) => changeFontScale(event.target.value)}
+              className="w-full accent-emerald-700"
+            />
+            <div className="mt-1 flex justify-between text-xs text-slate-500"><span>Menor</span><span>Mayor</span></div>
+            <button type="button" className="mt-4 text-sm font-medium text-emerald-800 hover:underline" onClick={() => changeFontScale(100)}>
+              Restablecer
+            </button>
+          </div>
+        )}
       </div>
       </div>
       </div>

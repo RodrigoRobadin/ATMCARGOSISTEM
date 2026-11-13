@@ -613,7 +613,6 @@ export default function OperationDetail() {
   const [filesRefreshKey, setFilesRefreshKey] = useState(0);
   const [uploadingFiles, setUploadingFiles] = useState([]);
   const [expenseOpenKey, setExpenseOpenKey] = useState(0);
-  const [costSheetVersions, setCostSheetVersions] = useState([]);
   const [currentCostSheetVersion, setCurrentCostSheetVersion] = useState(null);
   const [selectedCostSheetVersionNumber, setSelectedCostSheetVersionNumber] = useState(null);
 
@@ -694,11 +693,7 @@ export default function OperationDetail() {
 
   async function refreshCostSheetRevisionState() {
     try {
-      const [versionsRes, currentRes] = await Promise.all([
-        api.get(`/deals/${id}/cost-sheet/versions`).catch(() => ({ data: [] })),
-        api.get(`/deals/${id}/cost-sheet/current-version`).catch(() => ({ data: null })),
-      ]);
-      setCostSheetVersions(Array.isArray(versionsRes?.data) ? versionsRes.data : []);
+      const currentRes = await api.get(`/deals/${id}/cost-sheet/current-version`);
       setCurrentCostSheetVersion(currentRes?.data || null);
     } catch (_) {}
   }
@@ -900,7 +895,6 @@ useEffect(() => {
       setDeal(detail.deal);
       setDesc(detail.deal?.title || "");
       const costVersions = Array.isArray(costVersionsRes?.data) ? costVersionsRes.data : [];
-      setCostSheetVersions(costVersions);
       setCurrentCostSheetVersion(currentCostVersionRes?.data || null);
       let storedVersion = null;
       try {
@@ -2235,24 +2229,6 @@ useEffect(() => {
     doc: d,
   }));
 
-  const budgetRevisionTabs = [...costSheetVersions]
-    .sort((a, b) => Number(b.version_number || 0) - Number(a.version_number || 0))
-    .map((v) => ({
-      id: `budget-rev-${v.version_number}`,
-      kind: "budget-revision",
-      label: `REV ${String(Number(v.version_number || 0)).padStart(2, "0")}`,
-      version: v,
-    }));
-
-  const currentBudgetTab = currentCostSheetVersion?.version_number
-    ? [{
-        id: "budget-current",
-        kind: "budget-current",
-        label: "Revision Actual",
-        version: currentCostSheetVersion,
-      }]
-    : [];
-
   const topTabs = [
     { id: "detalle", kind: "base", label: "Detalle" },
     { id: "documentos", kind: "base", label: "Documentos" },
@@ -2261,8 +2237,6 @@ useEffect(() => {
     { id: "estado-cuenta", kind: "base", label: "Estado de cuenta" },
     { id: "detcos", kind: "base", label: "Planilla de costos (DET COS)" },
     ...(canAccessCommissions ? [{ id: "comisiones", kind: "base", label: "Comisiones" }] : []),
-    ...currentBudgetTab,
-    ...budgetRevisionTabs,
   ];
   function openFileTabByType(type) {
     const list = filesByType[type] || [];
@@ -2276,13 +2250,6 @@ useEffect(() => {
     String(id).startsWith("f-") || String(id).startsWith("up-");
 
   const isDocTab = (id) => String(id).startsWith("doc-");
-  const isBudgetRevisionTab = (tabId) => String(tabId).startsWith("budget-rev-");
-  const getBudgetVersionFromTab = (tabId) => {
-    const sid = String(tabId || "");
-    if (!sid.startsWith("budget-rev-")) return null;
-    return Number(sid.slice("budget-rev-".length)) || null;
-  };
-
   function getDocFromTab(id) {
     const sid = String(id);
     if (!sid.startsWith("doc-")) return null;
@@ -2856,45 +2823,13 @@ function providerHasFreightTag(p = {}) {
       <div className="bg-white rounded-2xl shadow px-4 pt-3 pb-0">
         <div className="flex gap-1 flex-wrap overflow-x-auto">
           {topTabs.map((t) => (
-            (() => {
-              const budgetVersionNumber = t.kind === "budget-revision" || t.kind === "budget-current"
-                ? Number(t.version?.version_number || 0) || null
-                : null;
-              const isCurrentBudgetVersion =
-                budgetVersionNumber != null &&
-                Number(currentCostSheetVersion?.version_number || 0) === budgetVersionNumber;
-              const isSelectedBudgetVersion =
-                budgetVersionNumber != null &&
-                Number(selectedCostSheetVersionNumber || 0) === budgetVersionNumber;
-              const isActive = activeTab === t.id;
-              const showCurrentMarker =
-                isCurrentBudgetVersion && t.kind === "budget-revision";
-              const buttonClass = isActive
-                ? "bg-black text-white border-black"
-                : activeTab === "detcos" && isSelectedBudgetVersion && t.kind === "budget-revision"
-                  ? "bg-sky-50 text-sky-900 border-sky-300"
-                  : "bg-white";
-              const label = showCurrentMarker ? `${t.label} (actual)` : t.label;
-              const title = isSelectedBudgetVersion && activeTab === "detcos"
-                ? `${t.label} (revisi?n seleccionada en DET COS)`
-                : isCurrentBudgetVersion
-                  ? `${t.label} (revisi?n actual de DET COS)`
-                  : t.label;
-
-              return (
-                <button
-                  key={t.id}
-                  className={`px-3 py-2 text-sm rounded-t-lg border-b-0 border whitespace-nowrap ${buttonClass}`}
-                  onClick={() => {
-                    if (budgetVersionNumber) persistSelectedCostSheetVersion(budgetVersionNumber);
-                    handleTabChange(t.id);
-                  }}
-                  title={title}
-                >
-                  {label}
-                </button>
-              );
-            })()
+            <button
+              key={t.id}
+              className={`px-3 py-2 text-sm rounded-t-lg border-b-0 border whitespace-nowrap ${activeTab === t.id ? "bg-black text-white border-black" : "bg-white"}`}
+              onClick={() => handleTabChange(t.id)}
+            >
+              {t.label}
+            </button>
           ))}
         </div>
       </div>
@@ -2917,35 +2852,6 @@ function providerHasFreightTag(p = {}) {
                 mercaderia: (cf["mercaderia"] || {}).value,
               }}
             />
-          ) : activeTab === "budget-current" ? (
-            <div className="bg-white rounded-2xl shadow p-4">
-              <div className="text-sm text-slate-600 mb-2">
-                Vista de la revisión actual del presupuesto
-                {currentCostSheetVersion?.version_number
-                  ? ` (DET COS ${currentCostSheetVersion.version_number})`
-                  : ""}
-              </div>
-              <div className="h-[78vh]">
-                <iframe
-                  src={`/operations/${id}/quote-embed?embed=1&preview=1${currentCostSheetVersion?.version_number ? `&cost_sheet_version=${currentCostSheetVersion.version_number}` : ""}`}
-                  title={`quote-current-${id}`}
-                  className="w-full h-full border rounded"
-                />
-              </div>
-            </div>
-          ) : isBudgetRevisionTab(activeTab) ? (
-            <div className="bg-white rounded-2xl shadow p-4">
-              <div className="text-sm text-slate-600 mb-2">
-                Vista de la revisión {getBudgetVersionFromTab(activeTab)} del presupuesto
-              </div>
-              <div className="h-[78vh]">
-                <iframe
-                  src={`/operations/${id}/quote-embed?embed=1&preview=1&cost_sheet_version=${getBudgetVersionFromTab(activeTab)}`}
-                  title={`quote-rev-${getBudgetVersionFromTab(activeTab)}`}
-                  className="w-full h-full border rounded"
-                />
-              </div>
-            </div>
           ) : activeTab === "gastos" ? (
             <div />
           ) : activeTab === "administracion" ? (

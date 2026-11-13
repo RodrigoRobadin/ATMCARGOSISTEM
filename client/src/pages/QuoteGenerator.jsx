@@ -1,5 +1,5 @@
 // client/src/pages/QuoteGenerator.jsx
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, API_BASE } from '../api';
 import { useAuth } from '../auth.jsx';
@@ -367,6 +367,7 @@ export default function QuoteGenerator(){
   const isEmbed = searchParams.get('embed') === '1';
   const previewOnly = searchParams.get('preview') === '1';
   const { user } = useAuth();
+  const printDetailsRef = useRef(null);
 
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState(null);
@@ -828,6 +829,18 @@ export default function QuoteGenerator(){
     return html2pdfLoader;
   }
 
+  async function withRenderedQuotePreview(render) {
+    const details = printDetailsRef.current;
+    if (!details) throw new Error('No se encontro la vista del presupuesto.');
+    details.open = true;
+    try {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      return await render();
+    } finally {
+      details.open = false;
+    }
+  }
+
   async function downloadPdf() {
     const el = document.getElementById('quote-print');
     if (!el) return;
@@ -864,7 +877,7 @@ export default function QuoteGenerator(){
         jsPDF: { unit: 'mm', format: [PDF_PAGE_W_MM, PDF_PAGE_H_MM], orientation: 'portrait' },
         pagebreak: { mode: ['css', 'legacy'] },
       };
-      html2pdf().from(el).set(opt).save();
+      await withRenderedQuotePreview(() => html2pdf().from(el).set(opt).save());
     } catch {
       alert('No se pudo generar el PDF.');
     }
@@ -897,10 +910,12 @@ Quedamos atentos a sus comentarios.`;
       jsPDF: { unit: 'mm', format: [PDF_PAGE_W_MM, PDF_PAGE_H_MM], orientation: 'portrait' },
       pagebreak: { mode: ['css', 'legacy'] },
     };
-    const worker = html2pdf().from(el).set(opt);
-    await worker.toPdf();
-    const pdf = await worker.get('pdf');
-    return pdf.output('blob');
+    return withRenderedQuotePreview(async () => {
+      const worker = html2pdf().from(el).set(opt);
+      await worker.toPdf();
+      const pdf = await worker.get('pdf');
+      return pdf.output('blob');
+    });
   }
 
   async function sendQuoteByEmail(fields) {
@@ -1345,6 +1360,8 @@ Quedamos atentos a sus comentarios.`;
       )}
 
       {/* ================= PREVIEW / PDF (A4) ================= */}
+      <details ref={printDetailsRef}>
+        <summary className="sr-only">Vista previa del presupuesto</summary>
       <div id="quote-print" className="bg-white border rounded-xl p-0">
         <div className="mx-auto text-[14px] leading-6" style={{ width: `${CONTENT_W_MM}mm`, paddingRight: '3mm', boxSizing: 'border-box' }}>
           <FormalHeader logoUrl={quoteBranding.logoUrl} />
@@ -1567,6 +1584,7 @@ Quedamos atentos a sus comentarios.`;
           </div>
         </div>
       </div>
+      </details>
     </div>
   );
 }

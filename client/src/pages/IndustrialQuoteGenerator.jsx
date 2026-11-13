@@ -1,6 +1,6 @@
 // client/src/pages/IndustrialQuoteGenerator.jsx
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import { Link, useParams, useSearchParams, useLocation } from 'react-router-dom';
 
@@ -825,6 +825,7 @@ export default function QuoteGenerator(){
   }, [baseId, isService, revisionIdParam, serviceQuoteAdditionId]);
 
   const { user } = useAuth();
+  const legacyPrintDetailsRef = useRef(null);
 
 
 
@@ -2067,7 +2068,15 @@ CORDIALES SALUDOS`,
 
       };
 
-      html2pdf().from(el).set(opt).save();
+      const details = legacyPrintDetailsRef.current;
+      if (!details) throw new Error('No se encontro la vista del presupuesto.');
+      details.open = true;
+      try {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        await html2pdf().from(el).set(opt).save();
+      } finally {
+        details.open = false;
+      }
 
     } catch {
 
@@ -3420,6 +3429,8 @@ Quedamos atentos a sus comentarios.`;
 
       {/* ================= PREVIEW / PDF (A4) ================= */}
 
+      <details ref={legacyPrintDetailsRef}>
+        <summary className="sr-only">Vista anterior del presupuesto</summary>
       <div id="quote-print" className="bg-white p-0">
 
         <div className="mx-auto text-[14px] leading-6" style={{ width: `${CONTENT_W_MM}mm`, paddingRight: '3mm', boxSizing: 'border-box' }}>
@@ -3981,6 +3992,8 @@ Quedamos atentos a sus comentarios.`;
         </div>
 
       </div>
+
+      </details>
 
       <div className="formal-print-shell">
         <FormalQuoteDocument {...formalDocProps} containerId="quote-formal-print" />

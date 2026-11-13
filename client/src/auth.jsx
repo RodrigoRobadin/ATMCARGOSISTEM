@@ -2,6 +2,7 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import api, { saveAuth, loadSavedAuth } from "./api";
+import { DEFAULT_FONT_SCALE, readFontScale, saveFontScale } from "./utils/fontPreference.js";
 
 const AuthContext = createContext(null);
 
@@ -9,6 +10,20 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [fontPreference, setFontPreference] = useState({ userId: null, scale: DEFAULT_FONT_SCALE });
+  const fontScale = user?.id && fontPreference.userId === user.id
+    ? fontPreference.scale
+    : readFontScale(user?.id);
+
+  useEffect(() => {
+    document.documentElement.style.fontSize = fontScale === DEFAULT_FONT_SCALE ? "" : `${fontScale}%`;
+  }, [fontScale]);
+
+  const changeFontScale = (value) => {
+    if (!user?.id) return;
+    const scale = saveFontScale(user.id, value);
+    setFontPreference({ userId: user.id, scale });
+  };
 
   useEffect(() => {
     const { token: savedToken, user: savedUser } = loadSavedAuth();
@@ -105,6 +120,8 @@ export function AuthProvider({ children }) {
         login,
         logout,
         refreshUser,
+        fontScale,
+        changeFontScale,
       }}
     >
       {children}
